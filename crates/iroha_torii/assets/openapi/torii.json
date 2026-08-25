@@ -1089,17 +1089,17 @@
               }
             ]
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
-          "lease_remaining_ticks": {
+          "lease_remaining_blocks": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
-          "lease_started_sequence": {
+          "lease_started_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1186,9 +1186,9 @@
           "apartment_name",
           "manifest_hash",
           "status",
-          "lease_started_sequence",
-          "lease_expires_sequence",
-          "lease_remaining_ticks",
+          "lease_started_height",
+          "lease_expires_height",
+          "lease_remaining_blocks",
           "restart_count",
           "state_quota_bytes",
           "tool_capability_count",
@@ -1560,12 +1560,12 @@
               }
             ]
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
-          "lease_remaining_ticks": {
+          "lease_remaining_blocks": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1631,8 +1631,8 @@
           "apartment_name",
           "sequence",
           "status",
-          "lease_expires_sequence",
-          "lease_remaining_ticks",
+          "lease_expires_height",
+          "lease_remaining_blocks",
           "manifest_hash",
           "revoked_policy_capability_count",
           "budget_ceiling_units",
@@ -1660,7 +1660,7 @@
             "minimum": 0,
             "type": "integer"
           },
-          "lease_ticks": {
+          "lease_blocks": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1671,7 +1671,7 @@
         },
         "required": [
           "manifest",
-          "lease_ticks",
+          "lease_blocks",
           "autonomy_budget_units"
         ],
         "type": "object"
@@ -1682,7 +1682,7 @@
           "apartment_name": {
             "type": "string"
           },
-          "lease_ticks": {
+          "lease_blocks": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1690,7 +1690,7 @@
         },
         "required": [
           "apartment_name",
-          "lease_ticks"
+          "lease_blocks"
         ],
         "type": "object"
       },
@@ -5637,15 +5637,19 @@
               }
             ]
           },
-          "config_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "config_generation": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "config_mutations": {
+            "items": {
+              "$ref": "#/components/schemas/SoraServiceConfigMutationV1"
+            },
+            "type": "array"
+          },
+          "config_snapshot_hash": {
+            "$ref": "#/components/schemas/Hash"
           },
           "consent_evidence_hash": {
             "anyOf": [
@@ -5700,6 +5704,16 @@
               }
             ]
           },
+          "lease_usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SoraServiceLeaseUsageAuditV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "policy_name": {
             "anyOf": [
               {
@@ -5720,30 +5734,49 @@
               }
             ]
           },
-          "rollout_handle": {
+          "process_generation": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rollout_state": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/RolloutRuntimeState"
               },
               {
                 "type": "null"
               }
             ]
           },
-          "secret_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "secret_generation": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "secret_mutations": {
+            "items": {
+              "$ref": "#/components/schemas/SoraServiceSecretMutationV1"
+            },
+            "type": "array"
+          },
+          "secret_snapshot_hash": {
+            "$ref": "#/components/schemas/Hash"
           },
           "sequence": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          },
+          "service_lease_commitment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "service_manifest_hash": {
             "$ref": "#/components/schemas/Hash"
@@ -5776,18 +5809,25 @@
           "to_version",
           "service_manifest_hash",
           "container_manifest_hash",
+          "process_generation",
+          "config_generation",
+          "secret_generation",
+          "config_snapshot_hash",
+          "secret_snapshot_hash",
           "binding_name",
           "state_key",
-          "config_name",
-          "secret_name",
+          "config_mutations",
+          "secret_mutations",
           "governance_tx_hash",
-          "rollout_handle",
+          "rollout_state",
           "policy_name",
           "policy_snapshot_hash",
           "jurisdiction_tag",
           "consent_evidence_hash",
           "break_glass",
           "break_glass_reason",
+          "lease_usage",
+          "service_lease_commitment",
           "lease_reporting_epoch_rollover",
           "signed_by"
         ],
@@ -8761,25 +8801,7 @@
             "type": "string"
           },
           "approval_mode": {
-            "enum": [
-              "PARLIAMENT_SORTITION_JIT",
-              "LEGACY_COUNCIL_EPOCH"
-            ],
-            "type": "string"
-          },
-          "approval_threshold_denominator": {
-            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
-            "type": "string"
-          },
-          "approval_threshold_numerator": {
-            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
-            "type": "string"
-          },
-          "auto_finalize_plain": {
-            "type": "boolean"
-          },
-          "auto_finalize_plain_scope": {
-            "const": "GENERIC_NON_VALIDATION_FEE_ONLY",
+            "const": "PARLIAMENT_ATTEMPT_TIMED_OVN_V1",
             "type": "string"
           },
           "bond_escrow_account": {
@@ -8798,7 +8820,7 @@
             "minLength": 1,
             "type": "string"
           },
-          "conviction_step_blocks": {
+          "commitment_phase_blocks": {
             "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
@@ -8810,7 +8832,19 @@
             "minLength": 1,
             "type": "string"
           },
-          "max_conviction": {
+          "invitation_phase_blocks": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
+          "mandatory_private_ballots": {
+            "const": true,
+            "type": "boolean"
+          },
+          "max_ballot_retries": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
+          "max_corpus_entries": {
             "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
@@ -8822,10 +8856,6 @@
             "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
-          "min_turnout": {
-            "minLength": 1,
-            "type": "string"
-          },
           "network_id": {
             "$ref": "#/components/schemas/NetworkId"
           },
@@ -8833,16 +8863,36 @@
             "minLength": 1,
             "type": "string"
           },
-          "parliament_quorum_bps": {
+          "opening_phase_blocks": {
             "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
-          "plain_voting_enabled": {
+          "private_ballot_protocol": {
+            "const": "TIMED_OVN_TLE_THRESHOLD_BLS_V1",
+            "type": "string"
+          },
+          "proposal_backed_referendum_ballots_supported": {
+            "const": false,
             "type": "boolean"
+          },
+          "registration_phase_blocks": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
+          "release_delay_blocks": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
           },
           "schema": {
             "const": "iroha.governance.capabilities.v1",
             "type": "string"
+          },
+          "standalone_plain_ballots_supported": {
+            "type": "boolean"
+          },
+          "standalone_zk_ballots_supported": {
+            "const": true,
+            "type": "boolean"
           },
           "supported_proposal_kinds": {
             "items": {
@@ -8860,14 +8910,12 @@
             "type": "array",
             "uniqueItems": true
           },
+          "survivor_freeze_phase_blocks": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
           "target_body_sizes": {
             "$ref": "#/components/schemas/GovernanceTargetBodySizesV1"
-          },
-          "validation_fee_plain_electorate_rules": {
-            "$ref": "#/components/schemas/ValidationFeePlainElectorateRulesV1"
-          },
-          "validation_fee_plain_requires_explicit_finalization": {
-            "type": "boolean"
           },
           "version": {
             "const": 1,
@@ -8876,10 +8924,6 @@
           },
           "voting_asset_id": {
             "minLength": 1,
-            "type": "string"
-          },
-          "window_span": {
-            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           }
         },
@@ -8892,25 +8936,26 @@
           "abi_version",
           "data_model_version",
           "approval_mode",
-          "plain_voting_enabled",
-          "auto_finalize_plain",
-          "auto_finalize_plain_scope",
-          "validation_fee_plain_requires_explicit_finalization",
+          "private_ballot_protocol",
+          "mandatory_private_ballots",
+          "proposal_backed_referendum_ballots_supported",
+          "standalone_plain_ballots_supported",
+          "standalone_zk_ballots_supported",
           "citizenship_asset_id",
           "citizenship_bond_amount",
           "citizenship_escrow_account",
           "voting_asset_id",
           "min_bond_amount",
           "bond_escrow_account",
-          "validation_fee_plain_electorate_rules",
-          "conviction_step_blocks",
-          "max_conviction",
           "min_enactment_delay",
-          "window_span",
-          "min_turnout",
-          "approval_threshold_numerator",
-          "approval_threshold_denominator",
-          "parliament_quorum_bps",
+          "invitation_phase_blocks",
+          "registration_phase_blocks",
+          "survivor_freeze_phase_blocks",
+          "commitment_phase_blocks",
+          "release_delay_blocks",
+          "opening_phase_blocks",
+          "max_ballot_retries",
+          "max_corpus_entries",
           "target_body_sizes",
           "supported_proposal_kinds",
           "supported_routes"
@@ -12183,11 +12228,23 @@
             "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
+          "confirmation_jury": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
+          "coordination_council": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
           "fma_committee": {
             "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
           "interest_panel": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
+          "mpc_committee": {
             "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
@@ -12213,9 +12270,12 @@
           "agenda_council",
           "interest_panel",
           "review_panel",
-          "policy_jury",
+          "coordination_council",
+          "mpc_committee",
+          "fma_committee",
           "oversight_committee",
-          "fma_committee"
+          "policy_jury",
+          "confirmation_jury"
         ],
         "type": "object"
       },
@@ -23770,6 +23830,10 @@
           "continue_cursor": {
             "anyOf": [
               {
+                "description": "Opaque canonical URL-safe no-padding V1 token for the next page. It binds the exact filters and the first page's ledger sequence snapshot.",
+                "maxLength": 114,
+                "minLength": 114,
+                "pattern": "^[A-Za-z0-9_-]{114}$",
                 "type": "string"
               },
               {
@@ -23794,10 +23858,18 @@
             "type": "array"
           },
           "remaining_items": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
+            "anyOf": [
+              {
+                "description": "Exact number of matching rows after this page when count_mode is exact.",
+                "format": "uint32",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "returned_items": {
             "format": "uint32",
@@ -31713,7 +31785,7 @@
           "egress_price_per_mib": {
             "$ref": "#/components/schemas/Quantity"
           },
-          "lease_duration_sequences": {
+          "lease_duration_blocks": {
             "format": "uint64",
             "minimum": 1,
             "type": "integer"
@@ -31724,14 +31796,14 @@
           "quota_class": {
             "type": "string"
           },
-          "runtime_price_per_sequence": {
+          "runtime_price_per_block": {
             "$ref": "#/components/schemas/Quantity"
           },
           "schema_version": {
             "const": 1,
             "type": "integer"
           },
-          "storage_price_per_gib_sequence": {
+          "storage_price_per_gib_block": {
             "$ref": "#/components/schemas/Quantity"
           }
         },
@@ -31740,9 +31812,9 @@
           "quota_class",
           "deployment_deposit",
           "prepaid_runtime_balance",
-          "lease_duration_sequences",
-          "runtime_price_per_sequence",
-          "storage_price_per_gib_sequence",
+          "lease_duration_blocks",
+          "runtime_price_per_block",
+          "storage_price_per_gib_block",
           "egress_price_per_mib"
         ],
         "type": "object"
@@ -31890,6 +31962,58 @@
         ],
         "type": "object"
       },
+      "SoraInrouReplicaPlacementV1": {
+        "additionalProperties": false,
+        "properties": {
+          "peer_id": {
+            "type": "string"
+          },
+          "replica_slot": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "selected_geography_tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selected_guest_isa": {
+            "$ref": "#/components/schemas/SoraInrouGuestIsaV1"
+          },
+          "selection_latency_ms": {
+            "anyOf": [
+              {
+                "format": "uint32",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "validator_account_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "replica_slot",
+          "validator_account_id",
+          "peer_id",
+          "selected_guest_isa",
+          "selected_geography_tag",
+          "selection_latency_ms"
+        ],
+        "type": "object"
+      },
       "SoraLeaseVolumeBindingV1": {
         "additionalProperties": false,
         "properties": {
@@ -32030,7 +32154,7 @@
           "queue_name": {
             "type": "string"
           },
-          "retention_sequences": {
+          "retention_blocks": {
             "format": "uint32",
             "maximum": 4294967295,
             "minimum": 1,
@@ -32041,7 +32165,7 @@
           "queue_name",
           "max_pending_messages",
           "max_message_bytes",
-          "retention_sequences"
+          "retention_blocks"
         ],
         "type": "object"
       },
@@ -32224,7 +32348,8 @@
           },
           "ciphertext_bytes": {
             "format": "uint64",
-            "minimum": 0,
+            "maximum": 75497472,
+            "minimum": 1,
             "type": "integer"
           },
           "schema_version": {
@@ -32233,11 +32358,15 @@
           },
           "sorafs_manifest_digest": {
             "$ref": "#/components/schemas/ManifestDigest"
+          },
+          "sorafs_root_cid": {
+            "$ref": "#/components/schemas/PinManifestRootCidV1"
           }
         },
         "required": [
           "schema_version",
           "sorafs_manifest_digest",
+          "sorafs_root_cid",
           "artifact_hash",
           "ciphertext_bytes",
           "artifact_role"
@@ -32250,15 +32379,15 @@
           "attesting_validator": {
             "$ref": "#/components/schemas/SoraRuntimeDeterministicValidatorHostV1"
           },
-        "decryption_request_id": {
-          "type": "string"
-        },
-        "emitted_block_height": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "emitted_sequence": {
+          "decryption_request_id": {
+            "type": "string"
+          },
+          "emitted_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "emitted_sequence": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -32277,6 +32406,9 @@
           },
           "model_manifest_digest": {
             "$ref": "#/components/schemas/ManifestDigest"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
           },
           "output_artifact": {
             "$ref": "#/components/schemas/SoraPrivateModelArtifactRefV1"
@@ -32318,6 +32450,7 @@
         },
         "required": [
           "schema_version",
+          "network_id",
           "receipt_id",
           "service_name",
           "service_version",
@@ -32335,10 +32468,10 @@
           "output_commitment",
           "output_recipient",
           "request_commitment",
-        "result_commitment",
-        "emitted_sequence",
-        "emitted_block_height"
-      ],
+          "result_commitment",
+          "emitted_sequence",
+          "emitted_block_height"
+        ],
         "type": "object"
       },
       "SoraPublishedInrouGuestImageArtifactV1": {
@@ -32605,6 +32738,75 @@
             },
             "required": [
               "visibility",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SoraServiceConfigEntryV1": {
+        "additionalProperties": false,
+        "properties": {
+          "config_name": {
+            "type": "string"
+          },
+          "last_update_sequence": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "value_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "value_json": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "required": [
+          "schema_version",
+          "config_name",
+          "value_json",
+          "value_hash",
+          "last_update_sequence"
+        ],
+        "type": "object"
+      },
+      "SoraServiceConfigMutationV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "Upsert",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/SoraServiceConfigEntryV1"
+              }
+            },
+            "required": [
+              "operation",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "Delete",
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
               "value"
             ],
             "type": "object"
@@ -32993,6 +33195,71 @@
           "artifacts"
         ],
         "type": "object"
+      },
+      "SoraServiceSecretEntryV1": {
+        "additionalProperties": false,
+        "properties": {
+          "envelope": {
+            "$ref": "#/components/schemas/SecretEnvelopeV1"
+          },
+          "last_update_sequence": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "secret_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "secret_name",
+          "envelope",
+          "last_update_sequence"
+        ],
+        "type": "object"
+      },
+      "SoraServiceSecretMutationV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "Upsert",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/SoraServiceSecretEntryV1"
+              }
+            },
+            "required": [
+              "operation",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "Delete",
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "SoraStateBindingV1": {
         "additionalProperties": false,
@@ -33799,6 +34066,23 @@
             "additionalProperties": false,
             "properties": {
               "action": {
+                "const": "LeaseUsage",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "action",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
                 "const": "LeaseReportingEpochRollover",
                 "type": "string"
               },
@@ -34165,7 +34449,7 @@
             "minimum": 0,
             "type": "integer"
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -34208,7 +34492,7 @@
           "manifest_hash",
           "status",
           "process_generation",
-          "lease_expires_sequence",
+          "lease_expires_height",
           "last_active_sequence",
           "materialization_dir",
           "pending_wallet_request_count",
@@ -34585,7 +34869,7 @@
           "kind": {
             "$ref": "#/components/schemas/SoraLeaseVolumeKindV1"
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -34619,7 +34903,7 @@
           "storage_class",
           "mount_path",
           "max_total_bytes",
-          "lease_expires_sequence",
+          "lease_expires_height",
           "authoritative_generation",
           "local_materialization_dir"
         ],
@@ -34645,7 +34929,7 @@
           "queue_name": {
             "type": "string"
           },
-          "retention_sequences": {
+          "retention_blocks": {
             "format": "uint32",
             "maximum": 4294967295,
             "minimum": 0,
@@ -34657,7 +34941,7 @@
           "queue_name",
           "max_pending_messages",
           "max_message_bytes",
-          "retention_sequences"
+          "retention_blocks"
         ],
         "type": "object"
       },
@@ -34842,7 +35126,7 @@
               }
             ]
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "anyOf": [
               {
                 "format": "uint64",
@@ -34921,12 +35205,6 @@
                 "type": "null"
               }
             ]
-          },
-          "reported_pending_mailbox_messages": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
           },
           "role": {
             "$ref": "#/components/schemas/SoracloudRuntimeRevisionRole"
@@ -35009,14 +35287,13 @@
           "local_replicas",
           "health_status",
           "load_factor_bps",
-          "reported_pending_mailbox_messages",
           "authoritative_pending_mailbox_messages",
           "rollout_handle",
           "config_generation",
           "secret_generation",
           "quota_class",
           "service_lease_status",
-          "lease_expires_sequence",
+          "lease_expires_height",
           "remaining_runtime_balance",
           "config_entry_count",
           "secret_entry_count",
@@ -35191,11 +35468,6 @@
                 "minimum": 0,
                 "type": "integer"
               },
-              "reported_pending_mailbox_messages": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
               "service_revisions": {
                 "format": "uint64",
                 "minimum": 0,
@@ -35212,7 +35484,6 @@
               "service_revisions",
               "apartments",
               "max_load_factor_bps",
-              "reported_pending_mailbox_messages",
               "authoritative_pending_mailbox_messages",
               "bundle_cache_misses",
               "artifact_cache_misses"
@@ -42846,303 +43117,25 @@
         "type": "object",
         "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.current_policy_proof.response"
       },
-      "ValidationFeePlainBallotDraftRequestV1": {
-        "additionalProperties": false,
-        "properties": {
-          "direction": {
-            "enum": [
-              "AYE",
-              "NAY",
-              "ABSTAIN"
-            ],
-            "type": "string"
-          },
-          "owner": {
-            "description": "Canonical account that must authenticate the signed ballot transaction.",
-            "maxLength": 4096,
-            "minLength": 1,
-            "type": "string"
-          },
-          "version": {
-            "const": 1,
-            "format": "uint16",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "owner",
-          "direction"
-        ],
-        "type": "object"
-      },
-      "ValidationFeePlainBallotDraftResponseV1": {
-        "additionalProperties": false,
-        "properties": {
-          "amount": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "direction": {
-            "enum": [
-              "AYE",
-              "NAY",
-              "ABSTAIN"
-            ],
-            "type": "string"
-          },
-          "duration_blocks": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "owner": {
-            "maxLength": 4096,
-            "minLength": 1,
-            "type": "string"
-          },
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "tx_instructions": {
-            "items": {
-              "$ref": "#/components/schemas/ValidationFeeProposalInstructionDraftV1"
-            },
-            "maxItems": 1,
-            "minItems": 1,
-            "type": "array"
-          },
-          "version": {
-            "const": 1,
-            "format": "uint16",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "proposal_id",
-          "owner",
-          "amount",
-          "duration_blocks",
-          "direction",
-          "tx_instructions"
-        ],
-        "type": "object"
-      },
-      "ValidationFeePlainElectorateMemberV1": {
-        "additionalProperties": false,
-        "properties": {
-          "account_id": {
-            "description": "Canonical domainless citizen account.",
-            "minLength": 1,
-            "type": "string"
-          },
-          "bonded_amount": {
-            "description": "Positive exact-integer citizenship amount frozen at the referendum boundary.",
-            "maxLength": 155,
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "bonded_height": {
-            "description": "Canonical unsigned decimal height at which the uninterrupted citizenship bond began.",
-            "pattern": "^(?:0|[1-9][0-9]*)$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "account_id",
-          "bonded_height",
-          "bonded_amount"
-        ],
-        "type": "object"
-      },
-      "ValidationFeePlainElectorateRulesV1": {
-        "additionalProperties": false,
-        "properties": {
-          "approval_threshold_denominator": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "approval_threshold_numerator": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "ballot_amount": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "ballot_duration_blocks": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "bond_escrow_account": {
-            "maxLength": 4096,
-            "minLength": 1,
-            "type": "string"
-          },
-          "citizenship_amount": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "conviction_step_blocks": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "eligibility_rule": {
-            "additionalProperties": false,
-            "properties": {
-              "rule": {
-                "const": "proposal_operator_at_or_before_gate_others_after_gate"
-              },
-              "value": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "rule",
-              "value"
-            ],
-            "type": "object"
-          },
-          "max_conviction": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "max_members": {
-            "const": "256",
-            "type": "string"
-          },
-          "min_turnout": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "slash_receiver_account": {
-            "maxLength": 4096,
-            "minLength": 1,
-            "type": "string"
-          },
-          "voting_asset_id": {
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": [
-          "voting_asset_id",
-          "bond_escrow_account",
-          "slash_receiver_account",
-          "ballot_amount",
-          "ballot_duration_blocks",
-          "citizenship_amount",
-          "max_members",
-          "conviction_step_blocks",
-          "max_conviction",
-          "min_turnout",
-          "approval_threshold_numerator",
-          "approval_threshold_denominator",
-          "eligibility_rule"
-        ],
-        "type": "object"
-      },
-      "ValidationFeePlainElectorateSnapshotV1": {
-        "additionalProperties": false,
-        "properties": {
-          "approval_gate_height": {
-            "description": "First height at which all seven proposal-local Parliament bodies held approval quorum.",
-            "pattern": "^(?:0|[1-9][0-9]*)$",
-            "type": "string"
-          },
-          "captured_at_height": {
-            "description": "Exact referendum start height at whose boundary the electorate was frozen.",
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "member_count": {
-            "description": "Canonical unsigned decimal member count; it exactly matches the members array.",
-            "pattern": "^(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-6])$",
-            "type": "string"
-          },
-          "members": {
-            "description": "Complete canonically ordered, duplicate-free frozen electorate.",
-            "items": {
-              "$ref": "#/components/schemas/ValidationFeePlainElectorateMemberV1"
-            },
-            "maxItems": 256,
-            "minItems": 1,
-            "type": "array"
-          },
-          "proposal_id": {
-            "allOf": [
-              {
-                "description": "Canonical non-zero 32-byte value in Norito JSON's uppercase hexadecimal representation.",
-                "maxLength": 64,
-                "minLength": 64,
-                "not": {
-                  "pattern": "^0{64}$"
-                },
-                "pattern": "^[0-9A-F]{64}$",
-                "type": "string"
-              }
-            ],
-            "description": "Native proposal identifier in Norito JSON's canonical uppercase hexadecimal representation."
-          },
-          "proposal_operator": {
-            "description": "Canonical domainless proposal-operator account.",
-            "minLength": 1,
-            "type": "string"
-          },
-          "roster_root": {
-            "allOf": [
-              {
-                "description": "Canonical non-zero 32-byte value in Norito JSON's uppercase hexadecimal representation.",
-                "maxLength": 64,
-                "minLength": 64,
-                "not": {
-                  "pattern": "^0{64}$"
-                },
-                "pattern": "^[0-9A-F]{64}$",
-                "type": "string"
-              }
-            ],
-            "description": "Domain-separated commitment to the complete frozen snapshot payload."
-          }
-        },
-        "required": [
-          "proposal_id",
-          "proposal_operator",
-          "captured_at_height",
-          "approval_gate_height",
-          "member_count",
-          "members",
-          "roster_root"
-        ],
-        "type": "object"
-      },
       "ValidationFeeProposalDetailV1": {
         "additionalProperties": false,
         "properties": {
-          "body_progress": {
-            "description": "Exact Parliament counts encoded as canonical unsigned decimal strings.",
-            "items": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
-            "type": "array"
-          },
           "current_height": {
-            "pattern": "^(?:0|[1-9][0-9]*)$",
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
-          "locks": {
-            "$ref": "#/components/schemas/JsonValue",
-            "description": "Retained citizen locks with expiry and duration encoded as canonical unsigned decimal strings."
+          "governance_certificate": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GovernanceParliamentCertificateV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "proposal": {
             "$ref": "#/components/schemas/ValidationFeeProposalRecordV1"
-          },
-          "tally": {
-            "$ref": "#/components/schemas/JsonValue",
-            "description": "Exact u128 tally and threshold values encoded as canonical unsigned decimal strings."
           },
           "version": {
             "const": 1,
@@ -43154,66 +43147,86 @@
           "version",
           "proposal",
           "current_height",
-          "body_progress",
-          "tally",
-          "locks"
+          "governance_certificate"
         ],
         "type": "object"
+      },
+      "ValidationFeeProposalDraftPayloadV1": {
+        "description": "Closed first-release validation-fee Parliament proposal draft payload.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "POLICY",
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "payout_lifecycle_proposal_id": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "policy": {
+                    "$ref": "#/components/schemas/JsonValue"
+                  }
+                },
+                "required": [
+                  "policy",
+                  "payout_lifecycle_proposal_id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "PAYOUT_LIFECYCLE",
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "payout_binding": {
+                    "$ref": "#/components/schemas/JsonValue"
+                  }
+                },
+                "required": [
+                  "payout_binding"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "ValidationFeeProposalDraftRequestV1": {
         "additionalProperties": false,
         "properties": {
-          "mode": {
-            "default": "Plain",
-            "description": "Zk is deliberately outside the first-release validation-fee contract.",
-            "oneOf": [
-              {
-                "enum": [
-                  "Plain"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "plain_electorate_rules": {
-            "$ref": "#/components/schemas/ValidationFeePlainElectorateRulesV1"
-          },
           "proposal": {
-            "$ref": "#/components/schemas/JsonValue",
-            "description": "Closed POLICY or PAYOUT_LIFECYCLE typed payload."
+            "$ref": "#/components/schemas/ValidationFeeProposalDraftPayloadV1"
           },
           "proposal_operator": {
-            "description": "Canonical domainless transaction authority bound into the exact typed proposal fingerprint.",
-            "minLength": 1,
-            "type": "string"
-          },
-          "referendum_window": {
-            "oneOf": [
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "lower": {
-                    "pattern": "^(?:0|[1-9][0-9]*)$",
-                    "type": "string"
-                  },
-                  "upper": {
-                    "pattern": "^(?:0|[1-9][0-9]*)$",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "lower",
-                  "upper"
-                ],
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           },
           "version": {
             "const": 1,
@@ -43224,10 +43237,7 @@
         "required": [
           "version",
           "proposal_operator",
-          "proposal",
-          "referendum_window",
-          "mode",
-          "plain_electorate_rules"
+          "proposal"
         ],
         "type": "object"
       },
@@ -43241,7 +43251,10 @@
             "type": "string"
           },
           "proposal_kind": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/GovernanceParliamentProposalKindV1"
+          },
+          "proposal_operator": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           },
           "tx_instructions": {
             "items": {
@@ -43333,84 +43346,38 @@
         "additionalProperties": false,
         "properties": {
           "created_height": {
-            "description": "Canonical unsigned decimal block height.",
-            "pattern": "^(?:0|[1-9][0-9]*)$",
-            "type": "string"
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           },
-          "enacted_at_height": {
-            "oneOf": [
-              {
-                "pattern": "^(?:0|[1-9][0-9]*)$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "finalization_evidence": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/JsonValue"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "parliament_snapshot": {
-            "$ref": "#/components/schemas/JsonValue"
-          },
-          "pipeline": {
-            "$ref": "#/components/schemas/JsonValue",
-            "description": "Ordered pipeline stages with every height encoded as a canonical unsigned decimal string."
-          },
-          "plain_electorate_snapshot": {
-            "description": "Complete citizen electorate frozen at referendum start; null only before the referendum opens.",
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ValidationFeePlainElectorateSnapshotV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "proposal_kind": {
-            "$ref": "#/components/schemas/JsonValue",
-            "description": "Exact native ValidationFeePolicy or ValidationFeePayoutLifecycle ProposalKind."
+          "kind": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalKindV1"
           },
           "proposer": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "referendum": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           },
           "status": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/ValidationFeeProposalStatusV1"
           }
         },
         "required": [
-          "proposal_id",
           "proposer",
-          "proposal_kind",
+          "kind",
           "created_height",
-          "status",
-          "pipeline",
-          "referendum",
-          "parliament_snapshot",
-          "plain_electorate_snapshot",
-          "finalization_evidence",
-          "enacted_at_height"
+          "status"
         ],
         "type": "object"
+      },
+      "ValidationFeeProposalStatusV1": {
+        "enum": [
+          "Proposed",
+          "Rejected",
+          "Enacted",
+          "Superseded",
+          "ExecutionFailed"
+        ],
+        "type": "string"
       },
       "VerifyingKeyId": {
         "additionalProperties": false,
@@ -47484,15 +47451,17 @@
             "minimum": 0,
             "type": "integer"
           },
-          "active_service_version": {
-            "type": "string"
+          "assignment": {
+            "$ref": "#/components/schemas/SoraServiceLeaseReporterAssignmentV1"
           },
           "finalize_reporter": {
             "type": "boolean"
           },
-          "replica_slot": {
-            "format": "uint16",
-            "maximum": 65535,
+          "forced_finalization": {
+            "type": "boolean"
+          },
+          "last_updated_height": {
+            "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
@@ -47500,18 +47469,42 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
-          },
-          "validator_account_id": {
-            "type": "string"
           }
         },
         "required": [
           "reporting_epoch",
-          "active_service_version",
-          "replica_slot",
-          "validator_account_id",
+          "assignment",
           "accounted_egress_bytes",
-          "finalize_reporter"
+          "last_updated_height",
+          "finalize_reporter",
+          "forced_finalization"
+        ],
+        "type": "object"
+      },
+      "SoraServiceLeaseReporterAssignmentV1": {
+        "additionalProperties": false,
+        "properties": {
+          "placement": {
+            "$ref": "#/components/schemas/SoraInrouReplicaPlacementV1"
+          },
+          "placement_reconciled_at_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "service_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "service_version",
+          "placement",
+          "placement_reconciled_at_ms"
         ],
         "type": "object"
       },
@@ -47527,7 +47520,13 @@
             "minimum": 0,
             "type": "integer"
           },
-          "lease_started_sequence": {
+          "forced_finalized_checkpoint_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lease_started_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -47568,13 +47567,14 @@
         },
         "required": [
           "schema_version",
-          "lease_started_sequence",
+          "lease_started_height",
           "previous_reporting_epoch",
           "new_reporting_epoch",
           "reporter_account_id",
           "active_service_version",
           "replica_slot",
           "finalized_checkpoint_count",
+          "forced_finalized_checkpoint_count",
           "settled_egress_bytes_delta",
           "settled_egress_bytes"
         ],
@@ -47610,12 +47610,12 @@
               }
             ]
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
-          "lease_started_sequence": {
+          "lease_started_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -47631,7 +47631,7 @@
             "minimum": 0,
             "type": "integer"
           },
-          "runtime_price_per_sequence": {
+          "runtime_price_per_block": {
             "$ref": "#/components/schemas/Quantity"
           },
           "schema_version": {
@@ -47646,7 +47646,7 @@
           "status": {
             "$ref": "#/components/schemas/SoraServiceLeaseStatusV1"
           },
-          "storage_price_per_gib_sequence": {
+          "storage_price_per_gib_block": {
             "$ref": "#/components/schemas/Quantity"
           }
         },
@@ -47656,16 +47656,49 @@
           "quota_class",
           "deployment_deposit",
           "prepaid_runtime_balance",
-          "runtime_price_per_sequence",
-          "storage_price_per_gib_sequence",
+          "runtime_price_per_block",
+          "storage_price_per_gib_block",
           "egress_price_per_mib",
-          "lease_started_sequence",
-          "lease_expires_sequence",
+          "lease_started_height",
+          "lease_expires_height",
           "reporting_epoch",
           "settled_egress_bytes",
           "egress_reporter_checkpoints",
           "accounted_egress_bytes",
           "last_status_reason"
+        ],
+        "type": "object"
+      },
+      "SoraServiceLeaseUsageAuditV1": {
+        "additionalProperties": false,
+        "properties": {
+          "assignment": {
+            "$ref": "#/components/schemas/SoraServiceLeaseReporterAssignmentV1"
+          },
+          "finalize_reporter": {
+            "type": "boolean"
+          },
+          "replica_accounted_egress_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reporting_epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "reporting_epoch",
+          "assignment",
+          "replica_accounted_egress_bytes",
+          "finalize_reporter"
         ],
         "type": "object"
       }
@@ -72724,11 +72757,25 @@
             }
           },
           {
+            "description": "Opaque continue_cursor returned by the preceding page. The token is bound to the exact filters and initial ledger sequence snapshot.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 114,
+              "minLength": 114,
+              "pattern": "^[A-Za-z0-9_-]{114}$",
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
+              "default": 50,
               "format": "uint32",
+              "maximum": 500,
               "minimum": 1,
               "type": "integer"
             }
@@ -74055,7 +74102,7 @@
     },
     "/v1/soracloud/status": {
       "get": {
-        "description": "Fetch the exact V1 Soracloud service-health, routing, hosted-HTTP topology, resource-pressure, failed-admission, runtime-manager, and control-plane projections. Routing reports configured_lane_count, declared_lane_count, active lane ids/count, and autoscale-capacity lane ids/count separately.",
+        "description": "Fetch the exact V1 Soracloud service-health, routing, hosted-HTTP topology, resource-pressure, failed-admission, runtime-manager, and control-plane projections. Routing reports `configured_lane_count`, `declared_lane_count`, `active_lane_ids`/`active_lane_count`, and `autoscale_capacity_lane_ids`/`autoscale_capacity_lane_count` separately.",
         "parameters": [
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
@@ -89913,36 +89960,6 @@
           "Sumeragi"
         ],
         "x-iroha-tool-effect": "read"
-      },
-      "post": {
-        "description": "Submit consensus evidence payloads.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit evidence.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sumeragi/evidence/count": {
@@ -90990,155 +91007,6 @@
           ]
         },
         "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft": {
-      "post": {
-        "description": "Validate the authenticated citizen against the retained proposal electorate and return one exact CastPlainBallot instruction. Amount and duration are forced from the immutable proposal rules.",
-        "parameters": [
-          {
-            "description": "Exact lowercase 32-byte native proposal fingerprint.",
-            "in": "path",
-            "name": "proposal_id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
-            "in": "header",
-            "name": "X-Iroha-Account",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Signature",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Timestamp-Ms",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Nonce",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
-            "in": "header",
-            "name": "X-Iroha-Witness",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ValidationFeePlainBallotDraftRequestV1"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ValidationFeePlainBallotDraftResponseV1"
-                }
-              }
-            },
-            "description": "Successful response",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical authentication headers selecting the private response.",
-                "required": true,
-                "schema": {
-                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "IrohaCanonicalAccount": [],
-            "IrohaCanonicalNonce": [],
-            "IrohaCanonicalSignature": [],
-            "IrohaCanonicalTimestampMs": []
-          },
-          {
-            "IrohaCanonicalWitness": []
-          }
-        ],
-        "summary": "Draft a proposal-bound PLAIN ballot.",
-        "tags": [
-          "Validation fee"
-        ],
-        "x-iroha-canonical-auth-v1": {
-          "body_hash_bound": true,
-          "exact_request_target": true,
-          "modes": [
-            {
-              "forbidden_headers": [
-                "X-Iroha-Witness"
-              ],
-              "kind": "single_signature",
-              "required_headers": [
-                "X-Iroha-Account",
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce"
-              ]
-            },
-            {
-              "forbidden_headers": [
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce"
-              ],
-              "kind": "multisig_witness",
-              "optional_headers": [
-                "X-Iroha-Account"
-              ],
-              "required_headers": [
-                "X-Iroha-Witness"
-              ]
-            }
-          ]
-        },
-        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/vpn/profile": {

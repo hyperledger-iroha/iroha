@@ -1295,21 +1295,17 @@ impl PartialOrd for RecordSoracloudRuntimeReceipt {
         Some(encoded_order(self, other))
     }
 }
-/// Atomically register a private execution output manifest and persist its authoritative receipt.
+/// Persist an authoritative private execution receipt for an already durable output manifest.
 ///
-/// This privileged ledger projection is restricted to `CanManageSoracloud` holders. Recorded
-/// receipt identifiers are immutable and cannot be replaced. Exact retries are idempotent even
-/// when the original transaction committed after the submitting runtime restarted.
+/// This runtime-owned ledger projection requires the transaction authority to be the receipt's
+/// exact active validator attester. Recorded receipt identifiers are immutable and cannot be
+/// replaced. Consensus requires the receipt's exact output pin to be approved, retain an adequate
+/// horizon, and have its deterministic automatic replication order completed. Exact retries are
+/// idempotent even when the original transaction committed after the submitting runtime restarted.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct RecordSoracloudPrivateUploadedModelExecutionReceipt {
-    /// Canonical Norito-encoded `sorafs_manifest::ManifestV1` for the encrypted output artifact.
-    ///
-    /// Consensus derives the manifest digest and content length from these bytes and requires an
-    /// exact match with `receipt.output_artifact` before registering the pin and receipt together.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
-    pub output_manifest_payload: Vec<u8>,
     /// Private uploaded-model execution receipt to persist.
     pub receipt: SoraPrivateUploadedModelExecutionReceiptV1,
 }
@@ -1708,13 +1704,14 @@ impl_soracloud_decode_from_slice!(ApplySoracloudOrderedMailboxResult {
     result: SoraOrderedMailboxResultV1,
 });
 impl_soracloud_decode_from_slice!(RecordSoracloudPrivateUploadedModelExecutionReceipt {
-    output_manifest_payload: Vec<u8>,
     receipt: SoraPrivateUploadedModelExecutionReceiptV1,
 });
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
+    #[cfg(feature = "json")]
+    use crate::soracloud::SoraServiceExactCurrentRevisionPreconditionV1;
     use iroha_crypto::{
         Algorithm, KeyGenOption, KeyPair, Signature,
         kex::{KeyExchangeScheme as _, X25519Sha256},
@@ -1763,65 +1760,70 @@ mod tests {
     fn private_uploaded_model_execution_receipt()
     -> RecordSoracloudPrivateUploadedModelExecutionReceipt {
         let validator_account_id = AccountId::new(provenance(0x35).signer);
-        let mut receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
-            schema_version:
-                crate::soracloud::SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
-            network_id: crate::NetworkId::from_genesis_hash(
-                iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+        let mut receipt =
+            SoraPrivateUploadedModelExecutionReceiptV1 {
+                schema_version:
+                    crate::soracloud::SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+                network_id: crate::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    crate::block::BlockHeader,
+                >::from_untyped_unchecked(
                     Hash::prehashed([0x91; Hash::LENGTH]),
-                ),
-            ),
-            receipt_id: Hash::prehashed([0; 32]),
-            service_name: name("portal"),
-            service_version: "2026.1".to_owned(),
-            model_id: "upload-1".to_owned(),
-            weight_version: "v1".to_owned(),
-            runtime_version: crate::soracloud::SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1
-                .to_owned(),
-            model_manifest_digest: crate::sorafs::pin_registry::ManifestDigest::new([0xA5; 32]),
-            model_bundle_root: hash("bundle"),
-            policy_id: "policy/v1".to_owned(),
-            decryption_request_id: "decrypt-upload-1".to_owned(),
-            attesting_validator: crate::soracloud::SoraRuntimeDeterministicValidatorHostV1 {
-                lane_id: crate::nexus::LaneId::SINGLE,
-                peer_id: crate::peer::PeerId::from(
-                    validator_account_id.expect_single_signatory().clone(),
-                )
-                .to_string(),
-                validator_account_id,
-            },
-            input_artifact: crate::soracloud::SoraPrivateModelArtifactRefV1 {
-                schema_version: crate::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
-                sorafs_manifest_digest: crate::sorafs::pin_registry::ManifestDigest::new(
-                    [0xB1; 32],
-                ),
-                sorafs_root_cid:
-                    crate::sorafs::pin_registry::ManifestRootCid::from_blake3_digest([0xB1; 32])
-                        .expect("fixture input root CID"),
-                artifact_hash: hash("input-artifact"),
-                ciphertext_bytes: 32,
-                artifact_role: "input".to_owned(),
-            },
-            output_artifact: crate::soracloud::SoraPrivateModelArtifactRefV1 {
-                schema_version: crate::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
-                sorafs_manifest_digest: crate::sorafs::pin_registry::ManifestDigest::new(
-                    [0xB2; 32],
-                ),
-                sorafs_root_cid:
-                    crate::sorafs::pin_registry::ManifestRootCid::from_blake3_digest([0xB2; 32])
-                        .expect("fixture output root CID"),
-                artifact_hash: hash("output-artifact"),
-                ciphertext_bytes: 32,
-                artifact_role: "output".to_owned(),
-            },
-            input_commitment: hash("input"),
-            output_commitment: hash("output"),
-            output_recipient: output_recipient(),
-            request_commitment: Hash::prehashed([0; 32]),
-            result_commitment: Hash::prehashed([0; 32]),
-            emitted_sequence: 1,
-            emitted_block_height: 1,
-        };
+                )),
+                receipt_id: Hash::prehashed([0; 32]),
+                service_name: name("portal"),
+                service_version: "2026.1".to_owned(),
+                model_id: "upload-1".to_owned(),
+                weight_version: "v1".to_owned(),
+                runtime_version: crate::soracloud::SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1
+                    .to_owned(),
+                model_manifest_digest: crate::sorafs::pin_registry::ManifestDigest::new([0xA5; 32]),
+                model_bundle_root: hash("bundle"),
+                policy_id: "policy/v1".to_owned(),
+                decryption_request_id: "decrypt-upload-1".to_owned(),
+                attesting_validator: crate::soracloud::SoraRuntimeDeterministicValidatorHostV1 {
+                    lane_id: crate::nexus::LaneId::SINGLE,
+                    peer_id: crate::peer::PeerId::from(
+                        validator_account_id.expect_single_signatory().clone(),
+                    )
+                    .to_string(),
+                    validator_account_id,
+                },
+                input_artifact: crate::soracloud::SoraPrivateModelArtifactRefV1 {
+                    schema_version: crate::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+                    sorafs_manifest_digest: crate::sorafs::pin_registry::ManifestDigest::new(
+                        [0xB1; 32],
+                    ),
+                    sorafs_root_cid:
+                        crate::sorafs::pin_registry::ManifestRootCid::from_blake3_digest([0xB1; 32])
+                            .expect("fixture input root CID"),
+                    artifact_hash: hash("input-artifact"),
+                    ciphertext_bytes: 32,
+                    artifact_role: "input".to_owned(),
+                },
+                output_artifact: crate::soracloud::SoraPrivateModelArtifactRefV1 {
+                    schema_version: crate::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+                    sorafs_manifest_digest: crate::sorafs::pin_registry::ManifestDigest::new(
+                        [0xB2; 32],
+                    ),
+                    sorafs_root_cid:
+                        crate::sorafs::pin_registry::ManifestRootCid::from_blake3_digest([0xB2; 32])
+                            .expect("fixture output root CID"),
+                    artifact_hash: hash("output-artifact"),
+                    ciphertext_bytes: 32,
+                    artifact_role: "output".to_owned(),
+                },
+                output_replication_order_id:
+                    crate::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1(
+                        &crate::sorafs::pin_registry::ManifestDigest::new([0xB2; 32]),
+                    ),
+                input_commitment: hash("input"),
+                output_commitment: hash("output"),
+                output_recipient: output_recipient(),
+                request_commitment: Hash::prehashed([0; 32]),
+                result_commitment: Hash::prehashed([0; 32]),
+                emitted_sequence: 1,
+                emitted_block_height: 1,
+            };
         receipt.request_commitment =
             crate::soracloud::derive_soracloud_private_model_request_commitment_v1(&receipt);
         receipt.result_commitment =
@@ -1830,10 +1832,7 @@ mod tests {
             crate::soracloud::derive_soracloud_private_uploaded_model_execution_receipt_id_v1(
                 &receipt,
             );
-        RecordSoracloudPrivateUploadedModelExecutionReceipt {
-            output_manifest_payload: vec![0x01, 0x02, 0x03],
-            receipt,
-        }
+        RecordSoracloudPrivateUploadedModelExecutionReceipt { receipt }
     }
     #[test]
     fn soracloud_decode_from_slice_roundtrips_simple_instructions() {
@@ -1988,7 +1987,7 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn soracloud_deploy_upgrade_and_rollout_v1_require_explicit_wire_keys() {
-        macro_rules! assert_required_maps {
+        macro_rules! assert_required_fields {
             ($value:expr, $ty:ty, $label:literal) => {{
                 let canonical =
                     norito::json::to_value(&$value).expect(concat!("serialize ", $label));
@@ -1997,7 +1996,11 @@ mod tests {
                     $label,
                     " must decode"
                 ));
-                for field in ["initial_service_configs", "initial_service_secrets"] {
+                for field in [
+                    "initial_service_configs",
+                    "initial_service_secrets",
+                    "precondition",
+                ] {
                     let mut missing = canonical.clone();
                     assert!(
                         missing
@@ -2007,20 +2010,20 @@ mod tests {
                             .is_some()
                     );
                     norito::json::from_value::<$ty>(missing)
-                        .expect_err(concat!($label, " must reject omitted material maps"));
+                        .expect_err(concat!($label, " must reject omitted required fields"));
 
                     let mut null = canonical.clone();
                     null.as_object_mut()
                         .expect(concat!($label, " JSON object"))
                         .insert(field.to_owned(), norito::json::Value::Null);
                     norito::json::from_value::<$ty>(null)
-                        .expect_err(concat!($label, " must reject null material maps"));
+                        .expect_err(concat!($label, " must reject null required fields"));
                 }
             }};
         }
 
         let bundle = deployment_bundle();
-        assert_required_maps!(
+        assert_required_fields!(
             DeploySoracloudService {
                 bundle: bundle.clone(),
                 initial_service_configs: BTreeMap::new(),
@@ -2031,12 +2034,21 @@ mod tests {
             DeploySoracloudService,
             "Soracloud deploy instruction"
         );
-        assert_required_maps!(
+        assert_required_fields!(
             UpgradeSoracloudService {
                 bundle,
                 initial_service_configs: BTreeMap::new(),
                 initial_service_secrets: BTreeMap::new(),
-                precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+                precondition: SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+                    SoraServiceExactCurrentRevisionPreconditionV1 {
+                        service_version: "2026.4".to_owned(),
+                        service_manifest_hash: hash("current-service-manifest"),
+                        container_manifest_hash: hash("current-container-manifest"),
+                        process_generation: 1,
+                        config_generation: 0,
+                        secret_generation: 0,
+                    },
+                ),
                 provenance: provenance(15),
             },
             UpgradeSoracloudService,

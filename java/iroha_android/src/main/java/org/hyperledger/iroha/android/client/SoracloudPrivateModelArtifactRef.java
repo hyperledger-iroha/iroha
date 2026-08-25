@@ -8,7 +8,7 @@ import java.util.Objects;
 /** SoraFS-backed encrypted artifact reference used by private uploaded-model execution. */
 public final class SoracloudPrivateModelArtifactRef {
   private final long schemaVersion;
-  private final String sorafsManifestDigest;
+  private final byte[] sorafsManifestDigest;
   private final List<Integer> sorafsRootCid;
   private final String artifactHash;
   private final long ciphertextBytes;
@@ -16,26 +16,35 @@ public final class SoracloudPrivateModelArtifactRef {
 
   public SoracloudPrivateModelArtifactRef(
       final long schemaVersion,
-      final String sorafsManifestDigest,
+      final byte[] sorafsManifestDigest,
       final List<Integer> sorafsRootCid,
       final String artifactHash,
       final long ciphertextBytes,
       final String artifactRole) {
+    SoracloudPrivateModelValidation.requireSchemaVersion(schemaVersion, "schemaVersion");
+    if (ciphertextBytes < 1L
+        || ciphertextBytes
+            > SoracloudPrivateModelValidation.ENCRYPTED_ARTIFACT_MAX_BYTES) {
+      throw new IllegalArgumentException(
+          "ciphertextBytes must be within 1..="
+              + SoracloudPrivateModelValidation.ENCRYPTED_ARTIFACT_MAX_BYTES);
+    }
     this.schemaVersion = schemaVersion;
-    this.sorafsManifestDigest =
-        Objects.requireNonNull(sorafsManifestDigest, "sorafsManifestDigest");
+    this.sorafsManifestDigest = canonicalManifestDigest(sorafsManifestDigest);
     this.sorafsRootCid = canonicalSorafsRootCid(sorafsRootCid);
-    this.artifactHash = Objects.requireNonNull(artifactHash, "artifactHash");
+    this.artifactHash =
+        SoracloudPrivateModelValidation.requireSoracloudHash(artifactHash, "artifactHash");
     this.ciphertextBytes = ciphertextBytes;
-    this.artifactRole = Objects.requireNonNull(artifactRole, "artifactRole");
+    this.artifactRole =
+        SoracloudPrivateModelValidation.requireArtifactRole(artifactRole, "artifactRole");
   }
 
   public long schemaVersion() {
     return schemaVersion;
   }
 
-  public String sorafsManifestDigest() {
-    return sorafsManifestDigest;
+  public byte[] sorafsManifestDigest() {
+    return sorafsManifestDigest.clone();
   }
 
   public List<Integer> sorafsRootCid() {
@@ -52,6 +61,14 @@ public final class SoracloudPrivateModelArtifactRef {
 
   public String artifactRole() {
     return artifactRole;
+  }
+
+  private static byte[] canonicalManifestDigest(final byte[] value) {
+    if (value == null || value.length != 32) {
+      throw new IllegalArgumentException(
+          "sorafsManifestDigest must contain exactly 32 bytes");
+    }
+    return value.clone();
   }
 
   private static List<Integer> canonicalSorafsRootCid(final List<Integer> value) {

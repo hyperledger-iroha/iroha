@@ -1943,8 +1943,9 @@ async fn resolve_incoming_soracloud_proxy_forward_target_rejects_unavailable_rec
     let local_peer_id =
         active_generated_hf_replica_peer_id(&world, &service_name, &service_version);
     let (pool_id, mut placement) = {
-        let view = world.view();
-        view.soracloud_hf_placements()
+        let world_view = world.view();
+        world_view
+            .soracloud_hf_placements()
             .iter()
             .next()
             .map(|(pool_id, placement)| (*pool_id, placement.clone()))
@@ -2712,11 +2713,12 @@ async fn validate_generated_hf_proxy_response_authority_rejects_mismatched_recei
     else {
         panic!("generated HF proxy receipt must carry HF execution-host attribution");
     };
-    host.peer_id = checked_torii_test_peer_id(
-            0x7c,
-            "derive generated-HF proxy mismatched receipt fixture key",
-        )
-        .to_string();
+    let mismatched_validator = checked_torii_test_account_id(
+        0x7c,
+        "derive generated-HF proxy mismatched receipt fixture key",
+    );
+    host.peer_id = PeerId::from(mismatched_validator.expect_single_signatory().clone()).to_string();
+    host.validator_account_id = mismatched_validator;
     let error = super::validate_generated_hf_proxy_response_authority(
         &app,
         &request,
@@ -2814,17 +2816,18 @@ async fn run_generated_hf_failure_report_case(case: GeneratedHfFailureReportCase
                 .runtime_receipt
                 .as_mut()
                 .expect("generated HF proxy receipt");
-            let Some(
-                iroha_data_model::soracloud::SoraRuntimeExecutionHostV1::HfModelHost(host),
-            ) = receipt.execution_host.as_mut()
+            let Some(iroha_data_model::soracloud::SoraRuntimeExecutionHostV1::HfModelHost(host)) =
+                receipt.execution_host.as_mut()
             else {
                 panic!("generated HF proxy receipt must carry HF execution-host attribution");
             };
-            host.peer_id = checked_torii_test_peer_id(
-                    0x7c,
-                    "derive generated-HF proxy mismatched receipt fixture key",
-                )
-                .to_string();
+            let mismatched_validator = checked_torii_test_account_id(
+                0x7c,
+                "derive generated-HF proxy mismatched receipt fixture key",
+            );
+            host.peer_id =
+                PeerId::from(mismatched_validator.expect_single_signatory().clone()).to_string();
+            host.validator_account_id = mismatched_validator;
             super::validate_generated_hf_proxy_response_authority(
                 &app,
                 &request,

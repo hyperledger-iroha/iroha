@@ -58,9 +58,9 @@ public final class PrivacyNativeBridgeTest {
     aliasesAndNonCanonicalSpellingsAreRejected();
     sharedTypedValidatorStatusContractIsStable();
     compiledProfileCatalogPreflightRejectsNullEmptyAndOversizeWithoutNativeCalls();
-    compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22();
+    compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23();
     exact12FixturePreflightRejectsNullEmptyAndOversizeWithoutNativeCalls();
-    exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22();
+    exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23();
     retiredGenericProofSurfaceIsAbsent();
     System.out.println("[IrohaAndroid] PrivacyNativeBridgeTest passed.");
   }
@@ -235,7 +235,7 @@ public final class PrivacyNativeBridgeTest {
         == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.ARCHIVE_TOO_LARGE;
   }
 
-  private static void compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22() {
+  private static void compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23() {
     final boolean available = PrivacyNativeBridge.isNativeAvailable();
     if (!available) {
       throw new AssertionError(
@@ -289,7 +289,7 @@ public final class PrivacyNativeBridgeTest {
         == PrivacyNativeBridge.Exact12FixtureValidationStatusV1.ARCHIVE_TOO_LARGE;
   }
 
-  private static void exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22() {
+  private static void exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23() {
     final boolean available = PrivacyNativeBridge.isNativeAvailable();
     if (!available) {
       throw new AssertionError(

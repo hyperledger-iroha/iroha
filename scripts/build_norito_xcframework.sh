@@ -1142,8 +1142,8 @@ protocol_abis = re.findall(
     protocol.read_text(encoding="utf-8"),
     re.MULTILINE,
 )
-if header_abis != ["22"]:
-    raise SystemExit("authoritative NoritoBridge public header ABI is not exact 22")
+if header_abis != ["23"]:
+    raise SystemExit("authoritative NoritoBridge public header ABI is not exact 23")
 if bridge_aliases != ["PRIVACY_BRIDGE_ABI_VERSION_V1"]:
     raise SystemExit("NoritoBridge Rust ABI alias is not exact")
 if protocol_abis != header_abis:

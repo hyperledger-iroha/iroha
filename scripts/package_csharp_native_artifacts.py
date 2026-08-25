@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble and verify the exact ABI-22 native inventory for the C# NuGet SDK.
+"""Assemble and verify the exact ABI-23 native inventory for the C# NuGet SDK.
 
 Each native artifact must have been exercised on its matching host and recorded
 with ``check_native_sdk_abi22_artifact.py``.  This helper deliberately does not

@@ -7,9 +7,8 @@
 //! part of the pulse DTO, so different qualifying subsets cannot create
 //! different public representations of the same pulse.
 //!
-//! The older per-validator VRF input and aggregation helpers remain below in an
-//! explicitly legacy section while their existing call sites are removed. They
-//! are not consulted by the threshold-beacon validator.
+//! The first-release module exposes only this threshold-beacon construction;
+//! retired per-validator VRF constructions are deliberately absent.
 
 use iroha_crypto::{
     Hash,
@@ -2361,85 +2360,6 @@ pub fn decode_finalized_global_threshold_beacon_pulse_v1(
 fn is_zero(bytes: &[u8]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
 }
-
-// Legacy VRF compatibility helpers. New global beacon pulses MUST NOT call
-// these functions; they remain only until their existing consensus call sites
-// are removed in the integrated cutover.
-
-/// Build the canonical epoch VRF input bytes.
-///
-/// Layout: `b"iroha:beacon:v1" || network_id[32] || epoch_be || prev_finalized_hash` where
-/// - `network_id` is the exact genesis-derived deployment identity;
-/// - `epoch_be` is the big‑endian encoding of the epoch number;
-/// - `prev_finalized_hash` is the 32‑byte block hash anchoring this epoch.
-pub fn epoch_input(network_id: &NetworkId, epoch: u64, prev_finalized_hash: [u8; 32]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(16 + 32 + 8 + 32);
-    v.extend_from_slice(b"iroha:beacon:v1");
-    v.extend_from_slice(network_id.as_bytes());
-    v.extend_from_slice(&epoch.to_be_bytes());
-    v.extend_from_slice(&prev_finalized_hash);
-    v
-}
-/// Build the canonical leader‑election VRF input (slot‑bound, pk‑bound).
-///
-/// Layout: `b"iroha:vrf:v1:input|leader|" || network_id[32] || epoch_be || slot_be || prev_finalized_hash || pk_bytes`
-pub fn leader_input(
-    network_id: &NetworkId,
-    epoch: u64,
-    slot: u64,
-    prev_finalized_hash: [u8; 32],
-    pk_bytes: &[u8],
-) -> Vec<u8> {
-    let mut v = Vec::with_capacity(24 + 32 + 8 + 8 + 32 + pk_bytes.len());
-    v.extend_from_slice(b"iroha:vrf:v1:input|leader|");
-    v.extend_from_slice(network_id.as_bytes());
-    v.extend_from_slice(&epoch.to_be_bytes());
-    v.extend_from_slice(&slot.to_be_bytes());
-    v.extend_from_slice(&prev_finalized_hash);
-    v.extend_from_slice(pk_bytes);
-    v
-}
-/// Aggregate a set of per‑validator VRF outputs deterministically.
-///
-/// Construction: `Hash(b"iroha:beacon:v1:agg" || network_id[32] || sort(outputs))` where sorting
-/// is lexicographic on the raw 32‑byte outputs. This prevents order‑based
-/// malleability and yields identical results across peers.
-pub fn aggregate_outputs(network_id: &NetworkId, mut outputs: Vec<[u8; 32]>) -> [u8; 32] {
-    outputs.sort_unstable();
-    outputs.dedup();
-    let mut buf = Vec::with_capacity(16 + 32 + outputs.len() * 32);
-    buf.extend_from_slice(b"iroha:beacon:v1:agg");
-    buf.extend_from_slice(network_id.as_bytes());
-    for y in outputs {
-        buf.extend_from_slice(&y);
-    }
-    *Hash::new(&buf).as_ref()
-}
-/// Aggregate outputs with metadata binding: committee root and a reveal bitmap.
-///
-/// Layout: `b"iroha:beacon:v1:agg|" || network_id[32] || epoch_be || committee_root || bitmap_len_be || bitmap_bytes || concat(sort_lex(y_i))`
-pub fn aggregate_outputs_with_meta(
-    network_id: &NetworkId,
-    epoch: u64,
-    committee_root: [u8; 32],
-    reveal_bitmap: &[u8],
-    mut outputs: Vec<[u8; 32]>,
-) -> [u8; 32] {
-    outputs.sort_unstable();
-    outputs.dedup();
-    let mut buf =
-        Vec::with_capacity(24 + 32 + 8 + 32 + 8 + reveal_bitmap.len() + outputs.len() * 32);
-    buf.extend_from_slice(b"iroha:beacon:v1:agg|");
-    buf.extend_from_slice(network_id.as_bytes());
-    buf.extend_from_slice(&epoch.to_be_bytes());
-    buf.extend_from_slice(&committee_root);
-    buf.extend_from_slice(&(reveal_bitmap.len() as u64).to_be_bytes());
-    buf.extend_from_slice(reveal_bitmap);
-    for y in outputs {
-        buf.extend_from_slice(&y);
-    }
-    *Hash::new(&buf).as_ref()
-}
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -2449,7 +2369,10 @@ pub(crate) mod tests {
         },
         kura::Kura,
         query::store::LiveQueryStore,
-        state::{GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, State, World, WorldReadOnly},
+        state::{
+            GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, MusubiResolverIndexRevisionV1, State, World,
+            WorldReadOnly as _,
+        },
         sumeragi::v2_beacon::{
             V2GlobalBeaconError, V2GlobalBeaconIngressOutcome, V2GlobalBeaconLifecycle,
         },
@@ -2457,7 +2380,7 @@ pub(crate) mod tests {
             V2ContextBuildError, finalized_global_beacon_npos_successor_seed_from_sources,
         },
     };
-    use iroha_config::parameters::actual::Governance;
+    use iroha_config::parameters::actual::{Governance, LaneConfig as RuntimeLaneConfig};
     use iroha_crypto::{
         Algorithm, HashOf, KeyPair,
         threshold_bls::{AdaptiveThresholdBlsSecretShare, DasRenDealerSecret, TleReleasePurpose},
@@ -2476,6 +2399,7 @@ pub(crate) mod tests {
             GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentBody, ProposalContentId,
             RiskTierV1, SortitionRequestId, SortitionRequestV1, parliament_candidate_root_v1,
         },
+        musubi::MusubiRegistrySnapshotV1,
         peer::PeerId,
     };
     use rand::{SeedableRng as _, rngs::StdRng};
@@ -3243,7 +3167,7 @@ pub(crate) mod tests {
                 data_shards: 3,
                 parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x91; 32],
         };
@@ -3277,23 +3201,52 @@ pub(crate) mod tests {
                 .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, cursor);
             block.commit();
         }
-        let state = State::new_with_chain_and_network_id_for_testing(
+        let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             ChainId::from("live-global-threshold-beacon-producer"),
             fixture.session.record().network_id,
         );
-        {
-            let mut block_hashes = state.block_hashes.block();
-            for marker in 1_u8..40 {
-                block_hashes.push_for_tests(HashOf::from_untyped_unchecked(Hash::prehashed(
-                    [marker; 32],
-                )));
-            }
-            block_hashes.push_for_tests(parent_hash);
-            block_hashes.commit_for_tests();
+        for marker in 1_u8..40 {
+            state.push_block_hash_for_testing(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [marker; 32],
+            )));
         }
+        state.push_block_hash_for_testing(parent_hash);
+        let snapshot_hashes = state
+            .block_hashes
+            .view()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let revision = MusubiResolverIndexRevisionV1::default();
+        let checkpoint = MusubiRegistrySnapshotV1 {
+            finalized_height: 1,
+            finalized_block_hash: *snapshot_hashes
+                .first()
+                .expect("live-producer history has a genesis hash")
+                .as_ref(),
+            index_revision: revision.get(),
+        };
+        checkpoint
+            .validate()
+            .expect("valid live-producer genesis resolver checkpoint");
+        {
+            let mut block = state.world.block();
+            assert!(
+                block
+                    .musubi_resolver_index_checkpoints
+                    .insert(revision, checkpoint)
+                    .is_none(),
+                "live-producer fixture must install one genesis resolver checkpoint"
+            );
+            block.commit();
+        }
+        state
+            .kura()
+            .extend_hash_only_suffix_from_verified_snapshot(&snapshot_hashes)
+            .expect("install verified live-producer snapshot prefix");
         state
     }
 
@@ -3479,10 +3432,8 @@ pub(crate) mod tests {
         {
             let mut block = state.world.block();
             {
-                let mut transaction = block.transaction_without_telemetry(
-                    iroha_config::parameters::actual::LaneConfig::default(),
-                    0,
-                );
+                let mut transaction =
+                    block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
                 transaction
                     .verify_and_advance_global_beacon_pulse(
                         &fixture_b.session,
@@ -3562,8 +3513,8 @@ pub(crate) mod tests {
             height: 0,
             round: 0,
         };
-        let state = live_producer_state(&fixture_a, cursor, parent_hash);
-        if optional_parliament_slot {
+        let mut state = live_producer_state(&fixture_a, cursor, parent_hash);
+        let transient_governance_attempt_id = if optional_parliament_slot {
             let (governance_attempt_id, _request_ids, attempt) =
                 pending_batched_sortition_attempt(&network_id, &roster, context.height);
             let mut block = state.world.block();
@@ -3571,7 +3522,10 @@ pub(crate) mod tests {
                 .parliament_attempts
                 .insert(governance_attempt_id, attempt);
             block.commit();
-        }
+            Some(governance_attempt_id)
+        } else {
+            None
+        };
 
         let signers = (1_u16..=2)
             .map(|index| live_fixture_signer(&fixture_a, index))
@@ -3632,6 +3586,7 @@ pub(crate) mod tests {
             0,
             0,
         );
+        let committed_hash = header.hash();
         let mut state_block = state.block(header);
         let mut transaction = state_block.transaction();
         transaction
@@ -3661,15 +3616,35 @@ pub(crate) mod tests {
             None,
         )
         .expect("post-transaction rotation must preserve the parent-authorized pulse");
+        if let Some(governance_attempt_id) = transient_governance_attempt_id {
+            assert!(
+                transaction
+                    .world
+                    .remove_parliament_attempt_for_testing(&governance_attempt_id)
+                    .is_some(),
+                "transient logical-pulse request must remain present through effect application"
+            );
+        }
         transaction.apply();
         state_block
             .commit()
             .expect("commit rotated key lifecycle and finalized pulse atomically");
+        state.push_block_hash_for_testing(committed_hash);
+        let committed_snapshot_hashes = state
+            .block_hashes
+            .view()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        state
+            .kura()
+            .extend_hash_only_suffix_from_verified_snapshot(&committed_snapshot_hashes)
+            .expect("persist the committed pulse-height hash-only snapshot suffix");
 
         let snapshot = norito::json::to_value(&state)
             .expect("serialize the committed key rotation and pulse history");
         let restored = crate::state::deserialize::KuraSeed {
-            kura: Kura::blank_kura_for_testing(),
+            kura: state.kura_handle(),
             query_handle: LiveQueryStore::start_test(),
             #[cfg(feature = "telemetry")]
             telemetry: crate::telemetry::StateTelemetry::default(),
@@ -3969,10 +3944,8 @@ pub(crate) mod tests {
         {
             let mut block = state.world.block();
             {
-                let mut transaction = block.transaction_without_telemetry(
-                    iroha_config::parameters::actual::LaneConfig::default(),
-                    0,
-                );
+                let mut transaction =
+                    block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
                 transaction
                     .verify_and_advance_global_beacon_pulse(
                         &fixture.session,
@@ -4140,10 +4113,8 @@ pub(crate) mod tests {
         {
             let mut block = world.block();
             {
-                let mut transaction = block.transaction_without_telemetry(
-                    iroha_config::parameters::actual::LaneConfig::default(),
-                    0,
-                );
+                let mut transaction =
+                    block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
                 transaction
                     .global_beacon_key_sessions
                     .insert(pulse.session_id, key_record);
@@ -4220,10 +4191,8 @@ pub(crate) mod tests {
         {
             let mut block = world.block();
             {
-                let mut transaction = block.transaction_without_telemetry(
-                    iroha_config::parameters::actual::LaneConfig::default(),
-                    0,
-                );
+                let mut transaction =
+                    block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
                 transaction
                     .global_beacon_key_sessions
                     .insert(prior.session_id, key_record);
@@ -4577,84 +4546,5 @@ pub(crate) mod tests {
             Err(GlobalThresholdBeaconError::InvalidEncoding)
                 | Err(GlobalThresholdBeaconError::NonCanonicalEncoding)
         ));
-    }
-    #[test]
-    fn epoch_input_has_domain_and_sizes() {
-        let prev = [7u8; 32];
-        let network_id = network_id(0x81);
-        let x = epoch_input(&network_id, 42, prev);
-        assert!(x.starts_with(b"iroha:beacon:v1"));
-        assert_eq!(x.len(), b"iroha:beacon:v1".len() + 32 + 8 + 32);
-    }
-    #[test]
-    fn aggregate_is_order_independent() {
-        let a = [1u8; 32];
-        let b = [2u8; 32];
-        let c = [3u8; 32];
-        let network_id = network_id(0x81);
-        let r1 = aggregate_outputs(&network_id, vec![a, b, c]);
-        let r2 = aggregate_outputs(&network_id, vec![c, a, b]);
-        assert_eq!(r1, r2);
-    }
-    #[test]
-    fn aggregate_deduplicates_outputs() {
-        let a = [1u8; 32];
-        let b = [2u8; 32];
-        let network_id = network_id(0x81);
-        let r1 = aggregate_outputs(&network_id, vec![a, b]);
-        let r2 = aggregate_outputs(&network_id, vec![a, b, a, b]);
-        assert_eq!(r1, r2, "duplicate VRF outputs must not skew the beacon");
-    }
-    #[test]
-    fn leader_input_binds_pk_and_slot() {
-        let network_id = network_id(0x81);
-        let prev = [7u8; 32];
-        let pk = vec![5u8; 48];
-        let x = leader_input(&network_id, 42, 9, prev, &pk);
-        assert!(x.starts_with(b"iroha:vrf:v1:input|leader|"));
-        assert_eq!(
-            x.len(),
-            b"iroha:vrf:v1:input|leader|".len() + 32 + 8 + 8 + 32 + pk.len()
-        );
-    }
-    #[test]
-    fn aggregate_with_meta_changes_with_bitmap() {
-        let network_id = network_id(0x81);
-        let out = [[1u8; 32], [2u8; 32]].to_vec();
-        let r1 = aggregate_outputs_with_meta(&network_id, 1, [9u8; 32], &[0b11], out.clone());
-        let r2 = aggregate_outputs_with_meta(&network_id, 1, [9u8; 32], &[0b01], out);
-        assert_ne!(r1, r2);
-    }
-    #[test]
-    fn aggregate_with_meta_deduplicates_outputs() {
-        let network_id = network_id(0x81);
-        let base = aggregate_outputs_with_meta(&network_id, 7, [9u8; 32], &[0b11], vec![[1u8; 32]]);
-        let duped = aggregate_outputs_with_meta(
-            &network_id,
-            7,
-            [9u8; 32],
-            &[0b11],
-            vec![[1u8; 32], [1u8; 32]],
-        );
-        assert_eq!(base, duped);
-    }
-    #[test]
-    fn every_beacon_domain_rejects_same_label_different_genesis_by_construction() {
-        let first = network_id(0x81);
-        let second = network_id(0x82);
-        let prev = [7_u8; 32];
-        let output = vec![[1_u8; 32]];
-        assert_ne!(
-            epoch_input(&first, 42, prev),
-            epoch_input(&second, 42, prev)
-        );
-        assert_ne!(
-            leader_input(&first, 42, 9, prev, &[5_u8; 48]),
-            leader_input(&second, 42, 9, prev, &[5_u8; 48])
-        );
-        assert_ne!(
-            aggregate_outputs(&first, output.clone()),
-            aggregate_outputs(&second, output)
-        );
     }
 }

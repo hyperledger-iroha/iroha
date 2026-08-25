@@ -2051,11 +2051,11 @@ pub struct SoraAgentApartmentRecordV1 {
     pub status: SoraAgentRuntimeStatusV1,
     /// Audit sequence that deployed the apartment.
     pub deployed_sequence: u64,
-    /// Audit sequence when the current lease began.
+    /// Consensus block height when the current lease began.
     pub lease_started_height: u64,
-    /// Audit sequence when the lease expires.
+    /// Consensus block height when the lease expires.
     pub lease_expires_height: u64,
-    /// Audit sequence of the latest lease renewal.
+    /// Consensus block height of the latest lease renewal.
     pub last_renewed_height: u64,
     /// Deterministic restart count.
     pub restart_count: u32,
@@ -3857,8 +3857,8 @@ pub struct SoraServiceMailboxMessageV1 {
     /// Ledger-assigned ordered sequence at which the message was enqueued.
     ///
     /// A [`crate::isi::soracloud::RecordSoracloudMailboxMessage`] submission must set this and the
-    /// two derived scheduling fields below to zero. Ledger execution assigns all three from the
-    /// canonical Soracloud sequence domain and the destination handler's mailbox contract.
+    /// derived height fields below to zero. Ledger execution assigns the ordered sequence and the
+    /// consensus-height schedule from the destination handler's mailbox contract.
     pub enqueue_sequence: u64,
     /// Consensus block height in which the message was enqueued.
     pub enqueue_height: u64,

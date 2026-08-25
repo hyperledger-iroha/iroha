@@ -1,7 +1,5 @@
 package org.hyperledger.iroha.android.client;
 
-import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
@@ -21,12 +19,21 @@ public final class SoracloudPrivateUploadedModelExecuteResponse {
       final String transactionHash,
       final SoracloudPrivateUploadedModelExecutionReceipt receipt,
       final SoracloudPrivateModelArtifactRef outputArtifact) {
+    SoracloudPrivateModelValidation.requireSchemaVersion(schemaVersion, "schemaVersion");
     this.schemaVersion = schemaVersion;
-    this.status = Collections.unmodifiableMap(new LinkedHashMap<>(Objects.requireNonNull(status, "status")));
-    this.submissionStatus = Objects.requireNonNull(submissionStatus, "submissionStatus");
-    this.transactionHash = transactionHash;
+    this.status = SoracloudPrivateModelValidation.snapshotUploadedModelStatus(status);
+    this.submissionStatus =
+        SoracloudPrivateModelValidation.requireSubmissionStatus(
+            submissionStatus, "submissionStatus");
+    this.transactionHash =
+        transactionHash == null
+            ? null
+            : SoracloudPrivateModelValidation.requireSoracloudHash(
+                transactionHash, "transactionHash");
     this.receipt = Objects.requireNonNull(receipt, "receipt");
     this.outputArtifact = Objects.requireNonNull(outputArtifact, "outputArtifact");
+    SoracloudPrivateModelValidation.requireExecuteResponseState(
+        this.submissionStatus, this.transactionHash, this.receipt, this.outputArtifact);
   }
 
   public long schemaVersion() { return schemaVersion; }

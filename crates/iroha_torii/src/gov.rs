@@ -3212,6 +3212,11 @@ seiyaku GovernedReadFixture {
         iroha_data_model::isi::decode_instruction_from_pair(&instr.wire_id, &bytes)
             .expect("instruction payload decode")
     }
+    fn decode_tx_instruction(instr: &TxInstr) -> iroha_data_model::isi::InstructionBox {
+        let bytes = hex::decode(&instr.payload_hex).expect("instruction payload hex");
+        iroha_data_model::isi::decode_instruction_from_pair(&instr.wire_id, &bytes)
+            .expect("instruction payload decode")
+    }
     fn queue_instruction_skeleton(harness: &GovHarness, tx_instructions: &[TxInstr]) {
         let instructions = tx_instructions
             .iter()

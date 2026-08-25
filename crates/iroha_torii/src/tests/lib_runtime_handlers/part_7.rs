@@ -679,9 +679,11 @@ fn assert_invalid_hosted_http_rollout(
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
     );
     mutate_hosted_http_rollout_deployment(&mut app, mutate);
-    let view = app.state.view();
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
     let error =
-        super::authoritative_weighted_hosted_http_versions(view.world(), 10, "web_portal")
+        super::authoritative_weighted_hosted_http_versions(world, current_height, "web_portal")
             .expect_err("noncanonical authoritative rollout must fail closed");
     assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Internal);
     assert!(
@@ -698,9 +700,11 @@ fn authoritative_hosted_http_versions_use_current_candidate_and_explicit_baselin
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
     );
-    let view = app.state.view();
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
     assert_eq!(
-        super::authoritative_weighted_hosted_http_versions(view.world(), 10, "web_portal")
+        super::authoritative_weighted_hosted_http_versions(world, current_height, "web_portal")
             .expect("canonical hosted rollout"),
         (
             vec![("2026.03.0".to_owned(), 20), ("2026.02.0".to_owned(), 80)],
@@ -710,7 +714,17 @@ fn authoritative_hosted_http_versions_use_current_candidate_and_explicit_baselin
 }
 #[test]
 fn authoritative_hosted_http_versions_reject_noncanonical_active_rollouts() {
-    for traffic_percent in [0_u8, 100, 101] {
+    for (traffic_percent, expected_message) in [
+        (
+            0_u8,
+            "canary traffic must stay at or above canary_percent and below 100",
+        ),
+        (
+            100,
+            "canary traffic must stay at or above canary_percent and below 100",
+        ),
+        (101, "must be within 0..=100"),
+    ] {
         assert_invalid_hosted_http_rollout(
             move |deployment| {
                 deployment
@@ -719,18 +733,16 @@ fn authoritative_hosted_http_versions_reject_noncanonical_active_rollouts() {
                     .expect("active rollout")
                     .traffic_percent = traffic_percent;
             },
-            "candidate traffic percent must be within 1..=99",
+            expected_message,
         );
     }
     assert_invalid_hosted_http_rollout(
         |deployment| {
-            deployment
-                .active_rollout
-                .as_mut()
-                .expect("active rollout")
-                .stage = iroha_data_model::soracloud::SoraRolloutStageV1::Promoted;
+            let rollout = deployment.active_rollout.as_mut().expect("active rollout");
+            rollout.stage = iroha_data_model::soracloud::SoraRolloutStageV1::Promoted;
+            rollout.traffic_percent = 100;
         },
-        "active rollout stage must be Canary",
+        "active_rollout may only track canary progress",
     );
     assert_invalid_hosted_http_rollout(
         |deployment| {
@@ -738,9 +750,9 @@ fn authoritative_hosted_http_versions_reject_noncanonical_active_rollouts() {
                 .active_rollout
                 .as_mut()
                 .expect("active rollout")
-                .candidate_version = "2026.02.0".to_owned();
+                .candidate_version = "2026.04.0".to_owned();
         },
-        "must equal current revision",
+        "must match current_service_version",
     );
     assert_invalid_hosted_http_rollout(
         |deployment| {
@@ -751,7 +763,7 @@ fn authoritative_hosted_http_versions_reject_noncanonical_active_rollouts() {
                 .baseline_version
                 .clear();
         },
-        "baseline revision must be present and nonempty",
+        "field `baseline_version` must not be empty",
     );
     assert_invalid_hosted_http_rollout(
         |deployment| {
@@ -762,7 +774,7 @@ fn authoritative_hosted_http_versions_reject_noncanonical_active_rollouts() {
                 .expect("active rollout")
                 .baseline_version = current;
         },
-        "baseline and candidate revisions must be distinct",
+        "must differ from candidate_version",
     );
 }
 #[tokio::test]

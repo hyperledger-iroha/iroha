@@ -198,7 +198,7 @@ def metrics_alerts(*, critical: bool = False) -> dict:
 
 def native_bridge_release(
     *,
-    abi: int = 22,
+    abi: int = 23,
     artifacts: list[dict[str, str]] | None = None,
 ) -> dict:
     artifacts = artifacts or [
@@ -1639,8 +1639,8 @@ def test_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
     assert "metrics must not include unknown values" in artifact["errors"]
 
 
-@pytest.mark.parametrize("abi", [20, 21])
-def test_native_bridge_abi_must_equal_twenty_two(tmp_path: Path, abi: int) -> None:
+@pytest.mark.parametrize("abi", [20, 21, 22])
+def test_native_bridge_abi_must_equal_twenty_three(tmp_path: Path, abi: int) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "native-bridge-release.json", native_bridge_release(abi=abi))
 

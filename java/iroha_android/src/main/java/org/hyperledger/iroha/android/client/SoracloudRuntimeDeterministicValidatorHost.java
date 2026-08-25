@@ -1,7 +1,5 @@
 package org.hyperledger.iroha.android.client;
 
-import java.util.Objects;
-
 /** Exact active validator that attested a deterministic private execution receipt. */
 public final class SoracloudRuntimeDeterministicValidatorHost {
   private final long laneId;
@@ -10,10 +8,11 @@ public final class SoracloudRuntimeDeterministicValidatorHost {
 
   public SoracloudRuntimeDeterministicValidatorHost(
       final long laneId, final String validatorAccountId, final String peerId) {
+    SoracloudPrivateModelValidation.requireU32(laneId, "laneId");
+    SoracloudPrivateModelValidation.requireValidatorIdentity(validatorAccountId, peerId);
     this.laneId = laneId;
-    this.validatorAccountId =
-        Objects.requireNonNull(validatorAccountId, "validatorAccountId");
-    this.peerId = Objects.requireNonNull(peerId, "peerId");
+    this.validatorAccountId = validatorAccountId;
+    this.peerId = peerId;
   }
 
   public long laneId() { return laneId; }

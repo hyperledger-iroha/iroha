@@ -423,14 +423,24 @@ fn sample_private_model_artifact_ref(role: &str, seed: u8) -> SoraPrivateModelAr
         artifact_role: role.to_string(),
     }
 }
+fn sample_private_model_artifact_context() -> SoraPrivateModelArtifactContextV1 {
+    SoraPrivateModelArtifactContextV1::Model(SoraPrivateModelArtifactModelContextV1 {
+        service_name: sample_name("private_model_host"),
+        service_version: "2026.1".to_owned(),
+        model_id: "upload-1".to_owned(),
+        weight_version: "v1".to_owned(),
+        policy_id: "policy/v1".to_owned(),
+        model_plaintext_commitment: sample_hash(0x35),
+    })
+}
 fn sample_private_uploaded_model_execution_receipt() -> SoraPrivateUploadedModelExecutionReceiptV1 {
     let mut receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
         schema_version: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
-        network_id: crate::NetworkId::from_genesis_hash(
-            iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
-                Hash::prehashed([0x92; Hash::LENGTH]),
-            ),
-        ),
+        network_id: crate::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            crate::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::prehashed([0x92; Hash::LENGTH])
+        )),
         receipt_id: Hash::prehashed([0; 32]),
         service_name: sample_name("private_model_host"),
         service_version: "2026.1".to_string(),
@@ -444,6 +454,9 @@ fn sample_private_uploaded_model_execution_receipt() -> SoraPrivateUploadedModel
         attesting_validator: sample_validator_execution_host(0x30),
         input_artifact: sample_private_model_artifact_ref("input", 0x11),
         output_artifact: sample_private_model_artifact_ref("output", 0x22),
+        output_replication_order_id: derive_sorafs_auto_replication_order_id_v1(
+            &ManifestDigest::new([0x22; 32]),
+        ),
         input_commitment: sample_hash(0x41),
         output_commitment: sample_hash(0x42),
         output_recipient: sample_uploaded_model_encryption_recipient(),

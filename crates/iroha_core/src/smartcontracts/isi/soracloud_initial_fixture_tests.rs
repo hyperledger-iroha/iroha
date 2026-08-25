@@ -872,8 +872,6 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
     insert_active_public_lane_validator(&mut stx, BOB_ID.clone(), 500);
     let mut bundle = sample_bundle("victim_runtime", "1.0.0", 0);
-    bundle.container.capabilities.allow_state_writes = true;
-    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
     bundle.service.handlers.push(SoraServiceHandlerV1 {
         handler_name: "update".parse().expect("valid name"),
         class: SoraServiceHandlerClassV1::Update,
@@ -887,6 +885,8 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
             retention_blocks: NonZeroU32::new(3).expect("nonzero"),
         }),
     });
+    bundle.container.capabilities.allow_state_writes = true;
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
     isi::DeploySoracloudService {
         bundle: bundle.clone(),
         initial_service_configs: BTreeMap::new(),
@@ -908,6 +908,18 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     .execute(&ALICE_ID, &mut stx)?;
     let other_name = other_bundle.service.service_name.clone();
     let other_version = other_bundle.service.service_version.as_str();
+    let lease_victim_bundle =
+        sample_initial_hosted_http_service_bundle("unassigned_hosted", "1.0.0");
+    isi::DeploySoracloudService {
+        bundle: lease_victim_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&lease_victim_bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let lease_victim_name = lease_victim_bundle.service.service_name.clone();
+    let lease_victim_version = lease_victim_bundle.service.service_version.as_str();
     stx.world.soracloud_inrou_host_capabilities.insert(
         BOB_ID.clone(),
         SoraInrouHostCapabilityRecordV1 {
@@ -1006,18 +1018,18 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     let deployment_before_usage = stx
         .world
         .soracloud_service_deployments
-        .get(&victim_name)
+        .get(&lease_victim_name)
         .cloned()
-        .expect("victim deployment");
+        .expect("unassigned hosted-service deployment");
     let reporting_epoch = deployment_before_usage
         .service_lease
         .as_ref()
-        .expect("victim hosted-service lease")
+        .expect("unassigned hosted-service lease")
         .reporting_epoch;
     let lease_error = isi::ReportSoracloudServiceLeaseUsage {
-        service_name: victim_name.clone(),
+        service_name: lease_victim_name.clone(),
         reporting_epoch,
-        active_service_version: victim_version.to_owned(),
+        active_service_version: lease_victim_version.to_owned(),
         replica_slot: 1,
         replica_accounted_egress_bytes: u64::MAX,
         finalize_reporter: false,
@@ -1030,7 +1042,9 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
             if message.contains("is not assigned to service")
     ));
     assert_eq!(
-        stx.world.soracloud_service_deployments.get(&victim_name),
+        stx.world
+            .soracloud_service_deployments
+            .get(&lease_victim_name),
         Some(&deployment_before_usage)
     );
     let mailbox_message = SoraServiceMailboxMessageV1 {
@@ -1075,81 +1089,17 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
             if message.contains("source service")
     ));
     assert!(stx.world.soracloud_mailbox_messages.is_empty());
-    let mut caller_scheduled_message = mailbox_message.clone();
-    caller_scheduled_message.enqueue_sequence = 1;
-    caller_scheduled_message.available_after_height = 3;
-    caller_scheduled_message.expires_at_height = 4;
-    let schedule_error = isi::RecordSoracloudMailboxMessage {
-        message: caller_scheduled_message.clone(),
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("a caller must not choose authoritative mailbox schedule fields");
-    assert!(schedule_error.to_string().contains("enqueue_sequence"));
-    assert!(stx.world.soracloud_mailbox_messages.is_empty());
-    let mut overdelayed_message = mailbox_message.clone();
-    overdelayed_message.delivery_delay_blocks = 3;
-    let delay_error = isi::RecordSoracloudMailboxMessage {
-        message: overdelayed_message.clone(),
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("delivery delay must remain within destination retention");
-    assert!(delay_error.to_string().contains("delivery delay"));
-    assert!(stx.world.soracloud_mailbox_messages.is_empty());
-    let mut oversized_message = mailbox_message.clone();
-    oversized_message.payload_bytes = vec![0xA5; 17];
-    oversized_message.payload_commitment = Hash::new(&oversized_message.payload_bytes);
-    let payload_error = isi::RecordSoracloudMailboxMessage {
-        message: oversized_message.clone(),
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("destination mailbox payload limit must be authoritative");
-    assert!(
-        payload_error
-            .to_string()
-            .contains("allows at most 16 bytes")
-    );
-    assert!(stx.world.soracloud_mailbox_messages.is_empty());
-    isi::RecordSoracloudMailboxMessage {
+    let disabled_mailbox_error = isi::RecordSoracloudMailboxMessage {
         message: mailbox_message.clone(),
     }
-    .execute(&ALICE_ID, &mut stx)?;
-    let (persisted_mailbox_id, persisted_mailbox_message) = stx
-        .world
-        .soracloud_mailbox_messages
-        .iter()
-        .next()
-        .map(|(message_id, message)| (*message_id, message.clone()))
-        .expect("mailbox message persisted with a ledger-assigned schedule");
-    assert_eq!(persisted_mailbox_id, persisted_mailbox_message.message_id);
-    assert_eq!(
-        persisted_mailbox_id,
-        derive_soracloud_mailbox_message_id_v1(&persisted_mailbox_message)
-    );
-    assert!(persisted_mailbox_message.enqueue_sequence > 0);
-    assert_eq!(
-        persisted_mailbox_message.from_service_version,
-        victim_version
-    );
-    assert_eq!(persisted_mailbox_message.to_service_version, victim_version);
-    assert_eq!(
-        persisted_mailbox_message.available_after_height,
-        persisted_mailbox_message.enqueue_sequence + 2
-    );
-    assert_eq!(
-        persisted_mailbox_message.expires_at_height,
-        persisted_mailbox_message.enqueue_sequence + 3
-    );
-    persisted_mailbox_message
-        .validate()
-        .expect("persisted mailbox schedule must validate");
-    let pending_limit_message = mailbox_message.clone();
-    let pending_limit_error = isi::RecordSoracloudMailboxMessage {
-        message: pending_limit_message.clone(),
-    }
     .execute(&ALICE_ID, &mut stx)
-    .expect_err("an unconsumed message must occupy the destination pending slot");
-    assert!(pending_limit_error.to_string().contains("pending limit"));
-    assert_eq!(stx.world.soracloud_mailbox_messages.len(), 1);
+    .expect_err("ordered mailbox admission must fail closed without consensus re-execution");
+    assert!(matches!(
+        disabled_mailbox_error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.contains("disabled until consensus can re-execute the exact admitted IVM bundle")
+    ));
+    assert!(stx.world.soracloud_mailbox_messages.is_empty());
     let mut runtime_receipt = SoraRuntimeReceiptV1 {
         schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
         receipt_id: Hash::new(b"cross-service-runtime-receipt"),
@@ -1175,12 +1125,12 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         service_version: victim_version.to_owned(),
         handler_name: "update".parse().expect("valid handler"),
         handler_class: SoraServiceHandlerClassV1::Update,
-        request_commitment: persisted_mailbox_message.payload_commitment,
+        request_commitment: mailbox_message.payload_commitment,
         result_commitment: Hash::new(b"mailbox-result"),
         certified_by: SoraCertifiedResponsePolicyV1::None,
         emitted_sequence: 0,
         execution_host: None,
-        mailbox_message_id: Some(persisted_mailbox_id),
+        mailbox_message_id: Some(Hash::new(b"disabled-mailbox-message")),
         journal_artifact_hash: None,
         checkpoint_artifact_hash: None,
     };
@@ -1290,6 +1240,10 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         },
         input_artifact: private_artifact("input", 0xD2),
         output_artifact: private_artifact("output", 0xD3),
+        output_replication_order_id:
+            iroha_data_model::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1(
+                &ManifestDigest::new([0xD3; 32]),
+            ),
         input_commitment: Hash::new(b"input-commitment"),
         output_commitment: Hash::new(b"output-commitment"),
         request_commitment: Hash::prehashed([0; 32]),
@@ -1298,8 +1252,12 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         emitted_block_height: 0,
     };
     let (private_output_manifest_payload, private_output_manifest_digest) =
-        private_output_manifest_fixture(0xD3, private_receipt.output_artifact.ciphertext_bytes);
+        private_artifact_manifest_fixture(0xD3, private_receipt.output_artifact.ciphertext_bytes);
     private_receipt.output_artifact.sorafs_manifest_digest = private_output_manifest_digest;
+    private_receipt.output_replication_order_id =
+        iroha_data_model::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1(
+            &private_output_manifest_digest,
+        );
     private_receipt.request_commitment =
         derive_soracloud_private_model_request_commitment_v1(&private_receipt);
     private_receipt.result_commitment =
@@ -1307,7 +1265,6 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     private_receipt.receipt_id =
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&private_receipt);
     let private_receipt_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: private_output_manifest_payload.clone(),
         receipt: private_receipt.clone(),
     }
     .execute(&BOB_ID, &mut stx)
@@ -1333,7 +1290,6 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     wrong_peer_receipt.receipt_id =
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&wrong_peer_receipt);
     let wrong_peer_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: private_output_manifest_payload.clone(),
         receipt: wrong_peer_receipt,
     }
     .execute(&ALICE_ID, &mut stx)
@@ -1352,7 +1308,6 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     inactive_lane_receipt.receipt_id =
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&inactive_lane_receipt);
     let inactive_lane_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: private_output_manifest_payload.clone(),
         receipt: inactive_lane_receipt,
     }
     .execute(&ALICE_ID, &mut stx)
@@ -1363,7 +1318,6 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
             if message.contains("attesting_validator must exactly match the authority's active public-lane validator record")
     ));
     let missing_model_pin_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: private_output_manifest_payload,
         receipt: private_receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)

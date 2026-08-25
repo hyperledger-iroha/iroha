@@ -77,7 +77,7 @@ revoked, so a legitimate branch is not stranded when issuance closes.
 
 ## Artifacts and native bridge
 
-Bridge ABI 22 exposes the current Kagemusha artifact contract. It reports
+Bridge ABI 23 exposes the current Kagemusha artifact contract. It reports
 manifest schema `kagemusha.offline.recursive_spend.artifact_manifest.v4`,
 backend `halo2/ipa-pasta-cycle-compact-v5`, transcript
 `kagemusha-pasta-cycle-poseidon-compact-v5`, and the exact StepEq/StepEp circuit
@@ -125,7 +125,7 @@ The complete first-release route set is:
 - `GET /v1/offline/operations/{operation_id}`
 
 The capability route reports the universal, asset-neutral application protocol:
-`cash_handoff_capability = "cash_handoff_v1"`, bridge ABI 22, maximum hop count
+`cash_handoff_capability = "cash_handoff_v1"`, bridge ABI 23, maximum hop count
 8, and `ready = true`. These are its only response fields. It takes no query
 and never evaluates an asset, domain, dataspace, verifier catalog, or proof
 backend. Wallet/device handoff must

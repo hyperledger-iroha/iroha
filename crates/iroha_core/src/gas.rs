@@ -391,12 +391,10 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     {
         return BASE_REGISTER_SMART_CONTRACT;
     }
-    if let Some(commit) = any.downcast_ref::<
-        dm_isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt,
-    >() {
-        return gas_for_soracloud_private_execution_commit(
-            commit.output_manifest_payload.len(),
-        );
+    if let Some(commit) =
+        any.downcast_ref::<dm_isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt>()
+    {
+        return gas_for_soracloud_private_execution_commit(commit.output_manifest_payload.len());
     }
     // Fallback: charge based on Norito-encoded size of the instruction payload
     // This ensures determinism for unknown/custom instructions under custom executors.

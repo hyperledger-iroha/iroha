@@ -6673,7 +6673,7 @@ fn parse_world(
         &mut map,
         "soracloud_private_uploaded_model_execution_receipts",
     )?;
-    let pin_manifests = take_optional_default(&mut map, "pin_manifests")?;
+    let pin_manifests = take_required(&mut map, "pin_manifests")?;
     SoracloudInrouPersistedStateV1 {
         sequence_watermark: *soracloud_sequence_watermark.view().get(),
         service_revisions: &soracloud_service_revisions,
@@ -7015,6 +7015,37 @@ fn parse_world(
         consensus_evidence: Storage::default(),
         external_event_buf,
     };
+    {
+        let world_view = world.view();
+        for (_receipt_id, receipt) in world_view
+            .soracloud_private_uploaded_model_execution_receipts()
+            .iter()
+        {
+            let bundle = world_view
+                .soracloud_uploaded_model_bundles()
+                .get(&(
+                    receipt.service_name.as_ref().to_owned(),
+                    receipt.model_id.clone(),
+                    receipt.weight_version.clone(),
+                ))
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_receipts",
+                        "private receipt must reference an authoritative uploaded-model bundle",
+                    )
+                })?;
+            crate::soracloud_runtime::validate_finalized_soracloud_uploaded_model_release(
+                &world_view,
+                bundle,
+            )
+            .map_err(|error| {
+                invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_receipts",
+                    error,
+                )
+            })?;
+        }
+    }
     let parliament_attempts_view = world.parliament_attempts.view();
     let governance_proposals_view = world.governance_proposals.view();
     for (attempt_id, attempt) in parliament_attempts_view.iter() {

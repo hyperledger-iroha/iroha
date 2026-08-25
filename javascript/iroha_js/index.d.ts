@@ -13927,11 +13927,15 @@ export function assembleSoracloudHfDeployRequest(
 
 export interface SoracloudPrivateArtifactRefInput {
   schemaVersion: number | bigint | string;
-  sorafsManifestDigest: string;
+  /** Plain dense JavaScript array of exactly 32 unsigned SoraFS manifest-digest bytes. */
+  sorafsManifestDigest: ReadonlyArray<number>;
+  /** Plain dense JavaScript array of exactly 36 canonical CIDv1/dag-cbor/BLAKE3-256 bytes. */
   sorafsRootCid: ReadonlyArray<number>;
+  /** Exact uppercase checksummed marker-bit Iroha Hash literal. */
   artifactHash: string;
+  /** Positive encrypted size, capped at 75,497,472 bytes in V1. */
   ciphertextBytes: number | bigint | string;
-  artifactRole: "input" | "output";
+  artifactRole: "input";
 }
 
 export interface SoracloudPrivateOutputRecipientInput {
@@ -13941,6 +13945,7 @@ export interface SoracloudPrivateOutputRecipientInput {
   kem: "X25519HkdfSha256";
   aead: "Aes256Gcm";
   publicKeyBytes: string;
+  /** Exact Iroha Blake2b-256 prehash of the decoded public key. */
   publicKeyFingerprint: string;
 }
 
@@ -13950,6 +13955,7 @@ export interface SoracloudPrivateUploadedModelExecuteInput {
   weightVersion: string;
   modelId: string | null;
   modelName: string | null;
+  /** Exact uppercase checksummed marker-bit Iroha Hash literal, or null. */
   bundleRoot: string | null;
   decryptionRequestId: string;
   inputArtifact: SoracloudPrivateArtifactRefInput;
@@ -13957,13 +13963,16 @@ export interface SoracloudPrivateUploadedModelExecuteInput {
 }
 
 export interface SoracloudPrivateUploadedModelReceiptQueryInput {
+  /** Exact uppercase checksummed marker-bit Iroha Hash literal. */
   receiptId?: string;
   serviceName?: string;
   modelId?: string;
   weightVersion?: string;
+  /** Opaque continuation token returned as `continue_cursor` by the preceding page. */
+  cursor?: string;
+  /** Positive integer no greater than 500; the server defaults omission to 50. */
   limit?: number | bigint | string;
   countMode?: "bounded" | "exact";
-  cursor?: string;
 }
 
 export function buildSoracloudPrivateUploadedModelExecuteRequest(

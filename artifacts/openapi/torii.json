@@ -8761,25 +8761,7 @@
             "type": "string"
           },
           "approval_mode": {
-            "enum": [
-              "PARLIAMENT_SORTITION_JIT",
-              "LEGACY_COUNCIL_EPOCH"
-            ],
-            "type": "string"
-          },
-          "approval_threshold_denominator": {
-            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
-            "type": "string"
-          },
-          "approval_threshold_numerator": {
-            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
-            "type": "string"
-          },
-          "auto_finalize_plain": {
-            "type": "boolean"
-          },
-          "auto_finalize_plain_scope": {
-            "const": "GENERIC_NON_VALIDATION_FEE_ONLY",
+            "const": "PARLIAMENT_ATTEMPT_TIMED_OVN_V1",
             "type": "string"
           },
           "bond_escrow_account": {
@@ -8798,7 +8780,7 @@
             "minLength": 1,
             "type": "string"
           },
-          "conviction_step_blocks": {
+          "commitment_phase_blocks": {
             "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
@@ -8810,7 +8792,19 @@
             "minLength": 1,
             "type": "string"
           },
-          "max_conviction": {
+          "invitation_phase_blocks": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
+          "mandatory_private_ballots": {
+            "const": true,
+            "type": "boolean"
+          },
+          "max_ballot_retries": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
+          "max_corpus_entries": {
             "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
@@ -8822,10 +8816,6 @@
             "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
-          "min_turnout": {
-            "minLength": 1,
-            "type": "string"
-          },
           "network_id": {
             "$ref": "#/components/schemas/NetworkId"
           },
@@ -8833,16 +8823,36 @@
             "minLength": 1,
             "type": "string"
           },
-          "parliament_quorum_bps": {
+          "opening_phase_blocks": {
             "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
-          "plain_voting_enabled": {
+          "private_ballot_protocol": {
+            "const": "TIMED_OVN_TLE_THRESHOLD_BLS_V1",
+            "type": "string"
+          },
+          "proposal_backed_referendum_ballots_supported": {
+            "const": false,
             "type": "boolean"
+          },
+          "registration_phase_blocks": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
+          "release_delay_blocks": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
           },
           "schema": {
             "const": "iroha.governance.capabilities.v1",
             "type": "string"
+          },
+          "standalone_plain_ballots_supported": {
+            "type": "boolean"
+          },
+          "standalone_zk_ballots_supported": {
+            "const": true,
+            "type": "boolean"
           },
           "supported_proposal_kinds": {
             "items": {
@@ -8860,14 +8870,12 @@
             "type": "array",
             "uniqueItems": true
           },
+          "survivor_freeze_phase_blocks": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
           "target_body_sizes": {
             "$ref": "#/components/schemas/GovernanceTargetBodySizesV1"
-          },
-          "validation_fee_plain_electorate_rules": {
-            "$ref": "#/components/schemas/ValidationFeePlainElectorateRulesV1"
-          },
-          "validation_fee_plain_requires_explicit_finalization": {
-            "type": "boolean"
           },
           "version": {
             "const": 1,
@@ -8876,10 +8884,6 @@
           },
           "voting_asset_id": {
             "minLength": 1,
-            "type": "string"
-          },
-          "window_span": {
-            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           }
         },
@@ -8892,25 +8896,26 @@
           "abi_version",
           "data_model_version",
           "approval_mode",
-          "plain_voting_enabled",
-          "auto_finalize_plain",
-          "auto_finalize_plain_scope",
-          "validation_fee_plain_requires_explicit_finalization",
+          "private_ballot_protocol",
+          "mandatory_private_ballots",
+          "proposal_backed_referendum_ballots_supported",
+          "standalone_plain_ballots_supported",
+          "standalone_zk_ballots_supported",
           "citizenship_asset_id",
           "citizenship_bond_amount",
           "citizenship_escrow_account",
           "voting_asset_id",
           "min_bond_amount",
           "bond_escrow_account",
-          "validation_fee_plain_electorate_rules",
-          "conviction_step_blocks",
-          "max_conviction",
           "min_enactment_delay",
-          "window_span",
-          "min_turnout",
-          "approval_threshold_numerator",
-          "approval_threshold_denominator",
-          "parliament_quorum_bps",
+          "invitation_phase_blocks",
+          "registration_phase_blocks",
+          "survivor_freeze_phase_blocks",
+          "commitment_phase_blocks",
+          "release_delay_blocks",
+          "opening_phase_blocks",
+          "max_ballot_retries",
+          "max_corpus_entries",
           "target_body_sizes",
           "supported_proposal_kinds",
           "supported_routes"
@@ -12183,11 +12188,23 @@
             "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
+          "confirmation_jury": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
+          "coordination_council": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
           "fma_committee": {
             "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
           "interest_panel": {
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
+          "mpc_committee": {
             "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
@@ -12213,9 +12230,12 @@
           "agenda_council",
           "interest_panel",
           "review_panel",
-          "policy_jury",
+          "coordination_council",
+          "mpc_committee",
+          "fma_committee",
           "oversight_committee",
-          "fma_committee"
+          "policy_jury",
+          "confirmation_jury"
         ],
         "type": "object"
       },
@@ -42812,303 +42832,25 @@
         "type": "object",
         "x-iroha-norito-schema": "iroha.torii.v1.validation_fee.current_policy_proof.response"
       },
-      "ValidationFeePlainBallotDraftRequestV1": {
-        "additionalProperties": false,
-        "properties": {
-          "direction": {
-            "enum": [
-              "AYE",
-              "NAY",
-              "ABSTAIN"
-            ],
-            "type": "string"
-          },
-          "owner": {
-            "description": "Canonical account that must authenticate the signed ballot transaction.",
-            "maxLength": 4096,
-            "minLength": 1,
-            "type": "string"
-          },
-          "version": {
-            "const": 1,
-            "format": "uint16",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "owner",
-          "direction"
-        ],
-        "type": "object"
-      },
-      "ValidationFeePlainBallotDraftResponseV1": {
-        "additionalProperties": false,
-        "properties": {
-          "amount": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "direction": {
-            "enum": [
-              "AYE",
-              "NAY",
-              "ABSTAIN"
-            ],
-            "type": "string"
-          },
-          "duration_blocks": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "owner": {
-            "maxLength": 4096,
-            "minLength": 1,
-            "type": "string"
-          },
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "tx_instructions": {
-            "items": {
-              "$ref": "#/components/schemas/ValidationFeeProposalInstructionDraftV1"
-            },
-            "maxItems": 1,
-            "minItems": 1,
-            "type": "array"
-          },
-          "version": {
-            "const": 1,
-            "format": "uint16",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "proposal_id",
-          "owner",
-          "amount",
-          "duration_blocks",
-          "direction",
-          "tx_instructions"
-        ],
-        "type": "object"
-      },
-      "ValidationFeePlainElectorateMemberV1": {
-        "additionalProperties": false,
-        "properties": {
-          "account_id": {
-            "description": "Canonical domainless citizen account.",
-            "minLength": 1,
-            "type": "string"
-          },
-          "bonded_amount": {
-            "description": "Positive exact-integer citizenship amount frozen at the referendum boundary.",
-            "maxLength": 155,
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "bonded_height": {
-            "description": "Canonical unsigned decimal height at which the uninterrupted citizenship bond began.",
-            "pattern": "^(?:0|[1-9][0-9]*)$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "account_id",
-          "bonded_height",
-          "bonded_amount"
-        ],
-        "type": "object"
-      },
-      "ValidationFeePlainElectorateRulesV1": {
-        "additionalProperties": false,
-        "properties": {
-          "approval_threshold_denominator": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "approval_threshold_numerator": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "ballot_amount": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "ballot_duration_blocks": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "bond_escrow_account": {
-            "maxLength": 4096,
-            "minLength": 1,
-            "type": "string"
-          },
-          "citizenship_amount": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "conviction_step_blocks": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "eligibility_rule": {
-            "additionalProperties": false,
-            "properties": {
-              "rule": {
-                "const": "proposal_operator_at_or_before_gate_others_after_gate"
-              },
-              "value": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "rule",
-              "value"
-            ],
-            "type": "object"
-          },
-          "max_conviction": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "max_members": {
-            "const": "256",
-            "type": "string"
-          },
-          "min_turnout": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "slash_receiver_account": {
-            "maxLength": 4096,
-            "minLength": 1,
-            "type": "string"
-          },
-          "voting_asset_id": {
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": [
-          "voting_asset_id",
-          "bond_escrow_account",
-          "slash_receiver_account",
-          "ballot_amount",
-          "ballot_duration_blocks",
-          "citizenship_amount",
-          "max_members",
-          "conviction_step_blocks",
-          "max_conviction",
-          "min_turnout",
-          "approval_threshold_numerator",
-          "approval_threshold_denominator",
-          "eligibility_rule"
-        ],
-        "type": "object"
-      },
-      "ValidationFeePlainElectorateSnapshotV1": {
-        "additionalProperties": false,
-        "properties": {
-          "approval_gate_height": {
-            "description": "First height at which all seven proposal-local Parliament bodies held approval quorum.",
-            "pattern": "^(?:0|[1-9][0-9]*)$",
-            "type": "string"
-          },
-          "captured_at_height": {
-            "description": "Exact referendum start height at whose boundary the electorate was frozen.",
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "member_count": {
-            "description": "Canonical unsigned decimal member count; it exactly matches the members array.",
-            "pattern": "^(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-6])$",
-            "type": "string"
-          },
-          "members": {
-            "description": "Complete canonically ordered, duplicate-free frozen electorate.",
-            "items": {
-              "$ref": "#/components/schemas/ValidationFeePlainElectorateMemberV1"
-            },
-            "maxItems": 256,
-            "minItems": 1,
-            "type": "array"
-          },
-          "proposal_id": {
-            "allOf": [
-              {
-                "description": "Canonical non-zero 32-byte value in Norito JSON's uppercase hexadecimal representation.",
-                "maxLength": 64,
-                "minLength": 64,
-                "not": {
-                  "pattern": "^0{64}$"
-                },
-                "pattern": "^[0-9A-F]{64}$",
-                "type": "string"
-              }
-            ],
-            "description": "Native proposal identifier in Norito JSON's canonical uppercase hexadecimal representation."
-          },
-          "proposal_operator": {
-            "description": "Canonical domainless proposal-operator account.",
-            "minLength": 1,
-            "type": "string"
-          },
-          "roster_root": {
-            "allOf": [
-              {
-                "description": "Canonical non-zero 32-byte value in Norito JSON's uppercase hexadecimal representation.",
-                "maxLength": 64,
-                "minLength": 64,
-                "not": {
-                  "pattern": "^0{64}$"
-                },
-                "pattern": "^[0-9A-F]{64}$",
-                "type": "string"
-              }
-            ],
-            "description": "Domain-separated commitment to the complete frozen snapshot payload."
-          }
-        },
-        "required": [
-          "proposal_id",
-          "proposal_operator",
-          "captured_at_height",
-          "approval_gate_height",
-          "member_count",
-          "members",
-          "roster_root"
-        ],
-        "type": "object"
-      },
       "ValidationFeeProposalDetailV1": {
         "additionalProperties": false,
         "properties": {
-          "body_progress": {
-            "description": "Exact Parliament counts encoded as canonical unsigned decimal strings.",
-            "items": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
-            "type": "array"
-          },
           "current_height": {
-            "pattern": "^(?:0|[1-9][0-9]*)$",
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
             "type": "string"
           },
-          "locks": {
-            "$ref": "#/components/schemas/JsonValue",
-            "description": "Retained citizen locks with expiry and duration encoded as canonical unsigned decimal strings."
+          "governance_certificate": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GovernanceParliamentCertificateV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "proposal": {
             "$ref": "#/components/schemas/ValidationFeeProposalRecordV1"
-          },
-          "tally": {
-            "$ref": "#/components/schemas/JsonValue",
-            "description": "Exact u128 tally and threshold values encoded as canonical unsigned decimal strings."
           },
           "version": {
             "const": 1,
@@ -43120,66 +42862,86 @@
           "version",
           "proposal",
           "current_height",
-          "body_progress",
-          "tally",
-          "locks"
+          "governance_certificate"
         ],
         "type": "object"
+      },
+      "ValidationFeeProposalDraftPayloadV1": {
+        "description": "Closed first-release validation-fee Parliament proposal draft payload.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "POLICY",
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "payout_lifecycle_proposal_id": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "policy": {
+                    "$ref": "#/components/schemas/JsonValue"
+                  }
+                },
+                "required": [
+                  "policy",
+                  "payout_lifecycle_proposal_id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "PAYOUT_LIFECYCLE",
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "payout_binding": {
+                    "$ref": "#/components/schemas/JsonValue"
+                  }
+                },
+                "required": [
+                  "payout_binding"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "ValidationFeeProposalDraftRequestV1": {
         "additionalProperties": false,
         "properties": {
-          "mode": {
-            "default": "Plain",
-            "description": "Zk is deliberately outside the first-release validation-fee contract.",
-            "oneOf": [
-              {
-                "enum": [
-                  "Plain"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "plain_electorate_rules": {
-            "$ref": "#/components/schemas/ValidationFeePlainElectorateRulesV1"
-          },
           "proposal": {
-            "$ref": "#/components/schemas/JsonValue",
-            "description": "Closed POLICY or PAYOUT_LIFECYCLE typed payload."
+            "$ref": "#/components/schemas/ValidationFeeProposalDraftPayloadV1"
           },
           "proposal_operator": {
-            "description": "Canonical domainless transaction authority bound into the exact typed proposal fingerprint.",
-            "minLength": 1,
-            "type": "string"
-          },
-          "referendum_window": {
-            "oneOf": [
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "lower": {
-                    "pattern": "^(?:0|[1-9][0-9]*)$",
-                    "type": "string"
-                  },
-                  "upper": {
-                    "pattern": "^(?:0|[1-9][0-9]*)$",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "lower",
-                  "upper"
-                ],
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           },
           "version": {
             "const": 1,
@@ -43190,10 +42952,7 @@
         "required": [
           "version",
           "proposal_operator",
-          "proposal",
-          "referendum_window",
-          "mode",
-          "plain_electorate_rules"
+          "proposal"
         ],
         "type": "object"
       },
@@ -43207,7 +42966,10 @@
             "type": "string"
           },
           "proposal_kind": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/GovernanceParliamentProposalKindV1"
+          },
+          "proposal_operator": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           },
           "tx_instructions": {
             "items": {
@@ -43299,84 +43061,38 @@
         "additionalProperties": false,
         "properties": {
           "created_height": {
-            "description": "Canonical unsigned decimal block height.",
-            "pattern": "^(?:0|[1-9][0-9]*)$",
-            "type": "string"
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           },
-          "enacted_at_height": {
-            "oneOf": [
-              {
-                "pattern": "^(?:0|[1-9][0-9]*)$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "finalization_evidence": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/JsonValue"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "parliament_snapshot": {
-            "$ref": "#/components/schemas/JsonValue"
-          },
-          "pipeline": {
-            "$ref": "#/components/schemas/JsonValue",
-            "description": "Ordered pipeline stages with every height encoded as a canonical unsigned decimal string."
-          },
-          "plain_electorate_snapshot": {
-            "description": "Complete citizen electorate frozen at referendum start; null only before the referendum opens.",
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ValidationFeePlainElectorateSnapshotV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "proposal_kind": {
-            "$ref": "#/components/schemas/JsonValue",
-            "description": "Exact native ValidationFeePolicy or ValidationFeePayoutLifecycle ProposalKind."
+          "kind": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalKindV1"
           },
           "proposer": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "referendum": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           },
           "status": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/ValidationFeeProposalStatusV1"
           }
         },
         "required": [
-          "proposal_id",
           "proposer",
-          "proposal_kind",
+          "kind",
           "created_height",
-          "status",
-          "pipeline",
-          "referendum",
-          "parliament_snapshot",
-          "plain_electorate_snapshot",
-          "finalization_evidence",
-          "enacted_at_height"
+          "status"
         ],
         "type": "object"
+      },
+      "ValidationFeeProposalStatusV1": {
+        "enum": [
+          "Proposed",
+          "Rejected",
+          "Enacted",
+          "Superseded",
+          "ExecutionFailed"
+        ],
+        "type": "string"
       },
       "VerifyingKeyId": {
         "additionalProperties": false,
@@ -89869,36 +89585,6 @@
           "Sumeragi"
         ],
         "x-iroha-tool-effect": "read"
-      },
-      "post": {
-        "description": "Submit consensus evidence payloads.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit evidence.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sumeragi/evidence/count": {
@@ -90946,155 +90632,6 @@
           ]
         },
         "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft": {
-      "post": {
-        "description": "Validate the authenticated citizen against the retained proposal electorate and return one exact CastPlainBallot instruction. Amount and duration are forced from the immutable proposal rules.",
-        "parameters": [
-          {
-            "description": "Exact lowercase 32-byte native proposal fingerprint.",
-            "in": "path",
-            "name": "proposal_id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
-            "in": "header",
-            "name": "X-Iroha-Account",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Signature",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Timestamp-Ms",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Nonce",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
-            "in": "header",
-            "name": "X-Iroha-Witness",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ValidationFeePlainBallotDraftRequestV1"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ValidationFeePlainBallotDraftResponseV1"
-                }
-              }
-            },
-            "description": "Successful response",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical authentication headers selecting the private response.",
-                "required": true,
-                "schema": {
-                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "IrohaCanonicalAccount": [],
-            "IrohaCanonicalNonce": [],
-            "IrohaCanonicalSignature": [],
-            "IrohaCanonicalTimestampMs": []
-          },
-          {
-            "IrohaCanonicalWitness": []
-          }
-        ],
-        "summary": "Draft a proposal-bound PLAIN ballot.",
-        "tags": [
-          "Validation fee"
-        ],
-        "x-iroha-canonical-auth-v1": {
-          "body_hash_bound": true,
-          "exact_request_target": true,
-          "modes": [
-            {
-              "forbidden_headers": [
-                "X-Iroha-Witness"
-              ],
-              "kind": "single_signature",
-              "required_headers": [
-                "X-Iroha-Account",
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce"
-              ]
-            },
-            {
-              "forbidden_headers": [
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce"
-              ],
-              "kind": "multisig_witness",
-              "optional_headers": [
-                "X-Iroha-Account"
-              ],
-              "required_headers": [
-                "X-Iroha-Witness"
-              ]
-            }
-          ]
-        },
-        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/vpn/profile": {

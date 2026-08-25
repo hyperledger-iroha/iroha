@@ -3053,8 +3053,9 @@ mod parliament_draft_response_validation_tests {
 
     #[test]
     fn attempt_read_state_payload_must_be_one_valid_bounded_norito_frame() {
-        let frame = norito::to_bytes_bounded(&42_u64, PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1)
-            .expect("encode Parliament read state fixture");
+        let frame =
+            norito::core::to_bytes_bounded(&42_u64, PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1)
+                .expect("encode Parliament read state fixture");
         assert!(validate_parliament_attempt_state_frame(&hex::encode(&frame)).is_ok());
 
         let mut corrupted = frame;

@@ -178,7 +178,7 @@ EthereumMainnetSccp.RequireOutboundRoute(EthereumMainnetSccp.DomainSora, Ethereu
 if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 23u
     || !SoraFsReferenceValidators.IsAppealFinanceAvailable())
 {
-    throw new InvalidOperationException("Packed ABI-22 SoraFS native bridge is unavailable");
+    throw new InvalidOperationException("Packed ABI-23 SoraFS native bridge is unavailable");
 }
 
 Console.WriteLine("Hyperledger.Iroha.Sdk package consumer smoke passed");

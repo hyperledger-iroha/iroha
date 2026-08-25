@@ -57,7 +57,7 @@ use iroha_data_model::{
             PinManifestSummaryV1, PinPolicy, PinResourceUsage, PinStatus, PinStatusKindV1,
             ProviderIngestCompletionAuthorityV1, ProviderIngestFinalizedAnchorV1,
             ReplicationOrderCompletionRecord, ReplicationOrderId, ReplicationOrderRecord,
-            ReplicationOrderStatus, StorageClass,
+            ReplicationOrderStatus, StorageClass, derive_sorafs_auto_replication_order_id_v1,
         },
         pricing::{
             PricingComputationError, PricingScheduleRecord, ProviderCreditRecord,
@@ -2055,7 +2055,6 @@ fn convert_storage_class(
 fn order_hex(order_id: &ReplicationOrderId) -> String {
     hex::encode(order_id.as_bytes())
 }
-const AUTO_REPLICATION_ORDER_NAMESPACE: &[u8] = b"sorafs:auto-replication-order:v1";
 const AUTO_REPLICATION_ORDER_SLICE_GIB: u64 = 1;
 const AUTO_REPLICATION_ORDER_EPOCH_SLACK: u64 = 1;
 const AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS: u32 = 86_400;
@@ -2136,18 +2135,6 @@ fn select_auto_replication_providers(
     }
     Ok(providers)
 }
-fn auto_replication_order_id(
-    digest: &ManifestDigest,
-    assignments: &[ReplicationAssignmentV1],
-) -> ReplicationOrderId {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(AUTO_REPLICATION_ORDER_NAMESPACE);
-    hasher.update(digest.as_bytes());
-    for assignment in assignments {
-        hasher.update(&assignment.provider_id);
-    }
-    ReplicationOrderId::new(*hasher.finalize().as_bytes())
-}
 fn build_auto_replication_order(
     record: &PinManifestRecord,
     issued_by: &AccountId,
@@ -2173,7 +2160,7 @@ fn build_auto_replication_order(
             lane: None,
         }
     }));
-    let order_id = auto_replication_order_id(&record.digest, &canonical_assignments);
+    let order_id = derive_sorafs_auto_replication_order_id_v1(&record.digest);
     let deadline_epoch = issued_epoch
         .checked_add(AUTO_REPLICATION_ORDER_EPOCH_SLACK)
         .ok_or_else(|| invalid_parameter("automatic replication deadline epoch overflow"))?;

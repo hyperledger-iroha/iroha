@@ -1,14 +1,16 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.math.BigInteger
 import java.nio.charset.StandardCharsets
-import java.util.Base64
 import java.util.Collections
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.crypto.IrohaHash
 
 /** Minimal JSON parser for Soracloud private uploaded-model execute and receipt surfaces. */
 object SoracloudPrivateUploadedModelJsonParser {
 
     private const val U32_MAX = 4_294_967_295L
+    private val U64_MAX = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
     private const val SUBMITTED = "submitted"
     private const val COMMITTED = "committed"
     private const val X25519_HKDF_SHA256 = "X25519HkdfSha256"
@@ -17,6 +19,7 @@ object SoracloudPrivateUploadedModelJsonParser {
         "schema_version", "status", "submission_status", "transaction_hash", "receipt",
         "output_artifact",
     )
+    private val UPLOADED_MODEL_STATUS_FIELDS = setOf("schema_version", "bundle", "artifact")
     private val RECEIPT_FIELDS = setOf(
         "schema_version", "network_id", "receipt_id", "service_name", "service_version", "model_id",
         "weight_version", "runtime_version", "model_manifest_digest", "model_bundle_root",
@@ -36,11 +39,10 @@ object SoracloudPrivateUploadedModelJsonParser {
     private val KEM_FIELDS = setOf("kem", "value")
     private val AEAD_FIELDS = setOf("aead", "value")
     private val RECEIPT_LIST_REQUIRED_FIELDS = setOf(
-        "schema_version", "receipts", "returned_items", "remaining_items", "has_more",
-        "count_mode",
+        "schema_version", "receipts", "total", "returned_items", "remaining_items", "has_more",
+        "count_mode", "continue_cursor",
     )
-    private val RECEIPT_LIST_ALLOWED_FIELDS = RECEIPT_LIST_REQUIRED_FIELDS +
-        setOf("total", "continue_cursor")
+    private val RECEIPT_LIST_ALLOWED_FIELDS = RECEIPT_LIST_REQUIRED_FIELDS
 
     @JvmStatic
     fun parseExecuteResponse(payload: ByteArray): SoracloudPrivateUploadedModelExecuteResponse {
@@ -55,7 +57,7 @@ object SoracloudPrivateUploadedModelJsonParser {
             root["submission_status"],
             "soracloud private execute response.submission_status",
         )
-        val transactionHash = optionalNonBlankString(
+        val transactionHash = optionalHashLiteral(
             root["transaction_hash"],
             "soracloud private execute response.transaction_hash",
         )
@@ -76,14 +78,34 @@ object SoracloudPrivateUploadedModelJsonParser {
         check(outputArtifact == receipt.outputArtifact) {
             "soracloud private execute response.output_artifact must match receipt.output_artifact"
         }
+        val status = parseUploadedModelStatus(
+            expectObject(root["status"], "soracloud private execute response.status"),
+            "soracloud private execute response.status",
+        )
         return SoracloudPrivateUploadedModelExecuteResponse(
             schemaVersion = schemaVersion(root["schema_version"], "soracloud private execute response.schema_version"),
-            status = expectObject(root["status"], "soracloud private execute response.status"),
+            status = status,
             submissionStatus = submissionStatus,
             transactionHash = transactionHash,
             receipt = receipt,
             outputArtifact = outputArtifact,
         )
+    }
+
+    private fun parseUploadedModelStatus(
+        root: Map<String, Any?>,
+        context: String,
+    ): Map<String, Any?> {
+        requireFields(
+            root,
+            allowed = UPLOADED_MODEL_STATUS_FIELDS,
+            required = UPLOADED_MODEL_STATUS_FIELDS,
+            path = context,
+        )
+        schemaVersion(root["schema_version"], "$context.schema_version")
+        expectObject(root["bundle"], "$context.bundle")
+        root["artifact"]?.let { expectObject(it, "$context.artifact") }
+        return root
     }
 
     @JvmStatic
@@ -98,17 +120,64 @@ object SoracloudPrivateUploadedModelJsonParser {
         val receiptValues = asArray(root["receipts"], "soracloud private receipt list.receipts")
         val receipts = ArrayList<SoracloudPrivateUploadedModelExecutionReceipt>(receiptValues.size)
         for (i in receiptValues.indices) {
-            receipts.add(parseReceipt(expectObject(receiptValues[i], "soracloud private receipt list.receipts[$i]"), "soracloud private receipt list.receipts[$i]"))
+            val path = "soracloud private receipt list.receipts[$i]"
+            val receipt = parseReceipt(expectObject(receiptValues[i], path), path)
+            check(
+                receipt.emittedSequence > BigInteger.ZERO &&
+                    receipt.emittedBlockHeight > BigInteger.ZERO
+            ) {
+                "$path must have positive ledger coordinates"
+            }
+            receipts.add(receipt)
         }
+        val countMode = countMode(
+            root["count_mode"],
+            "soracloud private receipt list.count_mode",
+        )
+        val total = asOptionalBoundedLong(
+            root["total"],
+            "soracloud private receipt list.total",
+            0L,
+            U32_MAX,
+        )
+        check((countMode == "bounded") == (total == null)) {
+            "soracloud private receipt list.total must be null for `bounded` and non-null for `exact`"
+        }
+        val returnedItems = boundedLong(
+            root["returned_items"],
+            "soracloud private receipt list.returned_items",
+            0L,
+            U32_MAX,
+        )
+        val remainingItems = asOptionalBoundedLong(
+            root["remaining_items"],
+            "soracloud private receipt list.remaining_items",
+            0L,
+            U32_MAX,
+        )
+        val hasMore = asBoolean(root["has_more"], "soracloud private receipt list.has_more")
+        check(returnedItems == receipts.size.toLong()) {
+            "soracloud private receipt list.returned_items must equal receipts.size"
+        }
+        check(receipts.zipWithNext().all { (left, right) ->
+            left.emittedSequence < right.emittedSequence ||
+                (left.emittedSequence == right.emittedSequence && left.receiptId < right.receiptId)
+        }) {
+            "soracloud private receipt list.receipts must use canonical ledger order"
+        }
+        val continueCursor = optionalNonBlankString(
+            root["continue_cursor"],
+            "soracloud private receipt list.continue_cursor",
+        )
         return SoracloudPrivateUploadedModelReceiptListResponse(
             schemaVersion = schemaVersion(root["schema_version"], "soracloud private receipt list.schema_version"),
             receipts = receipts,
-            total = if (root.containsKey("total")) asOptionalNonNegativeLong(root["total"], "soracloud private receipt list.total") else null,
-            returnedItems = asNonNegativeLong(root["returned_items"], "soracloud private receipt list.returned_items"),
-            remainingItems = asNonNegativeLong(root["remaining_items"], "soracloud private receipt list.remaining_items"),
-            hasMore = asBoolean(root["has_more"], "soracloud private receipt list.has_more"),
-            countMode = requiredString(root["count_mode"], "soracloud private receipt list.count_mode").lowercase(),
-            continueCursor = optionalString(root["continue_cursor"], "soracloud private receipt list.continue_cursor"),
+            total = total,
+            returnedItems = returnedItems,
+            remainingItems = remainingItems,
+            hasMore = hasMore,
+            countMode = countMode,
+            continueCursor = continueCursor,
         )
     }
 
@@ -117,17 +186,34 @@ object SoracloudPrivateUploadedModelJsonParser {
         context: String,
     ): SoracloudPrivateUploadedModelExecutionReceipt {
         requireFields(root, allowed = RECEIPT_FIELDS, required = RECEIPT_FIELDS, path = context)
+        val emittedSequence = unsigned64Integer(
+            root["emitted_sequence"],
+            "$context.emitted_sequence",
+        )
+        val emittedBlockHeight = unsigned64Integer(
+            root["emitted_block_height"],
+            "$context.emitted_block_height",
+        )
+        check(
+            (emittedSequence == BigInteger.ZERO && emittedBlockHeight == BigInteger.ZERO) ||
+                (emittedSequence > BigInteger.ZERO && emittedBlockHeight > BigInteger.ZERO)
+        ) {
+            "$context ledger coordinates must both be zero or both be positive"
+        }
         return SoracloudPrivateUploadedModelExecutionReceipt(
             schemaVersion = schemaVersion(root["schema_version"], "$context.schema_version"),
             networkId = networkId(root["network_id"], "$context.network_id"),
-            receiptId = requiredString(root["receipt_id"], "$context.receipt_id"),
-            serviceName = requiredString(root["service_name"], "$context.service_name"),
+            receiptId = hashLiteral(root["receipt_id"], "$context.receipt_id"),
+            serviceName = canonicalServiceName(root["service_name"], "$context.service_name"),
             serviceVersion = requiredString(root["service_version"], "$context.service_version"),
             modelId = requiredString(root["model_id"], "$context.model_id"),
             weightVersion = requiredString(root["weight_version"], "$context.weight_version"),
             runtimeVersion = requiredString(root["runtime_version"], "$context.runtime_version"),
-            modelManifestDigest = requiredString(root["model_manifest_digest"], "$context.model_manifest_digest"),
-            modelBundleRoot = requiredString(root["model_bundle_root"], "$context.model_bundle_root"),
+            modelManifestDigest = manifestDigest(
+                root["model_manifest_digest"],
+                "$context.model_manifest_digest",
+            ),
+            modelBundleRoot = hashLiteral(root["model_bundle_root"], "$context.model_bundle_root"),
             policyId = requiredString(root["policy_id"], "$context.policy_id"),
             decryptionRequestId = requiredString(root["decryption_request_id"], "$context.decryption_request_id"),
             attestingValidator = parseAttestingValidator(
@@ -144,19 +230,16 @@ object SoracloudPrivateUploadedModelJsonParser {
                 "$context.output_artifact",
                 requiredRole = "output",
             ),
-            inputCommitment = requiredString(root["input_commitment"], "$context.input_commitment"),
-            outputCommitment = requiredString(root["output_commitment"], "$context.output_commitment"),
+            inputCommitment = hashLiteral(root["input_commitment"], "$context.input_commitment"),
+            outputCommitment = hashLiteral(root["output_commitment"], "$context.output_commitment"),
             outputRecipient = parseOutputRecipient(
                 expectObject(root["output_recipient"], "$context.output_recipient"),
                 "$context.output_recipient",
             ),
-            requestCommitment = requiredString(root["request_commitment"], "$context.request_commitment"),
-            resultCommitment = requiredString(root["result_commitment"], "$context.result_commitment"),
-            emittedSequence = asNonNegativeLong(root["emitted_sequence"], "$context.emitted_sequence"),
-            emittedBlockHeight = asNonNegativeLong(
-                root["emitted_block_height"],
-                "$context.emitted_block_height",
-            ),
+            requestCommitment = hashLiteral(root["request_commitment"], "$context.request_commitment"),
+            resultCommitment = hashLiteral(root["result_commitment"], "$context.result_commitment"),
+            emittedSequence = emittedSequence,
+            emittedBlockHeight = emittedBlockHeight,
         )
     }
 
@@ -172,10 +255,18 @@ object SoracloudPrivateUploadedModelJsonParser {
         }
         return SoracloudPrivateModelArtifactRef(
             schemaVersion = schemaVersion(root["schema_version"], "$context.schema_version"),
-            sorafsManifestDigest = requiredString(root["sorafs_manifest_digest"], "$context.sorafs_manifest_digest"),
+            sorafsManifestDigest = manifestDigest(
+                root["sorafs_manifest_digest"],
+                "$context.sorafs_manifest_digest",
+            ),
             sorafsRootCid = sorafsRootCid(root["sorafs_root_cid"], "$context.sorafs_root_cid"),
-            artifactHash = requiredString(root["artifact_hash"], "$context.artifact_hash"),
-            ciphertextBytes = asPositiveLong(root["ciphertext_bytes"], "$context.ciphertext_bytes"),
+            artifactHash = hashLiteral(root["artifact_hash"], "$context.artifact_hash"),
+            ciphertextBytes = boundedLong(
+                root["ciphertext_bytes"],
+                "$context.ciphertext_bytes",
+                1L,
+                SORACLOUD_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_MAX_BYTES_V1,
+            ),
             artifactRole = artifactRole,
         )
     }
@@ -190,10 +281,23 @@ object SoracloudPrivateUploadedModelJsonParser {
             required = ATTESTING_VALIDATOR_FIELDS,
             path = context,
         )
+        val validatorAccountId = requiredString(
+            root["validator_account_id"],
+            "$context.validator_account_id",
+        )
+        val peerId = requiredString(root["peer_id"], "$context.peer_id")
+        try {
+            requireSoracloudValidatorIdentity(validatorAccountId, peerId)
+        } catch (error: IllegalArgumentException) {
+            throw IllegalStateException(
+                "$context must bind a canonical universal single-signatory AccountId to its canonical PeerId",
+                error,
+            )
+        }
         return SoracloudRuntimeDeterministicValidatorHost(
             laneId = boundedLong(root["lane_id"], "$context.lane_id", 0L, U32_MAX),
-            validatorAccountId = requiredString(root["validator_account_id"], "$context.validator_account_id"),
-            peerId = requiredString(root["peer_id"], "$context.peer_id"),
+            validatorAccountId = validatorAccountId,
+            peerId = peerId,
         )
     }
 
@@ -207,6 +311,27 @@ object SoracloudPrivateUploadedModelJsonParser {
             required = OUTPUT_RECIPIENT_FIELDS,
             path = context,
         )
+        val publicKeyBytesBase64 = canonicalBase64X25519Key(
+            root["public_key_bytes"],
+            "$context.public_key_bytes",
+        )
+        val publicKeyFingerprint = hashLiteral(
+            root["public_key_fingerprint"],
+            "$context.public_key_fingerprint",
+        )
+        val publicKeyBytes = try {
+            decodeCanonicalSoracloudX25519PublicKey(publicKeyBytesBase64, "$context.public_key_bytes")
+        } catch (error: IllegalArgumentException) {
+            throw IllegalStateException("$context.public_key_bytes is invalid", error)
+        }
+        val fingerprintBytes = try {
+            requireSoracloudHashLiteral(publicKeyFingerprint, "$context.public_key_fingerprint")
+        } catch (error: IllegalArgumentException) {
+            throw IllegalStateException("$context.public_key_fingerprint is invalid", error)
+        }
+        check(fingerprintBytes.contentEquals(IrohaHash.prehash(publicKeyBytes))) {
+            "$context.public_key_fingerprint must equal IrohaHash.prehash(public_key_bytes)"
+        }
         return SoracloudUploadedModelEncryptionRecipient(
             schemaVersion = schemaVersion(root["schema_version"], "$context.schema_version"),
             keyId = requiredString(root["key_id"], "$context.key_id"),
@@ -225,14 +350,8 @@ object SoracloudPrivateUploadedModelJsonParser {
                 expected = AES_256_GCM,
                 context = "$context.aead",
             ),
-            publicKeyBytesBase64 = canonicalBase64X25519Key(
-                root["public_key_bytes"],
-                "$context.public_key_bytes",
-            ),
-            publicKeyFingerprint = requiredString(
-                root["public_key_fingerprint"],
-                "$context.public_key_fingerprint",
-            ),
+            publicKeyBytesBase64 = publicKeyBytesBase64,
+            publicKeyFingerprint = publicKeyFingerprint,
         )
     }
 
@@ -271,29 +390,46 @@ object SoracloudPrivateUploadedModelJsonParser {
     private fun requiredString(value: Any?, path: String): String {
         val string = optionalString(value, path)
         check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
-        return string.trim()
+        return string
     }
 
     private fun optionalString(value: Any?, path: String): String? {
         if (value == null) return null
         check(value is String) { "$path must be a string" }
+        check(value == value.trim()) { "$path must not contain leading or trailing whitespace" }
+        check(value.none { Character.isISOControl(it) }) {
+            "$path must be free of control characters"
+        }
         return value
     }
 
     private fun optionalNonBlankString(value: Any?, path: String): String? =
         if (value == null) null else requiredString(value, path)
 
-    private fun asLong(value: Any?, path: String): Long = JsonNumbers.asLong(value, path)
-
-    private fun asNonNegativeLong(value: Any?, path: String): Long {
-        val parsed = asLong(value, path)
-        check(parsed >= 0) { "$path must be non-negative" }
-        return parsed
+    private fun canonicalServiceName(value: Any?, path: String): String {
+        val name = requiredString(value, path)
+        try {
+            requireCanonicalSoracloudName(name, path)
+        } catch (error: IllegalArgumentException) {
+            throw IllegalStateException(error.message, error)
+        }
+        return name
     }
 
-    private fun asPositiveLong(value: Any?, path: String): Long {
-        val parsed = asLong(value, path)
-        check(parsed > 0) { "$path must be greater than zero" }
+    private fun asLong(value: Any?, path: String): Long = JsonNumbers.asLong(value, path)
+
+    private fun unsigned64Integer(value: Any?, path: String): BigInteger {
+        val parsed = when (value) {
+            is BigInteger -> value
+            is Byte -> BigInteger.valueOf(value.toLong())
+            is Short -> BigInteger.valueOf(value.toLong())
+            is Int -> BigInteger.valueOf(value.toLong())
+            is Long -> BigInteger.valueOf(value)
+            else -> throw IllegalStateException("$path must be an integer")
+        }
+        check(parsed >= BigInteger.ZERO && parsed <= U64_MAX) {
+            "$path must fit in unsigned 64-bit range"
+        }
         return parsed
     }
 
@@ -303,8 +439,12 @@ object SoracloudPrivateUploadedModelJsonParser {
         return parsed
     }
 
-    private fun asOptionalNonNegativeLong(value: Any?, path: String): Long? =
-        if (value == null) null else asNonNegativeLong(value, path)
+    private fun asOptionalBoundedLong(
+        value: Any?,
+        path: String,
+        minimum: Long,
+        maximum: Long,
+    ): Long? = if (value == null) null else boundedLong(value, path, minimum, maximum)
 
     private fun asBoolean(value: Any?, path: String): Boolean {
         check(value is Boolean) { "$path must be a boolean" }
@@ -329,6 +469,15 @@ object SoracloudPrivateUploadedModelJsonParser {
         }
     }
 
+    private fun manifestDigest(value: Any?, path: String): List<Int> {
+        val values = asArray(value, path)
+        check(values.size == 32) { "$path must contain exactly 32 unsigned integer bytes" }
+        val bytes = values.mapIndexed { index, element ->
+            boundedLong(element, "$path[$index]", 0L, 255L).toInt()
+        }
+        return Collections.unmodifiableList(ArrayList(bytes))
+    }
+
     private fun sorafsRootCid(value: Any?, path: String): List<Int> {
         val values = asArray(value, path)
         check(values.size == 36) { "$path must contain exactly 36 unsigned integer bytes" }
@@ -346,6 +495,14 @@ object SoracloudPrivateUploadedModelJsonParser {
         val parsed = requiredString(value, path)
         check(parsed == SUBMITTED || parsed == COMMITTED) {
             "$path must equal `submitted` or `committed`"
+        }
+        return parsed
+    }
+
+    private fun countMode(value: Any?, path: String): String {
+        val parsed = requiredString(value, path)
+        check(parsed == "bounded" || parsed == "exact") {
+            "$path must equal `bounded` or `exact`"
         }
         return parsed
     }
@@ -368,13 +525,15 @@ object SoracloudPrivateUploadedModelJsonParser {
     ) {
         check(
             submissionStatus != SUBMITTED ||
-                (receipt.emittedSequence == 0L && receipt.emittedBlockHeight == 0L)
+                (receipt.emittedSequence == BigInteger.ZERO &&
+                    receipt.emittedBlockHeight == BigInteger.ZERO)
         ) {
             "soracloud private execute response.receipt must use zero ledger coordinates for `submitted`"
         }
         check(
             submissionStatus != COMMITTED ||
-                (receipt.emittedSequence > 0L && receipt.emittedBlockHeight > 0L)
+                (receipt.emittedSequence > BigInteger.ZERO &&
+                    receipt.emittedBlockHeight > BigInteger.ZERO)
         ) {
             "soracloud private execute response.receipt must use positive ledger coordinates for `committed`"
         }
@@ -382,16 +541,29 @@ object SoracloudPrivateUploadedModelJsonParser {
 
     private fun canonicalBase64X25519Key(value: Any?, path: String): String {
         val encoded = requiredString(value, path)
-        val decoded = try {
-            Base64.getDecoder().decode(encoded)
+        try {
+            decodeCanonicalSoracloudX25519PublicKey(encoded, path)
         } catch (error: IllegalArgumentException) {
-            throw IllegalStateException("$path must be canonical base64", error)
-        }
-        check(decoded.size == 32 && Base64.getEncoder().encodeToString(decoded) == encoded) {
-            "$path must be canonical base64 encoding exactly 32 bytes"
+            throw IllegalStateException("$path must be a canonical non-low-order X25519 key", error)
         }
         return encoded
     }
+
+    private fun hashLiteral(value: Any?, path: String): String {
+        val literal = requiredString(value, path)
+        try {
+            requireSoracloudHashLiteral(literal, path)
+        } catch (error: IllegalArgumentException) {
+            throw IllegalStateException(
+                "$path must be an exact uppercase checksummed hash literal with marker bit",
+                error,
+            )
+        }
+        return literal
+    }
+
+    private fun optionalHashLiteral(value: Any?, path: String): String? =
+        if (value == null) null else hashLiteral(value, path)
 
     private fun requireFields(
         root: Map<String, Any?>,

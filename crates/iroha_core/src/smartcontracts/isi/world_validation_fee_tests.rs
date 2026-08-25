@@ -34,7 +34,7 @@ fn validation_fee_activation_delay_enforces_exact_boundary_and_overflow() {
     );
 }
 #[test]
-fn sorafs_provider_owner_transition_requires_full_parliament_gate() {
+fn sorafs_provider_owner_transition_uses_canonical_constitutional_parliament_pipeline() {
     let kind = ProposalKind::SorafsProviderGovernance(
         iroha_data_model::governance::types::SorafsProviderGovernanceProposal {
             action: Box::new(
@@ -52,7 +52,7 @@ fn sorafs_provider_owner_transition_requires_full_parliament_gate() {
     let (risk_tier, requirements) = super::parliament_attempt_policy_v1(&kind);
     assert_eq!(
         risk_tier,
-        iroha_data_model::governance::types::RiskTierV1::Constitutional
+        iroha_data_model::governance::types::RiskTierV1::Constitutional,
     );
     assert_eq!(
         requirements,

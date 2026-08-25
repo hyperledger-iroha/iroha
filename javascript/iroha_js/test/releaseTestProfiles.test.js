@@ -144,6 +144,6 @@ test("release workflows require platform provenance, heavy, and SoraFS native la
     "javascript/iroha_js/src/sorafsOrderbookSubmission.d.ts",
     "javascript/iroha_js/test/sorafsOrderbookSubmission.test.js",
   ]) {
-    assert.ok(privacyWorkflow.includes(`- \"${path}\"`), `${path} must trigger ABI-22 checks`);
+    assert.ok(privacyWorkflow.includes(`- \"${path}\"`), `${path} must trigger ABI-23 checks`);
   }
 });

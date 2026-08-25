@@ -4307,7 +4307,6 @@ pub struct World {
     #[norito(skip)]
     pub(crate) da_pin_intents_by_lane_epoch: Storage<(LaneId, u64, u64), StorageTicketId>,
     /// `SoraFS` pin manifest registry keyed by manifest digest.
-    #[norito(skip)]
     pub(crate) pin_manifests: Storage<ManifestDigest, PinManifestRecord>,
     /// Active alias bindings keyed by `namespace/name`.
     #[norito(skip)]
@@ -5023,7 +5022,6 @@ pub struct WorldBlock<'world> {
     pub(crate) da_pin_intents_by_lane_epoch:
         StorageBlock<'world, (LaneId, u64, u64), StorageTicketId>,
     /// `SoraFS` pin manifest registry keyed by manifest digest.
-    #[norito(skip)]
     pub(crate) pin_manifests: StorageBlock<'world, ManifestDigest, PinManifestRecord>,
     /// Active alias bindings keyed by alias identifier.
     #[norito(skip)]
@@ -5185,6 +5183,16 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     external_event_buf: Vec<EventBox>,
 }
+#[cfg(test)]
+impl<'world> WorldBlock<'world> {
+    /// Mutable access to VRF epoch randomness and participation records.
+    pub fn vrf_epochs_mut(
+        &mut self,
+    ) -> &mut StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord> {
+        &mut self.vrf_epochs
+    }
+}
+
 impl WorldBlock<'_> {
     #[cfg(test)]
     fn put_governance_locks(&mut self, referendum_id: String, locks: GovernanceLocksForReferendum) {

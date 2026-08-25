@@ -7466,7 +7466,7 @@ pub(crate) mod tests {
                 retry_tle_session,
                 key_session_id,
                 retry_beacon,
-                41,
+                50,
                 policy,
                 retry_release_height,
             )
