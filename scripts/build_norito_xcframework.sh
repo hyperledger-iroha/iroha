@@ -949,6 +949,8 @@ stage_cargo_library() {
     exit 1
   fi
   mkdir -p "$(dirname "$staged_library")"
+  # rustc already folds the native support members into its staticlib. Reindex
+  # that archive alone; appending the dependencies creates duplicate members.
   env -i \
     HOME="$USER_HOME_DIR" \
     PATH="${LIBTOOL_BINARY%/*}:/usr/bin:/bin" \
@@ -957,9 +959,9 @@ stage_cargo_library() {
     LC_ALL=C.UTF-8 \
     DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
     ZERO_AR_DATE=1 \
-    "$LIBTOOL_BINARY" -static -no_warning_for_no_symbols \
+    "$LIBTOOL_BINARY" -static -D -a -no_warning_for_no_symbols \
     -o "$staged_library" \
-    "$source_library" "${pqclean_candidates[0]}" "${keccak_candidates[0]}" \
+    "$source_library" \
     || exit 1
   run_isolated_python - \
     "$NM_BINARY" "$staged_library" \
@@ -970,6 +972,16 @@ import sys
 
 
 nm, staged, *dependencies = (Path(value) for value in sys.argv[1:])
+NM_STDERR_LIMIT = 2048
+
+
+def bounded_nm_stderr(stderr: str | None) -> str:
+    detail = (stderr or "").strip()
+    if not detail:
+        return "<no stderr>"
+    if len(detail) <= NM_STDERR_LIMIT:
+        return detail
+    return f"{detail[:NM_STDERR_LIMIT]}...[truncated]"
 
 
 def defined_symbols(archive: Path) -> set[str]:
@@ -981,9 +993,18 @@ def defined_symbols(archive: Path) -> set[str]:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
-    except (OSError, subprocess.CalledProcessError) as error:
-        raise SystemExit(f"unable to inspect staged Apple archive: {error}") from None
+    except OSError as error:
+        raise SystemExit(
+            f"unable to inspect staged Apple archive {archive}: {error}"
+        ) from None
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(
+            f"unable to inspect staged Apple archive {archive}: nm exited with "
+            f"status {error.returncode}; stderr: {bounded_nm_stderr(error.stderr)}"
+        ) from None
     return {line.strip() for line in result.stdout.splitlines() if line.strip()}
 
 

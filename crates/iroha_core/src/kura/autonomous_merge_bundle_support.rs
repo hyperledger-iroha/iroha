@@ -1804,6 +1804,45 @@ impl Kura {
         Self::validate_autonomous_lane_merge_bundle(&bundle, expected_network_id, expected_epoch)?;
         Ok(bundle)
     }
+    /// Encode one fully validated autonomous merge bundle for downstream crate tests.
+    ///
+    /// Keeping the private persistence envelope here prevents fixtures from
+    /// drifting away from the production Norito layout.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn encode_autonomous_lane_merge_bundle_for_testing(
+        executable_payload: LaneExecutablePayloadV1,
+        availability_certificate: LaneBlockQcV1,
+        certified: CertifiedLaneBlockArtifact,
+    ) -> std::result::Result<(Vec<u8>, Hash), &'static str> {
+        let expected_network_id = executable_payload.network_id;
+        let expected_epoch = executable_payload.epoch;
+        let bundle = AutonomousLaneMergeBundleV1 {
+            version: AutonomousLaneMergeBundleV1::VERSION,
+            autonomous: AutonomousLaneBlockArtifact {
+                format: AutonomousLaneBlockArtifactFormat::Current,
+                executable_payload,
+                availability_certificate: Some(DurableLanePayloadAvailabilityCertificateV1 {
+                    certificate: availability_certificate,
+                }),
+                view_checkpoint: None,
+                new_view_certificates: Vec::new(),
+            },
+            certified,
+        };
+        Self::validate_autonomous_lane_merge_bundle(
+            &bundle,
+            expected_network_id,
+            expected_epoch,
+        )?;
+        let bytes = bundle
+            .encode_framed()
+            .map_err(|_| "failed to encode autonomous lane merge bundle fixture")?;
+        let hash = bundle
+            .bundle_hash()
+            .map_err(|_| "failed to hash autonomous lane merge bundle fixture")?;
+        Ok((bytes, hash))
+    }
     fn autonomous_lane_merge_bundle_pair_entry_limit(&self) -> usize {
         self.lane_history_retention
             .get()

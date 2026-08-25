@@ -1037,6 +1037,10 @@ fn incoming_ordinary_kagemusha_lifecycle_proxy_fixture(
             )
         })
         .collect::<Vec<_>>();
+    let ingress_peer_id = validator_bindings
+        .get(1)
+        .map(|(_, peer_id)| peer_id.clone())
+        .expect("lifecycle receiver fixture requires a remote ingress validator");
     {
         let app = Arc::get_mut(&mut app).expect("lifecycle receiver app is uniquely owned");
         app.torii_proxy_bridge_signer = local_signer.clone();
@@ -1103,7 +1107,7 @@ fn incoming_ordinary_kagemusha_lifecycle_proxy_fixture(
         deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
-        visited_peer_ids: Vec::new(),
+        visited_peer_ids: vec![ingress_peer_id],
         request: ToriiProxyRequestKindV4::SubmitTransaction {
             transaction,
             expected_plan: ToriiRoutingPlanHintV1::from(routing_plan),
@@ -1710,6 +1714,48 @@ async fn generic_transaction_proxy_rejects_ordinary_lifecycle_and_dedicated_rout
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
+async fn generic_transaction_handler_rejects_exact_ordinary_kagemusha_lifecycle() {
+    let validator_signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                0x98_u8.saturating_add(offset),
+                Algorithm::BlsNormal,
+                "derive lifecycle generic-handler validator fixture key",
+            )
+        })
+        .collect::<Vec<_>>();
+    let (app, request, _) =
+        incoming_ordinary_kagemusha_lifecycle_proxy_fixture(&validator_signers);
+    let ToriiProxyRequestKindV4::SubmitTransaction { transaction, .. } = request.request else {
+        panic!("lifecycle generic-handler fixture must remain a transaction submission");
+    };
+    let TransactionEntrypoint::External(signed_transaction) = transaction else {
+        panic!("lifecycle generic-handler fixture must remain externally signed");
+    };
+
+    let response = super::handler_post_transaction(
+        State(app.clone()),
+        HeaderMap::new(),
+        None,
+        versioned_signed_for_test(&signed_transaction),
+    )
+    .await
+    .expect("generic lifecycle rejection must remain an HTTP response")
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-reject-code"),
+        Some("queue_plan_admission_intent_mismatch")
+    );
+    assert_eq!(
+        app.queue.active_len(),
+        0,
+        "generic lifecycle rejection must not enqueue the transaction"
+    );
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
 async fn generic_transaction_batch_rejects_ordinary_lifecycle_without_enqueuing() {
     let validator_signers = (0_u8..4)
         .map(|offset| {
@@ -1850,12 +1896,15 @@ async fn ordinary_kagemusha_lifecycle_receiver_rolls_durable_retry_without_queue
 
     let first_response =
         super::execute_incoming_torii_proxy_request(&app, request.clone(), None).await;
-    assert_eq!(first_response.status(), StatusCode::ACCEPTED);
     let first_snapshot = super::response_to_torii_proxy_snapshot(
         first_response,
         QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2,
     )
     .await;
+    assert_eq!(
+        first_snapshot.status_code,
+        StatusCode::ACCEPTED.as_u16()
+    );
     let first_certificate =
         super::decode_ordinary_kagemusha_lifecycle_certificate(&first_snapshot.body)
             .expect("decode first lifecycle durable receipt");

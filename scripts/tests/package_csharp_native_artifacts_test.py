@@ -306,6 +306,9 @@ class CSharpNativePackageTests(unittest.TestCase):
 
         self.assertEqual(native_job.count("check_native_sdk_abi22_artifact.py"), 2)
         self.assertIn("--sdk csharp", native_job)
+        self.assertIn('GIT_CONFIG_COUNT: "1"', native_job)
+        self.assertIn("GIT_CONFIG_KEY_0: core.autocrlf", native_job)
+        self.assertIn('GIT_CONFIG_VALUE_0: "false"', native_job)
         self.assertIn("cache-targets: false", native_job)
         self.assertIn('if [[ "$host_target" != "$target" ]]', native_job)
         self.assertIn('if [[ -e target ]]', native_job)

@@ -310,10 +310,10 @@ mod tests {
     fn weight_selection_uses_shared_authenticated_precedence_and_sorted_set() {
         let model_info = norito::json!({
             "siblings": [
-                {"rfilename": "fallback.safetensors", "lfs": {"sha256": "33".repeat(32), "size": 3}},
-                {"rfilename": "shard-2.GGUF", "lfs": {"sha256": "22".repeat(32), "size": 2}},
+                {"rfilename": "fallback.safetensors", "lfs": {"sha256": ("33".repeat(32)), "size": 3}},
+                {"rfilename": "shard-2.GGUF", "lfs": {"sha256": ("22".repeat(32)), "size": 2}},
                 {"rfilename": "notes.txt"},
-                {"rfilename": "shard-1.gguf", "lfs": {"sha256": "11".repeat(32), "size": 1}}
+                {"rfilename": "shard-1.gguf", "lfs": {"sha256": ("11".repeat(32)), "size": 1}}
             ]
         });
         let config = config_with_limit(1024);
@@ -352,9 +352,9 @@ mod tests {
     fn weight_selection_deduplicates_then_enforces_the_import_file_cap() {
         let model_info = norito::json!({
             "siblings": [
-                {"rfilename": "same.gguf", "lfs": {"sha256": "11".repeat(32), "size": 1}},
-                {"rfilename": "same.gguf", "lfs": {"sha256": "11".repeat(32), "size": 1}},
-                {"rfilename": "second.gguf", "lfs": {"sha256": "22".repeat(32), "size": 1}}
+                {"rfilename": "same.gguf", "lfs": {"sha256": ("11".repeat(32)), "size": 1}},
+                {"rfilename": "same.gguf", "lfs": {"sha256": ("11".repeat(32)), "size": 1}},
+                {"rfilename": "second.gguf", "lfs": {"sha256": ("22".repeat(32)), "size": 1}}
             ]
         });
         let mut config = config_with_limit(1024);

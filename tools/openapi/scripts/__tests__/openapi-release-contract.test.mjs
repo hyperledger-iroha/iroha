@@ -384,6 +384,25 @@ test('OpenAPI CI replays complete bundles from independent clean sources', async
     gate,
     /cp -R "\$\{REPLAY_BASELINE\}\/\." "\$\{output_dir\}\/"/,
   );
+  const baselineCopy = gate.indexOf(
+    'cp -R "${REPLAY_BASELINE}/." "${output_dir}/"',
+  );
+  const rejectLinkedCopy = gate.indexOf(
+    'find "${output_dir}" -type l -print -quit',
+    baselineCopy,
+  );
+  const makeBundleWritable = gate.indexOf(
+    'chmod -R u+w "${output_dir}"',
+    rejectLinkedCopy,
+  );
+  const replaceGeneratedSpec = gate.indexOf(
+    'cp "${generated_dir}/torii.json" "${output_dir}/torii.json"',
+    makeBundleWritable,
+  );
+  assert.ok(baselineCopy < rejectLinkedCopy);
+  assert.ok(rejectLinkedCopy < makeBundleWritable);
+  assert.ok(makeBundleWritable < replaceGeneratedSpec);
+  assert.ok(!gate.includes('chmod -R u+w "${REPLAY_BASELINE}"'));
   assert.match(
     gate,
     /--output-root "\$\{generated_dir\}"[\s\S]*?--unsigned-manifest/,

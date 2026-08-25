@@ -904,10 +904,10 @@ def _check_cargo_workflow(
         ),
     }
     native_lane_job_digests = {
-        "privacy_swift_sdk_parse": "dd43a27ab1f5d899bc37636b3dec230a0f61871ab1ccaede2df3f93f2b53a0bc",
+        "privacy_swift_sdk_parse": "59cc0705b34e0195114c574e1e4b6034ddddf55a4a3ddf7c07ea82c4dc0fc0f6",
         "privacy_jvm_sdk_tests": "1f430f2e88d3c455e8ed0a5182308627d6657099093d6c6021c308bbf12aedcb",
-        "privacy_csharp_sdk_tests": "6b9999401229dbed36cea7e2b2764edd445f6875a018e36d7e132ce7cda89a1e",
-        "privacy_javascript_sdk_tests": "d0672182b3b0a661c3c68beaf14410826fa134b730ed2ff44c80e405219aa9b2",
+        "privacy_csharp_sdk_tests": "f1413f02d0d9e34f1c89dca806152754c129884cf4f8264936728768cfbdbc5f",
+        "privacy_javascript_sdk_tests": "9f8550cfc6e8cd162220c6495dd7e70e9d19e404377ae7999bba4cae581b6996",
     }
 
     require(

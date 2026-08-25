@@ -9526,7 +9526,7 @@ fn generate_openapi(
     unsigned_manifest: bool,
 ) -> Result<(), Box<dyn Error>> {
     let spec = require_release_router_openapi(try_generate_router_openapi())?;
-    let formatted = json::to_string_pretty(&spec)?;
+    let formatted = render_release_openapi(&spec)?;
     let emits_manifest = signature_envelope.is_some() || unsigned_manifest;
     if emits_manifest
         && !outputs
@@ -9590,6 +9590,15 @@ fn generate_openapi(
         }
     }
     Ok(())
+}
+/// Render a release authority with one canonical final LF.
+/// Normalize any formatter-provided line ending before appending it.
+fn render_release_openapi(spec: &Value) -> Result<String, Box<dyn Error>> {
+    let mut formatted = json::to_string_pretty(spec)?;
+    let content_len = formatted.trim_end_matches(&['\r', '\n'][..]).len();
+    formatted.truncate(content_len);
+    formatted.push('\n');
+    Ok(formatted)
 }
 fn require_release_router_openapi(
     generated: Result<Option<Value>, Box<dyn Error>>,
@@ -12068,6 +12077,23 @@ mod openapi_tests {
         assert_eq!(state.network_id_ref(), &network_id);
         assert_eq!(state.chain_id_ref(), &cfg.common.chain);
     }
+    #[test]
+    fn openapi_router_persistence_stays_under_test_data_dir() {
+        let data_dir = TestDataDirGuard::new();
+        let mut cfg = mk_minimal_root_cfg();
+        configure_openapi_router_persistence(&mut cfg, data_dir.path());
+
+        let torii_data_dir = data_dir.path().join("torii");
+        assert_eq!(cfg.torii.data_dir, torii_data_dir);
+        assert_eq!(
+            cfg.torii.da_ingest.replay_cache_store_dir,
+            torii_data_dir.join("da_replay")
+        );
+        assert_eq!(
+            cfg.torii.da_ingest.manifest_store_dir,
+            torii_data_dir.join("da_manifests")
+        );
+    }
     // Direct fragment keeps this cohesive OpenAPI regression test together under the source cap.
     include!("tests/openapi_empty_manifest_writers.rs");
     #[test]
@@ -13670,8 +13696,9 @@ fn try_generate_router_openapi() -> Result<Option<Value>, Box<dyn Error>> {
 }
 async fn generate_router_openapi_async() -> Result<Option<Value>, Box<dyn Error>> {
     const OPENAPI_ENDPOINT_CANDIDATES: &[&str] = &["/openapi.json", "/openapi"];
-    let _data_dir = TestDataDirGuard::new();
+    let data_dir = TestDataDirGuard::new();
     let mut cfg = mk_minimal_root_cfg();
+    configure_openapi_router_persistence(&mut cfg, data_dir.path());
     let mut tokens = vec!["Test-Token".to_owned()];
     if let Ok(single) = std::env::var("TORII_OPENAPI_TOKEN")
         && !single.is_empty()
@@ -13716,6 +13743,12 @@ async fn generate_router_openapi_async() -> Result<Option<Value>, Box<dyn Error>
     let router = torii.api_router_for_tests();
     let spec = fetch_openapi_from_router(router, OPENAPI_ENDPOINT_CANDIDATES).await;
     Ok(spec)
+}
+fn configure_openapi_router_persistence(cfg: &mut actual::Root, root: &Path) {
+    let torii_data_dir = root.join("torii");
+    cfg.torii.data_dir.clone_from(&torii_data_dir);
+    cfg.torii.da_ingest.replay_cache_store_dir = torii_data_dir.join("da_replay");
+    cfg.torii.da_ingest.manifest_store_dir = torii_data_dir.join("da_manifests");
 }
 fn openapi_router_state(
     cfg: &actual::Root,

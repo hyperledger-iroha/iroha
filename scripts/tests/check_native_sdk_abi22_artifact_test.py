@@ -553,6 +553,56 @@ def test_record_and_verify_reject_dirty_or_stale_source(
         )
 
 
+def test_release_job_git_config_keeps_windows_checkout_clean(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The release-job override must defeat a CRLFAlways runner policy."""
+
+    source = clean_source(tmp_path)
+    tracked = source / "tracked.txt"
+    tracked.unlink()
+    global_config = tmp_path / "windows-system-gitconfig"
+    subprocess.run(
+        [
+            "git",
+            "config",
+            "--file",
+            str(global_config),
+            "core.autocrlf",
+            "true",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    checkout_environment = os.environ.copy()
+    checkout_environment.update(
+        {
+            "GIT_CONFIG_GLOBAL": str(global_config),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.autocrlf",
+            "GIT_CONFIG_VALUE_0": "false",
+        }
+    )
+    subprocess.run(
+        ["git", "-C", str(source), "checkout-index", "--force", "--", "tracked.txt"],
+        check=True,
+        capture_output=True,
+        env=checkout_environment,
+    )
+    assert tracked.read_bytes() == b"reviewed source\n"
+
+    for name in ("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"):
+        monkeypatch.setenv(name, checkout_environment[name])
+    _commit, clean = checker.source_state(source)
+    assert clean is True
+
+    tracked.write_bytes(b"reviewed source\r\n")
+    _commit, clean = checker.source_state(source)
+    assert clean is False
+
+
 def test_verify_rejects_replaced_artifact(
     tmp_path: Path,
 ) -> None:
