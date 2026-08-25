@@ -9526,7 +9526,7 @@ fn generate_openapi(
     unsigned_manifest: bool,
 ) -> Result<(), Box<dyn Error>> {
     let spec = require_release_router_openapi(try_generate_router_openapi())?;
-    let formatted = json::to_string_pretty(&spec)?;
+    let formatted = render_release_openapi(&spec)?;
     let emits_manifest = signature_envelope.is_some() || unsigned_manifest;
     if emits_manifest
         && !outputs
@@ -9590,6 +9590,15 @@ fn generate_openapi(
         }
     }
     Ok(())
+}
+/// Render a release authority with one canonical final LF.
+/// Normalize any formatter-provided line ending before appending it.
+fn render_release_openapi(spec: &Value) -> Result<String, Box<dyn Error>> {
+    let mut formatted = json::to_string_pretty(spec)?;
+    let content_len = formatted.trim_end_matches(&['\r', '\n'][..]).len();
+    formatted.truncate(content_len);
+    formatted.push('\n');
+    Ok(formatted)
 }
 fn require_release_router_openapi(
     generated: Result<Option<Value>, Box<dyn Error>>,

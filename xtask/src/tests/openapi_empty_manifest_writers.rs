@@ -1,4 +1,12 @@
 #[test]
+fn release_openapi_rendering_uses_one_final_newline() {
+    let rendered =
+        render_release_openapi(&empty_openapi_stub()).expect("render release OpenAPI document");
+
+    assert!(rendered.ends_with("}\n"));
+}
+
+#[test]
 fn manifest_writers_reject_empty_openapi_before_output() {
     let tmp = tempdir().expect("tempdir");
     let spec_path = tmp.path().join("torii.json");
