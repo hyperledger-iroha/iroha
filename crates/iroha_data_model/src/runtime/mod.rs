@@ -42,6 +42,7 @@ impl RuntimeUpgradeId {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct RuntimeUpgradeSbomDigest {
     /// Digest algorithm identifier (e.g., `sha256`).
     pub algorithm: String,
@@ -55,6 +56,7 @@ pub struct RuntimeUpgradeSbomDigest {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct RuntimeUpgradeManifest {
     /// Human-readable name.
     pub name: String,
@@ -74,14 +76,11 @@ pub struct RuntimeUpgradeManifest {
     /// Activation window end (exclusive).
     pub end_height: u64,
     /// SBOM digests associated with the upgrade artefacts.
-    #[norito(default)]
     pub sbom_digests: Vec<RuntimeUpgradeSbomDigest>,
     /// Raw SLSA attestation bytes (base64 in JSON).
-    #[norito(default)]
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub slsa_attestation: Vec<u8>,
     /// Provenance signatures over the canonical manifest payload.
-    #[norito(default)]
     pub provenance: Vec<ManifestProvenance>,
 }
 /// Canonical payload signed to attest a runtime upgrade manifest.
@@ -109,10 +108,8 @@ pub struct RuntimeUpgradeManifestSignaturePayload {
     /// Activation window end (exclusive).
     pub end_height: u64,
     /// SBOM digests associated with the upgrade artefacts.
-    #[norito(default)]
     pub sbom_digests: Vec<RuntimeUpgradeSbomDigest>,
     /// Raw SLSA attestation bytes (base64 in JSON).
-    #[norito(default)]
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub slsa_attestation: Vec<u8>,
 }
@@ -497,5 +494,57 @@ mod tests {
             .signature
             .verify(kp.public_key(), &payload)
             .expect("signature must verify");
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn runtime_manifest_json_requires_the_complete_first_release_shape() {
+        let manifest = RuntimeUpgradeManifest {
+            name: "ABI V1".to_owned(),
+            description: "strict JSON shape".to_owned(),
+            abi_version: 1,
+            abi_hash: [0x11; 32],
+            added_syscalls: Vec::new(),
+            added_pointer_types: Vec::new(),
+            start_height: 10,
+            end_height: 20,
+            sbom_digests: vec![RuntimeUpgradeSbomDigest {
+                algorithm: "sha256".to_owned(),
+                digest: vec![0xAA],
+            }],
+            slsa_attestation: vec![0xBB],
+            provenance: Vec::new(),
+        };
+        for field in ["sbom_digests", "slsa_attestation", "provenance"] {
+            let mut value = json::to_value(&manifest).expect("encode runtime manifest JSON value");
+            value
+                .as_object_mut()
+                .expect("runtime manifest JSON object")
+                .remove(field);
+            let value = json::to_json(&value).expect("encode incomplete runtime manifest JSON");
+            assert!(
+                json::from_json::<RuntimeUpgradeManifest>(&value).is_err(),
+                "missing `{field}` must be rejected"
+            );
+        }
+
+        let mut manifest_value =
+            json::to_value(&manifest).expect("encode runtime manifest mutation source");
+        manifest_value
+            .as_object_mut()
+            .expect("runtime manifest JSON object")
+            .insert("legacy_window".into(), json::Value::from(20_u64));
+        let manifest_value =
+            json::to_json(&manifest_value).expect("encode runtime manifest with unknown field");
+        assert!(json::from_json::<RuntimeUpgradeManifest>(&manifest_value).is_err());
+
+        let mut digest_value = json::to_value(&manifest.sbom_digests[0])
+            .expect("encode runtime SBOM digest mutation source");
+        digest_value
+            .as_object_mut()
+            .expect("runtime SBOM digest JSON object")
+            .insert("legacy_kind".into(), json::Value::from("sha256"));
+        let digest_value =
+            json::to_json(&digest_value).expect("encode SBOM digest with unknown field");
+        assert!(json::from_json::<RuntimeUpgradeSbomDigest>(&digest_value).is_err());
     }
 }

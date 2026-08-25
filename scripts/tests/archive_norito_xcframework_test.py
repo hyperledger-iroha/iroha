@@ -27,7 +27,7 @@ VALIDATOR = ROOT / "scripts/validate_norito_bridge_xcframework.py"
 SOURCE_DATE_EPOCH = "1700000001"
 NORMALIZED_ZIP_TIME = (2023, 11, 14, 22, 13, 20)
 KNOWN_FIXTURE_ARCHIVE_SHA256 = (
-    "3d286e54d5b72c9608dc4fa73ee360b8c2dcedf2e7eb156670ebe0bf0d2a0d59"
+    "34a716d04bdc69f3751b135406674f55699798db94ee4d2965d85d3feb9904ca"
 )
 SLICE_METADATA = {
     "ios-arm64": ("ios", ["arm64"], None),
@@ -296,7 +296,7 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
         hashes: dict[str, str] = {}
         self.framework.mkdir()
         for identifier, (platform, architectures, variant) in SLICE_METADATA.items():
-            binary = f"native:{identifier}:abi22".encode()
+            binary = f"native:{identifier}:abi23".encode()
             slice_root = self.framework / identifier
             headers = slice_root / "Headers"
             headers.mkdir(parents=True)
@@ -359,7 +359,7 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
         }
         manifest = {
             "version": "0.1.0",
-            "native_bridge_abi_version": 22,
+            "native_bridge_abi_version": 23,
             "privacy_production_enabled": False,
             "cargo_features": [],
             "build_environment": build_environment,
@@ -913,7 +913,7 @@ print(f"{digest} {size}")
         self.assertGreaterEqual(builder.count("--archive-output requires a value"), 2)
         self.assertIn('output.suffix != ".zip"', builder)
         self.assertIn(
-            'header_abis != ["22"]',
+            'header_abis != ["23"]',
             builder,
         )
         self.assertIn(

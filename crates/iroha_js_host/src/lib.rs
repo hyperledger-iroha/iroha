@@ -51,7 +51,7 @@ use iroha_core::privacy_profiles::{
     compiled_privacy_profile_catalog_v1, validate_local_privacy_compiled_profile_catalog_archive_v1,
 };
 use iroha_core::soracloud_runtime::{
-    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
+    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_BLOCKS,
     build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
 };
 use iroha_core::zk::confidential_v2::{
@@ -83,7 +83,8 @@ use iroha_data_model::{
     escrow::EscrowId,
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     governance::types::{
-        ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+        AbiVersion, ContractAbiHash, ContractCodeHash, ProposalKind,
+        ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
     },
     isi::{
         Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, ExecuteTrigger, Grant, GrantBox,
@@ -95,9 +96,8 @@ use iroha_data_model::{
         asset_transfer_control::SetAssetTransferAvailability,
         escrow::CancelAssetLock,
         governance::{
-            CastPlainBallot, CastZkBallot, EnactReferendum, FinalizeReferendum,
-            PersistCouncilForEpoch, ProposeDeployContract, ProposeValidationFeePolicy,
-            RegisterCitizen, VotingMode,
+            CastPlainBallot, CastZkBallot, PersistCouncilForEpoch, ProposeDeployContract,
+            ProposeValidationFeePolicy, RegisterCitizen,
         },
         ministry::SubmitAgendaProposal,
         rwa::{
@@ -148,8 +148,8 @@ use iroha_data_model::{
         manifest::{ContractManifest, ManifestProvenance},
     },
     soracloud::{
-        SORACLOUD_XOR_SCALE, SecretEnvelopeV1, encode_agent_deploy_provenance_payload,
-        encode_bundle_with_materials_provenance_payload,
+        SORACLOUD_XOR_SCALE, SecretEnvelopeV1, SoraServiceMutationPreconditionV1,
+        encode_agent_deploy_provenance_payload, encode_bundle_with_materials_provenance_payload,
         encode_hf_shared_lease_join_provenance_payload, is_canonical_hf_commit_oid_v1,
     },
     sorafs::{
@@ -171,10 +171,7 @@ use iroha_data_model::{
         Trigger, TriggerId,
         action::{Action, Repeats},
     },
-    validation_fee::{
-        ValidationFeePlainElectorateRulesV1, ValidationFeePolicyV1,
-        ValidationFeeTreasuryPayoutBindingV1,
-    },
+    validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
 };
 use std::{
     collections::{BTreeMap, HashSet},
@@ -1032,7 +1029,7 @@ fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Halo2Scalar]]) {
         return;
     }
     let mut payload =
-        Vec::with_capacity(8 + rows * columns.len() * std::mem::size_of::<Halo2Scalar>());
+        Vec::with_capacity(8 + rows * columns.len() * core::mem::size_of::<Halo2Scalar>());
     payload
         .extend_from_slice(&usize_to_u32_len(columns.len(), "zk1 instance columns").to_le_bytes());
     payload.extend_from_slice(&usize_to_u32_len(rows, "zk1 instance rows").to_le_bytes());
@@ -1532,9 +1529,13 @@ pub fn soracloud_build_hf_deploy_request_json(
     );
     let configs: BTreeMap<String, Json> = BTreeMap::new();
     let secrets: BTreeMap<String, SecretEnvelopeV1> = BTreeMap::new();
-    let service_provenance_payload =
-        encode_bundle_with_materials_provenance_payload(&generated_bundle, &configs, &secrets)
-            .map_err(norito_to_napi)?;
+    let service_provenance_payload = encode_bundle_with_materials_provenance_payload(
+        &generated_bundle,
+        &configs,
+        &secrets,
+        &SoraServiceMutationPreconditionV1::ServiceAbsent,
+    )
+    .map_err(norito_to_napi)?;
     let generated_service_provenance =
         sign_soracloud_payload(&keypair, &service_provenance_payload)?;
     let generated_apartment_provenance = apartment_name
@@ -1550,7 +1551,7 @@ pub fn soracloud_build_hf_deploy_request_json(
                 build_soracloud_hf_generated_agent_manifest(apartment_name, &generated_bundle);
             let payload = encode_agent_deploy_provenance_payload(
                 manifest,
-                HF_GENERATED_AGENT_LEASE_TICKS,
+                HF_GENERATED_AGENT_LEASE_BLOCKS,
                 Some(HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS),
             )
             .map_err(norito_to_napi)?;
@@ -1945,22 +1946,21 @@ pub fn norito_decode_instruction(bytes: Uint8Array) -> napi::Result<String> {
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn validation_fee_policy_proposal_fingerprint_v1(
+    proposal_operator: String,
     policy_json: String,
     payout_lifecycle_proposal_id: Option<Uint8Array>,
-    plain_electorate_rules_json: String,
 ) -> napi::Result<Buffer> {
+    let proposal_operator = validation_fee_proposal_operator(&proposal_operator)?;
     let policy_value: json::Value = json::from_json(&policy_json).map_err(norito_to_napi)?;
     let policy = validation_fee_policy_from_json_value(policy_value)?;
     let payout_lifecycle_proposal_id = payout_lifecycle_proposal_id
         .map(|value| validation_fee_fixed_hash(&value, "payout lifecycle proposal id"))
         .transpose()?;
-    let plain_electorate_rules =
-        validation_fee_plain_electorate_rules_from_json(&plain_electorate_rules_json)?;
     validate_validation_fee_policy_proposal(&policy, payout_lifecycle_proposal_id.as_ref())?;
     let fingerprint = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+        proposal_operator,
         policy,
         payout_lifecycle_proposal_id,
-        plain_electorate_rules,
     })
     .fingerprint();
     Ok(Buffer::from(fingerprint.to_vec()))
@@ -1969,20 +1969,19 @@ pub fn validation_fee_policy_proposal_fingerprint_v1(
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn validation_fee_payout_lifecycle_proposal_fingerprint_v1(
+    proposal_operator: String,
     payout_binding_json: String,
-    plain_electorate_rules_json: String,
 ) -> napi::Result<Buffer> {
+    let proposal_operator = validation_fee_proposal_operator(&proposal_operator)?;
     let payout_binding_value: json::Value =
         json::from_json(&payout_binding_json).map_err(norito_to_napi)?;
     let payout_binding =
         validation_fee_payout_binding_from_json_value(payout_binding_value, "payout binding")?;
     validate_validation_fee_payout_binding(&payout_binding)?;
-    let plain_electorate_rules =
-        validation_fee_plain_electorate_rules_from_json(&plain_electorate_rules_json)?;
     let fingerprint =
         ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+            proposal_operator,
             payout_binding,
-            plain_electorate_rules,
         })
         .fingerprint();
     Ok(Buffer::from(fingerprint.to_vec()))
@@ -7260,37 +7259,6 @@ fn parse_canonical_quantity_value(value: json::Value, context: &str) -> napi::Re
     };
     parse_canonical_quantity_text(&source, context)
 }
-fn parse_optional_voting_mode(
-    value: Option<json::Value>,
-    context: &str,
-) -> napi::Result<Option<VotingMode>> {
-    match value {
-        None | Some(json::Value::Null) => Ok(None),
-        Some(json::Value::String(label)) => {
-            let mode = match label.trim() {
-                "Zk" | "zk" | "ZK" => VotingMode::Zk,
-                "Plain" | "plain" | "PLAIN" => VotingMode::Plain,
-                other => {
-                    return Err(napi::Error::new(
-                        napi::Status::InvalidArg,
-                        format!("{context}.mode must be one of: Zk, Plain (found {other})"),
-                    ));
-                }
-            };
-            Ok(Some(mode))
-        }
-        Some(other) => Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context}.mode must be a string (found {other:?})"),
-        )),
-    }
-}
-fn voting_mode_to_json(mode: VotingMode) -> &'static str {
-    match mode {
-        VotingMode::Zk => "Zk",
-        VotingMode::Plain => "Plain",
-    }
-}
 fn require_exact_json_fields(
     fields: &json::Map,
     expected: &[&str],
@@ -7459,58 +7427,28 @@ fn validate_validation_fee_payout_binding(
     }
     Ok(())
 }
-fn validation_fee_plain_electorate_rules_from_json(
-    payload: &str,
-) -> napi::Result<ValidationFeePlainElectorateRulesV1> {
-    let value: json::Value = json::from_json(payload).map_err(norito_to_napi)?;
-    validation_fee_plain_electorate_rules_from_json_value(value)
-}
-fn validation_fee_plain_electorate_rules_from_json_value(
-    value: json::Value,
-) -> napi::Result<ValidationFeePlainElectorateRulesV1> {
-    const RULES_FIELDS: &[&str] = &[
-        "voting_asset_id",
-        "bond_escrow_account",
-        "slash_receiver_account",
-        "ballot_amount",
-        "ballot_duration_blocks",
-        "citizenship_amount",
-        "max_members",
-        "conviction_step_blocks",
-        "max_conviction",
-        "min_turnout",
-        "approval_threshold_numerator",
-        "approval_threshold_denominator",
-        "eligibility_rule",
-    ];
-    const ELIGIBILITY_RULE_FIELDS: &[&str] = &["rule", "value"];
-    let json::Value::Object(fields) = &value else {
+fn validation_fee_proposal_operator(value: &str) -> napi::Result<AccountId> {
+    if value.is_empty() || value.trim() != value {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
-            "plain electorate rules must be an object",
-        ));
-    };
-    require_exact_json_fields(fields, RULES_FIELDS, "plain electorate rules")?;
-    let Some(json::Value::Object(eligibility_rule)) = fields.get("eligibility_rule") else {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "plain electorate rules.eligibility_rule must be an object",
-        ));
-    };
-    require_exact_json_fields(
-        eligibility_rule,
-        ELIGIBILITY_RULE_FIELDS,
-        "plain electorate rules.eligibility_rule",
-    )?;
-    let rules: ValidationFeePlainElectorateRulesV1 =
-        json::from_value(value).map_err(norito_to_napi)?;
-    if let Some(reason) = rules.invariant_error() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid plain electorate rules: {reason}"),
+            "proposal operator must be one canonical domainless AccountId",
         ));
     }
-    Ok(rules)
+    let account = AccountId::parse_encoded(value)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|error| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid proposal operator: {error}"),
+            )
+        })?;
+    if account.to_string() != value {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "proposal operator must use canonical AccountId form",
+        ));
+    }
+    Ok(account)
 }
 fn validate_validation_fee_policy_proposal(
     policy: &ValidationFeePolicyV1,
@@ -7539,13 +7477,7 @@ fn validate_validation_fee_policy_proposal(
     }
 }
 fn validation_fee_policy_instruction_from_json(value: json::Value) -> napi::Result<InstructionBox> {
-    const INSTRUCTION_FIELDS: &[&str] = &[
-        "policy",
-        "payout_lifecycle_proposal_id",
-        "plain_electorate_rules",
-        "referendum_window",
-        "mode",
-    ];
+    const INSTRUCTION_FIELDS: &[&str] = &["policy", "payout_lifecycle_proposal_id"];
     let json::Value::Object(mut fields) = value else {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -7566,54 +7498,10 @@ fn validation_fee_policy_instruction_from_json(value: json::Value) -> napi::Resu
         json::Value::Null => None,
         value => Some(json::from_value::<[u8; 32]>(value).map_err(norito_to_napi)?),
     };
-    let plain_electorate_rules =
-        validation_fee_plain_electorate_rules_from_json_value(required_value(
-            &mut fields,
-            "plain_electorate_rules",
-            "ProposeValidationFeePolicy",
-        )?)?;
-    let referendum_window = match required_value(
-        &mut fields,
-        "referendum_window",
-        "ProposeValidationFeePolicy",
-    )? {
-        json::Value::Null => None,
-        json::Value::Object(window) => {
-            require_exact_json_fields(
-                &window,
-                &["lower", "upper"],
-                "ProposeValidationFeePolicy.referendum_window",
-            )?;
-            Some(json::from_value(json::Value::Object(window)).map_err(norito_to_napi)?)
-        }
-        other => {
-            return Err(napi::Error::new(
-                napi::Status::InvalidArg,
-                format!(
-                    "ProposeValidationFeePolicy.referendum_window must be an object or null (found {other:?})"
-                ),
-            ));
-        }
-    };
-    let mode = match required_value(&mut fields, "mode", "ProposeValidationFeePolicy")? {
-        json::Value::String(mode) if mode == "Plain" => Some(VotingMode::Plain),
-        json::Value::Null => None,
-        other => {
-            return Err(napi::Error::new(
-                napi::Status::InvalidArg,
-                format!(
-                    "ProposeValidationFeePolicy.mode must be exactly \"Plain\" or null (found {other:?})"
-                ),
-            ));
-        }
-    };
     validate_validation_fee_policy_proposal(&policy, payout_lifecycle_proposal_id.as_ref())?;
     Ok(ProposeValidationFeePolicy {
         policy,
         payout_lifecycle_proposal_id,
-        plain_electorate_rules,
-        referendum_window,
-        mode,
     }
     .into())
 }
@@ -7924,7 +7812,6 @@ fn validate_governance_instruction_selectors(value: &json::Value) -> napi::Resul
     for (variant, field) in [
         ("CastZkBallot", "election_id"),
         ("CastPlainBallot", "referendum_id"),
-        ("FinalizeReferendum", "referendum_id"),
     ] {
         validate_governance_selector_payload(instruction.get(variant), field, variant)?;
     }
@@ -9280,35 +9167,42 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             ),
                         )
                     })?;
-                let code_hash_hex = parse_string_value(
-                    required_value(&mut fields, "code_hash_hex", "ProposeDeployContract")?,
-                    "ProposeDeployContract.code_hash_hex",
-                )?;
-                let abi_hash_hex = parse_string_value(
-                    required_value(&mut fields, "abi_hash_hex", "ProposeDeployContract")?,
-                    "ProposeDeployContract.abi_hash_hex",
-                )?;
-                let abi_version = parse_string_value(
-                    required_value(&mut fields, "abi_version", "ProposeDeployContract")?,
-                    "ProposeDeployContract.abi_version",
-                )?;
-                let window = match fields.remove("window") {
-                    None | Some(json::Value::Null) => None,
-                    Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
-                };
-                let mode =
-                    parse_optional_voting_mode(fields.remove("mode"), "ProposeDeployContract")?;
+                let code_hash: ContractCodeHash = json::from_value(required_value(
+                    &mut fields,
+                    "code_hash",
+                    "ProposeDeployContract",
+                )?)
+                .map_err(norito_to_napi)?;
+                let abi_hash: ContractAbiHash = json::from_value(required_value(
+                    &mut fields,
+                    "abi_hash",
+                    "ProposeDeployContract",
+                )?)
+                .map_err(norito_to_napi)?;
+                let abi_version: AbiVersion = json::from_value(required_value(
+                    &mut fields,
+                    "abi_version",
+                    "ProposeDeployContract",
+                )?)
+                .map_err(norito_to_napi)?;
                 let manifest_provenance = match fields.remove("manifest_provenance") {
                     None | Some(json::Value::Null) => None,
                     Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
                 };
+                if !fields.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "ProposeDeployContract contains unexpected field(s): {}",
+                            fields.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
                 let instruction = ProposeDeployContract {
                     contract_address,
-                    code_hash_hex,
-                    abi_hash_hex,
+                    code_hash,
+                    abi_hash,
                     abi_version,
-                    window,
-                    mode,
                     manifest_provenance,
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
@@ -9374,16 +9268,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 )?;
                 let instruction = RegisterCitizen { owner, amount };
                 return Ok(Box::new(instruction).into_instruction_box());
-            }
-            if let Some(enact_value) = map.remove("EnactReferendum") {
-                let enact: EnactReferendum =
-                    json::from_value(enact_value).map_err(norito_to_napi)?;
-                return Ok(Box::new(enact).into_instruction_box());
-            }
-            if let Some(finalize_value) = map.remove("FinalizeReferendum") {
-                let finalize: FinalizeReferendum =
-                    json::from_value(finalize_value).map_err(norito_to_napi)?;
-                return Ok(Box::new(finalize).into_instruction_box());
             }
             if let Some(json::Value::Object(mut fields)) = map.remove("PersistCouncilForEpoch") {
                 let epoch = parse_u64_value(
@@ -10546,20 +10430,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             "payout_lifecycle_proposal_id".to_owned(),
             json::to_value(&propose.payout_lifecycle_proposal_id).map_err(norito_to_napi)?,
         );
-        inner.insert(
-            "plain_electorate_rules".to_owned(),
-            json::to_value(&propose.plain_electorate_rules).map_err(norito_to_napi)?,
-        );
-        inner.insert(
-            "referendum_window".to_owned(),
-            json::to_value(&propose.referendum_window).map_err(norito_to_napi)?,
-        );
-        inner.insert(
-            "mode".to_owned(),
-            propose.mode.map_or(json::Value::Null, |mode| {
-                json::Value::String(voting_mode_to_json(mode).to_owned())
-            }),
-        );
         let mut outer = json::Map::new();
         outer.insert(
             "ProposeValidationFeePolicy".to_owned(),
@@ -10577,27 +10447,21 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             json::Value::String(propose.contract_address.to_string()),
         );
         inner.insert(
-            "code_hash_hex".to_owned(),
-            json::Value::String(propose.code_hash_hex.clone()),
+            "code_hash".to_owned(),
+            json::to_value(&propose.code_hash).map_err(norito_to_napi)?,
         );
         inner.insert(
-            "abi_hash_hex".to_owned(),
-            json::Value::String(propose.abi_hash_hex.clone()),
+            "abi_hash".to_owned(),
+            json::to_value(&propose.abi_hash).map_err(norito_to_napi)?,
         );
         inner.insert(
             "abi_version".to_owned(),
-            json::Value::String(propose.abi_version.clone()),
+            json::to_value(&propose.abi_version).map_err(norito_to_napi)?,
         );
-        if let Some(window) = &propose.window {
+        if let Some(manifest_provenance) = &propose.manifest_provenance {
             inner.insert(
-                "window".to_owned(),
-                json::to_value(window).map_err(norito_to_napi)?,
-            );
-        }
-        if let Some(mode) = propose.mode {
-            inner.insert(
-                "mode".to_owned(),
-                json::Value::String(voting_mode_to_json(mode).to_owned()),
+                "manifest_provenance".to_owned(),
+                json::to_value(manifest_provenance).map_err(norito_to_napi)?,
             );
         }
         let mut outer = json::Map::new();
@@ -10706,25 +10570,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             "FinalizeElection",
             json::to_value(finalize).map_err(norito_to_napi)?,
         ));
-    }
-    if let Some(enact) = instruction_ref.as_any().downcast_ref::<EnactReferendum>() {
-        let mut outer = json::Map::new();
-        outer.insert(
-            "EnactReferendum".to_owned(),
-            json::to_value(enact).map_err(norito_to_napi)?,
-        );
-        return Ok(json::Value::Object(outer));
-    }
-    if let Some(finalize) = instruction_ref
-        .as_any()
-        .downcast_ref::<FinalizeReferendum>()
-    {
-        let mut outer = json::Map::new();
-        outer.insert(
-            "FinalizeReferendum".to_owned(),
-            json::to_value(finalize).map_err(norito_to_napi)?,
-        );
-        return Ok(json::Value::Object(outer));
     }
     if let Some(persist) = instruction_ref
         .as_any()
@@ -13279,9 +13124,8 @@ mod tests {
             Mint, MintBox, RecordKaigiUsage, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
             SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
             governance::{
-                AtWindow, CastPlainBallot, CastZkBallot, EnactReferendum, FinalizeReferendum,
-                PersistCouncilForEpoch, ProposeDeployContract, ProposeValidationFeePolicy,
-                RegisterCitizen, VotingMode,
+                CastPlainBallot, CastZkBallot, PersistCouncilForEpoch, ProposeDeployContract,
+                ProposeValidationFeePolicy, RegisterCitizen,
             },
             smart_contract_code::{
                 ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -13314,7 +13158,6 @@ mod tests {
         validation_fee::{
             VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
-            ValidationFeePlainElectorateEligibilityRuleV1, ValidationFeePlainElectorateRulesV1,
             ValidationFeeTreasuryPayoutBindingV1, ValidationFeeTreasuryPayoutRecipientV1,
             initial_validation_fee_amount, validation_fee_payout_batch_ds,
             validation_fee_payout_max_xor, validation_fee_payout_min_xor,
@@ -14484,9 +14327,6 @@ seiyaku Privacy {
             }),
             "CastPlainBallot" => norito_json!({
                 "CastPlainBallot": norito_json!({ "referendum_id": selector })
-            }),
-            "FinalizeReferendum" => norito_json!({
-                "FinalizeReferendum": norito_json!({ "referendum_id": selector })
             }),
             "CreateElection" => norito_json!({
                 "zk": norito_json!({
@@ -16532,14 +16372,9 @@ seiyaku Privacy {
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
-            code_hash_hex: "aa".repeat(32),
-            abi_hash_hex: "bb".repeat(32),
-            abi_version: "1".to_owned(),
-            window: Some(AtWindow {
-                lower: 10,
-                upper: 20,
-            }),
-            mode: Some(VotingMode::Plain),
+            code_hash: ContractCodeHash::new([0xaa; 32]),
+            abi_hash: ContractAbiHash::new([0xbb; 32]),
+            abi_version: AbiVersion::new(1),
             manifest_provenance: None,
         })
         .into_instruction_box();
@@ -16550,6 +16385,44 @@ seiyaku Privacy {
                 .as_object()
                 .and_then(|map| map.get("ProposeDeployContract"))
                 .is_some()
+        );
+        let fields = json_value
+            .as_object()
+            .and_then(|map| map.get("ProposeDeployContract"))
+            .and_then(json::Value::as_object)
+            .expect("typed deploy proposal fields");
+        assert!(fields.contains_key("code_hash"));
+        assert!(fields.contains_key("abi_hash"));
+        assert_eq!(fields.get("abi_version"), Some(&json::Value::from(1_u64)));
+        for retired in ["code_hash_hex", "abi_hash_hex", "window", "mode"] {
+            let mut legacy = json_value.clone();
+            legacy
+                .as_object_mut()
+                .and_then(|map| map.get_mut("ProposeDeployContract"))
+                .and_then(json::Value::as_object_mut)
+                .expect("legacy deploy proposal fields")
+                .insert(retired.to_owned(), json::Value::Null);
+            let error = value_to_instruction(legacy)
+                .expect_err("retired deploy proposal field must fail closed");
+            assert!(
+                error.reason.contains(retired),
+                "{retired}: {}",
+                error.reason
+            );
+        }
+        let mut string_abi = json_value.clone();
+        string_abi
+            .as_object_mut()
+            .and_then(|map| map.get_mut("ProposeDeployContract"))
+            .and_then(json::Value::as_object_mut)
+            .expect("string ABI deploy proposal fields")
+            .insert(
+                "abi_version".to_owned(),
+                json::Value::String("1".to_owned()),
+            );
+        assert!(
+            value_to_instruction(string_abi).is_err(),
+            "string ABI version must fail closed"
         );
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize governance instruction");
@@ -16617,10 +16490,9 @@ seiyaku Privacy {
     }
     #[test]
     fn governance_selectors_are_canonical_at_instruction_construction() {
-        const VARIANTS: [&str; 6] = [
+        const VARIANTS: [&str; 5] = [
             "CastZkBallot",
             "CastPlainBallot",
-            "FinalizeReferendum",
             "CreateElection",
             "SubmitBallot",
             "FinalizeElection",
@@ -17064,47 +16936,6 @@ seiyaku Privacy {
                 error.reason
             );
         }
-    }
-    #[test]
-    fn governance_enact_referendum_instruction_json_roundtrip() {
-        let instruction: InstructionBox = Box::new(EnactReferendum {
-            referendum_id: sample_hash(0x11),
-            preimage_hash: sample_hash(0x22),
-            at_window: AtWindow {
-                lower: 0,
-                upper: 100,
-            },
-        })
-        .into_instruction_box();
-        let json_value =
-            instruction_to_json_value(&instruction).expect("serialize EnactReferendum");
-        assert!(
-            json_value
-                .as_object()
-                .and_then(|map| map.get("EnactReferendum"))
-                .is_some()
-        );
-        let reconstructed = value_to_instruction(json_value).expect("deserialize EnactReferendum");
-        assert_eq!(reconstructed, instruction);
-    }
-    #[test]
-    fn governance_finalize_referendum_instruction_json_roundtrip() {
-        let instruction: InstructionBox = Box::new(FinalizeReferendum {
-            referendum_id: "ref-final".to_owned(),
-            proposal_id: sample_hash(0x33),
-        })
-        .into_instruction_box();
-        let json_value =
-            instruction_to_json_value(&instruction).expect("serialize FinalizeReferendum");
-        assert!(
-            json_value
-                .as_object()
-                .and_then(|map| map.get("FinalizeReferendum"))
-                .is_some()
-        );
-        let reconstructed =
-            value_to_instruction(json_value).expect("deserialize FinalizeReferendum");
-        assert_eq!(reconstructed, instruction);
     }
     #[test]
     fn governance_persist_council_instruction_json_roundtrip() {

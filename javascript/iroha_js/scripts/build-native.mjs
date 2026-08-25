@@ -247,17 +247,19 @@ function canonicalBuildInputs(repoRoot, env) {
     join(repoRoot, "Cargo.toml"),
     "Native build root Cargo.toml",
   );
-  const expectedLock = join(repoRoot, "Cargo.lock");
-  if (env[NATIVE_BUILD_CARGO_LOCK_ENV] !== expectedLock) {
+  const configuredLock = env[NATIVE_BUILD_CARGO_LOCK_ENV];
+  const selectedLock =
+    configuredLock === undefined ? join(repoRoot, "Cargo.lock") : configuredLock;
+  if (basename(selectedLock) !== "Cargo.lock") {
     throw new Error(
       "Native build requires " +
         NATIVE_BUILD_CARGO_LOCK_ENV +
-        " to name the root Cargo.lock.",
+        " to name a Cargo.lock file.",
     );
   }
   const cargoLock = canonicalRegularFile(
-    env[NATIVE_BUILD_CARGO_LOCK_ENV],
-    "Native build root Cargo.lock",
+    selectedLock,
+    "Native build selected Cargo.lock",
   );
   return Object.freeze({ cargoLock, cargoManifest });
 }

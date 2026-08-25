@@ -55,6 +55,8 @@ use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::consensus::{CertPhase, NativeAmxAttestationBodyV2};
+#[cfg(test)]
+use iroha_data_model::consensus::{VrfEpochRecord, VrfParticipantRecord};
 #[cfg(feature = "bls")]
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
@@ -69,10 +71,7 @@ use iroha_data_model::{
         *,
     },
     confidential::ConfidentialFeatureDigest,
-    consensus::{
-        ConsensusKeyRole, NposConsensusEffects, VALIDATOR_SET_HASH_VERSION_V1, VrfEpochRecord,
-        VrfParticipantRecord,
-    },
+    consensus::{ConsensusKeyRole, NposConsensusEffects, VALIDATOR_SET_HASH_VERSION_V1},
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -4179,8 +4178,7 @@ pub(crate) mod valid {
     fn collect_ready_soracloud_mailbox_messages(
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Vec<SoraServiceMailboxMessageV1> {
-        let execution_sequence =
-            crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(state_transaction);
+        let observed_height = state_transaction.block_height();
         let consumed: BTreeSet<Hash> = state_transaction
             .world
             .soracloud_runtime_receipts
@@ -4195,20 +4193,18 @@ pub(crate) mod valid {
                 if consumed.contains(message_id) {
                     return None;
                 }
-                if message.available_after_sequence > execution_sequence {
+                if message.available_after_height > observed_height {
                     return None;
                 }
-                if let Some(expires_at) = message.expires_at_sequence
-                    && expires_at <= execution_sequence
-                {
+                if message.expires_at_height <= observed_height {
                     return None;
                 }
                 Some(message.clone())
             })
             .collect();
         messages.sort_unstable_by(|left, right| {
-            left.available_after_sequence
-                .cmp(&right.available_after_sequence)
+            left.available_after_height
+                .cmp(&right.available_after_height)
                 .then_with(|| left.enqueue_sequence.cmp(&right.enqueue_sequence))
                 .then_with(|| left.message_id.cmp(&right.message_id))
         });
@@ -4219,6 +4215,7 @@ pub(crate) mod valid {
         state_transaction: &StateTransaction<'_, '_>,
         service_name: &iroha_data_model::name::Name,
     ) -> u32 {
+        let current_height = state_transaction.block_height();
         let consumed: BTreeSet<Hash> = state_transaction
             .world
             .soracloud_runtime_receipts
@@ -4231,7 +4228,9 @@ pub(crate) mod valid {
                 .soracloud_mailbox_messages
                 .iter()
                 .filter(|(message_id, message)| {
-                    !consumed.contains(message_id) && message.to_service == *service_name
+                    !consumed.contains(message_id)
+                        && message.to_service == *service_name
+                        && message.expires_at_height > current_height
                 })
                 .count(),
         )
@@ -4256,11 +4255,10 @@ pub(crate) mod valid {
         );
         let receipt_id = Hash::new(
             format!(
-                "soracloud:runtime-failure-receipt:{}:{}:{}:{}:{}",
+                "soracloud:runtime-failure-receipt:{}:{}:{}:{}",
                 request.mailbox_message.message_id,
                 request.deployment.service_name,
                 request.deployment.current_service_version,
-                request.execution_sequence,
                 outcome_label,
             )
             .as_bytes(),
@@ -4272,18 +4270,8 @@ pub(crate) mod valid {
             health_status: SoraServiceHealthStatusV1::Degraded,
             load_factor_bps: 0,
             materialized_bundle_hash: request.bundle.container.bundle_hash,
-            rollout_handle: request
-                .deployment
-                .active_rollout
-                .as_ref()
-                .map(|rollout| rollout.rollout_handle.clone()),
-            pending_mailbox_message_count: request.authoritative_pending_mailbox_messages,
-            last_receipt_id: None,
         });
         runtime_state.health_status = SoraServiceHealthStatusV1::Degraded;
-        runtime_state.pending_mailbox_message_count = request
-            .authoritative_pending_mailbox_messages
-            .saturating_sub(1);
         SoracloudOrderedMailboxExecutionResult {
             state_mutations: Vec::new(),
             outbound_mailbox_messages: Vec::new(),
@@ -4304,13 +4292,11 @@ pub(crate) mod valid {
                 request_commitment: request.mailbox_message.payload_commitment,
                 result_commitment,
                 certified_by: iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
-                emitted_sequence: request.execution_sequence,
+                emitted_sequence: 0,
                 mailbox_message_id: Some(request.mailbox_message.message_id),
                 journal_artifact_hash: None,
                 checkpoint_artifact_hash: None,
-                placement_id: None,
-                selected_validator_account_id: None,
-                selected_peer_id: None,
+                execution_host: None,
             },
         }
     }
@@ -4365,10 +4351,10 @@ pub(crate) mod valid {
                 &receipt.request_commitment, &mailbox_message.payload_commitment
             ));
         }
-        if receipt.emitted_sequence != request.execution_sequence {
+        if receipt.emitted_sequence != 0 {
             return Err(format!(
-                "receipt emitted sequence `{}` does not match request execution sequence `{}`",
-                receipt.emitted_sequence, request.execution_sequence
+                "receipt emitted sequence `{}` is not the required submission sentinel",
+                receipt.emitted_sequence
             ));
         }
         Ok(())
@@ -4416,10 +4402,11 @@ pub(crate) mod valid {
                 observed_height: state_transaction.block_height(),
                 observed_block_hash: StateReadOnly::latest_block_hash(&state_transaction)
                     .map(Hash::from),
-                execution_sequence:
+                observed_sequence:
                     crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
                         &state_transaction,
-                    ),
+                    )
+                    .expect("test mailbox execution requires an available Soracloud audit sequence"),
                 deployment,
                 bundle,
                 handler,
@@ -4444,7 +4431,7 @@ pub(crate) mod valid {
                 response_bytes: _response_bytes,
                 content_type: _content_type,
                 runtime_state,
-                runtime_receipt,
+                mut runtime_receipt,
             } = result;
             if let Err(error) = validate_mailbox_runtime_receipt(&request, &runtime_receipt) {
                 warn!(
@@ -4483,7 +4470,7 @@ pub(crate) mod valid {
                         None,
                         None,
                         runtime_receipt.receipt_id,
-                        request.execution_sequence,
+                        request.observed_sequence,
                     )
                 {
                     warn!(
@@ -4534,6 +4521,7 @@ pub(crate) mod valid {
                 failed = true;
                 break;
             }
+            runtime_receipt.emitted_sequence = 0;
             if let Err(error) =
                 crate::smartcontracts::isi::soracloud::write_soracloud_runtime_receipt(
                     &mut state_transaction,
@@ -4905,6 +4893,19 @@ pub(crate) mod valid {
                                   policy_slot: u64,
                                   min_expiry_slot: Option<u64>|
              -> Result<usize, BlockValidationError> {
+                if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof.payload) {
+                    return Err(make_axt_error_with(
+                        AxtRejectReason::Proof,
+                        &format!(
+                            "proof payload exceeds the {}-byte decode limit",
+                            fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                        ),
+                        Some(dsid),
+                        Some(policy.target_lane),
+                        None,
+                        None,
+                    ));
+                }
                 let cache_key = (proof.expiry_slot, Hash::new(&proof.payload));
                 let cached_index = verified_proof_buckets.get(&cache_key).and_then(|bucket| {
                     bucket
@@ -8079,6 +8080,7 @@ pub(crate) mod valid {
                 }
             }
         }
+        #[cfg(test)]
         fn vrf_epoch_record_extends_existing(
             existing: &VrfEpochRecord,
             proposed: &VrfEpochRecord,
@@ -8116,6 +8118,7 @@ pub(crate) mod valid {
                     .as_ref()
                     .is_none_or(|election| proposed.validator_election.as_ref() == Some(election))
         }
+        #[cfg(test)]
         fn vrf_participants_extend_existing(
             existing: &[VrfParticipantRecord],
             proposed: &[VrfParticipantRecord],
@@ -8142,6 +8145,7 @@ pub(crate) mod valid {
                     })
                 })
         }
+        #[cfg(test)]
         fn vrf_late_reveals_extend_existing(
             existing: &VrfEpochRecord,
             proposed: &VrfEpochRecord,
@@ -8180,13 +8184,35 @@ pub(crate) mod valid {
             if authoritative_mode
                 == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned)
             {
-                return if actual_effects.is_none() {
-                    Ok(())
-                } else {
-                    Err(Self::npos_effects_error(
-                        "permissioned consensus blocks must not carry NPoS effects",
-                    ))
-                };
+                let context = authenticated_height_context.ok_or_else(|| {
+                    Self::npos_effects_error(
+                        "permissioned candidate validation requires its authenticated height context",
+                    )
+                })?;
+                if context.mode
+                    != iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned
+                    || context.height != block_height
+                {
+                    return Err(Self::npos_effects_error(
+                        "permissioned candidate differs from its authenticated height context",
+                    ));
+                }
+                if let Some(effects) = actual_effects
+                    && (!effects.vrf_epoch_seals.is_empty()
+                        || !effects.v2_evidence_admissions.is_empty()
+                        || !effects.penalty_actions.is_empty())
+                {
+                    return Err(Self::npos_effects_error(
+                        "permissioned consensus blocks may carry only a requested global beacon pulse",
+                    ));
+                }
+                return Self::validate_global_beacon_pulse_effect(
+                    block,
+                    state,
+                    context,
+                    actual_effects
+                        .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref()),
+                );
             }
             if authoritative_mode
                 == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos)
@@ -8213,8 +8239,21 @@ pub(crate) mod valid {
                         "invalid authenticated NPoS VRF effects: {error}"
                     ))
                 })?;
+                Self::validate_global_beacon_pulse_effect(
+                    block,
+                    state,
+                    context,
+                    actual_effects
+                        .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref()),
+                )?;
             }
             let admission_keys = if let Some(effects) = actual_effects {
+                #[cfg(not(test))]
+                if !effects.vrf_epoch_seals.is_empty() {
+                    return Err(Self::npos_effects_error(
+                        "legacy VRF epoch effects are retired; finalized threshold-beacon pulses are authoritative",
+                    ));
+                }
                 crate::sumeragi::evidence::validate_v2_evidence_admissions(
                     state,
                     block_height,
@@ -8242,53 +8281,57 @@ pub(crate) mod valid {
                     &effects.penalty_actions,
                 )
                 .map_err(|err| Self::npos_effects_error(err.to_string()))?;
-                let mut seen_epochs = BTreeSet::new();
-                for record in &effects.vrf_epoch_seals {
-                    if !seen_epochs.insert(record.epoch) {
-                        return Err(Self::npos_effects_error(
-                            "duplicate VRF epoch seal in NPoS effects",
-                        ));
-                    }
-                    if record.penalties_applied_at_height.is_some() && !record.penalties_applied {
-                        return Err(Self::npos_effects_error(
-                            "VRF epoch seal has applied height without applied marker",
-                        ));
-                    }
-                    if !record.finalized
-                        && (!record.committed_no_reveal.is_empty()
-                            || !record.no_participation.is_empty())
-                    {
-                        return Err(Self::npos_effects_error(
-                            "unfinalized VRF epoch seal includes penalty offenders",
-                        ));
-                    }
-                    let mut offenders = record
-                        .committed_no_reveal
-                        .iter()
-                        .chain(record.no_participation.iter())
-                        .copied()
-                        .collect::<Vec<_>>();
-                    offenders.sort();
-                    offenders.dedup();
-                    if offenders.len()
-                        != record.committed_no_reveal.len() + record.no_participation.len()
-                    {
-                        return Err(Self::npos_effects_error(
-                            "VRF epoch seal contains duplicate offender indices",
-                        ));
-                    }
-                    if offenders.iter().any(|signer| *signer >= record.roster_len) {
-                        return Err(Self::npos_effects_error(
-                            "VRF epoch seal contains offender outside roster",
-                        ));
-                    }
-                    let world = state.world_view();
-                    if let Some(existing) = world.vrf_epochs().get(&record.epoch)
-                        && !Self::vrf_epoch_record_extends_existing(&existing, record)
-                    {
-                        return Err(Self::npos_effects_error(
-                            "VRF epoch seal conflicts with pre-block state",
-                        ));
+                #[cfg(test)]
+                {
+                    let mut seen_epochs = BTreeSet::new();
+                    for record in &effects.vrf_epoch_seals {
+                        if !seen_epochs.insert(record.epoch) {
+                            return Err(Self::npos_effects_error(
+                                "duplicate VRF epoch seal in NPoS effects",
+                            ));
+                        }
+                        if record.penalties_applied_at_height.is_some() && !record.penalties_applied
+                        {
+                            return Err(Self::npos_effects_error(
+                                "VRF epoch seal has applied height without applied marker",
+                            ));
+                        }
+                        if !record.finalized
+                            && (!record.committed_no_reveal.is_empty()
+                                || !record.no_participation.is_empty())
+                        {
+                            return Err(Self::npos_effects_error(
+                                "unfinalized VRF epoch seal includes penalty offenders",
+                            ));
+                        }
+                        let mut offenders = record
+                            .committed_no_reveal
+                            .iter()
+                            .chain(record.no_participation.iter())
+                            .copied()
+                            .collect::<Vec<_>>();
+                        offenders.sort();
+                        offenders.dedup();
+                        if offenders.len()
+                            != record.committed_no_reveal.len() + record.no_participation.len()
+                        {
+                            return Err(Self::npos_effects_error(
+                                "VRF epoch seal contains duplicate offender indices",
+                            ));
+                        }
+                        if offenders.iter().any(|signer| *signer >= record.roster_len) {
+                            return Err(Self::npos_effects_error(
+                                "VRF epoch seal contains offender outside roster",
+                            ));
+                        }
+                        let world = state.world_view();
+                        if let Some(existing) = world.vrf_epochs().get(&record.epoch)
+                            && !Self::vrf_epoch_record_extends_existing(&existing, record)
+                        {
+                            return Err(Self::npos_effects_error(
+                                "VRF epoch seal conflicts with pre-block state",
+                            ));
+                        }
                     }
                 }
             }
@@ -8313,6 +8356,131 @@ pub(crate) mod valid {
                     "NPoS penalty actions do not match pre-block state",
                 ));
             }
+            Ok(())
+        }
+        fn validate_global_beacon_pulse_effect(
+            block: &SignedBlock,
+            state: &State,
+            context: &iroha_data_model::block::consensus_v2::HeightContext,
+            pulse: Option<&iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
+        ) -> Result<(), BlockValidationError> {
+            let pulse_required_for_successor = context.mode
+                == iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+                && context
+                    .height
+                    .checked_add(1)
+                    .is_some_and(|next_height| next_height == context.epoch_end_height);
+            let world = state.world_view();
+            let logical_beacon_id =
+                iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
+                    &context.network_id,
+                );
+            let parliament_requested = world.parliament_attempts().iter().any(|(_, attempt)| {
+                attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)
+            });
+            let pulse_requested = pulse_required_for_successor || parliament_requested;
+            let Some(pulse) = pulse else {
+                return if pulse_required_for_successor {
+                    Err(Self::npos_effects_error(
+                        "NPoS pre-boundary block is missing its finalized global beacon pulse",
+                    ))
+                } else {
+                    Ok(())
+                };
+            };
+            if !pulse_requested {
+                return Err(Self::npos_effects_error(
+                    "global beacon pulse was not requested by committed pre-state",
+                ));
+            }
+            let block_height = block.header().height().get();
+            if pulse.height != block_height
+                || pulse.round != crate::beacon::GLOBAL_THRESHOLD_BEACON_PULSE_ROUND_V1
+                || pulse.network_id != context.network_id
+            {
+                return Err(Self::npos_effects_error(
+                    "global beacon pulse differs from the authenticated block height, fixed protocol round, or network",
+                ));
+            }
+            let parent_hash = block.header().prev_block_hash().ok_or_else(|| {
+                Self::npos_effects_error("global beacon pulse has no finalized parent anchor")
+            })?;
+            let anchor_height = block_height.checked_sub(1).ok_or_else(|| {
+                Self::npos_effects_error("global beacon pulse height cannot anchor a parent")
+            })?;
+            let expected_anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+                height: anchor_height,
+                block_hash: parent_hash,
+            };
+
+            if world.global_beacon_pulses.get(&pulse.pulse_id).is_some() {
+                return Err(Self::npos_effects_error(
+                    "global beacon pulse replays a pulse already in committed state",
+                ));
+            }
+            let active_session = world
+                .global_beacon_active_session
+                .get(&crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+                .copied()
+                .ok_or_else(|| {
+                    Self::npos_effects_error("global beacon pulse has no active key session")
+                })?;
+            if active_session != pulse.session_id {
+                return Err(Self::npos_effects_error(
+                    "global beacon pulse is not signed by the active key session",
+                ));
+            }
+            let key_record = world
+                .global_beacon_key_sessions
+                .get(&active_session)
+                .ok_or_else(|| {
+                    Self::npos_effects_error("global beacon active key session is absent")
+                })?;
+            if !key_record.is_active_at(block_height) {
+                return Err(Self::npos_effects_error(
+                    "global beacon key session is not active at the pulse height",
+                ));
+            }
+            let context_roster = context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<Vec<_>>();
+            let expected_roster_hash =
+                crate::beacon::authenticated_global_threshold_beacon_roster_hash_v1(
+                    &key_record.session,
+                    &context_roster,
+                )
+                .map_err(|_| {
+                    Self::npos_effects_error(
+                        "global beacon active key session differs from the authenticated height roster",
+                    )
+                })?;
+            let binding = crate::beacon::GlobalThresholdBeaconSessionBindingV1 {
+                network_id: context.network_id,
+                session_id: active_session,
+                roster_hash: expected_roster_hash,
+                transcript_hash: key_record.session.transcript_hash,
+            };
+            let session = crate::beacon::validate_global_threshold_beacon_session_v1(
+                key_record.session.clone(),
+                &binding,
+            )
+            .map_err(|error| {
+                Self::npos_effects_error(format!(
+                    "global beacon active public DKG session is invalid: {error}"
+                ))
+            })?;
+            crate::beacon::verify_finalized_global_threshold_beacon_pulse_v1(
+                &session,
+                pulse,
+                expected_anchor,
+            )
+            .map_err(|error| {
+                Self::npos_effects_error(format!(
+                    "invalid finalized global beacon pulse effect: {error}"
+                ))
+            })?;
             Ok(())
         }
         fn execution_context_error(message: impl Into<String>) -> BlockValidationError {
@@ -18697,6 +18865,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 2,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: vec![vrf_epoch_record_for_test(0, 2)],
                     v2_evidence_admissions: Vec::new(),
                     penalty_actions: Vec::new(),
@@ -18801,6 +18970,7 @@ pub(crate) mod valid {
                 keys[0].private_key(),
                 context.height,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     // This is the exact malicious shape from R-CON-25: a
                     // first record with no authenticated commit proof.
                     vrf_epoch_seals: vec![vrf_epoch_record_for_test(0, context.height)],
@@ -18885,6 +19055,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 15,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: vec![proposed],
                     v2_evidence_admissions: Vec::new(),
                     penalty_actions: Vec::new(),
@@ -18911,6 +19082,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 15,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: vec![proposed],
                     v2_evidence_admissions: Vec::new(),
                     penalty_actions: Vec::new(),
@@ -18942,6 +19114,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 4,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: vec![npos_vrf_record(
                         0,
                         4,
@@ -18975,6 +19148,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 4,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: vec![npos_vrf_record(
                         0,
                         4,
@@ -19031,6 +19205,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 20,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: Vec::new(),
                     v2_evidence_admissions: Vec::new(),
                     penalty_actions: vec![npos_marker(7, 20)],
@@ -19051,6 +19226,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 2,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: Vec::new(),
                     v2_evidence_admissions: Vec::new(),
                     penalty_actions: vec![npos_marker(99, 2)],
@@ -19073,6 +19249,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 2,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: Vec::new(),
                     v2_evidence_admissions: Vec::new(),
                     penalty_actions: vec![action.clone(), action],
@@ -24301,8 +24478,9 @@ mod commit {
             AxtEnvelopeRecord, AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey,
             AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtProofEnvelope,
             AxtProofFragment, AxtRemoteSpendClaimV1, AxtReplayRecord, AxtTouchFragment,
-            AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject, ManifestVersion, ProofBlob,
-            RemoteSpendIntent, SpendOp, TouchManifest, UniversalAccountId,
+            AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject,
+            MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES, ManifestVersion, ProofBlob, RemoteSpendIntent,
+            SpendOp, TouchManifest, UniversalAccountId,
         };
         use iroha_data_model::{DomainId, Registrable};
         use iroha_primitives::time::TimeSource;
@@ -26554,6 +26732,41 @@ mod commit {
                 AxtRejectReason::Proof,
                 "not an AXT proof envelope",
             );
+        }
+        #[test]
+        fn axt_validation_rejects_oversized_proof_before_decode() {
+            let mut state = axt_validation_state();
+            let dsid = DataSpaceId::new(22);
+            let lane = LaneId::new(9);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x45; 32],
+                target_lane: lane,
+                active_handle_era: 1,
+                next_handle_counter: 1,
+                current_slot: 2,
+            };
+            state.set_axt_policy(dsid, policy);
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: Vec::new(),
+            };
+            let envelope = AxtEnvelopeRecord {
+                binding: binding_for_descriptor(&descriptor),
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: ProofBlob {
+                        payload: vec![0; MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1],
+                        expiry_slot: Some(12),
+                    },
+                }],
+                handles: Vec::new(),
+                commit_height: 1,
+            };
+
+            expect_axt_envelope_error(&state, envelope, AxtRejectReason::Proof, "decode limit");
         }
         #[test]
         fn axt_validation_rejects_extended_proof_expiry() {

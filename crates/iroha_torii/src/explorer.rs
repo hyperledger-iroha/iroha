@@ -692,6 +692,7 @@ pub(crate) struct ExplorerInstructionDto {
     pub authority: String,
     pub created_at: String,
     pub kind: String,
+    #[norito(rename = "box")]
     pub r#box: ExplorerInstructionBoxDto,
     pub transaction_hash: String,
     pub transaction_status: String,
@@ -913,8 +914,6 @@ fn propose_sccp_route_governance_payload(instruction: &InstructionBox) -> Option
     )?;
     let mut value = Map::new();
     value.insert("anchor".to_owned(), json::to_value(&proposal.anchor).ok()?);
-    value.insert("window".to_owned(), json::to_value(&proposal.window).ok()?);
-    value.insert("mode".to_owned(), json::to_value(&proposal.mode).ok()?);
     Some(instruction_variant_value(
         "ProposeSccpRouteGovernance",
         Value::Object(value),
@@ -2988,6 +2987,12 @@ mod tests {
         let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         let dto = instruction_dto_with_kind(&tx, 7, &result, &instruction, kind, 0);
         assert_eq!(dto.kind, "AddSignatory");
+        let serialized = json::to_value(&dto).expect("instruction dto should serialize");
+        let Value::Object(fields) = serialized else {
+            panic!("instruction dto should serialize into an object");
+        };
+        assert!(fields.contains_key("box"));
+        assert!(!fields.contains_key("r#box"));
     }
     #[test]
     fn instruction_box_dto_wraps_payload_and_encoded() {
@@ -3073,21 +3078,11 @@ mod tests {
                 network_id: test_network_id(),
                 action,
             },
-            window: None,
-            mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
         };
         let mut expected = Map::new();
         expected.insert(
             "anchor".to_owned(),
             json::to_value(&proposal.anchor).expect("anchor should serialize"),
-        );
-        expected.insert(
-            "window".to_owned(),
-            json::to_value(&proposal.window).expect("window should serialize"),
-        );
-        expected.insert(
-            "mode".to_owned(),
-            json::to_value(&proposal.mode).expect("mode should serialize"),
         );
         let instruction: InstructionBox = proposal.into();
         let dto = instruction_box_dto(&instruction, ExplorerInstructionKind::Custom);

@@ -5,8 +5,8 @@ ROOT_DIR="${PRIVACY_JS_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd
 NODE_OVERRIDE="${PRIVACY_JS_SDK_NODE_BIN:-}"
 PYTHON_BIN="${PRIVACY_JS_SDK_PYTHON_BIN:-python3}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492"
+FROZEN_CARGO_LOCK_SHA256="9d6421d36fde972b4ba31889d46f5e2231ac9241558455f9ba1be9c66e63a744"
+TRACKED_ROOT_CARGO_LOCK_SHA256="71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2"
 ABI22_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"
 NATIVE_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-js-native.XXXXXX")"
 
@@ -112,10 +112,6 @@ PRIVACY_RELEASE_CARGO_LOCK="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-}"
   || { echo "error: privacy JavaScript requires a distinct external release Cargo.lock" >&2; exit 1; }
 [[ "$(sha256_file "${PRIVACY_RELEASE_CARGO_LOCK}")" == "${FROZEN_CARGO_LOCK_SHA256}" ]] \
   || { echo "error: privacy JavaScript external Cargo.lock is not the frozen release lock" >&2; exit 1; }
-echo \
-  "error: privacy JavaScript native tooling requires external-lock requalification before it can consume cd9e without replacing the tracked 4bcc root authority" \
-  >&2
-exit 1
 
 RUSTUP_BIN="${PRIVACY_JS_SDK_RUSTUP_BIN:-$(command -v rustup)}"
 IROHA_JS_CARGO_PATH="$("${RUSTUP_BIN}" which --toolchain 1.93.1 cargo)"

@@ -203,41 +203,26 @@ Common envelope: `InstructionExecutionError` with variants for evaluation errors
 ---
 
 ## Transactions and Executables
-- `Executable`: `Instructions(ConstVec<InstructionBox>)`, `ContractCall(ContractInvocation)`, `Ivm(IvmBytecode)`, `IvmProved(IvmProved)`, or the flat ordered `Batch(ConstVec<ExecutableBatchItem>)`; bytecode serializes as base64. `DATA_MODEL_VERSION = 3` introduces the append-only `Batch` tag `4`; its item tags are `0` for a native `InstructionBox` and `1` for a deployed `ContractInvocation`. Existing executable tags `0..=3` retain their canonical bytes. Raw IVM bytecode and nested batches cannot be smuggled into the mixed form. Code: `crates/iroha_data_model/src/transaction/executable.rs`.
+- `Executable`: `Instructions(ConstVec<InstructionBox>)`, `ContractCall(ContractInvocation)`, `Ivm(IvmBytecode)`, `IvmProved(IvmProved)`, or the flat ordered `Batch(ConstVec<ExecutableBatchItem>)`; bytecode serializes as base64. In the sole first-release layout, `Batch` uses tag `4`, and its item tags are `0` for a native `InstructionBox` and `1` for a deployed `ContractInvocation`. Raw IVM bytecode and nested batches cannot be smuggled into the mixed form. Code: `crates/iroha_data_model/src/transaction/executable.rs`.
 - `TransactionBuilder`/`SignedTransaction`: constructs, signs, and packages an executable with metadata, `chain_id`, `authority`, `creation_time_ms`, optional `ttl_ms`, and `nonce`. Code: `crates/iroha_data_model/src/transaction/`.
 - Admission rejects an empty mixed batch. At runtime, `iroha_core` executes `InstructionBox` batches via `Execute for InstructionBox`, downcasting to the appropriate `*Box` or concrete instruction. A mixed batch is a global live-state scheduler barrier: each item observes all earlier item effects, and any failure discards every staged effect. Transaction batches containing a call share one signature-bound gas limit across explicit ISIs and calls, with one fee settlement for the transaction. Trigger actions support the same ordered atomic batch and share one deterministic trigger gas budget across all items in an invocation. Code: `crates/iroha_core/src/smartcontracts/isi/mod.rs` and `crates/iroha_core/src/executor.rs`.
 - Runtime executor validation budget: every transaction snapshots the governed `executor.fuel` parameter when its state transaction is created. A user-provided executor shares that single budget across all instruction and trigger validations in the transaction; transaction metadata cannot change or replenish it.
 
-The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
-Version 3 remains the historical introduction point for the append-only mixed
-batch above. Version 4 changes canonical validation-fee governance bytes by
-requiring exact `plain_electorate_rules` in policy and payout-lifecycle
-proposal instructions, retaining those rules in enacted registry entries, and
-binding finalized authorization to the frozen PLAIN electorate. The rules fix
-the voting asset, bond-escrow and slash-receiver accounts, ballot and
-citizenship amounts, inclusive ballot duration, member cap, conviction,
-turnout, threshold, and closed eligibility rule. Taira requires PLAIN only, an
-exact 150-XOR bond, and an exact 3,600-block window
-(`h_end = h_start + 3,599`).
+The only supported SDK/node compatibility handshake is
+`DATA_MODEL_VERSION = 4`; SDKs reject every other value before submission. A
+validation-fee policy or payout-lifecycle proposal binds its canonical
+execution authority into the native proposal fingerprint. Policy proposals
+also bind the exact payout-lifecycle proposal when they carry a payout binding.
 
-At `h_start`, after the seven-body Parliament gate, consensus persists a
-`ValidationFeePlainElectorateSnapshotV1`: the proposal id/operator, capture and
-gate heights, exact member count, canonical member records, and
-domain-separated roster root. The corresponding
-`ValidationFeeParliamentAuthorizationV1` retains the snapshot
-root/count/capture/gate anchors. Ballot admission and tallying reject accounts
-outside the full frozen roster. Finalization and enactment recheck that
-snapshot, while registry validation and the verified policy projection recheck
-the proposal-bound rules and retained anchors. An enacted policy is admitted
-only when `effective_from_height = enacted_at_height + 120,960`; both earlier
-and later activation fail closed. SDKs must reject a node advertising any
-other data-model version before submission.
-
-New validation-fee governance locks retain the proposal-bound voting asset,
-escrow account, and slash receiver. Bond locking, expiry release, slashing, and
-restitution use those retained identities and one prechecked exact numeric
-transfer. A missing or mismatched custody binding, insufficient escrow, or
-failed destination update leaves the lock and balances unchanged.
+`ValidationFeeParliamentAuthorizationV1` retains that operator and fingerprint,
+the canonical id and complete value of the successful
+`GovernanceCertificateV1`, and the enacted height. Admission validates the
+certificate, derives and compares its id, requires its proposal content id to
+match the native fingerprint, and requires its enactment due height to equal
+the retained enacted height. An enabled policy is admitted only when
+`effective_from_height = enacted_at_height + 120,960`; both earlier and later
+activation fail closed. There is no validation-fee-specific electorate,
+snapshot, referendum-window, or finalization-evidence compatibility path.
 
 ---
 

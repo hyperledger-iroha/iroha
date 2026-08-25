@@ -461,8 +461,9 @@ key, and final-key selector-zero bootstrap witness for each Eq/Ep parity. Each p
 circuit parameters are authenticated inline in the V4 manifest, not streamed as a ninth or tenth
 artifact. The top-up-finality roster is authenticated release metadata outside the exact eight-role
 cryptographic inventory. `ReleaseAuthentication` also requires the canonical candidate-bound
-promotion record alongside the trusted policy, attestation, benchmark evidence, and cryptographic
-review; an authenticated-but-unpromoted release cannot be installed.
+promotion record and runner-signed internal-validation receipt alongside the trusted policy,
+attestation, benchmark evidence, and cryptographic review. The receipt and review are each limited
+to 1 MiB; an authenticated-but-unpromoted release cannot be installed.
 
 `KagemushaRecursiveSpendProver.newToriiClient` requires a genesis-derived
 `LocalSigningContext`. Its receiver-lineage method additionally requires a per-call
@@ -475,7 +476,7 @@ membership, note-opening, and accumulator details remain native-owned opaque byt
 The protocol and JVM append builder accept one or two inputs and support up to eight peer hops.
 Inputs are canonicalized by authenticated bundle digest; duplicate or conflicting exact-state
 branches fail closed. `getOfflineCapability` takes no selector and accepts only
-the four-field `cash_handoff_v1` response: bridge ABI 22, maximum hop count 8,
+the four-field `cash_handoff_v1` response: bridge ABI 23, maximum hop count 8,
 and `ready=true`. Asset scale, committed snapshot, verifier identities, and
 release bindings are supplied through the exact command and proof types that
 consume them rather than a separate readiness archive.

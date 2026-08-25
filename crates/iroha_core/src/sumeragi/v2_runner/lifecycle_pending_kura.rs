@@ -691,6 +691,9 @@ pub(super) fn run_pending_kura_lifecycle_height(
     reputation_finalized_archive: Option<
         Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
     >,
+    global_beacon_partial_signer: Option<
+        Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>,
+    >,
     network: crate::IrohaNetwork,
     block_rx: Arc<FairV2Ingress>,
     lane_relay_rx: std::sync::mpsc::Receiver<crate::sumeragi::LaneRelayMessage>,
@@ -1035,6 +1038,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
         kura,
         provider_ingest_finalized_archive,
         reputation_finalized_archive,
+        global_beacon_partial_signer,
         network,
         block_rx,
         lane_relay_rx,

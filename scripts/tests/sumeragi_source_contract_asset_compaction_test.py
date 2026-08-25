@@ -14,10 +14,10 @@ ASSET_PATH = ROOT / "crates/iroha_core/src/sumeragi/source_contracts_v1.txt"
 SUPPORT_PATH = ROOT / "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs"
 EXPECTED_CASE_COUNT = 52
 BASELINE_RUST_LINES = 5_779
-MAX_POSTIMAGE_RUST_LINES = 3_609
-MINIMUM_NET_REDUCTION = 2_170
-EXPECTED_ASSET_LENGTH = 475_201
-EXPECTED_ASSET_SHA256 = "2366606c6c57c95a97ebd34b75a9edf89669b47aaee2d4a22005b0f8d76b5f6b"
+MAX_POSTIMAGE_RUST_LINES = 3_606
+MINIMUM_NET_REDUCTION = 2_173
+EXPECTED_ASSET_LENGTH = 478_694
+EXPECTED_ASSET_SHA256 = "29cd5e5cb391e27b7768d5bbe383fdde4ccfe9ceb0f0b1bf196c49d6f11cf1b8"
 EXPECTED_CASE_IDS_SHA256 = "c00f7bf8c8c4a38b7cfa0a456ee10ec2bb8573ce6aac5330f5d377025ab298b6"
 
 HOST_PREIMAGE_SHA256 = {
@@ -30,9 +30,9 @@ HOST_PREIMAGE_SHA256 = {
 HOST_POSTIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "5b3988299c7873cb3cd0cf70f4007007d570cbb324c7c9adbf237ef4fbc6afda",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "cafb63f1161f2cd95185b4c46ccb6bd7eb09cd0afee0f5c07afa894c39ad4678",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "bc57cf6e598cf680a57ac43295e7efbd5dc44cd036199144a3e325f4fe3b8fa6",
+    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "d9d27eb348563245f606d5c0537df948b14d09bf29a9e4e99119e89a83dc8963",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "c6427c6b098be208556e08222f31507d024f5c63524fb43a5e5c7822b65711e7",
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "a267e6147cabfe7dd05f4e2a15458ce3fa5428a3b7633b353963a0f50b5e2da1",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "6c118646b68d797a3ba74ae6fb8f13fb8feda00a17e7328166e2bf72f11d9faa",
 }
 
 MIGRATED_TESTS = {
@@ -63,7 +63,7 @@ NEW_CASE_CONTRACT_COUNTS = {
 MIGRATED_CASE_SHA256 = {
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "8d461314d4d76d1dddc42d4fc21f908c1369874d90c96256f3184eec0949d4f0",
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "03b7d7a3a9843536bca8c686937561c0c12eea4281e9850de7ee7c841cf6ac48",
-    "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "ddb35ea319aba502839875f5548a17c0329dabe8e6d44e99b865e146417e6e23",
+    "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "dc5a58896a12211ec735952b05a411112a8fda45ed60923b1b5f114913a14a12",
 }
 
 

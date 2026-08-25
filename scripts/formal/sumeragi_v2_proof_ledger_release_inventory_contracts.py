@@ -845,8 +845,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 445:
-        errors.append("internal release-regression seal must contain exactly 445 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 444:
+        errors.append("internal release-regression seal must contain exactly 444 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:

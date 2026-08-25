@@ -13,7 +13,7 @@ use crate::{
     gadgets::transfer::{self, TransferRowKey},
     pack_bytes, poseidon,
 };
-use core::{cmp::max, convert::TryFrom};
+use core::convert::TryFrom;
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_isi::poseidon::RATE;
 use fastpq_isi::{StarkParameterSet, poseidon::PoseidonSponge as CpuPoseidonSponge};
@@ -36,6 +36,8 @@ const SMT_HEIGHT: usize = transfer::TRANSFER_MERKLE_HEIGHT;
 const METADATA_COMMITMENT_DOMAIN: &[u8] = b"fastpq:v1:metadata-commitment:blake2b-256";
 /// Number of exact 32-bit limbs carrying the 256-bit metadata commitment.
 pub(crate) const METADATA_COMMITMENT_LIMBS: usize = 8;
+/// Default maximum canonical trace columns admitted before prover allocation.
+pub(crate) const DEFAULT_MAX_TRACE_COLUMNS: usize = 512;
 /// Domain tag for hashing DS identifiers.
 const DSID_DOMAIN: &[u8] = b"fastpq:v1:dsid";
 /// Domain tag used for column hashes.
@@ -62,6 +64,14 @@ type PoseidonPipelineObserver = dyn Fn(PoseidonPipelinePolicy, &'static str, Opt
     + 'static;
 static POSEIDON_PIPELINE_OBSERVER: OnceLock<RwLock<Option<Arc<PoseidonPipelineObserver>>>> =
     OnceLock::new();
+#[cfg(test)]
+pub(crate) static POSEIDON_PIPELINE_OBSERVER_TEST_LOCK: std::sync::Mutex<()> =
+    std::sync::Mutex::new(());
+#[cfg(test)]
+type TraceMerkleModeObserver = dyn Fn(ExecutionMode) + Send + Sync + 'static;
+#[cfg(test)]
+static TRACE_MERKLE_MODE_OBSERVER: OnceLock<RwLock<Option<Arc<TraceMerkleModeObserver>>>> =
+    OnceLock::new();
 type PoseidonGpuEventObserver = dyn Fn(&'static str, &'static str, &'static str, Option<backend::GpuBackend>)
     + Send
     + Sync
@@ -81,13 +91,7 @@ impl PoseidonPipelinePolicy {
         let resolved = match requested {
             PoseidonExecutionMode::Auto => fallback,
             PoseidonExecutionMode::Cpu => ExecutionMode::Cpu,
-            PoseidonExecutionMode::Gpu => {
-                if matches!(fallback, ExecutionMode::Gpu) {
-                    ExecutionMode::Gpu
-                } else {
-                    ExecutionMode::Cpu
-                }
-            }
+            PoseidonExecutionMode::Gpu => ExecutionMode::Gpu,
         };
         Self {
             requested,
@@ -128,15 +132,91 @@ fn poseidon_observer_slot() -> &'static RwLock<Option<Arc<PoseidonPipelineObserv
 fn poseidon_gpu_event_observer_slot() -> &'static RwLock<Option<Arc<PoseidonGpuEventObserver>>> {
     POSEIDON_GPU_EVENT_OBSERVER.get_or_init(|| RwLock::new(None))
 }
+#[cfg(test)]
+fn trace_merkle_mode_observer_slot() -> &'static RwLock<Option<Arc<TraceMerkleModeObserver>>> {
+    TRACE_MERKLE_MODE_OBSERVER.get_or_init(|| RwLock::new(None))
+}
+fn replace_observer<T: ?Sized>(
+    slot: &RwLock<Option<Arc<T>>>,
+    replacement: Option<Arc<T>>,
+    observer_name: &'static str,
+) {
+    let previous = {
+        let mut guard = match slot.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!(
+                    target: "fastpq::poseidon",
+                    observer = observer_name,
+                    "recovering poisoned observer registration lock"
+                );
+                let guard = poisoned.into_inner();
+                slot.clear_poison();
+                guard
+            }
+        };
+        core::mem::replace(&mut *guard, replacement)
+    };
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(previous))).is_err() {
+        tracing::warn!(
+            target: "fastpq::poseidon",
+            observer = observer_name,
+            "observer destructor panicked"
+        );
+    }
+}
+fn clone_observer<T: ?Sized>(
+    slot: &RwLock<Option<Arc<T>>>,
+    observer_name: &'static str,
+) -> Option<Arc<T>> {
+    match slot.read() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => {
+            tracing::warn!(
+                target: "fastpq::poseidon",
+                observer = observer_name,
+                "recovering poisoned observer notification lock"
+            );
+            let guard = poisoned.into_inner();
+            slot.clear_poison();
+            guard.clone()
+        }
+    }
+}
 fn notify_poseidon_pipeline_observer(
     policy: PoseidonPipelinePolicy,
     path: &'static str,
     backend: Option<backend::GpuBackend>,
 ) {
-    if let Ok(guard) = poseidon_observer_slot().read()
-        && let Some(callback) = guard.clone()
-    {
-        callback(policy, path, backend);
+    let observer = clone_observer(poseidon_observer_slot(), "poseidon_pipeline");
+    if let Some(callback) = observer {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            callback(policy, path, backend);
+        }));
+        let drop_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(callback)));
+        if result.is_err() {
+            tracing::warn!(
+                target: "fastpq::poseidon",
+                requested = policy.requested().as_str(),
+                resolved = policy.resolved().as_str(),
+                path,
+                "Poseidon pipeline observer callback panicked"
+            );
+        }
+        if drop_result.is_err() {
+            tracing::warn!(
+                target: "fastpq::poseidon",
+                observer = "poseidon_pipeline",
+                "observer destructor panicked"
+            );
+        }
+    }
+}
+#[cfg(test)]
+fn notify_trace_merkle_mode_observer(mode: ExecutionMode) {
+    let observer = clone_observer(trace_merkle_mode_observer_slot(), "trace_merkle_mode");
+    if let Some(callback) = observer {
+        callback(mode);
     }
 }
 #[cfg(feature = "fastpq-gpu")]
@@ -146,13 +226,34 @@ fn notify_poseidon_gpu_event_observer(
     reason: &'static str,
     backend: Option<backend::GpuBackend>,
 ) {
-    if let Ok(guard) = poseidon_gpu_event_observer_slot().read()
-        && let Some(callback) = guard.clone()
-    {
-        callback(accelerator, event, reason, backend);
+    let observer = clone_observer(poseidon_gpu_event_observer_slot(), "poseidon_gpu_event");
+    if let Some(callback) = observer {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            callback(accelerator, event, reason, backend);
+        }));
+        let drop_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(callback)));
+        if result.is_err() {
+            tracing::warn!(
+                target: "fastpq::poseidon",
+                accelerator,
+                event,
+                reason,
+                "Poseidon GPU event observer callback panicked"
+            );
+        }
+        if drop_result.is_err() {
+            tracing::warn!(
+                target: "fastpq::poseidon",
+                observer = "poseidon_gpu_event",
+                "observer destructor panicked"
+            );
+        }
     }
 }
 /// Install a callback invoked whenever the Poseidon pipeline resolves to CPU/GPU execution.
+///
+/// The callback runs without holding the registration lock, may replace or clear itself, and its
+/// panics are caught and logged.
 pub fn set_poseidon_pipeline_observer<F>(observer: F)
 where
     F: Fn(PoseidonPipelinePolicy, &'static str, Option<backend::GpuBackend>)
@@ -160,11 +261,17 @@ where
         + Sync
         + 'static,
 {
-    if let Ok(mut guard) = poseidon_observer_slot().write() {
-        *guard = Some(Arc::new(observer));
-    }
+    let observer: Arc<PoseidonPipelineObserver> = Arc::new(observer);
+    replace_observer(
+        poseidon_observer_slot(),
+        Some(observer),
+        "poseidon_pipeline",
+    );
 }
 /// Install a callback invoked when a FASTPQ GPU accelerator is disabled or a sampled parity check fails.
+///
+/// The callback runs without holding the registration lock, may replace or clear itself, and its
+/// panics are caught and logged.
 pub fn set_poseidon_gpu_event_observer<F>(observer: F)
 where
     F: Fn(&'static str, &'static str, &'static str, Option<backend::GpuBackend>)
@@ -172,21 +279,40 @@ where
         + Sync
         + 'static,
 {
-    if let Ok(mut guard) = poseidon_gpu_event_observer_slot().write() {
-        *guard = Some(Arc::new(observer));
-    }
+    let observer: Arc<PoseidonGpuEventObserver> = Arc::new(observer);
+    replace_observer(
+        poseidon_gpu_event_observer_slot(),
+        Some(observer),
+        "poseidon_gpu_event",
+    );
 }
 /// Remove the previously registered Poseidon pipeline observer, if any.
 pub fn clear_poseidon_pipeline_observer() {
-    if let Ok(mut guard) = poseidon_observer_slot().write() {
-        guard.take();
-    }
+    replace_observer(poseidon_observer_slot(), None, "poseidon_pipeline");
+}
+#[cfg(test)]
+pub(crate) fn set_trace_merkle_mode_observer<F>(observer: F)
+where
+    F: Fn(ExecutionMode) + Send + Sync + 'static,
+{
+    let observer: Arc<TraceMerkleModeObserver> = Arc::new(observer);
+    replace_observer(
+        trace_merkle_mode_observer_slot(),
+        Some(observer),
+        "trace_merkle_mode",
+    );
+}
+#[cfg(test)]
+pub(crate) fn clear_trace_merkle_mode_observer() {
+    replace_observer(trace_merkle_mode_observer_slot(), None, "trace_merkle_mode");
 }
 /// Remove the previously registered FASTPQ GPU accelerator event observer, if any.
 pub fn clear_poseidon_gpu_event_observer() {
-    if let Ok(mut guard) = poseidon_gpu_event_observer_slot().write() {
-        guard.take();
-    }
+    replace_observer(
+        poseidon_gpu_event_observer_slot(),
+        None,
+        "poseidon_gpu_event",
+    );
 }
 /// Representation of a fully padded FASTPQ trace.
 #[derive(Debug, Clone)]
@@ -524,10 +650,17 @@ fn hash_to_field(hash: &Hash) -> u64 {
 ///
 /// # Errors
 ///
-/// Returns [`Error`] when numeric encodings, asset keys, mint/burn direction,
-/// permission witnesses, or transfer transcripts are malformed.
+/// Returns [`Error`] when the row or schema dimensions exceed supported bounds,
+/// or when numeric encodings, asset keys, mint/burn direction, permission
+/// witnesses, or transfer transcripts are malformed.
 #[allow(clippy::too_many_lines)]
 pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
+    let n_rows = batch.transitions.len();
+    let padded_len = n_rows
+        .max(1)
+        .checked_next_power_of_two()
+        .ok_or(Error::TraceLengthOverflow { rows: n_rows })?;
+    ensure_trace_schema_limit(batch, DEFAULT_MAX_TRACE_COLUMNS)?;
     let mut canonical = batch.clone();
     canonical.sort();
     let transfer_witnesses = extract_transfer_witnesses(
@@ -535,10 +668,12 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         &canonical.transitions,
         &canonical.public_inputs,
     )?;
-    let transfer_proof_index = transfer::index_row_proofs(&transfer_witnesses);
+    let mut transfer_proof_index = transfer::index_row_proofs(&transfer_witnesses);
     let metadata_hash_limbs = metadata_commitment_limbs(&canonical.metadata)?;
     let dsid_hash = hash_with_domain(DSID_DOMAIN, &canonical.public_inputs.dsid)?;
-    let slot_value = canonical.public_inputs.slot;
+    // The exact `u64` remains bound by `PublicIO`; trace columns must use the
+    // unique canonical Goldilocks representative expected by every backend.
+    let slot_value = canonical.public_inputs.slot % GOLDILOCKS_MODULUS;
     let mut rows: Vec<RowData> = Vec::with_capacity(canonical.transitions.len());
     // TODO: Constrain these running values in the AIR before enabling Mint/Burn or generic
     // multi-row conservation in a public proof-semantics profile.
@@ -662,8 +797,8 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         };
         if matches!(transition.operation, crate::OperationKind::Transfer) {
             let proof = transfer_proof_index
-                .get(&TransferRowKey::from_transition(transition))
-                .cloned()
+                .get_mut(&TransferRowKey::from_transition(transition))
+                .and_then(std::collections::VecDeque::pop_front)
                 .ok_or_else(|| Error::TransferInvariant {
                     details: "transfer row is missing its canonical SMT proof witness".into(),
                 });
@@ -678,8 +813,7 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         }
         rows.push(row);
     }
-    let n_rows = rows.len();
-    let padded_len = pow2_ceil(max(1, n_rows));
+    debug_assert_eq!(rows.len(), n_rows);
     let row_usage = RowUsage::from_rows(&rows, n_rows);
     while rows.len() < padded_len {
         rows.push(RowData::padding(metadata_hash_limbs, dsid_hash, slot_value));
@@ -799,6 +933,70 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         row_usage,
     })
 }
+#[derive(Clone, Copy)]
+struct TraceSchemaLimbWidths {
+    key: usize,
+    old_value: usize,
+    new_value: usize,
+    asset: usize,
+}
+fn packed_limb_len(byte_len: usize) -> usize {
+    byte_len.div_ceil(crate::LIMB_BYTES)
+}
+fn trace_schema_limb_widths(batch: &TransitionBatch) -> Result<TraceSchemaLimbWidths> {
+    let mut widths = TraceSchemaLimbWidths {
+        key: 0,
+        old_value: 0,
+        new_value: 0,
+        asset: 0,
+    };
+    for transition in &batch.transitions {
+        let asset_len = match &transition.operation {
+            crate::OperationKind::MetaSet => transition.key.len(),
+            crate::OperationKind::RoleGrant { .. } | crate::OperationKind::RoleRevoke { .. } => 0,
+            crate::OperationKind::Transfer
+            | crate::OperationKind::Mint
+            | crate::OperationKind::Burn => canonical_asset_id_bytes(&transition.key)?.len(),
+        };
+        widths.key = widths.key.max(packed_limb_len(transition.key.len()));
+        widths.old_value = widths
+            .old_value
+            .max(packed_limb_len(transition.pre_value.len()));
+        widths.new_value = widths
+            .new_value
+            .max(packed_limb_len(transition.post_value.len()));
+        widths.asset = widths.asset.max(packed_limb_len(asset_len));
+    }
+    Ok(widths)
+}
+/// Return the number of columns in the canonical FASTPQ layout without allocating column names.
+pub(crate) fn column_count_for_batch(batch: &TransitionBatch) -> Result<usize> {
+    const SELECTOR_COLUMNS: usize = 8;
+    const DELTA_COLUMNS: usize = 2;
+    const TRAILING_COLUMNS: usize = 5;
+    let widths = trace_schema_limb_widths(batch)?;
+    let fixed_columns = SELECTOR_COLUMNS
+        + DELTA_COLUMNS
+        + METADATA_COMMITMENT_LIMBS
+        + TRAILING_COLUMNS
+        + SMT_HEIGHT * 4;
+    Ok(fixed_columns + widths.key + widths.old_value + widths.new_value + widths.asset)
+}
+/// Enforce a caller-selected trace schema width before materialising columns.
+pub(crate) fn ensure_trace_schema_limit(
+    batch: &TransitionBatch,
+    max_air_row_values: usize,
+) -> Result<()> {
+    let actual = column_count_for_batch(batch)?;
+    if actual > max_air_row_values {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_air_row_values",
+            actual,
+            max: max_air_row_values,
+        });
+    }
+    Ok(())
+}
 /// Return the canonical FASTPQ column layout for a transition batch without materialising rows.
 ///
 /// # Errors
@@ -806,27 +1004,7 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
 /// Returns [`Error::InvalidAssetKey`] when a numeric operation does not use the canonical
 /// `asset/<asset-id>/<account>` key shape.
 pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Result<Vec<String>> {
-    let mut canonical = batch.clone();
-    canonical.sort();
-    let mut max_key_limbs = 0usize;
-    let mut max_value_old = 0usize;
-    let mut max_value_new = 0usize;
-    let mut max_asset_limbs = 0usize;
-    for transition in &canonical.transitions {
-        let asset_id_bytes = match &transition.operation {
-            crate::OperationKind::MetaSet => transition.key.clone(),
-            crate::OperationKind::RoleGrant { .. } | crate::OperationKind::RoleRevoke { .. } => {
-                Vec::new()
-            }
-            crate::OperationKind::Transfer
-            | crate::OperationKind::Mint
-            | crate::OperationKind::Burn => extract_canonical_asset_id(&transition.key)?,
-        };
-        max_key_limbs = max_key_limbs.max(pack_bytes(&transition.key).limbs.len());
-        max_value_old = max_value_old.max(pack_bytes(&transition.pre_value).limbs.len());
-        max_value_new = max_value_new.max(pack_bytes(&transition.post_value).limbs.len());
-        max_asset_limbs = max_asset_limbs.max(pack_bytes(&asset_id_bytes).limbs.len());
-    }
+    let widths = trace_schema_limb_widths(batch)?;
     let mut columns = [
         "s_active",
         "s_transfer",
@@ -840,10 +1018,10 @@ pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Result<Vec<Stri
     .into_iter()
     .map(str::to_owned)
     .collect::<Vec<_>>();
-    columns.extend((0..max_key_limbs).map(|idx| format!("key_limb_{idx}")));
-    columns.extend((0..max_value_old).map(|idx| format!("value_old_limb_{idx}")));
-    columns.extend((0..max_value_new).map(|idx| format!("value_new_limb_{idx}")));
-    columns.extend((0..max_asset_limbs).map(|idx| format!("asset_id_limb_{idx}")));
+    columns.extend((0..widths.key).map(|idx| format!("key_limb_{idx}")));
+    columns.extend((0..widths.old_value).map(|idx| format!("value_old_limb_{idx}")));
+    columns.extend((0..widths.new_value).map(|idx| format!("value_new_limb_{idx}")));
+    columns.extend((0..widths.asset).map(|idx| format!("asset_id_limb_{idx}")));
     columns.extend(
         ["delta", "running_asset_delta"]
             .into_iter()
@@ -1343,11 +1521,28 @@ pub fn hash_columns_gpu_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
         record_poseidon_pipeline_start(batch.columns(), 1);
     }
     match gpu::poseidon_hash_columns(batch, backend) {
-        Ok(result) => {
+        Ok(result) if poseidon_column_result_count_matches(batch, &result) => {
             if !batch.is_empty() {
                 record_poseidon_pipeline_batch();
             }
             Some(result)
+        }
+        Ok(result) => {
+            disable_poseidon_column_gpu_with_warning(
+                backend,
+                "column batch count mismatch",
+                batch.columns(),
+                None,
+            );
+            tracing::warn!(
+                target: "fastpq::poseidon",
+                backend = ?backend,
+                expected = batch.columns(),
+                actual = result.len(),
+                "gpu Poseidon column batch returned an unexpected digest count; falling back"
+            );
+            record_poseidon_pipeline_fallback();
+            None
         }
         Err(error) => {
             disable_poseidon_column_gpu_with_warning(
@@ -1360,6 +1555,10 @@ pub fn hash_columns_gpu_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
             None
         }
     }
+}
+#[cfg(feature = "fastpq-gpu")]
+fn poseidon_column_result_count_matches(batch: &PoseidonColumnBatch, result: &[u64]) -> bool {
+    result.len() == batch.columns()
 }
 #[cfg(feature = "fastpq-gpu")]
 pub(crate) fn disable_poseidon_column_gpu_after_parity_mismatch(
@@ -1382,7 +1581,7 @@ fn poseidon_column_disable_reason(
     }
     match operation {
         "self-test mismatch" => "self_test_mismatch",
-        "limb batch count mismatch" => "count_mismatch",
+        "column batch count mismatch" | "limb batch count mismatch" => "count_mismatch",
         "limb batch CPU parity mismatch" | "runtime CPU parity mismatch" => "cpu_parity_mismatch",
         _ => operation,
     }
@@ -1539,7 +1738,7 @@ pub fn hash_columns_gpu_fused(
     });
     Some(ColumnDigests::new(leaves, Some(parents)))
 }
-fn extract_canonical_asset_id(key: &[u8]) -> Result<Vec<u8>> {
+fn canonical_asset_id_bytes(key: &[u8]) -> Result<&[u8]> {
     let rest = key.strip_prefix(b"asset/").ok_or(Error::InvalidAssetKey)?;
     let separator = rest
         .iter()
@@ -1550,7 +1749,10 @@ fn extract_canonical_asset_id(key: &[u8]) -> Result<Vec<u8>> {
     if asset_id.is_empty() || account.is_empty() || account.contains(&b'/') {
         return Err(Error::InvalidAssetKey);
     }
-    Ok(asset_id.to_vec())
+    Ok(asset_id)
+}
+fn extract_canonical_asset_id(key: &[u8]) -> Result<Vec<u8>> {
+    Ok(canonical_asset_id_bytes(key)?.to_vec())
 }
 fn decode_u64_le(bytes: &[u8]) -> Result<u64> {
     if bytes.len() != core::mem::size_of::<u64>() {
@@ -1572,17 +1774,17 @@ fn field_from_i128(value: i128) -> u64 {
     }
     u64::try_from(reduced).expect("canonical reduction fits u64")
 }
-fn pow2_ceil(value: usize) -> usize {
-    value.next_power_of_two()
-}
 /// Compute column hashes for a trace suitable for Poseidon Merkle commitment.
 ///
 /// # Errors
 ///
-/// Returns [`Error::ValueWidth`] when metadata payloads exceed the field limb
-/// width or when Norito encoding fails.
-#[allow(clippy::unnecessary_wraps)]
+/// Returns [`Error::InvalidTraceShape`] when the trace is not padded to its
+/// canonical power-of-two length or its columns have inconsistent lengths,
+/// and [`Error::VerifierLimitExceeded`] or
+/// [`Error::TraceDomainCapacityExceeded`] when its dimensions exceed the
+/// supported schema or selected parameter domain.
 pub fn column_hashes(trace: &Trace, params: &StarkParameterSet) -> Result<ColumnDigests> {
+    validate_trace_shape(trace, params)?;
     if trace.columns.is_empty() {
         return Ok(ColumnDigests::new(Vec::new(), None));
     }
@@ -1596,6 +1798,53 @@ pub fn column_hashes(trace: &Trace, params: &StarkParameterSet) -> Result<Column
         mode,
         PoseidonPipelinePolicy::for_mode(mode),
     ))
+}
+fn validate_trace_shape(trace: &Trace, params: &StarkParameterSet) -> Result<()> {
+    if trace.columns.len() > DEFAULT_MAX_TRACE_COLUMNS {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_air_row_values",
+            actual: trace.columns.len(),
+            max: DEFAULT_MAX_TRACE_COLUMNS,
+        });
+    }
+    let required_padded_len = trace
+        .rows
+        .max(1)
+        .checked_next_power_of_two()
+        .ok_or(Error::TraceLengthOverflow { rows: trace.rows })?;
+    if trace.padded_len != required_padded_len {
+        return Err(Error::InvalidTraceShape {
+            details: format!(
+                "padded length {} does not match canonical length {required_padded_len} for {} rows",
+                trace.padded_len, trace.rows
+            ),
+        });
+    }
+    let max_rows = 1usize
+        .checked_shl(params.trace_log_size)
+        .ok_or(Error::TraceLengthOverflow {
+            rows: trace.padded_len,
+        })?;
+    if trace.padded_len > max_rows {
+        return Err(Error::TraceDomainCapacityExceeded {
+            rows: trace.rows,
+            padded_rows: trace.padded_len,
+            max_rows,
+        });
+    }
+    for (index, column) in trace.columns.iter().enumerate() {
+        if column.values.len() != trace.padded_len {
+            return Err(Error::InvalidTraceShape {
+                details: format!(
+                    "column {index} (`{}`) has length {}, expected {}",
+                    column.name,
+                    column.values.len(),
+                    trace.padded_len
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 pub(crate) fn trace_coefficients(
     trace: &Trace,
@@ -1772,24 +2021,36 @@ pub(crate) fn column_index(trace: &Trace, name: &str) -> Option<usize> {
 }
 /// Compute a Poseidon Merkle root over column hashes using an optional fused first level.
 pub fn merkle_root_with_first_level(leaves: &[u64], first_level: Option<&[u64]>) -> u64 {
+    merkle_root_with_first_level_using(leaves, first_level, compute_merkle_level)
+}
+/// Compute a Poseidon Merkle root using the requested pipeline for every non-fused level.
+pub(crate) fn merkle_root_with_first_level_with_mode(
+    leaves: &[u64],
+    first_level: Option<&[u64]>,
+    mode: ExecutionMode,
+) -> u64 {
+    merkle_root_with_first_level_using(leaves, first_level, |input| {
+        compute_merkle_level_with_mode(input, mode)
+    })
+}
+fn merkle_root_with_first_level_using(
+    leaves: &[u64],
+    first_level: Option<&[u64]>,
+    mut compute_level: impl FnMut(&[u64]) -> Vec<u64>,
+) -> u64 {
     if leaves.is_empty() {
         return 0;
     }
-    let mut current = first_level.map_or_else(
-        || compute_merkle_level(leaves),
-        |parents| {
-            if parents.is_empty() && leaves.len() > 1 {
-                compute_merkle_level(leaves)
-            } else {
-                parents.to_vec()
-            }
-        },
-    );
+    let expected_first_level_len = leaves.len().div_ceil(2);
+    let mut current = match first_level {
+        Some(parents) if parents.len() == expected_first_level_len => parents.to_vec(),
+        None | Some(_) => compute_level(leaves),
+    };
     if current.is_empty() {
         return leaves[0];
     }
     while current.len() > 1 {
-        current = compute_merkle_level(&current);
+        current = compute_level(&current);
     }
     current[0]
 }
@@ -1800,6 +2061,12 @@ pub fn merkle_root(leaves: &[u64]) -> u64 {
 fn compute_merkle_level(input: &[u64]) -> Vec<u64> {
     let pairs = merkle_pairs(input);
     hash_trace_merkle_pairs_batched(&pairs)
+}
+fn compute_merkle_level_with_mode(input: &[u64], mode: ExecutionMode) -> Vec<u64> {
+    #[cfg(test)]
+    notify_trace_merkle_mode_observer(mode);
+    let pairs = merkle_pairs(input);
+    hash_trace_merkle_pairs_with_mode(&pairs, mode)
 }
 fn merkle_pairs(input: &[u64]) -> Vec<[u64; 2]> {
     if input.is_empty() {
@@ -1820,12 +2087,7 @@ fn hash_trace_merkle_pairs_cpu(pairs: &[[u64; 2]]) -> Vec<u64> {
         .collect()
 }
 pub(crate) fn hash_trace_merkle_pairs_batched(pairs: &[[u64; 2]]) -> Vec<u64> {
-    let mode = if backend::current_gpu_backend().is_some() {
-        backend::ExecutionMode::Gpu
-    } else {
-        backend::ExecutionMode::Cpu
-    };
-    hash_trace_merkle_pairs_with_mode(pairs, mode)
+    hash_trace_merkle_pairs_with_mode(pairs, backend::ExecutionMode::Cpu)
 }
 pub(crate) fn hash_trace_merkle_pairs_with_mode(
     pairs: &[[u64; 2]],
@@ -2088,6 +2350,24 @@ mod tests {
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::to_bytes;
+    #[cfg(feature = "fastpq-gpu")]
+    static POSEIDON_PIPELINE_STATS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[cfg(feature = "fastpq-gpu")]
+    static POSEIDON_GPU_EVENT_OBSERVER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    struct PoseidonPipelineObserverTestGuard;
+    impl Drop for PoseidonPipelineObserverTestGuard {
+        fn drop(&mut self) {
+            clear_poseidon_pipeline_observer();
+        }
+    }
+    #[cfg(feature = "fastpq-gpu")]
+    struct PoseidonGpuEventObserverTestGuard;
+    #[cfg(feature = "fastpq-gpu")]
+    impl Drop for PoseidonGpuEventObserverTestGuard {
+        fn drop(&mut self) {
+            clear_poseidon_gpu_event_observer();
+        }
+    }
     fn sample_batch() -> TransitionBatch {
         let transcript = sample_transfer_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);
@@ -2130,21 +2410,93 @@ mod tests {
         assert_eq!(gpu_policy.cpu_label(), "cpu_fallback");
     }
     #[test]
-    fn poseidon_policy_gpu_override_requires_gpu_backend() {
+    fn poseidon_policy_gpu_override_is_independent_of_execution_mode() {
         let forced_gpu =
             PoseidonPipelinePolicy::new(PoseidonExecutionMode::Gpu, ExecutionMode::Gpu);
         assert!(matches!(forced_gpu.resolved(), ExecutionMode::Gpu));
         assert_eq!(forced_gpu.requested(), PoseidonExecutionMode::Gpu);
-        let downgraded =
-            PoseidonPipelinePolicy::new(PoseidonExecutionMode::Gpu, ExecutionMode::Cpu);
-        assert!(matches!(downgraded.resolved(), ExecutionMode::Cpu));
-        assert_eq!(downgraded.cpu_label(), "cpu_fallback");
+        let cpu_fft = PoseidonPipelinePolicy::new(PoseidonExecutionMode::Gpu, ExecutionMode::Cpu);
+        assert!(matches!(cpu_fft.resolved(), ExecutionMode::Gpu));
+        assert_eq!(cpu_fft.cpu_label(), "cpu_fallback");
     }
     #[test]
     fn poseidon_policy_respects_cpu_override() {
         let forced = PoseidonPipelinePolicy::new(PoseidonExecutionMode::Cpu, ExecutionMode::Gpu);
         assert!(matches!(forced.resolved(), ExecutionMode::Cpu));
         assert_eq!(forced.cpu_label(), "cpu_forced");
+    }
+    #[test]
+    fn poseidon_pipeline_observer_panic_does_not_escape_or_poison_registration() {
+        let _lock = POSEIDON_PIPELINE_OBSERVER_TEST_LOCK
+            .lock()
+            .expect("Poseidon observer test lock");
+        let _observer_guard = PoseidonPipelineObserverTestGuard;
+        clear_poseidon_pipeline_observer();
+        set_poseidon_pipeline_observer(|_, _, _| panic!("observer failure"));
+        let policy = PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu);
+        let result = std::panic::catch_unwind(|| {
+            notify_poseidon_pipeline_observer(policy, "cpu_forced", None);
+        });
+        assert!(
+            result.is_ok(),
+            "observer panic must not escape proving code"
+        );
+
+        set_poseidon_pipeline_observer(|_, _, _| {});
+        clear_poseidon_pipeline_observer();
+    }
+    #[test]
+    fn poseidon_pipeline_observer_can_clear_itself_reentrantly() {
+        let _lock = POSEIDON_PIPELINE_OBSERVER_TEST_LOCK
+            .lock()
+            .expect("Poseidon observer test lock");
+        let _observer_guard = PoseidonPipelineObserverTestGuard;
+        clear_poseidon_pipeline_observer();
+        set_poseidon_pipeline_observer(|_, _, _| clear_poseidon_pipeline_observer());
+
+        notify_poseidon_pipeline_observer(
+            PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
+            "cpu_forced",
+            None,
+        );
+
+        set_poseidon_pipeline_observer(|_, _, _| {});
+        clear_poseidon_pipeline_observer();
+    }
+    #[test]
+    fn poseidon_pipeline_observer_destructor_panic_is_isolated_after_reentrant_clear() {
+        struct PanicOnDrop;
+        impl Drop for PanicOnDrop {
+            fn drop(&mut self) {
+                panic!("observer destructor failure");
+            }
+        }
+
+        let _lock = POSEIDON_PIPELINE_OBSERVER_TEST_LOCK
+            .lock()
+            .expect("Poseidon observer test lock");
+        let _observer_guard = PoseidonPipelineObserverTestGuard;
+        clear_poseidon_pipeline_observer();
+        let panic_on_drop = PanicOnDrop;
+        set_poseidon_pipeline_observer(move |_, _, _| {
+            let _ = &panic_on_drop;
+            clear_poseidon_pipeline_observer();
+        });
+
+        let result = std::panic::catch_unwind(|| {
+            notify_poseidon_pipeline_observer(
+                PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
+                "cpu_forced",
+                None,
+            );
+        });
+        assert!(
+            result.is_ok(),
+            "observer destruction must not escape proving code"
+        );
+
+        set_poseidon_pipeline_observer(|_, _, _| {});
+        clear_poseidon_pipeline_observer();
     }
     #[test]
     fn trace_has_power_of_two_length() {
@@ -2157,6 +2509,25 @@ mod tests {
                 .iter()
                 .all(|col| col.values.len() == trace.padded_len)
         );
+    }
+    #[test]
+    fn trace_reduces_full_width_slots_to_canonical_field_elements() {
+        for slot in [GOLDILOCKS_MODULUS - 1, GOLDILOCKS_MODULUS, u64::MAX] {
+            let mut batch = sample_batch();
+            batch.public_inputs.slot = slot;
+            let trace = build_trace(&batch).expect("build trace for full-width slot");
+            let slot_column = trace
+                .columns
+                .iter()
+                .find(|column| column.name == "slot")
+                .expect("slot column");
+            assert!(
+                slot_column
+                    .values
+                    .iter()
+                    .all(|value| *value == slot % GOLDILOCKS_MODULUS)
+            );
+        }
     }
     #[test]
     fn column_names_for_batch_matches_trace_layout() {
@@ -2393,6 +2764,116 @@ mod tests {
         assert_ne!(root, 0);
     }
     #[test]
+    fn arithmetic_schema_count_matches_canonical_column_names() {
+        let batch = sample_batch();
+        let count = column_count_for_batch(&batch).expect("schema count");
+        let names = column_names_for_batch(&batch).expect("schema names");
+        assert_eq!(count, names.len());
+    }
+    #[test]
+    fn public_trace_builder_rejects_oversized_schema_before_materialising_columns() {
+        let mut batch =
+            TransitionBatch::new("fastpq-lane-balanced", crate::PublicInputs::default());
+        batch.push(StateTransition::new(
+            vec![0xA5; (DEFAULT_MAX_TRACE_COLUMNS + 1) * crate::LIMB_BYTES],
+            Vec::new(),
+            Vec::new(),
+            OperationKind::MetaSet,
+        ));
+        let actual = column_count_for_batch(&batch).expect("schema count");
+        assert!(actual > DEFAULT_MAX_TRACE_COLUMNS);
+
+        assert!(matches!(
+            build_trace(&batch),
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_air_row_values",
+                actual: observed,
+                max: DEFAULT_MAX_TRACE_COLUMNS,
+            }) if observed == actual
+        ));
+    }
+    #[test]
+    fn column_hashes_rejects_malformed_trace_shapes_without_panicking() {
+        let params = CANONICAL_PARAMETER_SETS[0];
+        let oversized_schema = Trace {
+            rows: 0,
+            padded_len: 1,
+            columns: (0..=DEFAULT_MAX_TRACE_COLUMNS)
+                .map(|index| TraceColumn {
+                    name: format!("column_{index}"),
+                    values: vec![0],
+                })
+                .collect(),
+            transfer_witnesses: Vec::new(),
+            row_usage: RowUsage::default(),
+        };
+        assert!(matches!(
+            column_hashes(&oversized_schema, &params),
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_air_row_values",
+                actual,
+                max: DEFAULT_MAX_TRACE_COLUMNS,
+            }) if actual == DEFAULT_MAX_TRACE_COLUMNS + 1
+        ));
+
+        let malformed_padding = Trace {
+            rows: 3,
+            padded_len: 3,
+            columns: vec![TraceColumn {
+                name: "values".to_owned(),
+                values: vec![1, 2, 3],
+            }],
+            transfer_witnesses: Vec::new(),
+            row_usage: RowUsage::default(),
+        };
+        assert!(matches!(
+            column_hashes(&malformed_padding, &params),
+            Err(Error::InvalidTraceShape { .. })
+        ));
+
+        let inconsistent_columns = Trace {
+            rows: 2,
+            padded_len: 2,
+            columns: vec![
+                TraceColumn {
+                    name: "first".to_owned(),
+                    values: vec![1, 2],
+                },
+                TraceColumn {
+                    name: "second".to_owned(),
+                    values: vec![3],
+                },
+            ],
+            transfer_witnesses: Vec::new(),
+            row_usage: RowUsage::default(),
+        };
+        assert!(matches!(
+            column_hashes(&inconsistent_columns, &params),
+            Err(Error::InvalidTraceShape { .. })
+        ));
+
+        let mut capacity_limited_params = params;
+        capacity_limited_params.trace_log_size = 1;
+        let over_capacity = Trace {
+            rows: 3,
+            padded_len: 4,
+            columns: vec![TraceColumn {
+                name: "values".to_owned(),
+                values: vec![1, 2, 3, 0],
+            }],
+            transfer_witnesses: Vec::new(),
+            row_usage: RowUsage::default(),
+        };
+        assert!(matches!(
+            column_hashes(&over_capacity, &capacity_limited_params),
+            Err(Error::TraceDomainCapacityExceeded {
+                rows: 3,
+                padded_rows: 4,
+                max_rows: 2
+            })
+        ));
+    }
+    #[test]
     fn column_hashes_reuse_coefficients() {
         let trace = build_trace(&sample_batch()).expect("build");
         let params = CANONICAL_PARAMETER_SETS[0];
@@ -2495,6 +2976,17 @@ mod tests {
             PoseidonColumnBatch::from_domains_and_columns(&domains, &columns).is_none(),
             "GPU batch construction must reject mismatched metadata before dispatch"
         );
+    }
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn poseidon_column_result_count_must_match_requested_batch() {
+        let domains = vec!["fastpq:v1:trace:column:a", "fastpq:v1:trace:column:b"];
+        let columns = vec![vec![1u64, 2, 3], vec![4u64, 5, 6]];
+        let batch =
+            PoseidonColumnBatch::from_domains_and_columns(&domains, &columns).expect("batch");
+        assert!(poseidon_column_result_count_matches(&batch, &[11, 12]));
+        assert!(!poseidon_column_result_count_matches(&batch, &[11]));
+        assert!(!poseidon_column_result_count_matches(&batch, &[11, 12, 13]));
     }
     #[cfg(feature = "fastpq-gpu")]
     #[test]
@@ -2807,6 +3299,50 @@ mod tests {
         );
     }
     #[test]
+    fn empty_fused_level_falls_back_for_a_single_leaf() {
+        let leaves = [7u64];
+        assert_eq!(
+            merkle_root_with_first_level(&leaves, Some(&[])),
+            merkle_root(&leaves),
+            "a missing fused level must not expose the raw leaf as a non-canonical root"
+        );
+    }
+    #[test]
+    fn malformed_fused_level_cardinality_falls_back_to_canonical_hashing() {
+        let leaves = vec![1u64, 2, 3, 4, 5];
+        let expected = merkle_root(&leaves);
+        let canonical_first_level = compute_merkle_level(&leaves);
+
+        assert_eq!(
+            merkle_root_with_first_level(
+                &leaves,
+                Some(&canonical_first_level[..canonical_first_level.len() - 1]),
+            ),
+            expected,
+            "a truncated fused level must not change the root"
+        );
+        let mut oversized = canonical_first_level;
+        oversized.push(99);
+        assert_eq!(
+            merkle_root_with_first_level(&leaves, Some(&oversized)),
+            expected,
+            "an oversized fused level must not change the root"
+        );
+    }
+    #[test]
+    fn modeful_merkle_root_preserves_the_canonical_root() {
+        let leaves = vec![1u64, 2, 3, 4, 5];
+        let expected = merkle_root(&leaves);
+        assert_eq!(
+            merkle_root_with_first_level_with_mode(&leaves, None, ExecutionMode::Cpu),
+            expected
+        );
+        assert_eq!(
+            merkle_root_with_first_level_with_mode(&leaves, None, ExecutionMode::Gpu),
+            expected
+        );
+    }
+    #[test]
     fn merkle_levels_match_scalar_reference_for_mixed_shapes() {
         let shapes = [
             Vec::new(),
@@ -2856,6 +3392,10 @@ mod tests {
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
+        let _lock = POSEIDON_GPU_EVENT_OBSERVER_TEST_LOCK
+            .lock()
+            .expect("Poseidon GPU observer test lock");
+        let _observer_guard = PoseidonGpuEventObserverTestGuard;
         let observed = Arc::new(AtomicUsize::new(0));
         let observed_for_callback = Arc::clone(&observed);
         set_poseidon_gpu_event_observer(move |accelerator, event, reason, backend| {
@@ -2876,7 +3416,35 @@ mod tests {
     }
     #[cfg(feature = "fastpq-gpu")]
     #[test]
+    fn poseidon_gpu_event_observer_panic_does_not_escape_or_poison_registration() {
+        let _lock = POSEIDON_GPU_EVENT_OBSERVER_TEST_LOCK
+            .lock()
+            .expect("Poseidon GPU observer test lock");
+        let _observer_guard = PoseidonGpuEventObserverTestGuard;
+        clear_poseidon_gpu_event_observer();
+        set_poseidon_gpu_event_observer(|_, _, _, _| panic!("observer failure"));
+        let result = std::panic::catch_unwind(|| {
+            notify_poseidon_gpu_event_observer(
+                "poseidon_columns",
+                "disabled",
+                "dispatch_error",
+                Some(backend::GpuBackend::Metal),
+            );
+        });
+        assert!(
+            result.is_ok(),
+            "observer panic must not escape proving code"
+        );
+
+        set_poseidon_gpu_event_observer(|_, _, _, _| {});
+        clear_poseidon_gpu_event_observer();
+    }
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
     fn merkle_pair_batch_stats_record_scalar_threshold_path() {
+        let _lock = POSEIDON_PIPELINE_STATS_TEST_LOCK
+            .lock()
+            .expect("Poseidon pipeline stats test lock");
         enable_poseidon_pipeline_stats(true);
         let pair_count = POSEIDON_MERKLE_GPU_MIN_PAIRS - 1;
         let leaves = (0..pair_count * 2)
@@ -2901,6 +3469,9 @@ mod tests {
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn public_gpu_trace_merkle_pair_path_records_gpu_batch_when_backend_available() {
+        let _lock = POSEIDON_PIPELINE_STATS_TEST_LOCK
+            .lock()
+            .expect("Poseidon pipeline stats test lock");
         if backend::current_gpu_backend().is_none() {
             eprintln!("skipping GPU Poseidon Merkle pair path test; backend unavailable");
             return;
@@ -2926,6 +3497,33 @@ mod tests {
         assert_eq!(
             stats.merkle_pair_fallbacks, 0,
             "GPU Merkle pair path should not fall back when parity passes"
+        );
+    }
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn explicit_cpu_merkle_levels_do_not_auto_select_gpu() {
+        let _lock = POSEIDON_PIPELINE_STATS_TEST_LOCK
+            .lock()
+            .expect("Poseidon pipeline stats test lock");
+        let leaves = (0..POSEIDON_MERKLE_GPU_MIN_PAIRS * 2)
+            .map(|value| (value as u64).wrapping_mul(0xd1b5_4a32_d192_ed03) % GOLDILOCKS_MODULUS)
+            .collect::<Vec<_>>();
+        let expected = merkle_root(&leaves);
+
+        enable_poseidon_pipeline_stats(true);
+        let actual =
+            merkle_root_with_first_level_with_mode(&leaves, None, backend::ExecutionMode::Cpu);
+        let stats = take_poseidon_pipeline_stats().expect("stats enabled");
+        enable_poseidon_pipeline_stats(false);
+
+        assert_eq!(actual, expected);
+        assert_eq!(
+            stats.merkle_pair_gpu_batches, 0,
+            "explicit CPU Merkle levels must never dispatch the GPU: {stats:?}"
+        );
+        assert!(
+            stats.merkle_pair_cpu_batches > 0,
+            "explicit CPU Merkle levels must use scalar pair hashing: {stats:?}"
         );
     }
     #[cfg(feature = "fastpq-gpu")]
@@ -2978,10 +3576,10 @@ mod tests {
         let policy = PoseidonPipelinePolicy::new(PoseidonExecutionMode::Cpu, ExecutionMode::Gpu);
         assert_eq!(policy.resolved(), ExecutionMode::Cpu);
         assert_eq!(policy.cpu_label(), "cpu_forced");
-        let downgraded =
+        let independent_gpu =
             PoseidonPipelinePolicy::new(PoseidonExecutionMode::Gpu, ExecutionMode::Cpu);
-        assert_eq!(downgraded.resolved(), ExecutionMode::Cpu);
-        assert_eq!(downgraded.cpu_label(), "cpu_fallback");
+        assert_eq!(independent_gpu.resolved(), ExecutionMode::Gpu);
+        assert_eq!(independent_gpu.cpu_label(), "cpu_fallback");
     }
     #[test]
     fn derive_polynomial_data_materializes_cpu_lde_for_gpu_mode() {
@@ -3010,7 +3608,10 @@ mod tests {
                 continue;
             }
             let row_key = transfer::TransferRowKey::from_transition(transition);
-            let proof = proof_index.get(&row_key).expect("transfer proof for row");
+            let proof = proof_index
+                .get(&row_key)
+                .and_then(std::collections::VecDeque::front)
+                .expect("transfer proof for row");
             let path_bit = trace
                 .columns
                 .iter()

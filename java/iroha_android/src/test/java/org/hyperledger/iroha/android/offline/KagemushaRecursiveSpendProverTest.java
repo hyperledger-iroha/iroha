@@ -36,7 +36,7 @@ import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.SchemaHash;
 
-/** Source-level checks for the ABI-22 bridge carrying the Kagemusha ABI-21/V4 lifecycle. */
+/** Source-level checks for the ABI-23 bridge carrying the Kagemusha ABI-21/V4 lifecycle. */
 public final class KagemushaRecursiveSpendProverTest {
   public static void main(final String[] args) {
     heavyProofPermitIsReentrantButRejectsAnotherThreadWithoutWaiting();
@@ -158,14 +158,14 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void exactAbiIsRequired() {
-    assert KagemushaRecursiveSpendProver.isExactBridgeAbi(22);
-    assert !KagemushaRecursiveSpendProver.isExactBridgeAbi(20);
+    assert KagemushaRecursiveSpendProver.isExactBridgeAbi(23);
+    assert !KagemushaRecursiveSpendProver.isExactBridgeAbi(22);
     assert KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> {}, () -> 22, () -> true);
+        () -> {}, () -> 23, () -> true);
     assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> {}, () -> 22, () -> false);
+        () -> {}, () -> 23, () -> false);
     assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> { throw new UnsatisfiedLinkError("missing"); }, () -> 22, () -> true);
+        () -> { throw new UnsatisfiedLinkError("missing"); }, () -> 23, () -> true);
     assert KagemushaRecursiveSpendProver.detectProductionProofBackendCompilation(
         () -> { throw new IllegalArgumentException("production artifact validation"); });
     assert !KagemushaRecursiveSpendProver.detectProductionProofBackendCompilation(
@@ -224,7 +224,7 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void artifactContractIsFixed() {
-    assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 22;
+    assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 23;
     assert KagemushaRecursiveSpendProver.ARTIFACT_COUNT == 8;
     assert KagemushaRecursiveSpendProver.MAX_ARTIFACT_CHUNK_BYTES == 1024 * 1024;
     try {
@@ -319,6 +319,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert Arrays.equals(
         installNative.getParameterTypes(),
         new Class<?>[] {
+          byte[].class,
           byte[].class,
           byte[].class,
           byte[].class,
@@ -908,31 +909,52 @@ public final class KagemushaRecursiveSpendProverTest {
 
   private static void releaseAuthenticationIsMandatoryAndBounded() {
     final byte[] one = new byte[] {1};
-    new KagemushaRecursiveSpendProver.ReleaseAuthentication(one, one, one, one, one);
+    new KagemushaRecursiveSpendProver.ReleaseAuthentication(one, one, one, one, one, one);
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
-            new byte[0], one, one, one, one));
+            new byte[0], one, one, one, one, one));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
-            one, new byte[0], one, one, one));
+            one, new byte[0], one, one, one, one));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
-            one, one, new byte[0], one, one));
+            one, one, new byte[0], one, one, one));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
-            one, one, one, new byte[0], one));
+            one, one, one, new byte[0], one, one));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
-            one, one, one, one, new byte[0]));
+            one, one, one, one, new byte[0], one));
+    assertThrowsIllegalArgument(() ->
+        new KagemushaRecursiveSpendProver.ReleaseAuthentication(
+            one, one, one, one, one, new byte[0]));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
             new byte[KagemushaRecursiveSpendProver.MAX_TRUSTED_RELEASE_POLICY_BYTES + 1],
             one,
             one,
             one,
+            one,
             one));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
+            one,
+            one,
+            new byte[KagemushaRecursiveSpendProver.MAX_INTERNAL_VALIDATION_RECEIPT_BYTES + 1],
+            one,
+            one,
+            one));
+    assertThrowsIllegalArgument(() ->
+        new KagemushaRecursiveSpendProver.ReleaseAuthentication(
+            one,
+            one,
+            one,
+            one,
+            new byte[KagemushaRecursiveSpendProver.MAX_CRYPTOGRAPHIC_REVIEW_BYTES + 1],
+            one));
+    assertThrowsIllegalArgument(() ->
+        new KagemushaRecursiveSpendProver.ReleaseAuthentication(
+            one,
             one,
             one,
             one,
@@ -1323,7 +1345,7 @@ public final class KagemushaRecursiveSpendProverTest {
   private static void requireNativeArtifactStreaming() {
     if (!KagemushaRecursiveSpendProver.isArtifactStreamingAvailable()) {
       throw new AssertionError(
-          "A freshly built connect_norito_bridge ABI 22 artifact-streaming library is required");
+          "A freshly built connect_norito_bridge ABI 23 artifact-streaming library is required");
     }
   }
 
@@ -1503,7 +1525,7 @@ public final class KagemushaRecursiveSpendProverTest {
         .noneMatch(method -> method.getName().equals("getReadiness"))
         : "selector-taking offline readiness alias must remain absent";
     assert status.cashHandoffCapability().equals("cash_handoff_v1");
-    assert status.requiredBridgeAbiVersion() == 22;
+    assert status.requiredBridgeAbiVersion() == 23;
     assert status.maximumHops() == 8;
     assert status.ready();
     assert captured.get().uri().toString()
@@ -1610,7 +1632,7 @@ public final class KagemushaRecursiveSpendProverTest {
 
   private static String universalOfflineCapabilityJson() {
     return "{\"cash_handoff_capability\":\"cash_handoff_v1\","
-        + "\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true}";
+        + "\"required_bridge_abi_version\":23,\"max_hops\":8,\"ready\":true}";
   }
 
   private static String unexpectedToriiRoute(final TransportRequest request) {
@@ -1619,14 +1641,14 @@ public final class KagemushaRecursiveSpendProverTest {
 
   private static void offlineCapabilityRejectsRetiredReadinessClaims() {
     final List<String> invalidPayloads = Arrays.asList(
-        "{\"mandatory\":true,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
-        "{\"cash_handoff_capability\":\"cash_handoff_v2\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true}",
-        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true}",
-        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":9,\"ready\":true}",
-        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":false}",
-        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[{}],\"blockers\":[]}",
-        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[{\"code\":\"unexpected\",\"message\":\"unexpected\"}]}",
-        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"future\":true}");
+        "{\"mandatory\":true,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":23,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
+        "{\"cash_handoff_capability\":\"cash_handoff_v2\",\"required_bridge_abi_version\":23,\"max_hops\":8,\"ready\":true}",
+        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true}",
+        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":23,\"max_hops\":9,\"ready\":true}",
+        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":23,\"max_hops\":8,\"ready\":false}",
+        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":23,\"max_hops\":8,\"ready\":true,\"assets\":[{}],\"blockers\":[]}",
+        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":23,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[{\"code\":\"unexpected\",\"message\":\"unexpected\"}]}",
+        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":23,\"max_hops\":8,\"ready\":true,\"future\":true}");
     for (final String payload : invalidPayloads) {
       final KagemushaRecursiveSpendProver.ToriiClient client =
           KagemushaRecursiveSpendProver.newToriiClient(

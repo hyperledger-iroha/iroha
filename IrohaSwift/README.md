@@ -746,7 +746,7 @@ let finality = try await torii.waitForDetachedAssetTransferFinality(
 )
 ```
 
-Preparation fails closed unless ABI-22 native inspection proves the versioned
+Preparation fails closed unless ABI-23 native inspection proves the versioned
 scaffold has the exact authority, network identity, protocol receipt chain, definition, source scope, amount,
 destination, memo, typed fee payer, creation time, TTL, and no extra metadata.
 The prepare route obtains the canonical fee quote and replaces only the charge
@@ -1183,7 +1183,7 @@ never retries the nonce-bearing request.
 
 `ToriiOfflineStatus` is an asset-neutral protocol contract, not backend
 settlement readiness. Swift accepts only
-`cash_handoff_capability: "cash_handoff_v1"`, bridge ABI `22`, the exact maximum
+`cash_handoff_capability: "cash_handoff_v1"`, bridge ABI `23`, the exact maximum
 hop bound, and `ready: true` as its only four fields. Assets and
 dataspaces require no offline enrollment or backend enablement.
 
@@ -1196,14 +1196,15 @@ operation and its input note until the operation status reaches final chain
 state. A transport timeout or unknown state is not permission to create a new
 operation ID.
 
-Local artifact validation requires exact bridge ABI 22 and manifest
+Local artifact validation requires exact bridge ABI 23 and manifest
 schema `kagemusha.offline.recursive_spend.artifact_manifest.v4`. The V4
 manifest's eight streamed artifacts are content-addressed and installed
 atomically through `KagemushaRecursiveSpendArtifactInstallSessionV4`; a partial,
 corrupt, unpromoted, or role-substituted generation never becomes active.
 `KagemushaRecursiveSpendReleaseAuthenticationV4` requires the canonical
-candidate-bound promotion record in addition to policy, attestation, benchmark,
-and review bytes. Circuit parameters remain authenticated inline in the Eq/Ep
+candidate-bound promotion record and runner-signed internal-validation receipt in
+addition to policy, attestation, benchmark, and review bytes. Receipt and review
+archives are each limited to 1 MiB. Circuit parameters remain authenticated inline in the Eq/Ep
 profiles. Proof material and verifier bindings are validated by the operation
 that consumes them; they do not change universal offline capability.
 
@@ -1251,12 +1252,12 @@ to fetch the exact canonical committed manifest; redirects, JSON, compressed
 representations, missing canonical request authentication, and a missing or
 stale native bridge fail closed. `PrivacyExact12CapabilityAdmissionV1` issues
 an opaque per-protocol token only when the committed row is active, ready, and
-byte-identical to the ABI22 native-validated compiled catalog. The generic
+byte-identical to the ABI23 native-validated compiled catalog. The generic
 transaction-frame initializer rejects `SubmitPrivacyProofV1`, and the admitted
 factory revalidates the native catalog, manifest, consensus action ceiling, and
 complete envelope profile tuple both at construction and final encoding.
 
-ABI22 intentionally remains exactly the five approved privacy C exports. It
+ABI23 intentionally remains exactly the five approved privacy C exports. It
 has no manifest validator export: Swift performs the strict bounded canonical
 and semantic manifest decode, anchored by the native catalog getter and native
 catalog validator on every authority-bearing path. A Rust-native semantic
@@ -1266,7 +1267,7 @@ implied by this Swift lane.
 envelopes, submit instructions, transaction intents, unsigned payloads, signed
 transactions, and transaction hashes for all twelve rows;
 `validateExact12FixtureBundleV1(_:)`
-accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 22
+accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 23
 availability requires both compiled-catalog symbols, both exact-12 fixture symbols,
 the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form selectors are absent; proofs use
@@ -1945,28 +1946,40 @@ The Android and JavaScript SDKs use the same seed/attempt mapping, so reconnect 
 `ToriiClient` now wraps the governance REST endpoints so apps can draft contract deployment proposals, submit ballots, and fetch referendum state without reimplementing the HTTP layer. The responses include Norito transaction skeletons (`tx_instructions`) that you can feed into the SDK transaction builders:
 
 ```swift
+let canonicalAuth = ToriiCanonicalRequestAuth(
+    accountId: "<canonical-domainless-account-id>",
+    privateKey: Data(repeating: 0x01, count: 32) // Replace with a securely loaded seed.
+)
 let proposal = ToriiGovernanceDeployContractProposalRequest(contractAlias: "demo::universal",
-                                                            codeHashHex: "f0…",
-                                                            abiHashHex: "e1…",
-                                                            abiVersion: "1",
+                                                            codeHash: Data(repeating: 0xf0, count: 32),
+                                                            abiHash: Data(repeating: 0xe1, count: 32),
+                                                            abiVersion: 1,
                                                             manifestProvenance: .init(
                                                                 signer: "ed25519:…",
                                                                 signature: "ed25519:…"
                                                             ))
-let draft = try await torii.submitGovernanceDeployContractProposal(proposal)
+let draft = try await torii.submitGovernanceDeployContractProposal(
+    proposal,
+    canonicalAuth: canonicalAuth
+)
 
 // Convert the instruction skeleton into a signed transaction envelope
 // (TxBuilder helpers reuse the Norito payload emitted by Torii).
 // try txBuilder.submit(envelope: yourConversionHelper(draft.txInstructions))
 
-let tally = try await torii.getGovernanceTally(id: "referendum-123")
+let tally = try await torii.getGovernanceTally(
+    id: "referendum-123",
+    canonicalAuth: canonicalAuth
+)
 print("approve:", tally.approve, "reject:", tally.reject)
 ```
 
 Governance mutation DTOs are closed, public-only types. They cannot carry a
 private key, witness, or an unrecognized JSON extension; sign the returned
 transaction skeleton locally. Deployment proposals deliberately expose no
-`limits` field because Torii does not enforce a per-proposal limits object.
+proposal window, voting mode, or `limits` field. Their typed 32-byte hashes
+encode as exact lowercase 64-hex JSON strings, ABI V1 encodes as a number, and the response contains
+only `proposal_id` plus `tx_instructions` (there is no compatibility `ok` flag).
 Manifest provenance uses `ToriiContractManifestProvenance` rather than opaque
 JSON.
 
@@ -1974,21 +1987,16 @@ Both V1 ZK submission formats share `GovernanceZkBallotPublicInputs`, whose
 only fields are `root_hint`, `owner`, `amount`, `duration_blocks`, `direction`,
 and `nullifier`. The flat envelope and nested `BallotProof` routes are available
 through `submitGovernanceZkBallotV1` and `submitGovernanceZkBallotProofV1`.
-Parliament ballots use `ToriiGovernanceParliamentBody` and
-`ToriiGovernanceParliamentDecision`, so canonical labels such as
-`policy-jury` and `approve` are emitted without stringly typed aliases. Plain
-ballots accept a `UInt64` duration in Swift and encode it as the canonical
+Plain ballots accept a `UInt64` duration in Swift and encode it as the canonical
 decimal JSON string required by Torii. ZK backend tags are exact non-empty
 tokens: whitespace and control-character variants are rejected before an HTTP
 request is dispatched. Referendum and election selectors use one first-release
 grammar across REST and locally signed transactions: 1–128 RFC 3986 unreserved
-ASCII bytes, without a leading dot. Governance windows reject an upper bound below the
-lower bound while retaining the complete `UInt64` height domain.
+ASCII bytes, without a leading dot.
 
-`ToriiGovernanceEnactRequest` contains only the exact 64-character lowercase
-proposal id. Torii derives the retained window and instruction preimage from
-committed state; Swift does not accept caller-supplied enactment aliases for
-either value. Locally signed `CastZkBallotRequest` transactions use the same
+Proposal-backed equal-Parliament-ballot, finalize, and enact draft routes are
+retired; binding proposal transitions use certificate-driven Parliament
+attempts. Locally signed `CastZkBallotRequest` transactions use the same
 closed `GovernanceZkBallotPublicInputs` model as REST, including typed `UInt64`
 durations and exact ballot directions. Arbitrary `NoritoJSON` public-input
 objects are intentionally not accepted.

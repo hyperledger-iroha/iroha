@@ -175,12 +175,12 @@ The canonical data-model types live in
 
 | Type / field | Contract |
 |--------------|----------|
-| `ProofBlob.payload` | Canonical Norito bytes for an `AxtProofEnvelope`; empty payloads are rejected. |
+| `ProofBlob.payload` | Canonical Norito bytes for an `AxtProofEnvelope`; empty payloads and payloads larger than 2 MiB are rejected before envelope decoding. |
 | `ProofBlob.expiry_slot` | Outer mirror of the proof-bound expiry. `None` is the authenticated no-expiry value; verifiers require an exact match before applying freshness policy. |
 | `AxtProofEnvelope.dsid` | Dataspace whose policy validates the proof. |
 | `AxtProofEnvelope.manifest_root` | Non-zero outer mirror of the exact 32-byte `axt_fastpq_manifest_root_v1` proof metadata and, where required by admission, the active Space Directory policy root. |
 | `AxtProofEnvelope.da_commitment` | Outer mirror of the proof-bound optional DA commitment. `axt_fastpq_da_commitment_v1` is always present as 33 bytes: `0 || 32*0` for `None`, or `1 || digest` for `Some(digest)`. |
-| `AxtProofEnvelope.proof` | Non-empty backend proof bytes. |
+| `AxtProofEnvelope.proof` | Non-empty backend proof bytes, limited to 1 MiB before FastPQ payload decoding or verification. |
 | `AxtProofEnvelope.fastpq_binding` | Required FastPQ V1 source, claim, witness, policy, effect, verifier, and target-dataspace binding. |
 | `AxtFastpqBinding.remote_spend_intent_commitments` | Canonical strictly ordered, duplicate-free set of at most 65,536 V1 commitments. Each commitment covers the exact authenticated handle replay key (dataspace, asset-definition incarnation, descriptor binding, era, sub-nonce, and target lane), exact `AssetDefinitionId`, `transfer` operation, canonical `from`/`to` accounts, and effective `Quantity`. Generic proofs may leave the set empty; every proof consumed by `USE_ASSET_HANDLE` must contain and consume exactly one matching claim. |
 | `committed_amount` | Optional non-zero scalar that must exactly match the canonical 16-byte little-endian `u128` in `axt_fastpq_committed_amount_v1` metadata inserted before the FastPQ batch seal and proof are generated. Missing or mismatched proof-bound metadata is rejected. |

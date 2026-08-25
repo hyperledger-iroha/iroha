@@ -219,6 +219,8 @@ const fn operation_semantic_frame_limit(operation: u16) -> usize {
         | OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1 => {
             MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1
         }
+        OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1
+        | OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1 => MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
         _ => MAX_BROKER_UNARY_FRAME_BYTES_V1,
     }
 }
@@ -226,6 +228,8 @@ const fn operation_frame_limit(operation: u16) -> usize {
     let semantic_limit = operation_semantic_frame_limit(operation);
     let broker_limit = match operation {
         OPERATION_SIGN_V1 => MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
+        OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1
+        | OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1 => MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
         OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1 => {
             MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1
         }
@@ -401,6 +405,8 @@ const fn operation_is_known(operation: u16) -> bool {
             | OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1
             | OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1
             | OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1
+            | OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1
+            | OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1
     )
 }
 fn provider_ingest_signer_context_from_wire(
@@ -1009,6 +1015,90 @@ fn verify_evidence_viewer_ed25519_signature(
         .verify(&public_key, message)
         .map_err(|_| BrokerError::Rejected)
 }
+
+fn global_beacon_aggregator_from_sign_request(
+    request: &GlobalBeaconPartialSignRequestWireV1,
+    session_network_id: &NetworkId,
+) -> Result<iroha_core::beacon::GlobalThresholdBeaconPulseAggregatorV1, BrokerError> {
+    if request.session.network_id != *session_network_id {
+        return Err(BrokerError::BindingMismatch);
+    }
+    let binding = iroha_core::beacon::GlobalThresholdBeaconSessionBindingV1 {
+        network_id: *session_network_id,
+        session_id: request.session.session_id,
+        roster_hash: request.session.roster_hash,
+        transcript_hash: request.session.transcript_hash,
+    };
+    let session = iroha_core::beacon::validate_global_threshold_beacon_session_v1(
+        request.session.clone(),
+        &binding,
+    )
+    .map_err(|_| BrokerError::Rejected)?;
+    iroha_core::beacon::GlobalThresholdBeaconPulseAggregatorV1::new(
+        session,
+        request.height,
+        request.finalized_chain_anchor,
+    )
+    .map_err(|_| BrokerError::Rejected)
+}
+
+fn decode_global_beacon_partial_sign_request(
+    payload: &[u8],
+    session_network_id: &NetworkId,
+) -> Result<
+    (
+        GlobalBeaconPartialSignRequestWireV1,
+        iroha_core::beacon::GlobalThresholdBeaconPulseAggregatorV1,
+    ),
+    BrokerError,
+> {
+    let request = decode_canonical::<GlobalBeaconPartialSignRequestWireV1>(
+        payload,
+        MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+    )?;
+    let aggregator = global_beacon_aggregator_from_sign_request(&request, session_network_id)?;
+    Ok((request, aggregator))
+}
+
+fn decode_parliament_tle_partial_release_sign_request(
+    payload: &[u8],
+    session_network_id: &NetworkId,
+) -> Result<
+    (
+        ParliamentTlePartialReleaseSignRequestWireV1,
+        iroha_core::tle_release::ValidatedTleReleaseProjectionV1,
+    ),
+    BrokerError,
+> {
+    let request = decode_canonical::<ParliamentTlePartialReleaseSignRequestWireV1>(
+        payload,
+        MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+    )?;
+    if request.projection.key_session.network_id != *session_network_id.as_bytes() {
+        return Err(BrokerError::BindingMismatch);
+    }
+    let projection = request
+        .projection
+        .clone()
+        .validate()
+        .map_err(|_| BrokerError::Rejected)?;
+    Ok((request, projection))
+}
+
+fn verify_parliament_tle_partial_release_result(
+    projection: &iroha_core::tle_release::ValidatedTleReleaseProjectionV1,
+    partial: &iroha_core::tle_release::TlePartialReleaseShareV1,
+) -> Result<(), BrokerError> {
+    projection
+        .session()
+        .verify_partial_release(
+            projection.identity(),
+            projection.finalized_height(),
+            partial,
+        )
+        .map(|_| ())
+        .map_err(|_| BrokerError::Rejected)
+}
 include!("governance_request_ingress.rs");
 include!("validate_operation_payload.rs");
 fn validate_operation_response(
@@ -1475,6 +1565,58 @@ fn validate_operation_result(
                 {
                     return Err(BrokerError::Protocol);
                 }
+            }
+            OPERATION_QUALIFY_V1
+                if matches!(
+                    request.binding.slot,
+                    slot if slot == IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id()
+                        || slot == IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id()
+                ) =>
+            {
+                let qualification = decode_canonical::<QualificationResultWireV1>(
+                    result,
+                    MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+                )?;
+                if Some(qualification.revision) != request.binding.revision
+                    || Some(qualification.policy_digest) != request.binding.policy_digest
+                {
+                    return Err(BrokerError::Protocol);
+                }
+            }
+            OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1 => {
+                if request.binding.slot
+                    != IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id()
+                {
+                    return Err(BrokerError::BindingMismatch);
+                }
+                let (_, mut aggregator) = decode_global_beacon_partial_sign_request(
+                    &request.payload,
+                    session_network_id,
+                )?;
+                let signed = decode_canonical::<GlobalBeaconPartialSignResultWireV1>(
+                    result,
+                    MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+                )?;
+                aggregator
+                    .accept_partial(signed.partial)
+                    .map_err(|_| BrokerError::Protocol)?;
+            }
+            OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1 => {
+                if request.binding.slot
+                    != IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id()
+                {
+                    return Err(BrokerError::BindingMismatch);
+                }
+                let (_, projection) = decode_parliament_tle_partial_release_sign_request(
+                    &request.payload,
+                    session_network_id,
+                )?;
+                let signed = decode_canonical::<ParliamentTlePartialReleaseSignResultWireV1>(
+                    result,
+                    MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+                )?;
+                verify_parliament_tle_partial_release_result(&projection, &signed.partial)
+                    .map_err(|_| BrokerError::Protocol)?;
             }
             OPERATION_MODERATION_HANDOFF_DELIVER_ONCE_V1 => {
                 let outcome = decode_canonical::<ModerationDurableHandoffOutcomeWireV1>(

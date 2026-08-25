@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{GovernancePipeline, GovernanceProposalRecord, State, World},
+    state::{GovernanceProposalRecord, State, World},
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use mv::cell::Cell;
@@ -620,22 +620,27 @@ fn insert_enacted_proposal(
 ) {
     let proposer = account(80);
     let created_height = enacted_at_height.saturating_sub(1).max(1);
+    let attempt = crate::governance::parliament::enacted_parliament_attempt_for_testing(
+        &kind,
+        vec![account(81), account(82), account(83)],
+        transaction.network_id(),
+        enacted_at_height,
+    );
+    let attempt_id = attempt.attempt().id;
     transaction.world.put_governance_proposal(
         decision_id,
         GovernanceProposalRecord {
-            parliament_snapshot: crate::state::governance_parliament_snapshot_for_tests(
-                &proposer,
-                created_height,
-            ),
             proposer,
             kind,
             created_height,
             status: GovernanceProposalStatus::Enacted,
-            pipeline: GovernancePipeline::default(),
-            finalization_evidence: None,
-            enacted_at_height: Some(enacted_at_height),
         },
-    );
+    )
+    .expect("Musubi test proposal must satisfy first-release JSON bounds");
+    transaction
+        .world
+        .put_parliament_attempt_for_testing(attempt_id, attempt)
+        .expect("persist exact enacted Musubi Parliament attempt");
 }
 fn seed_enacted_decision(
     action: &MusubiParliamentActionV1,

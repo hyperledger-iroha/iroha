@@ -67,42 +67,6 @@ public final class GovernanceSelectorV1Tests {
     expectIllegalArgument(() -> CastZkBallotInstruction.fromArguments(zkArguments));
   }
 
-  @Test
-  public void referendumFinalizationRequiresOneExactLowercaseProposalDigest() {
-    final String proposalId = "ab".repeat(32);
-    final FinalizeReferendumInstruction finalization =
-        FinalizeReferendumInstruction.builder()
-            .setReferendumId(proposalId)
-            .setProposalIdHex(proposalId)
-            .build();
-
-    assertEquals(proposalId, finalization.referendumId());
-    assertEquals(proposalId, finalization.proposalIdHex());
-    assertEquals(proposalId, finalization.toArguments().get("referendum_id"));
-    assertEquals(proposalId, finalization.toArguments().get("proposal_id_hex"));
-
-    expectIllegalArgument(
-        () -> FinalizeReferendumInstruction.builder().setReferendumId("ref-1"));
-    expectIllegalArgument(
-        () -> FinalizeReferendumInstruction.builder().setReferendumId("AB".repeat(32)));
-    expectIllegalArgument(
-        () -> FinalizeReferendumInstruction.builder().setProposalIdHex("AB".repeat(32)));
-    expectIllegalArgument(
-        () -> FinalizeReferendumInstruction.builder().setProposalIdHex("0x" + proposalId));
-    expectIllegalArgument(
-        () ->
-            FinalizeReferendumInstruction.builder()
-                .setReferendumId(proposalId)
-                .setProposalIdHex("cd".repeat(32))
-                .build());
-
-    final Map<String, String> mismatch = new LinkedHashMap<>();
-    mismatch.put("action", "FinalizeReferendum");
-    mismatch.put("referendum_id", proposalId);
-    mismatch.put("proposal_id_hex", "cd".repeat(32));
-    expectIllegalArgument(() -> FinalizeReferendumInstruction.fromArguments(mismatch));
-  }
-
   private static CastPlainBallotInstruction plainBallot(
       final String selector, final String ownerAccountId) {
     return CastPlainBallotInstruction.builder()

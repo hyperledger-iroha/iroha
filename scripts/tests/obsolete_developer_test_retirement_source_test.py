@@ -158,18 +158,18 @@ OPENING_LOCK_PIN = FilePin(
 )
 LOCK_PIN = FilePin(
     LOCKFILE,
-    "dff7dc4b22caba0c70c0e29e6ea87e07db4b15bc",
-    "4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492",
-    311_163,
-    13_612,
+    "e320ffaa8af21674f079573a1aaa1a8d73185ae8",
+    "71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2",
+    311_205,
+    13_616,
 )
 REPLACEMENT_PINS = (
     FilePin(
         "crates/iroha_core/src/streaming.rs",
-        "08257a928e5c284ee621e5896a801920788bace4",
-        "0d0c5d82d9848c449bd90feef445cab3df86a0fc5b76a472a536502417abe588",
-        258_071,
-        6_403,
+        "97328024c7ae0fe0d07a81d3198893ac237de1a8",
+        "e09177dcf832f61971ea5c7cac6255c9f2429265a7b9c93d4d0054813b8324c9",
+        258_160,
+        6_405,
     ),
     FilePin(
         "crates/norito/examples/telemetry_dump.rs",
@@ -229,12 +229,29 @@ REPLACEMENT_PINS = (
     ),
     FilePin(
         "crates/norito/README.md",
+        "8da233a7f39bf4258f9b057f24230d73f54df05b",
+        "8a8048219d08298605e66e55e3f4d48b45fd6c1400a0fd32d8fd18380c63425f",
+        31_139,
+        531,
+    ),
+)
+
+OPENING_REPLACEMENT_PIN_OVERRIDES = {
+    "crates/iroha_core/src/streaming.rs": FilePin(
+        "crates/iroha_core/src/streaming.rs",
+        "08257a928e5c284ee621e5896a801920788bace4",
+        "0d0c5d82d9848c449bd90feef445cab3df86a0fc5b76a472a536502417abe588",
+        258_071,
+        6_403,
+    ),
+    "crates/norito/README.md": FilePin(
+        "crates/norito/README.md",
         "77c08877ecc5598a599b85e8dc3cea30fe342e7a",
         "831a82698461c7eab98413c2a15229063dd795ce218f4361525321eaee575539",
         30_917,
         529,
     ),
-)
+}
 
 
 @dataclass(frozen=True)
@@ -447,7 +464,10 @@ def _authenticate_openings() -> dict[str, bytes]:
     _authenticate_file(IVM_MANIFEST_PIN, opening_tree=True)
     _authenticate_file(OPENING_LOCK_PIN, opening_tree=True)
     for pin in REPLACEMENT_PINS:
-        _authenticate_file(pin, opening_tree=True)
+        _authenticate_file(
+            OPENING_REPLACEMENT_PIN_OVERRIDES.get(pin.path, pin),
+            opening_tree=True,
+        )
     return openings
 
 

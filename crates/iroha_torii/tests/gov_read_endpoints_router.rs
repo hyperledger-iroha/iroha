@@ -2,8 +2,6 @@
 //! Router-level test for governance read endpoint wiring (`/v1/gov/proposals/{id}`).
 #![allow(clippy::similar_names)]
 #![cfg(feature = "app_api")]
-#[path = "common/governance.rs"]
-mod governance_fixture;
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -64,17 +62,13 @@ async fn gov_proposal_get_router_mapping() {
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
-            code_hash_hex: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),
-            abi_hash_hex: ContractAbiHash::from_hex_str(&"22".repeat(32)).expect("abi hash"),
+            code_hash: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),
+            abi_hash: ContractAbiHash::from_hex_str(&"22".repeat(32)).expect("abi hash"),
             abi_version: AbiVersion::new(1),
             manifest_provenance: None,
         }),
         created_height: 0,
         status: iroha_core::state::GovernanceProposalStatus::Proposed,
-        pipeline: iroha_core::state::GovernancePipeline::default(),
-        parliament_snapshot: governance_fixture::single_member_parliament_snapshot(&proposer, 0),
-        finalization_evidence: None,
-        enacted_at_height: None,
     };
     iroha_core::query::insert_gov_proposal_for_test(&mut raw_state, id_bytes, rec);
     // Wire only the GET route under the shared URI constant

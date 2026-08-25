@@ -1270,23 +1270,6 @@ fn replace_account_id_in_governance(
             replace_account_id(&mut record.proposer, old, new);
         }
     }
-    let approval_ids: Vec<_> = state_transaction
-        .world
-        .governance_stage_approvals
-        .iter()
-        .map(|(id, _)| id.clone())
-        .collect();
-    for approval_id in approval_ids {
-        if let Some(approvals) = state_transaction
-            .world
-            .governance_stage_approvals
-            .get_mut(&approval_id)
-        {
-            for stage in approvals.stages.values_mut() {
-                replace_account_id_in_set(&mut stage.approvers, old, new);
-            }
-        }
-    }
     let lock_ids: Vec<_> = state_transaction
         .world
         .governance_locks

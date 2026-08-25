@@ -935,7 +935,7 @@ mod model {
         /// Complete pre-evidence manifest with its three promotion digest slots zeroed.
         pub manifest: KagemushaRecursiveSpendArtifactManifestV4,
     }
-    /// Tracked-lock-bound production release manifest for the unchanged ABI-22 proof profile.
+    /// Tracked-lock-bound production release manifest for the ABI-23 proof profile.
     ///
     /// V5 changes release identity and source authentication only. The embedded
     /// proof profiles and artifact payload formats remain the explicitly named
@@ -948,7 +948,7 @@ mod model {
         pub schema: String,
         /// Manifest layout version.
         pub version: u16,
-        /// Required native bridge ABI; the cryptographic ABI remains 22.
+        /// Required native bridge ABI; the cryptographic ABI is 23.
         pub bridge_abi_version: u32,
         /// Exact paired-proof backend profile.
         pub proof_backend: String,
@@ -1523,7 +1523,7 @@ mod model {
         /// SHA-256 of the complete retained review report.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub report_sha256: [u8; 32],
-        /// Exact Eq-then-Ep cryptographic artifact roles reviewed for ABI 22.
+        /// Exact Eq-then-Ep cryptographic artifact roles reviewed for ABI 23.
         pub artifact_roles: Vec<String>,
         /// Exact ordered set of mandatory, independently evidenced checks.
         pub checks: Vec<KagemushaRecursiveSpendCryptographicReviewCheckResultV4>,

@@ -994,7 +994,8 @@ public final class HttpClientTransport implements IrohaClient {
       final MultisigProposeRequest requestBody) {
     final byte[] body = encodeJsonBody(buildMultisigProposePayload(requestBody));
     final TransportRequest request = buildJsonPostRequest("/v1/multisig/propose", body);
-    return fetchJson(request, ContractJsonParser::parseMultisigResponse, "multisig propose");
+    return fetchJson(request, ContractJsonParser::parseMultisigResponse, "multisig propose")
+        .thenApply(response -> validateMultisigResponse(response, requestBody));
   }
 
   /** Fetches one governance binding via `GET /v1/gov/contracts/{contract_address}`. */
@@ -1011,6 +1012,117 @@ public final class HttpClientTransport implements IrohaClient {
         request,
         ContractJsonParser::parseGovernanceContractResponse,
         "governance contract");
+  }
+
+  /** Drafts one typed Parliament attempt for local transaction signing. */
+  public CompletableFuture<ParliamentApiV1.AttemptDraftResponse> draftParliamentAttemptV1(
+      final ParliamentApiV1.Proposal proposal,
+      final long attemptSequence,
+      final String expectedProposalContentId,
+      final String expectedGovernanceAttemptId,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    final byte[] body =
+        ParliamentApiV1.attemptDraftRequestJson(proposal, attemptSequence);
+    return fetchJson(
+        buildVpnRequest(
+            "POST",
+            ParliamentApiV1.ATTEMPT_DRAFT_PATH,
+            body,
+            canonicalAuth,
+            1024L * 1024L),
+        response ->
+            ParliamentApiV1.parseAttemptDraftResponse(
+                response, expectedProposalContentId, expectedGovernanceAttemptId),
+        "Parliament attempt draft",
+        200);
+  }
+
+  /** Reads and strictly validates one authenticated typed Parliament attempt. */
+  public CompletableFuture<ParliamentApiV1.AttemptReadResponse> getParliamentAttemptV1(
+      final String governanceAttemptId,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return fetchJson(
+        buildVpnRequest(
+            "GET",
+            ParliamentApiV1.attemptReadPath(governanceAttemptId),
+            null,
+            canonicalAuth,
+            2L * ParliamentApiV1.MAX_STATE_BYTES + 2L * 1024L * 1024L),
+        response -> ParliamentApiV1.parseAttemptReadResponse(response, governanceAttemptId),
+        "Parliament attempt read",
+        200);
+  }
+
+  /** Drafts one closed public Parliament transition for local transaction signing. */
+  public CompletableFuture<ParliamentApiV1.TransitionDraftResponse>
+      draftParliamentTransitionV1(
+          final String governanceAttemptId,
+          final byte[] transitionJson,
+          final String expectedTransitionKind,
+          final byte[] expectedTransitionDigest,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    final byte[] body =
+        ParliamentApiV1.transitionDraftRequestJson(governanceAttemptId, transitionJson);
+    return fetchJson(
+        buildVpnRequest(
+            "POST",
+            ParliamentApiV1.TRANSITION_DRAFT_PATH,
+            body,
+            canonicalAuth,
+            1024L * 1024L),
+        response ->
+            ParliamentApiV1.parseTransitionDraftResponse(
+                response,
+                governanceAttemptId,
+                expectedTransitionKind,
+                expectedTransitionDigest),
+        "Parliament transition draft",
+        200);
+  }
+
+  /** Fetches the complete public transcript for one currently authorized TLE release. */
+  public CompletableFuture<ParliamentApiV1.TleReleaseContextResponse>
+      getParliamentTleReleaseContextV1(
+          final String ballotAttemptId,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    return fetchJson(
+        buildVpnRequest(
+            "GET",
+            ParliamentApiV1.tleReleaseContextReadPath(ballotAttemptId),
+            null,
+            canonicalAuth,
+            1024L * 1024L),
+        response -> ParliamentApiV1.parseTleReleaseContextResponse(response, ballotAttemptId),
+        "Parliament TLE release context",
+        200);
+  }
+
+  /** Requests one node-local proof-carrying partial bound to an admitted release context. */
+  public CompletableFuture<ParliamentApiV1.TlePartialReleaseShare>
+      requestParliamentTlePartialReleaseV1(
+          final String ballotAttemptId,
+          final ParliamentApiV1.TleReleaseContextResponse context,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(context, "context");
+    if (!context.ballotAttemptId.equals(ballotAttemptId)) {
+      throw new IllegalArgumentException(
+          "release context ballot id differs from the partial-release request");
+    }
+    return fetchJson(
+        buildVpnRequest(
+            "POST",
+            ParliamentApiV1.tlePartialReleasePath(ballotAttemptId),
+            null,
+            canonicalAuth,
+            16L * 1024L),
+        response ->
+            ParliamentApiV1.parseTlePartialReleaseResponse(
+                response,
+                context.keySession.keySessionId,
+                context.identityDigest,
+                context.keySession.committeeSize),
+        "Parliament TLE partial release",
+        200);
   }
 
   /** Fetches the complete manifest via `GET /v1/contracts/code/{code_hash}`. */
@@ -1932,6 +2044,15 @@ public final class HttpClientTransport implements IrohaClient {
       final String path,
       final byte[] body,
       final ToriiCanonicalRequestAuth canonicalAuth) {
+    return buildVpnRequest(method, path, body, canonicalAuth, null);
+  }
+
+  private TransportRequest buildVpnRequest(
+      final String method,
+      final String path,
+      final byte[] body,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final Long maximumResponseBytes) {
     if (path.startsWith("/v1/vpn/")) {
       requireSecureVpnBaseUri();
     }
@@ -1946,6 +2067,9 @@ public final class HttpClientTransport implements IrohaClient {
             .setTimeout(config.requestTimeout());
     if (body != null) {
       builder.setBody(body).addHeader("Content-Type", "application/json");
+    }
+    if (maximumResponseBytes != null) {
+      builder.setMaximumResponseBytes(maximumResponseBytes);
     }
     for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
       builder.addHeader(entry.getKey(), entry.getValue());
@@ -2840,6 +2964,21 @@ public final class HttpClientTransport implements IrohaClient {
     }
     payload.put("instructions", instructions);
     return payload;
+  }
+
+  /** Rejects a multisig response that changes a signature-bound request field. */
+  static MultisigResponse validateMultisigResponse(
+      final MultisigResponse response, final MultisigProposeRequest request) {
+    if (!request.feePayment().hasSamePayerAndGasBound(response.feePayment())) {
+      throw new IllegalStateException(
+          "multisig response fee_payment changed the requested payer, sponsor revision, or gas bound");
+    }
+    if (request.creationTimeMs() != null
+        && !request.creationTimeMs().equals(response.creationTimeMs())) {
+      throw new IllegalStateException(
+          "multisig response creation_time_ms is not bound to the request");
+    }
+    return response;
   }
 
   static void putValidationFeePolicyMetadata(

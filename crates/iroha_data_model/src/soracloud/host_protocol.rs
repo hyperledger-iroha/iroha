@@ -367,35 +367,15 @@ pub struct SoracloudEmitMailboxMessageRequestV1 {
     pub to_handler: Name,
     /// Opaque mailbox payload bytes.
     pub payload_bytes: Vec<u8>,
-    /// Earliest execution sequence for the emitted message.
-    pub available_after_sequence: u64,
-    /// Optional expiry sequence for the emitted message.
-    #[norito(required)]
-    pub expires_at_sequence: Option<u64>,
+    /// Number of consensus blocks to delay delivery.
+    pub delivery_delay_blocks: u32,
 }
 impl SoracloudEmitMailboxMessageRequestV1 {
     /// Validate outbound mailbox request fields.
     ///
     /// # Errors
-    /// Returns [`SoracloudManifestError`] when mailbox sequence bounds are malformed.
+    /// Returns [`SoracloudManifestError`] when mailbox request fields are malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.available_after_sequence == 0 {
-            return Err(invalid_field(
-                "soracloud emit mailbox message request",
-                "available_after_sequence",
-                "must be greater than zero",
-            ));
-        }
-        if self
-            .expires_at_sequence
-            .is_some_and(|expires_at| expires_at <= self.available_after_sequence)
-        {
-            return Err(invalid_field(
-                "soracloud emit mailbox message request",
-                "expires_at_sequence",
-                "must be greater than available_after_sequence",
-            ));
-        }
         Ok(())
     }
 }
@@ -404,7 +384,10 @@ impl SoracloudEmitMailboxMessageRequestV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SoracloudEmitMailboxMessageResponseV1 {
-    /// Deterministic mailbox message identifier.
+    /// Deterministic execution-local staging identifier.
+    ///
+    /// The ledger derives the canonical persisted mailbox message identifier after assigning the
+    /// authoritative service versions and delivery schedule.
     pub message_id: Hash,
     /// Commitment over the emitted mailbox payload.
     pub payload_commitment: Hash,
@@ -938,21 +921,24 @@ pub fn encode_bundle_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(bundle)
 }
-/// Encode the canonical provenance signature payload for app-level infrastructure manifests.
+/// Encode the canonical provenance signature payload for an app-level infrastructure mutation.
 ///
-/// The payload layout is the canonical Norito encoding of [`SoraAppInfraManifestV1`].
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(manifest, precondition)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
 pub fn encode_app_infra_provenance_payload(
     manifest: &SoraAppInfraManifestV1,
+    precondition: &SoraAppInfraMutationPreconditionV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::encode_canonical(manifest)
+    norito::encode_canonical(&(manifest.clone(), precondition.clone()))
 }
-/// Encode the canonical provenance signature payload for deployment bundles plus inline materials.
+/// Encode the canonical provenance signature payload for deployment bundles,
+/// inline materials, and the exact ledger mutation precondition.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
-/// `(bundle, initial_service_configs, initial_service_secrets)`.
+/// `(bundle, initial_service_configs, initial_service_secrets, precondition)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -960,11 +946,13 @@ pub fn encode_bundle_with_materials_provenance_payload(
     bundle: &SoraDeploymentBundleV1,
     initial_service_configs: &BTreeMap<String, Json>,
     initial_service_secrets: &BTreeMap<String, SecretEnvelopeV1>,
+    precondition: &SoraServiceMutationPreconditionV1,
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(
         bundle.clone(),
         initial_service_configs.clone(),
         initial_service_secrets.clone(),
+        precondition.clone(),
     ))
 }
 /// Encode the canonical provenance signature payload for service rollback.
@@ -1206,28 +1194,28 @@ pub fn encode_rollout_provenance_payload(
 /// Encode the canonical provenance signature payload for apartment deployment.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
-/// `(manifest, lease_ticks, autonomy_budget_units)`.
+/// `(manifest, lease_blocks, autonomy_budget_units)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
 pub fn encode_agent_deploy_provenance_payload(
     manifest: AgentApartmentManifestV1,
-    lease_ticks: u64,
+    lease_blocks: u64,
     autonomy_budget_units: Option<u64>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::encode_canonical(&(manifest, lease_ticks, autonomy_budget_units))
+    norito::encode_canonical(&(manifest, lease_blocks, autonomy_budget_units))
 }
 /// Encode the canonical provenance signature payload for apartment lease renewal.
 ///
-/// The payload layout is a Norito tuple in this exact field order: `(apartment_name, lease_ticks)`.
+/// The payload layout is a Norito tuple in this exact field order: `(apartment_name, lease_blocks)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
 pub fn encode_agent_lease_renew_provenance_payload(
     apartment_name: &str,
-    lease_ticks: u64,
+    lease_blocks: u64,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::encode_canonical(&(apartment_name, lease_ticks))
+    norito::encode_canonical(&(apartment_name, lease_blocks))
 }
 /// Encode the canonical provenance signature payload for apartment restart requests.
 ///

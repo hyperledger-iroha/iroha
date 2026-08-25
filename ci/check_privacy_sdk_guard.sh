@@ -852,7 +852,8 @@ def _check_cargo_workflow(
             "rustup target add --toolchain 1.93.1-aarch64-apple-darwin "
             "aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios "
             "aarch64-apple-darwin x86_64-apple-darwin",
-            "cargo fetch --locked",
+            "RUSTC_BOOTSTRAP=1 cargo fetch --locked -Z unstable-options "
+            '--lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"',
         )
     )
     additional_cargo_policies = {
@@ -888,7 +889,10 @@ def _check_cargo_workflow(
             },
             {
                 "name": "Prime privacy N-API dependencies from the frozen lock",
-                "run": "cargo fetch --locked",
+                "run": (
+                    "RUSTC_BOOTSTRAP=1 cargo fetch --locked -Z unstable-options "
+                    '--lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"'
+                ),
             },
         ),
         "privacy_swift_sdk_parse": (
@@ -904,10 +908,10 @@ def _check_cargo_workflow(
         ),
     }
     native_lane_job_digests = {
-        "privacy_swift_sdk_parse": "59cc0705b34e0195114c574e1e4b6034ddddf55a4a3ddf7c07ea82c4dc0fc0f6",
-        "privacy_jvm_sdk_tests": "1f430f2e88d3c455e8ed0a5182308627d6657099093d6c6021c308bbf12aedcb",
-        "privacy_csharp_sdk_tests": "f1413f02d0d9e34f1c89dca806152754c129884cf4f8264936728768cfbdbc5f",
-        "privacy_javascript_sdk_tests": "9f8550cfc6e8cd162220c6495dd7e70e9d19e404377ae7999bba4cae581b6996",
+        "privacy_swift_sdk_parse": "b6cb1cb00b9ab47c40546b0f223aef591b25bb6356add064b5652ded36ca39a2",
+        "privacy_jvm_sdk_tests": "92f0fbf340d40258b349f39ccfb4ad82b30aff364733fd4913090e9c579d8363",
+        "privacy_csharp_sdk_tests": "70e4ea3edc5be570669d45754d6fc982f930e7b777ddce3612fb252fb7049e4a",
+        "privacy_javascript_sdk_tests": "10b5999230e6e1108f3cb51a572b71378c983083297b1419bb9c5b60001b9e06",
     }
 
     require(
@@ -1522,49 +1526,49 @@ def check(overrides: dict[str, str] | None = None) -> None:
 
     require(
         re.search(
-            r"PRIVACY_REQUIRED_BRIDGE_ABI_VERSION\s*=\s*22\s*;",
+            r"PRIVACY_REQUIRED_BRIDGE_ABI_VERSION\s*=\s*23\s*;",
             js_crypto,
         )
         is not None
         and "abiVersion === PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" in js_crypto
         and "abiVersion >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" not in js_crypto,
-        "JavaScript privacy bridge must require exact first-release ABI 22",
+        "JavaScript privacy bridge must require exact first-release ABI 23",
         errors,
     )
     require(
-        literal_assignment(py_crypto, "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION") == 22
+        literal_assignment(py_crypto, "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION") == 23
         and "version == PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" in py_crypto
         and "version >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" not in py_crypto,
-        "Python privacy bridge must require exact first-release ABI 22",
+        "Python privacy bridge must require exact first-release ABI 23",
         errors,
     )
     require(
         "fn privacy_bridge_abi_version_py() -> u32" in py_native
         and "PRIVACY_BRIDGE_ABI_VERSION_V1" in py_native,
-        "Python native privacy bridge must report first-release bridge ABI 22",
+        "Python native privacy bridge must report first-release bridge ABI 23",
         errors,
     )
     for relative, marker in (
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
-            "REQUIRED_BRIDGE_ABI_VERSION = 22",
+            "REQUIRED_BRIDGE_ABI_VERSION = 23",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
-            "REQUIRED_BRIDGE_ABI_VERSION: Int = 22",
+            "REQUIRED_BRIDGE_ABI_VERSION: Int = 23",
         ),
         (
             "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
-            "requiredBridgeABIVersion: UInt32 = 22",
+            "requiredBridgeABIVersion: UInt32 = 23",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
-            "RequiredBridgeAbiVersion = 22",
+            "RequiredBridgeAbiVersion = 23",
         ),
     ):
         require(
             marker in read(relative, overrides),
-            f"{relative} must require exact first-release bridge ABI 22",
+            f"{relative} must require exact first-release bridge ABI 23",
             errors,
         )
 
@@ -1868,7 +1872,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
     require(
         "loadedBridgeAbiVersion == PrivacyNativeBridge.requiredBridgeABIVersion"
         in swift_native_bridge,
-        "Swift privacy availability must require exact first-release ABI 22",
+        "Swift privacy availability must require exact first-release ABI 23",
         errors,
     )
 
@@ -2088,7 +2092,10 @@ def check(overrides: dict[str, str] | None = None) -> None:
         in lock_helper_source
         and 'CARGO_HOME="${private_cargo_home}"' in lock_helper_source
         and "CARGO_NET_OFFLINE=false" in lock_helper_source
-        and '--lockfile-path "${lock_path}"' in lock_helper_source
+        and '--lockfile-path "${resolution_probe_lock_path}"'
+        in lock_helper_source
+        and "PRIVACY_SDK_RELEASE_LOCK_TRAILER" in lock_helper_source
+        and "privacy_sdk_materialize_release_lock" in lock_helper_source
         and "privacy_sdk_validate_repository_cargo_configuration"
         in lock_helper_source
         and "privacy_sdk_prepare_private_cargo_home" in lock_helper_source
@@ -2114,7 +2121,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
             "printf '%s\\n' \"${cargo_wrapper_directory}\""
         )
         == 1,
-        "privacy SDK CI helper must preserve the tracked root, authenticate the distinct external release lock, and install toolchain/wrapper PATH ordering",
+        "privacy SDK CI helper must preserve the tracked root, materialize and authenticate the deterministic external release projection, and install toolchain/wrapper PATH ordering",
         errors,
     )
     require(
@@ -2576,15 +2583,15 @@ if mode:
     elif mode == "--negative-control-js-privacy-abi-drift":
         path = "javascript/iroha_js/src/crypto.js"
         overrides[path] = read(path, {}).replace(
+            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 23",
             "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 22",
-            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 21",
             1,
         )
     elif mode == "--negative-control-python-privacy-abi-drift":
         path = "python/iroha_python/src/iroha_python/crypto.py"
         overrides[path] = read(path, {}).replace(
+            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 23",
             "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 22",
-            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 21",
             1,
         )
     elif mode == "--negative-control-canonical-backend-alias-rejection-coverage":

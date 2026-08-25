@@ -17875,16 +17875,17 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             fs::metadata(&output_path).expect("token metadata").mode() & 0o077,
             0
         );
-        let overwrite_error = HandshakeTokenIssueArgs::emit(
+        let error = HandshakeTokenIssueArgs::emit(
             &mut ctx,
             &artifacts,
             &output_path,
             TokenOutputFormat::Base64,
         )
         .expect_err("existing bearer output must not be overwritten");
+        let rendered = format!("{error:#}");
         assert!(
-            format!("{overwrite_error:#}")
-                .contains("failed to create new owner-private token output")
+            rendered.contains("failed to create new owner-private token output"),
+            "unexpected overwrite error: {rendered}"
         );
         artifacts.zeroize_encoded_token();
         assert!(artifacts.token_bytes.is_empty());

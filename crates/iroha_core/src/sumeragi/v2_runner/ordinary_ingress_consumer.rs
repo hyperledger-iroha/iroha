@@ -289,6 +289,7 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
     block_sync: &mut V2BlockSyncDiscovery,
     block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
     npos_vrf: &mut V2NposVrfLifecycle,
+    npos_beacon: &mut V2GlobalBeaconLifecycle,
 ) -> Result<ProductionPreparedOrdinaryIngressConsumptionV1, V2RunnerError> {
     let services_output_guard = services.lifecycle_output_guard();
     if !prepared.matches_output_guard(&services_output_guard) {
@@ -395,6 +396,17 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
         finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
     }
     match message.payload {
+        wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(partial) => {
+            drop(ingress_ownership);
+            match npos_beacon.accept_partial(partial, &sender, executor.current_tag().view()) {
+                Ok(outcome) => {
+                    iroha_logger::trace!(?outcome, "admitted global threshold-beacon partial");
+                }
+                Err(error) => {
+                    iroha_logger::debug!(%error, "rejected global threshold-beacon partial");
+                }
+            }
+        }
         wire::ConsensusMessageV2Payload::VrfCommit(commit) => {
             drop(ingress_ownership);
             let outcome = npos_vrf.accept_commit(commit, Some(&sender));

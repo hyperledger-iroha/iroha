@@ -2433,7 +2433,8 @@ fn project_broadcast(
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
         | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_) => {
+        | wire::ConsensusMessageV2Payload::VrfReveal(_)
+        | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
             Err(AdapterEffectAdmissionError::UnsupportedBroadcastPayload)
         }
     }
@@ -2617,7 +2618,9 @@ pub(super) fn execution_commitment(commitment: wire::ExecutionCommitment) -> Lif
 /// A same-round certificate may legitimately acquire a different quorum
 /// aggregation while retaining the same highest PrepareQC. Those envelopes
 /// require distinct durable output rows so the newer certificate still enters
-/// service I/O; exact byte retries retain the same key and stutter.
+/// service I/O. Exact byte retries retain the same key and logically stutter;
+/// a sealed fresh periodic-retransmit occurrence may still repeat physical
+/// Broadcast service without changing that terminal row.
 pub(super) fn timeout_certificate_envelope_subject(
     certificate: &wire::TimeoutCertificate,
 ) -> LifecycleDigest {

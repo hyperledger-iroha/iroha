@@ -94,7 +94,7 @@ fn valid_report() -> (Vec<u8>, CanonicalReportV4) {
         network_id: "n1".to_owned(),
         asset_definition_id: "a1".to_owned(),
         asset_scale: 1,
-        bridge_abi_version: 22,
+        bridge_abi_version: 23,
         recursive_step_verifier_commitment: digest,
         artifacts,
     };
@@ -429,7 +429,7 @@ fn report_rejects_every_noncanonical_type_order_scalar_and_artifact_binding() {
             1,
         ),
         text.replacen("\"asset_scale\":1", "\"asset_scale\":\"1\"", 1),
-        text.replacen("\"bridge_abi_version\":22", "\"bridge_abi_version\":21", 1),
+        text.replacen("\"bridge_abi_version\":23", "\"bridge_abi_version\":22", 1),
         text.replacen(
             &format!("\"purpose\":\"{}\"", first.purpose),
             "\"purpose\":\"wrong_role\"",

@@ -333,16 +333,20 @@ test(
         "governance.proposals.proposed",
       );
       assertNonNegativeInteger(
-        proposals.approved,
-        "governance.proposals.approved",
-      );
-      assertNonNegativeInteger(
         proposals.rejected,
         "governance.proposals.rejected",
       );
       assertNonNegativeInteger(
         proposals.enacted,
         "governance.proposals.enacted",
+      );
+      assertNonNegativeInteger(
+        proposals.superseded,
+        "governance.proposals.superseded",
+      );
+      assertNonNegativeInteger(
+        proposals.execution_failed,
+        "governance.proposals.execution_failed",
       );
 
       assertNonNegativeInteger(

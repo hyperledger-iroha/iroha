@@ -611,7 +611,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         }
         let json = try XCTUnwrap(
             decodedJson,
-            "ABI-22 native bridge must decode every required signed transaction fixture: \(name)"
+            "ABI-23 native bridge must decode every required signed transaction fixture: \(name)"
         )
         guard let payload = decodeSignedPayload(from: json) else {
             return XCTFail("failed to decode signed transaction JSON for \(name)")

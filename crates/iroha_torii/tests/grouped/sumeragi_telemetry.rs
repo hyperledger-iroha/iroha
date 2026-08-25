@@ -34,8 +34,6 @@ mod sumeragi_status_sse;
 mod sumeragi_status_sse_profile_gate;
 #[path = "../sumeragi_tel_subrouter_smoke.rs"]
 mod sumeragi_tel_subrouter_smoke;
-#[path = "../sumeragi_vrf_penalties_endpoint.rs"]
-mod sumeragi_vrf_penalties_endpoint;
 #[path = "../telemetry_gating.rs"]
 mod telemetry_gating;
 #[path = "../torii_start.rs"]

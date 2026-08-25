@@ -554,6 +554,7 @@ pub(super) struct InstalledRecoveredWalDecisionFetchRegistryCut<'registry> {
     registry: &'registry mut ConcreteLifecycleWorkRegistry,
     address: ConcreteWorkAddress,
     digest: LifecycleDigest,
+    validate_seal: Option<RecoveredDecisionValidateInstalledSealV1>,
 }
 /// Exclusive installed view of one recovered Decision Apply.
 ///
@@ -650,6 +651,17 @@ enum RecoveredWalDecisionFetchInstallFailure {
         _fetch: DurableRecoveredWalDecisionFetchCarrierV1,
         _store: RecoveredDecisionFetchStoreProjectionV1,
     },
+    ValidateProjection {
+        _fetch: AuthenticatedRecoveredWalDecisionFetchProjection,
+        _store: RecoveredDecisionFetchStoreProjectionV1,
+        _validate: RecoveredDecisionValidateProjectionV1,
+    },
+    ValidateCarrier {
+        _fetch: AuthenticatedRecoveredWalDecisionFetchProjection,
+        _store: RecoveredDecisionFetchStoreProjectionV1,
+        _carrier: DurableValidateBody,
+        _seal: RecoveredDecisionValidateInstalledSealV1,
+    },
 }
 impl RecoveredWalDecisionFetchInstallError {
     /// Return a stable diagnostic without exposing retained authority.
@@ -666,6 +678,12 @@ impl RecoveredWalDecisionFetchInstallError {
             }
             RecoveredWalDecisionFetchInstallFailure::StoreCarrier { .. } => {
                 "recovered Decision Store carrier disagrees with durable storage"
+            }
+            RecoveredWalDecisionFetchInstallFailure::ValidateProjection { .. } => {
+                "recovered Decision Validate failed exact registry preflight"
+            }
+            RecoveredWalDecisionFetchInstallFailure::ValidateCarrier { .. } => {
+                "recovered Decision Validate carrier disagrees with durable storage"
             }
         }
     }
@@ -3335,6 +3353,35 @@ impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
             && store.validates_in_store(self.address, self.digest, ledger))
         .then_some(store)
     }
+    fn exact_decision_validate_work(
+        &self,
+        ledger_store: &super::ledger::LifecycleLedgerStoreV1,
+    ) -> Option<&DurableValidateBody> {
+        let seal = self.validate_seal.as_ref()?;
+        if self
+            .registry
+            .entries
+            .keys()
+            .filter(|address| address.owner == self.address.owner)
+            .count()
+            != 1
+        {
+            return None;
+        }
+        let ledger = ledger_store.load().ok()?;
+        let record = seal.live_validate_record(&ledger)?;
+        if record.owner() != self.address.owner || record.ordinal() != self.address.ordinal {
+            return None;
+        }
+        let work = self.registry.entries.get(&self.address)?;
+        let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
+            return None;
+        };
+        (work.digest == self.digest
+            && work.validates_at(self.address)
+            && validate.matches_recovered_decision_installed_seal(work.digest, seal))
+        .then_some(validate)
+    }
     fn prepared_join_is_exact(
         &self,
         prepared: &PreparedLifecycleCoordinatorOpen,
@@ -3360,13 +3407,26 @@ impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
                         prepared.coordinator(),
                     )
             });
-        (fetch_is_exact ^ store_is_exact)
+        let validate_is_exact = self
+            .exact_decision_validate_work(prepared.store())
+            .is_some_and(|_| {
+                self.validate_seal
+                    .as_ref()
+                    .is_some_and(|seal| recovery.owns_recovered_decision_validate(seal))
+            });
+        ([fetch_is_exact, store_is_exact, validate_is_exact]
+            .into_iter()
+            .filter(|exact| *exact)
+            .count()
+            == 1)
             && self
                 .registry
                 .exactly_covers_recovered_ready_body_pipeline_with_extra(
                     prepared.coordinator(),
                     if store_is_exact {
                         RecoveredWalRegistrySlotV1::DecisionStore(self.address)
+                    } else if validate_is_exact {
+                        RecoveredWalRegistrySlotV1::None
                     } else {
                         RecoveredWalRegistrySlotV1::DecisionFetch(self.address)
                     },
@@ -3388,13 +3448,24 @@ impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
             store.owns_recovery(recovery)
                 && store.matches_current_ready_record(self.address, self.digest, coordinator)
         });
-        (fetch_is_exact ^ store_is_exact)
+        let validate_is_exact = self.exact_decision_validate_work(store).is_some_and(|_| {
+            self.validate_seal
+                .as_ref()
+                .is_some_and(|seal| recovery.owns_recovered_decision_validate(seal))
+        });
+        ([fetch_is_exact, store_is_exact, validate_is_exact]
+            .into_iter()
+            .filter(|exact| *exact)
+            .count()
+            == 1)
             && self
                 .registry
                 .exactly_covers_recovered_ready_work_with_extra(
                     coordinator,
                     if store_is_exact {
                         RecoveredWalRegistrySlotV1::DecisionStore(self.address)
+                    } else if validate_is_exact {
+                        RecoveredWalRegistrySlotV1::None
                     } else {
                         RecoveredWalRegistrySlotV1::DecisionFetch(self.address)
                     },
@@ -3405,13 +3476,17 @@ impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
         &mut self,
         body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
     ) -> Result<(), RecoveredWalDecisionFetchLifecycleOpenError> {
-        body_pipeline
-            .install_alongside_recovered_wal_authority(&mut *self.registry)
-            .map_err(|_body_pipeline| {
-                RecoveredWalDecisionFetchLifecycleOpenError::new(
-                    "recovered Decision Fetch and ordinary body carriers conflict",
-                )
-            })
+        let installed = if let Some(validate) = self.validate_seal.as_ref() {
+            body_pipeline
+                .install_alongside_recovered_decision_validate(&mut *self.registry, validate)
+        } else {
+            body_pipeline.install_alongside_recovered_wal_authority(&mut *self.registry)
+        };
+        installed.map_err(|_body_pipeline| {
+            RecoveredWalDecisionFetchLifecycleOpenError::new(
+                "recovered Decision Fetch and ordinary body carriers conflict",
+            )
+        })
     }
 }
 impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
@@ -3429,6 +3504,7 @@ impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
     > {
         if self.exact_decision_fetch_work(&store).is_none()
             && self.exact_decision_store_work(&store).is_none()
+            && self.exact_decision_validate_work(&store).is_none()
         {
             return Err(RecoveredWalDecisionFetchLifecycleOpenError::new(
                 "installed recovered Decision Fetch carrier is not exact",

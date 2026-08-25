@@ -16,6 +16,33 @@ fn finalized_cleanup_without_exact_output_seal_latches_restart() {
     );
 }
 #[test]
+fn zero_cleanup_deadline_polls_an_already_buffered_completion() {
+    let (command_tx, _command_rx, admission) = test_io_command_channel(1);
+    let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+    assert!(
+        completion_tx
+            .try_send(V2IoCompletion::AuxiliaryNoop)
+            .is_ok(),
+        "buffer cleanup completion before the zero-deadline poll"
+    );
+    let io = V2IoHandle {
+        command_tx,
+        completion_rx,
+        join: None,
+        allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+        admission,
+    };
+
+    assert!(matches!(
+        recv_cleanup_completion(&io, Instant::now()),
+        Ok(V2IoCompletion::AuxiliaryNoop)
+    ));
+    assert!(matches!(
+        recv_cleanup_completion(&io, Instant::now()),
+        Err(CleanupCompletionWaitError::DeadlineElapsed)
+    ));
+}
+#[test]
 fn finalized_cleanup_without_context_worker_retains_all_local_files() {
     let (mut service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);

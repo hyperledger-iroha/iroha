@@ -264,8 +264,8 @@ builders assign `100_000` ms when no explicit lifetime is selected, and
 stateless admission also enforces the governed
 `transaction.max_time_to_live_ms` ceiling.
 
-The `instructions` field contains the `Executable` enum. Its canonical variant
-tags are stable and append-only:
+The `instructions` field contains the sole first-release `Executable` enum.
+Its canonical variant tags are:
 
 ```text
 0  Instructions(ConstVec<InstructionBox>)
@@ -280,9 +280,7 @@ deployed-contract calls. Each `ExecutableBatchItem` uses tag `0` for
 `Instruction(InstructionBox)` and tag `1` for
 `ContractCall(ContractInvocation)`. Raw IVM bytecode and nested batches are not
 batch-item variants. Nodes reject an empty `Batch`; SDKs should reject one
-before signing. Existing instruction-only transactions continue to use
-`Executable` tag `0`, so adding the mixed form does not rewrite their canonical
-bytes. The append-only variant is advertised by `DATA_MODEL_VERSION = 3`.
+before signing. Instruction-only transactions use `Executable` tag `0`.
 
 Dynamic `InstructionBox` and erased `QueryBox` payloads carry a registry wire
 identifier plus the concrete Norito payload. First-release built-ins use
@@ -303,23 +301,18 @@ canonical bytes or breaking already encoded values. New built-ins must add a
 unique identifier and update the corresponding golden inventory; an existing
 V1 identifier must not be renamed or reused for a different layout.
 
-The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
-Version 4 changes the canonical validation-fee governance layout:
-`ProposeValidationFeePolicy` and `ProposeValidationFeePayoutLifecycle` require
-the exact `plain_electorate_rules` used by their ballot lifecycle—including
-the voting asset, bond-escrow account, and slash-receiver account—and enacted
-registry entries retain the same rules for historical verification. New locks
-retain the same custody identities so lock, release, slash, and restitution
-cannot be redirected by later configuration changes. At the referendum start
-height, the node freezes a canonical, account-sorted PLAIN electorate of at
-most 256 members from the pre-transaction committed state.
-The retained proposal state binds that full electorate, its member count, the
-capture and approval-gate heights, and its domain-separated roster root.
-Verified Parliament projections expose those immutable anchors; proposal read
-APIs may expose the full frozen member list. Missing or inconsistent snapshot
-evidence fails closed for voting, finalization, enactment, and fee admission.
-Version 3 peers and SDKs must therefore reject the version 4 wire contract
-instead of attempting a compatibility decode.
+The only supported SDK/node compatibility handshake is
+`DATA_MODEL_VERSION = 4`. Validation-fee policy and payout-lifecycle proposal
+preimages bind the canonical `proposal_operator`; policy proposals also bind
+the exact payout-lifecycle proposal when a payout binding is present. Enacted
+authorization retains the operator, native proposal fingerprint, canonical
+certificate id, complete `GovernanceCertificateV1`, and exact enacted height.
+Admission validates and derives those bindings rather than accepting a
+validation-fee-specific electorate, snapshot, window, or finalization-evidence
+layout. Proposal-owned `u64` values encoded as JSON numbers are bounded by
+`9,007,199,254,740,991`; canonical decimal-string fields retain the full `u64`
+range. Peers and SDKs reject every other data-model version instead of
+attempting a compatibility decode.
 
 Admission schedules a mixed batch as one global live-state barrier. Items run
 in canonical input order against the same transaction view, and failure of any

@@ -54,7 +54,7 @@ fn v4_profiles_bind_exact_four_role_inventory_and_inline_params() {
 include!("kagemusha_release_validation_inline_tests.rs");
 include!("kagemusha_promotion_receipt_inline_tests.rs");
 #[cfg(feature = "transparent_api")]
-pub(crate) fn lifecycle_enable_witness_wire_fixture() -> KagemushaV4IssuanceEnableWitnessV1 {
+pub(super) fn lifecycle_enable_witness_wire_fixture() -> KagemushaV4IssuanceEnableWitnessV1 {
     let fixture = complete_canary_fixture();
     let binding = fixture.receipt.expectations.binding().clone();
     let receipt_bytes =

@@ -230,7 +230,7 @@ pub const KAGEMUSHA_UNSHIELD_PUBLIC_INPUTS_DIGEST_DOMAIN_V2: &str =
 ///
 /// V4 is deliberately not an alias for ABI 19: its public accumulator layout, fold transcripts, key
 /// parsing parameters, and artifact framing all depend on an authenticated IPA degree.
-pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 22;
+pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 23;
 /// Exact schema identifier for the degree-parameterized artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.artifact_manifest.v4";
@@ -5694,7 +5694,9 @@ mod kagemusha_v4_artifact_contract_tests {
     }
 }
 #[cfg(all(test, feature = "transparent_api"))]
-pub(crate) use kagemusha_v4_artifact_contract_tests::lifecycle_enable_witness_wire_fixture;
+pub(crate) fn lifecycle_enable_witness_wire_fixture() -> KagemushaV4IssuanceEnableWitnessV1 {
+    kagemusha_v4_artifact_contract_tests::lifecycle_enable_witness_wire_fixture()
+}
 include!("device_authority_p256_tests.rs");
 /// Derive the canonical public reference carried by a receiver payment request.
 ///

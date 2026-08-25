@@ -731,7 +731,7 @@ run_expect_android_missing_symbol_fail() {
     fail "expected Android validation to reject missing symbol $symbol"
   fi
   case "$output" in
-    *"bridge is missing ABI22/V4 symbols:"*"$symbol"*) ;;
+    *"bridge is missing ABI23/V4 symbols:"*"$symbol"*) ;;
     *)
       printf '%s\n' "$output" >&2
       fail "expected Android missing-symbol failure for $symbol"
@@ -828,7 +828,7 @@ sed -i.bak 's/= PRIVACY_BRIDGE_ABI_VERSION_V1;/= SUBSTITUTE_ABI_VERSION;/' \
 rm "$substituted_abi_alias/crates/connect_norito_bridge/src/lib.rs.bak"
 run_expect_fail \
   "$substituted_abi_alias" \
-  "bridge ABI must be exact public-header 22 with the canonical Rust alias"
+  "bridge ABI must be exact public-header 23 with the canonical Rust alias"
 
 fallback_abi_definition="$TMP_DIR/fallback-abi-definition"
 make_fixture "$fallback_abi_definition"
@@ -836,41 +836,41 @@ printf '%s\n' 'const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 21;' \
   >>"$fallback_abi_definition/crates/connect_norito_bridge/src/lib.rs"
 run_expect_fail \
   "$fallback_abi_definition" \
-  "bridge ABI must be exact public-header 22 with the canonical Rust alias"
+  "bridge ABI must be exact public-header 23 with the canonical Rust alias"
 
 missing_canonical_abi="$TMP_DIR/missing-canonical-abi"
 make_fixture "$missing_canonical_abi"
 : >"$missing_canonical_abi/crates/iroha_data_model/src/privacy/protocol.rs"
 run_expect_fail \
   "$missing_canonical_abi" \
-  "bridge ABI must be exact public-header 22 with the canonical Rust alias"
+  "bridge ABI must be exact public-header 23 with the canonical Rust alias"
 
 nonnumeric_canonical_abi="$TMP_DIR/nonnumeric-canonical-abi"
 make_fixture "$nonnumeric_canonical_abi"
-sed -i.bak 's/= 22;/= ABI_TWENTY_TWO;/' \
+sed -i.bak 's/= 23;/= ABI_TWENTY_THREE;/' \
   "$nonnumeric_canonical_abi/crates/iroha_data_model/src/privacy/protocol.rs"
 rm "$nonnumeric_canonical_abi/crates/iroha_data_model/src/privacy/protocol.rs.bak"
 run_expect_fail \
   "$nonnumeric_canonical_abi" \
-  "bridge ABI must be exact public-header 22 with the canonical Rust alias"
+  "bridge ABI must be exact public-header 23 with the canonical Rust alias"
 
 canonical_abi_drift="$TMP_DIR/canonical-abi-drift"
 make_fixture "$canonical_abi_drift"
-sed -i.bak 's/= 22;/= 21;/' \
+sed -i.bak 's/= 23;/= 22;/' \
   "$canonical_abi_drift/crates/iroha_data_model/src/privacy/protocol.rs"
 rm "$canonical_abi_drift/crates/iroha_data_model/src/privacy/protocol.rs.bak"
 run_expect_fail \
   "$canonical_abi_drift" \
-  "bridge ABI must be exact public-header 22 with the canonical Rust alias"
+  "bridge ABI must be exact public-header 23 with the canonical Rust alias"
 
 header_abi_drift="$TMP_DIR/header-abi-drift"
 make_fixture "$header_abi_drift"
-sed -i.bak 's/ABI_VERSION 22/ABI_VERSION 21/' \
+sed -i.bak 's/ABI_VERSION 23/ABI_VERSION 22/' \
   "$header_abi_drift/crates/connect_norito_bridge/include/connect_norito_bridge.h"
 rm "$header_abi_drift/crates/connect_norito_bridge/include/connect_norito_bridge.h.bak"
 run_expect_fail \
   "$header_abi_drift" \
-  "bridge ABI must be exact public-header 22 with the canonical Rust alias"
+  "bridge ABI must be exact public-header 23 with the canonical Rust alias"
 
 custom_apple_artifact_dir="$TMP_DIR/custom-apple-artifact-dir"
 make_fixture "$custom_apple_artifact_dir"
@@ -1424,7 +1424,7 @@ retired_swift_binding="$TMP_DIR/retired-swift-binding"
 make_fixture "$retired_swift_binding"
 printf '%s\n' 'let retired = "connect_norito_kagemusha_recursive_spend_init_v3"' \
   >>"$retired_swift_binding/IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
-run_expect_fail "$retired_swift_binding" "Swift Kagemusha native symbol inventory is not exact ABI-22/V4"
+run_expect_fail "$retired_swift_binding" "Swift Kagemusha native symbol inventory is not exact ABI-23/V4"
 
 retired_swift_surface="$TMP_DIR/retired-swift-surface"
 make_fixture "$retired_swift_surface"
@@ -1455,13 +1455,13 @@ import sys
 header = Path(sys.argv[1]) / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
 text = header.read_text(encoding="utf-8")
 header.write_text(
-    text.replace("CONNECT_NORITO_BRIDGE_ABI_VERSION 22", "CONNECT_NORITO_BRIDGE_ABI_VERSION 21", 1),
+    text.replace("CONNECT_NORITO_BRIDGE_ABI_VERSION 23", "CONNECT_NORITO_BRIDGE_ABI_VERSION 22", 1),
     encoding="utf-8",
 )
 PY
 run_expect_fail \
   "$wrong_public_header_abi" \
-  "bridge ABI must be exact public-header 22 with the canonical Rust alias"
+  "bridge ABI must be exact public-header 23 with the canonical Rust alias"
 
 wrong_rust_abi_alias="$TMP_DIR/wrong-rust-abi-alias"
 make_fixture "$wrong_rust_abi_alias"
@@ -1472,13 +1472,13 @@ import sys
 source = Path(sys.argv[1]) / "crates/connect_norito_bridge/src/lib.rs"
 text = source.read_text(encoding="utf-8")
 source.write_text(
-    text.replace("PRIVACY_BRIDGE_ABI_VERSION_V1;", "21;", 1),
+    text.replace("PRIVACY_BRIDGE_ABI_VERSION_V1;", "22;", 1),
     encoding="utf-8",
 )
 PY
 run_expect_fail \
   "$wrong_rust_abi_alias" \
-  "bridge ABI must be exact public-header 22 with the canonical Rust alias"
+  "bridge ABI must be exact public-header 23 with the canonical Rust alias"
 
 wrong_protocol_abi="$TMP_DIR/wrong-protocol-abi"
 make_fixture "$wrong_protocol_abi"
@@ -1488,25 +1488,25 @@ import sys
 
 protocol = Path(sys.argv[1]) / "crates/iroha_data_model/src/privacy/protocol.rs"
 protocol.write_text(
-    "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;\n",
+    "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 22;\n",
     encoding="utf-8",
 )
 PY
 run_expect_fail \
   "$wrong_protocol_abi" \
-  "bridge ABI must be exact public-header 22 with the canonical Rust alias"
+  "bridge ABI must be exact public-header 23 with the canonical Rust alias"
 
 retired_kotlin_native="$TMP_DIR/retired-kotlin-native"
 make_fixture "$retired_kotlin_native"
 printf '%s\n' 'private external fun nativeArtifactBindingV3()' \
   >>"$retired_kotlin_native/kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
-run_expect_fail "$retired_kotlin_native" "native method inventory is not exact ABI-22/V4" --android-only
+run_expect_fail "$retired_kotlin_native" "native method inventory is not exact ABI-23/V4" --android-only
 
 retired_java_native="$TMP_DIR/retired-java-native"
 make_fixture "$retired_java_native"
 printf '%s\n' 'private static native void nativeArtifactBindingV3();' \
   >>"$retired_java_native/java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
-run_expect_fail "$retired_java_native" "native method inventory is not exact ABI-22/V4" --android-only
+run_expect_fail "$retired_java_native" "native method inventory is not exact ABI-23/V4" --android-only
 
 retired_rust_jni="$TMP_DIR/retired-rust-jni"
 make_fixture "$retired_rust_jni"
@@ -1517,10 +1517,10 @@ run_expect_fail "$retired_rust_jni" "Rust bridge exposes retired or unexpected K
 
 wrong_bridge_abi="$TMP_DIR/wrong-bridge-abi"
 make_fixture "$wrong_bridge_abi"
-sed -i.bak 's/"native_bridge_abi_version": 22/"native_bridge_abi_version": 21/' \
+sed -i.bak 's/"native_bridge_abi_version": 23/"native_bridge_abi_version": 22/' \
   "$wrong_bridge_abi/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
 rm -f "$wrong_bridge_abi/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
-run_expect_fail "$wrong_bridge_abi" "exact first-release NoritoBridge ABI 22"
+run_expect_fail "$wrong_bridge_abi" "exact first-release NoritoBridge ABI 23"
 
 tampered_apple_cargo_lock="$TMP_DIR/tampered-apple-cargo-lock"
 make_fixture "$tampered_apple_cargo_lock"

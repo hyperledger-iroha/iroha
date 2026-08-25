@@ -776,7 +776,6 @@ Total references: **790** · Unique variables: **194**
 - test: crates/iroha_torii/tests/contracts_call_integration.rs:1470 — `if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {`
 - test: crates/iroha_torii/tests/contracts_call_integration.rs:1572 — `if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {`
 - test: crates/iroha_torii/tests/contracts_call_integration.rs:1699 — `if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {`
-- test: crates/iroha_torii/tests/gov_enact_handler.rs:19 — `if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {`
 - test: crates/iroha_torii/tests/gov_mode_mismatch_and_autoclose.rs:39 — `if env::var("IROHA_RUN_IGNORED").ok().as_deref() == Some("1") {`
 - test: crates/iroha_torii/tests/gov_protected_endpoints.rs:14 — `if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {`
 - test: crates/iroha_torii/tests/gov_protected_endpoints_router.rs:18 — `if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {`

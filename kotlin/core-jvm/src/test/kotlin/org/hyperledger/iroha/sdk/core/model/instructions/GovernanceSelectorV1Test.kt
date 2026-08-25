@@ -71,40 +71,6 @@ class GovernanceSelectorV1Test {
         }
     }
 
-    @Test
-    fun `referendum finalization requires one exact lowercase proposal digest`() {
-        val proposalId = "ab".repeat(32)
-        val finalization = FinalizeReferendumInstruction(proposalId, proposalId)
-
-        assertEquals(proposalId, finalization.referendumId)
-        assertEquals(proposalId, finalization.proposalIdHex)
-        assertEquals(proposalId, finalization.arguments["referendum_id"])
-        assertEquals(proposalId, finalization.arguments["proposal_id_hex"])
-
-        val invalidPairs = listOf(
-            "ref-1" to proposalId,
-            proposalId.uppercase() to proposalId,
-            proposalId to proposalId.uppercase(),
-            proposalId to "0x$proposalId",
-            proposalId to "cd".repeat(32),
-        )
-        invalidPairs.forEach { (referendumId, proposalIdHex) ->
-            assertFailsWith<IllegalArgumentException> {
-                FinalizeReferendumInstruction(referendumId, proposalIdHex)
-            }
-        }
-
-        assertFailsWith<IllegalArgumentException> {
-            FinalizeReferendumInstruction.fromArguments(
-                mapOf(
-                    "action" to "FinalizeReferendum",
-                    "referendum_id" to proposalId,
-                    "proposal_id_hex" to "cd".repeat(32),
-                ),
-            )
-        }
-    }
-
     private fun plainBallot(selector: String): CastPlainBallotInstruction =
         CastPlainBallotInstruction(
             referendumId = selector,

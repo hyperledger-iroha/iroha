@@ -2492,14 +2492,6 @@ pub mod sumeragi {
         "sccp.sora_outbound_material.read",
         "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
     );
-    /// Read one epoch's VRF penalty state as an authenticated operator.
-    pub const VRF_PENALTIES: RouteDescriptor = operator_get(
-        "sumeragi.vrf.penalty.read",
-        "/v1/sumeragi/vrf/penalties/{epoch}",
-    );
-    /// Read one persisted VRF epoch snapshot as an authenticated operator.
-    pub const VRF_EPOCH: RouteDescriptor =
-        operator_get("sumeragi.vrf.epoch.read", "/v1/sumeragi/vrf/epoch/{epoch}");
     /// Read the authoritative Sumeragi status snapshot as an authenticated operator.
     pub const STATUS: RouteDescriptor =
         telemetry_operator_get("sumeragi.status.read", "/v1/sumeragi/status");
@@ -2547,8 +2539,6 @@ pub mod sumeragi {
         SCCP_CAPABILITIES,
         SCCP_REGISTRY,
         SCCP_SORA_OUTBOUND_MATERIAL,
-        VRF_PENALTIES,
-        VRF_EPOCH,
         STATUS,
         DIAGNOSTICS,
         STATUS_SSE,
@@ -2781,6 +2771,41 @@ pub mod runtime_governance {
     /// Draft the exact configured citizenship registration instruction.
     pub const GOV_CITIZEN_DRAFT: RouteDescriptor =
         app_signed_post("governance.citizen.draft", "/v1/gov/citizens/draft");
+    /// Draft one canonical attempt-based Parliament proposal for local signing.
+    pub const GOV_PARLIAMENT_ATTEMPT_DRAFT: RouteDescriptor = app_signed_post(
+        "governance.parliament.attempt.draft",
+        "/v1/gov/parliament/attempts/draft",
+    );
+    /// Read one complete canonical Parliament attempt projection.
+    pub const GOV_PARLIAMENT_ATTEMPT_READ: RouteDescriptor = app_signed_get(
+        "governance.parliament.attempt.read",
+        "/v1/gov/parliament/attempts/{governance_attempt_id}",
+    );
+    /// Inspect one node-local replay-validated timed-OVN context (never wallet input).
+    pub const GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ: RouteDescriptor = app_signed_get(
+        "governance.parliament.timed_ovn_casting_context.read",
+        "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context",
+    );
+    /// Fetch one consensus-authenticated timed-OVN casting archive or checkpoint page.
+    pub const GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF: RouteDescriptor = app_compute_post(
+        "governance.parliament.timed_ovn_casting_proof.read",
+        "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof",
+    );
+    /// Read one Core-authorized public TLE release context for a Parliament ballot.
+    pub const GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ: RouteDescriptor = app_signed_get(
+        "governance.parliament.tle_release_context.read",
+        "/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context",
+    );
+    /// Request this node's Core-authorized proof-carrying TLE partial release.
+    pub const GOV_PARLIAMENT_TLE_PARTIAL_RELEASE: RouteDescriptor = app_signed_post(
+        "governance.parliament.tle_partial_release.create",
+        "/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release",
+    );
+    /// Draft one closed Parliament lifecycle transition for local signing.
+    pub const GOV_PARLIAMENT_TRANSITION_DRAFT: RouteDescriptor = app_signed_post(
+        "governance.parliament.transition.draft",
+        "/v1/gov/parliament/transitions/draft",
+    );
     /// Finality-bound current validation-fee policy proof path.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: &str =
         "/v1/validation-fee/policy/current/proof";
@@ -2791,9 +2816,6 @@ pub mod runtime_governance {
         "/v1/validation-fee/proposals/{proposal_id}";
     /// Strict native validation-fee proposal draft path.
     pub const VALIDATION_FEE_PROPOSAL_DRAFT_PATH: &str = "/v1/validation-fee/proposals/draft";
-    /// Typed proposal-bound validation-fee PLAIN ballot draft path.
-    pub const VALIDATION_FEE_PLAIN_BALLOT_DRAFT_PATH: &str =
-        "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft";
     /// Fetch a finality-bound current validation-fee registry.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF: RouteDescriptor = app_compute_post(
         "validation_fee.policy.current_proof",
@@ -2814,11 +2836,6 @@ pub mod runtime_governance {
         "validation_fee.proposal.draft",
         VALIDATION_FEE_PROPOSAL_DRAFT_PATH,
     );
-    /// Draft one exact proposal-bound validation-fee PLAIN ballot.
-    pub const VALIDATION_FEE_PLAIN_BALLOT_DRAFT: RouteDescriptor = app_signed_post(
-        "validation_fee.proposal.plain_ballot.draft",
-        VALIDATION_FEE_PLAIN_BALLOT_DRAFT_PATH,
-    );
     /// Read one governance proposal.
     pub const GOV_PROPOSAL_GET: RouteDescriptor =
         app_signed_get("governance.proposal.read", "/v1/gov/proposals/{id}");
@@ -2831,31 +2848,23 @@ pub mod runtime_governance {
     /// Read a referendum tally snapshot.
     pub const GOV_TALLY_GET: RouteDescriptor =
         app_compute_get("governance.tally.read", "/v1/gov/tally/{id}");
-    /// Draft a version-one zero-knowledge governance ballot instruction.
+    /// Draft a standalone version-one zero-knowledge referendum ballot instruction.
     pub const GOV_BALLOT_ZK_V1: RouteDescriptor =
         app_post("governance.ballot.zk_v1", "/v1/gov/ballots/zk-v1")
             .with_admission(AdmissionPolicy::AuthenticatedAccount)
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
-    /// Draft a version-one zero-knowledge ballot-proof instruction.
+    /// Draft a standalone version-one zero-knowledge referendum ballot proof instruction.
     pub const GOV_BALLOT_ZK_V1_PROOF: RouteDescriptor = app_post(
         "governance.ballot.zk_v1_proof",
         "/v1/gov/ballots/zk-v1/ballot-proof",
     )
     .with_admission(AdmissionPolicy::AuthenticatedAccount)
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
-    /// Draft a plain governance ballot instruction.
+    /// Draft a standalone plain referendum ballot instruction.
     pub const GOV_BALLOT_PLAIN: RouteDescriptor =
         app_post("governance.ballot.plain", "/v1/gov/ballots/plain")
             .with_admission(AdmissionPolicy::AuthenticatedAccount)
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
-    /// Draft a parliament ballot.
-    pub const GOV_PARLIAMENT_BALLOT: RouteDescriptor =
-        app_post("governance.parliament.ballot", "/v1/gov/parliament/ballots")
-            .with_admission(AdmissionPolicy::AuthenticatedAccount)
-            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
-    /// Finalize a referendum.
-    pub const GOV_FINALIZE: RouteDescriptor =
-        app_post("governance.referendum.finalize", "/v1/gov/finalize");
     /// Replace the protected namespace set.
     pub const GOV_PROTECTED_POST: RouteDescriptor = app_operator_post(
         "operator.governance.protected_namespaces.update",
@@ -2892,9 +2901,6 @@ pub mod runtime_governance {
         "governance.contract.read",
         "/v1/gov/contracts/{contract_address}",
     );
-    /// Draft enactment of an approved referendum.
-    pub const GOV_ENACT: RouteDescriptor =
-        app_signed_post("governance.referendum.enact", "/v1/gov/enact");
     /// Read the current sortition council.
     pub const GOV_COUNCIL_CURRENT: RouteDescriptor =
         app_signed_get("governance.council.current", "/v1/gov/council/current");
@@ -2941,11 +2947,17 @@ pub mod runtime_governance {
         GOV_PROPOSE_SCCP,
         GOV_CAPABILITIES,
         GOV_CITIZEN_DRAFT,
+        GOV_PARLIAMENT_ATTEMPT_DRAFT,
+        GOV_PARLIAMENT_ATTEMPT_READ,
+        GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ,
+        GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF,
+        GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ,
+        GOV_PARLIAMENT_TLE_PARTIAL_RELEASE,
+        GOV_PARLIAMENT_TRANSITION_DRAFT,
         VALIDATION_FEE_CURRENT_POLICY_PROOF,
         VALIDATION_FEE_PROPOSALS,
         VALIDATION_FEE_PROPOSAL_DETAIL,
         VALIDATION_FEE_PROPOSAL_DRAFT,
-        VALIDATION_FEE_PLAIN_BALLOT_DRAFT,
         GOV_PROPOSAL_GET,
         GOV_LOCKS_GET,
         GOV_REFERENDUM_GET,
@@ -2953,14 +2965,11 @@ pub mod runtime_governance {
         GOV_BALLOT_ZK_V1,
         GOV_BALLOT_ZK_V1_PROOF,
         GOV_BALLOT_PLAIN,
-        GOV_PARLIAMENT_BALLOT,
-        GOV_FINALIZE,
         GOV_PROTECTED_POST,
         GOV_PROTECTED_GET,
         GOV_STREAM,
         GOV_UNLOCK_STATS,
         GOV_CONTRACT_GET,
-        GOV_ENACT,
         GOV_COUNCIL_CURRENT,
         GOV_CITIZENS_COUNT,
         GOV_CITIZEN_STATUS,

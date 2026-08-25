@@ -1,5 +1,7 @@
-# Sora Nexus (mainnet) validator configuration
-# Network prefix: `nexus`
+# Sora Nexus / Minamoto mainnet validator configuration
+# Public network profile: `minamoto` (legacy deployment directory: `nexus`)
+# Operators must provision the referenced runtime secrets, expected genesis hash,
+# trusted-peer roster, and final signed genesis/topology before starting a validator.
 # Start with: `iroha3d --sora --config configs/soranexus/nexus/config.toml`
 
 chain = "00000000-0000-0000-0000-000000000753"
@@ -26,6 +28,15 @@ public_address = "addr:nexus.mof2.sora.org:1337#D017"
 
 [torii]
 address = "addr:0.0.0.0:8080#B922"
+
+# The public plugin contract includes ordinary write/submission tools so an
+# explicitly authorized client can submit signed envelopes. Operator routes
+# remain hidden; clients default to read-only behavior on Minamoto.
+[torii.mcp]
+enabled = true
+profile = "writer"
+expose_operator_routes = false
+allow_tool_prefixes = ["iroha."]
 
 [torii.da_ingest.replication_policy.default_retention]
 hot_retention_secs = 21600          # 6 h

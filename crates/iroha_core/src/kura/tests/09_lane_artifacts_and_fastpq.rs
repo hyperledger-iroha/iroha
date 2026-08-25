@@ -1036,6 +1036,30 @@ fn fastpq_proof_snapshot_rejects_queue_overflow() {
     );
     assert_eq!(kura.fastpq_proof_queue.lock().len(), 1);
 }
+
+#[test]
+fn fastpq_proof_snapshot_rolls_back_when_shutdown_arrives_during_enqueue() {
+    use std::cell::Cell;
+
+    let kura = Kura::blank_kura_for_testing();
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+    let cancellation_checks = Cell::new(0usize);
+
+    let result =
+        kura.enqueue_fastpq_proof_snapshot_unless(sample_fastpq_snapshot(1, block_hash, 8), || {
+            let check = cancellation_checks.get();
+            cancellation_checks.set(check.saturating_add(1));
+            check == 1
+        });
+
+    assert_eq!(result, FastpqProofEnqueueResult::RejectedShutdown);
+    assert_eq!(cancellation_checks.get(), 2);
+    assert!(
+        kura.fastpq_proof_queue.lock().is_empty(),
+        "shutdown observed after insertion must roll the snapshot back"
+    );
+}
+
 #[test]
 fn fastpq_proof_snapshot_rejects_oversized_snapshot() {
     let kura = Kura::blank_kura_for_testing();
@@ -1063,6 +1087,60 @@ fn fastpq_proof_snapshot_retries_missing_sidecar_until_limit() {
     assert_eq!(kura.fastpq_proof_queue.lock().len(), 1);
     assert_eq!(kura.flush_fastpq_proof_snapshots(), 0);
     assert!(kura.fastpq_proof_queue.lock().is_empty());
+}
+
+#[test]
+fn fastpq_retry_requeue_respects_cap_during_concurrent_enqueue() {
+    let kura = Kura::blank_kura_for_testing();
+    kura.set_fastpq_proof_sidecar_limits_for_testing(1, usize::MAX, 2);
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+    let retry_snapshot = sample_fastpq_snapshot(1, block_hash, 8);
+    let concurrent_snapshot = sample_fastpq_snapshot(1, block_hash, 9);
+    let concurrent_entry_hash = concurrent_snapshot.entry_hash;
+    assert!(matches!(
+        kura.enqueue_fastpq_proof_snapshot(retry_snapshot),
+        FastpqProofEnqueueResult::Enqueued { queue_depth: 1 }
+    ));
+
+    // Hold the disk-mutation lock so the flusher drains the queue and then pauses before it can
+    // discover that the pipeline sidecar is absent. A concurrent enqueue can fill the newly empty
+    // queue in that window.
+    let sidecar_guard = kura.sidecar_lock.lock();
+    let flush_kura = Arc::clone(&kura);
+    let flusher = thread::spawn(move || flush_kura.flush_fastpq_proof_snapshots());
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let drained = loop {
+        if kura.fastpq_proof_queue.lock().is_empty() {
+            break true;
+        }
+        if std::time::Instant::now() >= deadline {
+            break false;
+        }
+        thread::yield_now();
+    };
+    if !drained {
+        drop(sidecar_guard);
+        flusher.join().expect("flusher joins after lock release");
+        panic!("FASTPQ flusher did not drain its initial queue");
+    }
+    assert!(matches!(
+        kura.enqueue_fastpq_proof_snapshot(concurrent_snapshot),
+        FastpqProofEnqueueResult::Enqueued { queue_depth: 1 }
+    ));
+    drop(sidecar_guard);
+    assert_eq!(
+        flusher.join().expect("FASTPQ flusher joins"),
+        0,
+        "missing pipeline sidecar cannot persist a proof"
+    );
+
+    let queue = kura.fastpq_proof_queue.lock();
+    assert_eq!(queue.len(), 1, "retry merge must preserve the queue cap");
+    assert_eq!(
+        queue.front().map(|queued| queued.snapshot.entry_hash),
+        Some(concurrent_entry_hash),
+        "an already accepted concurrent enqueue keeps its queue position"
+    );
 }
 #[test]
 fn pipeline_sidecar_promotes_temp_index_on_read() {

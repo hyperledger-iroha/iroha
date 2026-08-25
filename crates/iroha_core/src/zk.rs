@@ -5639,6 +5639,8 @@ mod debug_backend_tests {
     fn halo2_ivm_execution_rejects_legacy_unauthenticated_inner_headers() {
         use halo2_proofs::halo2curves::ff::PrimeField as _;
 
+        const RETIRED_LOOKUP_FLAG: u8 = 0x01;
+
         let fixture = test_utils::halo2_ivm_execution_envelope(
             iroha_crypto::Hash::new(b"legacy-inner-header/code"),
             iroha_crypto::Hash::new(b"legacy-inner-header/overlay"),
@@ -5668,7 +5670,6 @@ mod debug_backend_tests {
             .collect();
         assert_eq!(public_inputs.len(), 16);
 
-        const RETIRED_LOOKUP_FLAG: u8 = 0x01;
         let legacy_headers = [(13, 0, 0), (0, 13, RETIRED_LOOKUP_FLAG)];
         let mut encoded_headers = Vec::new();
         for (n_in, n_out, flags) in legacy_headers {

@@ -34,7 +34,11 @@ from urllib.parse import quote, urlencode, urlsplit
 import requests
 from blake3 import blake3
 
-from . import connect_session as _connect_session, identifier_receipts as _identifier_receipts
+from . import (
+    _account_id as _account_id_codec,
+    connect_session as _connect_session,
+    identifier_receipts as _identifier_receipts,
+)
 from .attachment_client import authenticated_attachment_request
 from .client_status_models import (
     SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES,
@@ -112,6 +116,7 @@ from .canonical_transport import (
     send_request as _send_request,
 )
 from .governance_ballot_client import create_governance_ballot_client_mixin
+from .governance_proposals import GovernanceProposalResult
 from .kaigi_relay_client import create_kaigi_relay_client_mixin
 from .native_amx import (
     compute_native_amx_descriptor_hash,
@@ -216,22 +221,18 @@ _SCCP_PROOF_REQUEST_NORITO_TYPE_NAME = (
     "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
 )
 
-BASE58_ALPHABET = tuple("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+BASE58_ALPHABET = _account_id_codec.BASE58_ALPHABET
 BASE58_INDEX = {symbol: idx for idx, symbol in enumerate(BASE58_ALPHABET)}
-IROHA_POEM_KANA_HALFWIDTH = (
-    "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
-    "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
-    "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
-)
-I105_ALPHABET = BASE58_ALPHABET + IROHA_POEM_KANA_HALFWIDTH
-I105_INDEX = {symbol: idx for idx, symbol in enumerate(I105_ALPHABET)}
-I105_BASE = len(I105_ALPHABET)
-I105_CHECKSUM_LEN = 6
-I105_BECH32M_CONST = 0x2BC830A3
-I105_SENTINELS = ("sora", "test", "dev")
-I105_NUMERIC_SENTINEL_PREFIX = "n"
-I105_DISCRIMINANT_MAX = 0xFFFF
-I105_SENTINEL_DISCRIMINANTS = {"sora": 0x02F1, "test": 0x0171, "dev": 0}
+IROHA_POEM_KANA_HALFWIDTH = _account_id_codec.IROHA_POEM_KANA_HALFWIDTH
+I105_ALPHABET = _account_id_codec.I105_ALPHABET
+I105_INDEX = _account_id_codec.I105_INDEX
+I105_BASE = _account_id_codec.I105_BASE
+I105_CHECKSUM_LEN = _account_id_codec.I105_CHECKSUM_LEN
+I105_BECH32M_CONST = _account_id_codec.I105_BECH32M_CONST
+I105_SENTINELS = _account_id_codec.I105_SENTINELS
+I105_NUMERIC_SENTINEL_PREFIX = _account_id_codec.I105_NUMERIC_SENTINEL_PREFIX
+I105_DISCRIMINANT_MAX = _account_id_codec.I105_DISCRIMINANT_MAX
+I105_SENTINEL_DISCRIMINANTS = _account_id_codec.I105_SENTINEL_DISCRIMINANTS
 I105_PROFILE_NAMES = {0x02F1: "minamoto", 0x0171: "taira", 0: "dev"}
 _SORAFS_ORDERBOOK_QUERY_MAX_ITEMS = 500
 _SORAFS_ORDERBOOK_ORDER_STATUS_VALUES = {
@@ -576,130 +577,24 @@ def _decode_base_n(digits: Sequence[int], base: int) -> bytes:
     return b"\x00" * pad + decoded
 
 
-def _convert_to_base32(data: bytes) -> List[int]:
-    acc = 0
-    bits = 0
-    out: List[int] = []
-    for byte in data:
-        acc = (acc << 8) | byte
-        bits += 8
-        while bits >= 5:
-            bits -= 5
-            out.append((acc >> bits) & 0x1F)
-    if bits:
-        out.append((acc << (5 - bits)) & 0x1F)
-    return out
-
-
-def _bech32_polymod(values: Iterable[int]) -> int:
-    generators = (0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3)
-    chk = 1
-    for value in values:
-        top = chk >> 25
-        chk = ((chk & 0x1FF_FFFF) << 5) ^ value
-        for idx, generator in enumerate(generators):
-            if (top >> idx) & 1:
-                chk ^= generator
-    return chk
-
-
-def _expand_hrp(hrp: str) -> List[int]:
-    out: List[int] = []
-    for ch in hrp:
-        value = ord(ch)
-        out.append(value >> 5)
-    out.append(0)
-    out.extend(ord(ch) & 0x1F for ch in hrp)
-    return out
-
-
-def _bech32m_checksum(data: Sequence[int]) -> List[int]:
-    values = _expand_hrp("snx")
-    values.extend(data)
-    values.extend([0] * I105_CHECKSUM_LEN)
-    polymod = _bech32_polymod(values) ^ I105_BECH32M_CONST
-    return [(polymod >> (5 * (I105_CHECKSUM_LEN - 1 - i))) & 0x1F for i in range(I105_CHECKSUM_LEN)]
-
-
-def _i105_checksum_digits(canonical: bytes) -> List[int]:
-    return _bech32m_checksum(_convert_to_base32(canonical))
-
-
-def _strip_i105_sentinel(encoded: str) -> str:
-    return _parse_i105_sentinel_and_payload(encoded)[2]
-
-
 def _parse_i105_sentinel_and_payload(encoded: str) -> Tuple[str, int, str]:
-    for sentinel in I105_SENTINELS:
-        if encoded.startswith(sentinel):
-            return sentinel, I105_SENTINEL_DISCRIMINANTS[sentinel], encoded[len(sentinel) :]
-    if encoded.startswith(I105_NUMERIC_SENTINEL_PREFIX):
-        index = len(I105_NUMERIC_SENTINEL_PREFIX)
-        while index < len(encoded) and "0" <= encoded[index] <= "9":
-            index += 1
-        if index > len(I105_NUMERIC_SENTINEL_PREFIX):
-            discriminant = int(encoded[len(I105_NUMERIC_SENTINEL_PREFIX):index])
-            if discriminant > I105_DISCRIMINANT_MAX:
-                raise ValueError(
-                    "i105 chain discriminant must fit in an unsigned 16-bit integer"
-                )
-            return encoded[:index], discriminant, encoded[index:]
-    raise ValueError("i105 address is missing the expected chain-discriminant sentinel")
+    return _account_id_codec.parse_i105_sentinel_and_payload(encoded)
 
 
 def _decode_i105_string(encoded: str) -> bytes:
-    payload = _strip_i105_sentinel(encoded)
-    digits: List[int] = []
-    for symbol in payload:
-        try:
-            digits.append(I105_INDEX[symbol])
-        except KeyError as exc:
-            raise ValueError("invalid character in i105 address") from exc
-    if len(digits) <= I105_CHECKSUM_LEN:
-        raise ValueError("i105 address too short")
-    data_digits = digits[:-I105_CHECKSUM_LEN]
-    checksum_digits = digits[-I105_CHECKSUM_LEN:]
-    canonical = _decode_base_n(data_digits, I105_BASE)
-    if checksum_digits != _i105_checksum_digits(canonical):
-        raise ValueError("i105 checksum mismatch")
-    return canonical
+    return _account_id_codec.decode_canonical_i105_account_id(encoded)
 
 
 def _encode_i105_string(canonical: bytes, discriminant: int) -> str:
     """Render decoded address bytes with the one canonical I105 sentinel."""
 
-    leading_zeroes = len(canonical) - len(canonical.lstrip(b"\x00"))
-    value = int.from_bytes(canonical, "big")
-    digits: List[int] = []
-    while value:
-        value, remainder = divmod(value, I105_BASE)
-        digits.append(remainder)
-    encoded_digits = [0] * leading_zeroes + list(reversed(digits))
-    if not encoded_digits:
-        encoded_digits = [0]
-
-    sentinel = next(
-        (
-            name
-            for name, known_discriminant in I105_SENTINEL_DISCRIMINANTS.items()
-            if known_discriminant == discriminant
-        ),
-        f"{I105_NUMERIC_SENTINEL_PREFIX}{discriminant}",
-    )
-    return sentinel + "".join(
-        I105_ALPHABET[digit]
-        for digit in (*encoded_digits, *_i105_checksum_digits(canonical))
-    )
+    return _account_id_codec.encode_i105_account_id(canonical, discriminant)
 
 
 def _decode_canonical_i105_string(encoded: str) -> bytes:
     """Parse an I105 literal and reject every non-canonical re-rendering."""
 
-    _, discriminant, _ = _parse_i105_sentinel_and_payload(encoded)
-    canonical = _decode_i105_string(encoded)
-    if _encode_i105_string(canonical, discriminant) != encoded:
-        raise ValueError("i105 address must use its exact canonical rendering")
-    return canonical
+    return _account_id_codec.decode_canonical_i105_account_id(encoded)
 
 
 @dataclass(frozen=True)
@@ -755,7 +650,6 @@ __all__ = [
     "GovernanceTallySummary",
     "GovernanceUnlockStats",
     "TransactionInstruction",
-    "GovernanceInstructionDraft",
     "GovernanceProposalDraft",
     "ContractOperationReceipt",
     "ContractCallResponse",
@@ -1837,7 +1731,7 @@ _OFFLINE_MAX_JSON_DEPTH = 128
 _OFFLINE_MAX_JSON_RESPONSE_BYTES = 256 * 1024
 _KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES = 512 * 1024
 _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES = 48 * 1024 * 1024
-_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 22
+_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 23
 _KAGEMUSHA_MAX_HOPS = 8
 _KAGEMUSHA_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1"
 
@@ -4416,12 +4310,7 @@ class CouncilCurrentStatus:
     members: List[CouncilMember]
 
 
-@dataclass(frozen=True)
-class GovernanceProposalStatus:
-    """Result returned by ``GET /v1/gov/proposals/{id}``."""
-
-    found: bool
-    proposal: Optional[Dict[str, Any]]
+GovernanceProposalStatus = GovernanceProposalResult
 
 
 @dataclass(frozen=True)
@@ -4814,18 +4703,9 @@ class VpnReceiptListResponse:
 
 
 @dataclass(frozen=True)
-class GovernanceInstructionDraft:
-    """Instruction bundle returned by finalize/enact helpers."""
-
-    ok: bool
-    tx_instructions: List[TransactionInstruction]
-
-
-@dataclass(frozen=True)
 class GovernanceProposalDraft:
     """Result returned by ``POST /v1/gov/proposals/deploy-contract``."""
 
-    ok: bool
     proposal_id: str
     tx_instructions: List[TransactionInstruction]
 
@@ -5159,9 +5039,10 @@ class GovernanceProposalCounters:
     """Proposal lifecycle counters inside the status payload."""
 
     proposed: int
-    approved: int
     rejected: int
     enacted: int
+    superseded: int
+    execution_failed: int
 
 
 @dataclass(frozen=True)
@@ -11599,24 +11480,33 @@ class ToriiClient(
             context="governance contract response",
         )
 
-    def get_governance_proposal(
+    def get_governance_proposal_raw(
         self, proposal_id: str, *, canonical_auth: ToriiCanonicalRequestAuth
-    ) -> GovernanceProposalStatus:
-        """Fetch proposal metadata via ``GET /v1/gov/proposals/{id}``."""
+    ) -> Mapping[str, Any]:
+        """Fetch the unparsed proposal JSON for diagnostic callers."""
 
         proposal_id = self._require_governance_proposal_id_v1(
             proposal_id,
             context="governance proposal proposal_id",
         )
-        payload = self._account_json_request(
+        return self._account_json_request(
             "GET",
             f"/v1/gov/proposals/{quote(proposal_id, safe='')}",
             canonical_auth=canonical_auth,
             context="governance proposal",
         )
-        found = bool(payload.get("found"))
-        proposal = self._optional_mapping(payload.get("proposal"), context="governance proposal body")
-        return GovernanceProposalStatus(found=found, proposal=proposal)
+
+    def get_governance_proposal(
+        self, proposal_id: str, *, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> GovernanceProposalStatus:
+        """Fetch and strictly decode first-release proposal metadata."""
+
+        return GovernanceProposalResult.from_payload(
+            self.get_governance_proposal_raw(
+                proposal_id,
+                canonical_auth=canonical_auth,
+            )
+        )
 
     def get_governance_locks(
         self, referendum_id: str, *, canonical_auth: ToriiCanonicalRequestAuth
@@ -11735,12 +11625,10 @@ class ToriiClient(
         canonical_auth: ToriiCanonicalRequestAuth,
         contract_address: Optional[str] = None,
         contract_alias: Optional[str] = None,
-        abi_version: str,
+        abi_version: int,
         code_hash: str,
         abi_hash: str,
-        window: Optional[Tuple[int, int]] = None,
-        mode: Optional[Literal["Zk", "Plain"]] = None,
-        limits: Optional[Mapping[str, Any]] = None,
+        manifest_provenance: Optional[Mapping[str, str]] = None,
     ) -> GovernanceProposalDraft:
         """Draft a deploy-contract proposal via ``POST /v1/gov/proposals/deploy-contract``."""
 
@@ -11748,23 +11636,40 @@ class ToriiClient(
             raise ValueError(
                 "provide exactly one of contract_address or contract_alias",
             )
+        if isinstance(abi_version, bool) or abi_version != 1:
+            raise ValueError("abi_version must be the integer 1")
+        for field_name, value in (("code_hash", code_hash), ("abi_hash", abi_hash)):
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise ValueError(
+                    f"{field_name} must be exactly 32 lowercase hexadecimal bytes"
+                )
         payload: Dict[str, Any] = {
             "abi_version": abi_version,
             "code_hash": code_hash,
             "abi_hash": abi_hash,
         }
         if contract_address is not None:
-            payload["contract_address"] = contract_address
+            payload["contract_address"] = _require_exact_non_empty_string(
+                contract_address,
+                "propose_contract_deploy.contract_address",
+            )
         if contract_alias is not None:
-            payload["contract_alias"] = contract_alias
-        if window is not None:
-            payload["window"] = {"lower": int(window[0]), "upper": int(window[1])}
-        if mode is not None:
-            if mode not in ("Zk", "Plain"):
-                raise ValueError("mode must be exactly 'Zk' or 'Plain'")
-            payload["mode"] = mode
-        if limits is not None:
-            payload["limits"] = dict(limits)
+            payload["contract_alias"] = _require_exact_non_empty_string(
+                contract_alias,
+                "propose_contract_deploy.contract_alias",
+            )
+        if manifest_provenance is not None:
+            if set(manifest_provenance) != {"signer", "signature"}:
+                raise ValueError(
+                    "manifest_provenance must contain exactly signer and signature"
+                )
+            payload["manifest_provenance"] = {
+                field: _require_exact_non_empty_string(
+                    manifest_provenance[field],
+                    f"propose_contract_deploy.manifest_provenance.{field}",
+                )
+                for field in ("signer", "signature")
+            }
         body = self._account_json_request(
             "POST",
             "/v1/gov/proposals/deploy-contract",
@@ -11772,76 +11677,40 @@ class ToriiClient(
             canonical_auth=canonical_auth,
             context="deploy-contract proposal",
         )
-        ok = bool(body.get("ok"))
-        proposal_id = str(body.get("proposal_id") or "")
-        if not proposal_id:
-            raise RuntimeError("deploy-contract response missing proposal_id")
-        instructions = self._parse_tx_instructions(body.get("tx_instructions"))
-        return GovernanceProposalDraft(ok=ok, proposal_id=proposal_id, tx_instructions=instructions)
-
-    def finalize_referendum(
-        self,
-        *,
-        referendum_id: str,
-        proposal_id: str,
-    ) -> GovernanceInstructionDraft:
-        """Draft a FinalizeReferendum transaction via ``POST /v1/gov/finalize``."""
-
-        referendum_id = self._require_governance_proposal_id_v1(
-            referendum_id,
-            context="governance finalize referendum_id",
-        )
-        proposal_id = self._require_governance_proposal_id_v1(
-            proposal_id,
-            context="governance finalize proposal_id",
-        )
-        if referendum_id != proposal_id:
+        if set(body) != {"proposal_id", "tx_instructions"}:
             raise RuntimeError(
-                "governance finalize referendum_id must equal proposal_id"
+                "deploy-contract response must contain exactly proposal_id and tx_instructions"
             )
-        payload = {"referendum_id": referendum_id, "proposal_id": proposal_id}
-        body = self._post_json(
-            "/v1/gov/finalize",
-            payload,
-            context="governance finalize",
-            expected_status=(200, 202, 204),
+        proposal_id = body.get("proposal_id")
+        if not isinstance(proposal_id, str) or re.fullmatch(r"[0-9a-f]{64}", proposal_id) is None:
+            raise RuntimeError(
+                "deploy-contract response proposal_id must be exactly 32 lowercase hexadecimal bytes"
+            )
+        raw_instructions = body.get("tx_instructions")
+        if not isinstance(raw_instructions, list) or len(raw_instructions) != 1:
+            raise RuntimeError("deploy-contract response must contain exactly one instruction")
+        instruction_entry = raw_instructions[0]
+        if not isinstance(instruction_entry, Mapping) or set(instruction_entry) != {
+            "wire_id",
+            "payload_hex",
+        }:
+            raise RuntimeError(
+                "deploy-contract response instruction must contain exactly wire_id and payload_hex"
+            )
+        instructions = self._parse_tx_instructions(body.get("tx_instructions"))
+        if instructions[0].wire_id != (
+            "iroha_data_model::isi::governance::ProposeDeployContract"
+        ):
+            raise RuntimeError("deploy-contract response returned the wrong instruction wire_id")
+        canonical_payload_hex = self._require_exact_lower_even_hex_string(
+            instructions[0].payload_hex,
+            context="deploy-contract response instruction.payload_hex",
         )
-        return GovernanceInstructionDraft(
-            ok=bool(body.get("ok")),
-            tx_instructions=self._parse_tx_instructions(body.get("tx_instructions")),
+        instructions[0] = TransactionInstruction(
+            wire_id=instructions[0].wire_id,
+            payload_hex=canonical_payload_hex,
         )
-
-    def enact_proposal(
-        self,
-        *,
-        canonical_auth: ToriiCanonicalRequestAuth,
-        proposal_id: str,
-        preimage_hash: Optional[str] = None,
-        window: Optional[Tuple[int, int]] = None,
-    ) -> GovernanceInstructionDraft:
-        """Draft an EnactReferendum transaction via ``POST /v1/gov/enact``."""
-
-        proposal_id = self._require_governance_proposal_id_v1(
-            proposal_id,
-            context="governance enact proposal_id",
-        )
-        payload: Dict[str, Any] = {"proposal_id": proposal_id}
-        if preimage_hash:
-            payload["preimage_hash"] = preimage_hash
-        if window is not None:
-            payload["window"] = {"lower": int(window[0]), "upper": int(window[1])}
-        body = self._account_json_request(
-            "POST",
-            "/v1/gov/enact",
-            body_payload=payload,
-            canonical_auth=canonical_auth,
-            context="governance enact",
-            expected_status=(200, 202, 204),
-        )
-        return GovernanceInstructionDraft(
-            ok=bool(body.get("ok")),
-            tx_instructions=self._parse_tx_instructions(body.get("tx_instructions")),
-        )
+        return GovernanceProposalDraft(proposal_id=proposal_id, tx_instructions=instructions)
 
     def apply_protected_namespaces(
         self,
@@ -14764,9 +14633,16 @@ class ToriiClient(
         return GovernanceStatusSnapshot(
             proposals=GovernanceProposalCounters(
                 proposed=self._coerce_int(proposals.get("proposed"), "governance.proposals.proposed"),
-                approved=self._coerce_int(proposals.get("approved"), "governance.proposals.approved"),
                 rejected=self._coerce_int(proposals.get("rejected"), "governance.proposals.rejected"),
                 enacted=self._coerce_int(proposals.get("enacted"), "governance.proposals.enacted"),
+                superseded=self._coerce_int(
+                    proposals.get("superseded"),
+                    "governance.proposals.superseded",
+                ),
+                execution_failed=self._coerce_int(
+                    proposals.get("execution_failed"),
+                    "governance.proposals.execution_failed",
+                ),
             ),
             protected_namespace=GovernanceProtectedNamespaceStats(
                 total_checks=self._coerce_int(

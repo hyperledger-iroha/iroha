@@ -133,8 +133,8 @@ TON, generic backends, arbitrary assets, and compatibility manifests are not
 SCCP V1 launch work.
 
 The implementation uses one consensus-owned `SccpRegistryV1` and typed,
-NetworkId-bound `SccpRouteGovernanceAnchorV1` actions enacted only through a
-finalized threshold referendum. Direct registry apply is retired and rejected.
+NetworkId-bound `SccpRouteGovernanceAnchorV1` actions executed only at the exact
+height of a valid Parliament certificate. Direct registry apply is retired and rejected.
 Each route binds the exact
 transfer-only XOR settlement, revision, source identity, native trust anchor,
 destination deployment, full BN254 key, audited semantic-profile commitments,

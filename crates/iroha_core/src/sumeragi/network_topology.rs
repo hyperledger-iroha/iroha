@@ -763,7 +763,7 @@ pub fn test_topology_with_keys<'a>(keys: impl IntoIterator<Item = &'a KeyPair>) 
         .map(|key| PeerId::new(key.public_key().clone()));
     Topology::new(peers)
 }
-#[cfg(all(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 mod tests {
     #![allow(unused_variables, unused_mut)]
     use super::*;

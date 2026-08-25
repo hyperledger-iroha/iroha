@@ -1977,7 +1977,7 @@ Connect frame encoding and crypto helpers require the compiled
 directory before running tests that exercise Connect payloads.
 
 From the repository root, the SoraFS V1 native parity lane uses exact Python
-3.12 and rebuilds the ABI-22 extension from the current clean source revision:
+3.12 and rebuilds the ABI-23 extension from the current clean source revision:
 
 ```bash
 SORAFS_PYTHON_SDK_PYTHON_BIN=/path/to/python3.12 \
@@ -2120,7 +2120,7 @@ The workflow now:
 
 1. Builds exactly one wheel candidate with `python -m build` and seals and structurally preflights it before installation.
 2. Installs the wheel into a fresh virtualenv, authenticates the complete installed package and native-extension provenance against that seal, and rejects path or file aliases.
-3. Requires the installed native extension to expose bridge ABI 22 and a non-empty compiled-profile catalog accepted by its native validator, then runs the Norito RPC parity suite.
+3. Requires the installed native extension to expose bridge ABI 23 and a non-empty compiled-profile catalog accepted by its native validator, then runs the Norito RPC parity suite.
 4. Runs `twine check` followed by a `twine upload --dry-run` call so PyPI metadata and credentials are validated ahead of time.
 
 The smoke harness accepts no signing, provenance, key, or manifest-output

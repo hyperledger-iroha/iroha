@@ -682,15 +682,19 @@ For higher-level walkthroughs, see:
   `getRuntimeAbiHash`, `listRuntimeUpgrades`, and the helper trio
   (`proposeRuntimeUpgrade`, `activateRuntimeUpgrade`, `cancelRuntimeUpgrade`) mirroring the
   `/v1/node/capabilities` and `/v1/runtime/*` surfaces with typed instruction bundles.
-- **Governance:** draft deployment proposals (`submitGovernanceDeployContractProposal`),
-  submit plain/ZK ballots, finalize or enact referenda, and fetch proposal/lock/tally/lock-stat
-  snapshots via the typed helpers. Responses that include `tx_instructions` can be fed
-  directly into `TxBuilder` to produce signed transactions.
+- **Governance:** draft typed V1 deployment proposals
+  (`submitGovernanceDeployContractProposal`), submit standalone plain/ZK
+  ballots, fetch proposal/lock/tally snapshots, and inspect certificate-driven
+  Parliament attempts. Deployment drafts bind typed 32-byte code/ABI hashes,
+  numeric ABI version `1`, and optional manifest provenance; there are no
+  proposal window/mode controls. V1 exposes no client finalize or enact path:
+  Core creates the final certificate and executes its effect at the exact
+  derived enactment height.
 
 > **Roadmap ADDR-5a:** Account-aware helpers (`getAssets`, `getTransactions`, and the matching `IrohaSDK` wrappers) accept canonical I105 account literals and percent-encode `/v1/accounts/{account_id}/…` paths automatically.
 
-Upcoming work (tracked under IOS3) includes governance endpoints, additional query
-builders, and WebSocket/SSE subscribers shared with Android/JS.
+Upcoming work (tracked under IOS3) includes additional query builders and
+WebSocket/SSE subscribers shared with Android/JS.
 
 ### Rendering account addresses
 

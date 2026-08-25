@@ -53,8 +53,6 @@ import {
   buildProposeSccpRouteGovernanceInstruction,
   buildCastZkBallotInstruction,
   buildCastPlainBallotInstruction,
-  buildEnactReferendumInstruction,
-  buildFinalizeReferendumInstruction,
   buildPersistCouncilForEpochInstruction,
   buildRegisterZkAssetInstruction,
   buildScheduleConfidentialPolicyTransitionInstruction,
@@ -4212,11 +4210,17 @@ export function buildProposeDeployContractTransaction(input) {
  */
 export function buildProposeSccpRouteGovernanceTransaction(input) {
   transactionNetworkIdBytes(input, "input");
+  for (const field of ["proposal", "window", "mode", "anchor"]) {
+    if (Object.prototype.hasOwnProperty.call(input, field)) {
+      throw new TypeError(
+        `input.${field} is unsupported; provide the exact action field`,
+      );
+    }
+  }
   const {
     networkId,
     authority,
     feePayment,
-    proposal,
     action,
     metadata = null,
     creationTimeMs = null,
@@ -4225,9 +4229,10 @@ export function buildProposeSccpRouteGovernanceTransaction(input) {
     privateKey,
     privateKeyAlgorithm = null,
   } = input;
-  const instruction = buildProposeSccpRouteGovernanceInstruction(
-    proposal ?? { action },
-  );
+  const instruction = buildProposeSccpRouteGovernanceInstruction({
+    networkId,
+    action,
+  });
   return buildTransaction({
     networkId,
     authority,
@@ -4292,70 +4297,6 @@ export function buildCastPlainBallotTransaction(input) {
     privateKeyAlgorithm = null,
   } = input;
   const instruction = buildCastPlainBallotInstruction(ballot);
-  return buildTransaction({
-    networkId,
-    authority,
-    feePayment,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
-}
-
-/**
- * Build a transaction containing an `EnactReferendum` instruction.
- */
-export function buildEnactReferendumTransaction(input) {
-  transactionNetworkIdBytes(input, "input");
-  const {
-    networkId,
-    authority,
-    feePayment,
-    enactment,
-    metadata = null,
-    creationTimeMs = null,
-    ttlMs = null,
-    nonce = null,
-    privateKey,
-    privateKeyAlgorithm = null,
-  } = input;
-  const instruction = buildEnactReferendumInstruction(enactment);
-  return buildTransaction({
-    networkId,
-    authority,
-    feePayment,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
-}
-
-/**
- * Build a transaction containing a `FinalizeReferendum` instruction.
- */
-export function buildFinalizeReferendumTransaction(input) {
-  transactionNetworkIdBytes(input, "input");
-  const {
-    networkId,
-    authority,
-    feePayment,
-    finalization,
-    metadata = null,
-    creationTimeMs = null,
-    ttlMs = null,
-    nonce = null,
-    privateKey,
-    privateKeyAlgorithm = null,
-  } = input;
-  const instruction = buildFinalizeReferendumInstruction(finalization);
   return buildTransaction({
     networkId,
     authority,

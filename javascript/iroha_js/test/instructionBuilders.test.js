@@ -43,8 +43,6 @@ import {
   buildProposeDeployContractInstruction,
   buildCastZkBallotInstruction,
   buildCastPlainBallotInstruction,
-  buildEnactReferendumInstruction,
-  buildFinalizeReferendumInstruction,
   buildPersistCouncilForEpochInstruction,
   buildSubmitAgendaProposalInstruction,
   buildClaimTwitterFollowRewardInstruction,
@@ -2212,23 +2210,19 @@ test("buildRemoveSmartContractBytesInstruction accepts reason or null", () => {
   assert.equal(withoutReason.RemoveSmartContractBytes.reason, undefined);
 });
 
-baseTest("buildProposeDeployContractInstruction normalizes exact hashes and full-u64 window", () => {
+baseTest("buildProposeDeployContractInstruction normalizes the typed V1 payload", () => {
   const instruction = buildProposeDeployContractInstruction({
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: `blake2b32:0x${"AA".repeat(32)}`,
     abiHash: `0X${"BB".repeat(32)}`,
-    abiVersion: "1",
-    window: { lower: 10, upper: 0xffff_ffff_ffff_ffffn },
-    votingMode: "Plain",
+    abiVersion: 1,
   });
   const expected = {
     ProposeDeployContract: {
       contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-      code_hash_hex: "aa".repeat(32),
-      abi_hash_hex: "bb".repeat(32),
-      abi_version: "1",
-      window: { lower: "10", upper: "18446744073709551615" },
-      mode: "Plain",
+      code_hash: "aa".repeat(32),
+      abi_hash: "bb".repeat(32),
+      abi_version: 1,
     },
   };
   assert.deepEqual(instruction, expected);
@@ -2236,7 +2230,7 @@ baseTest("buildProposeDeployContractInstruction normalizes exact hashes and full
   assert.deepEqual(decoded, expected);
 });
 
-baseTest("buildProposeDeployContractInstruction encodes manifest provenance as field seven", () => {
+baseTest("buildProposeDeployContractInstruction encodes manifest provenance as field five", () => {
   const instruction = buildProposeDeployContractInstruction({
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
@@ -2270,6 +2264,10 @@ baseTest("buildProposeDeployContractInstruction has a closed canonical local tar
     "contractAlias",
     "contract_address",
     "code_hash",
+    "abi_hash",
+    "abi_version",
+    "window",
+    "votingMode",
     "mode",
     "limits",
     "manifest_provenance",
@@ -2292,29 +2290,23 @@ baseTest("buildProposeDeployContractInstruction has a closed canonical local tar
   }
 });
 
-baseTest("buildProposeDeployContractInstruction rejects non-V1 ABI and unordered windows", () => {
+baseTest("buildProposeDeployContractInstruction accepts only numeric ABI V1", () => {
   const base = {
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
   };
-  for (const abiVersion of ["01", "1 ", "2", 1]) {
+  for (const abiVersion of ["1", "01", "1 ", "2", 0, 2, 1n, null]) {
     assert.throws(
       () => buildProposeDeployContractInstruction({ ...base, abiVersion }),
-      /exactly '1'/u,
+      /exactly 1/u,
     );
   }
-  for (const window of [
-    { lower: 2, upper: 1 },
-    { lower: "01", upper: "2" },
-    { lower: 0, upper: 0x1_0000_0000_0000_0000n },
-    { lower: 0, upper: 1, from: 0 },
-  ]) {
-    assert.throws(
-      () => buildProposeDeployContractInstruction({ ...base, window }),
-      /window/u,
-    );
-  }
+  assert.equal(
+    buildProposeDeployContractInstruction({ ...base, abiVersion: 1 })
+      .ProposeDeployContract.abi_version,
+    1,
+  );
 });
 
 baseTest("buildProposeDeployContractInstruction enforces the governance hash grammar", () => {
@@ -2361,50 +2353,39 @@ baseTest("governance proposal builder rejects every private-key alias recursivel
       () =>
         buildProposeDeployContractInstruction({
           ...base,
-          window: { lower: 0, upper: 1, nested: [{ [alias]: "secret" }] },
+          nested: [{ [alias]: "secret" }],
         }),
       new RegExp(alias, "u"),
     );
   }
 });
 
-baseTest("buildProposeDeployContractInstruction rejects non-canonical voting modes", () => {
+baseTest("buildProposeDeployContractInstruction rejects retired lifecycle controls", () => {
   const base = {
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
   };
-  for (const votingMode of [
-    "zk",
-    "plain",
-    " Zk",
-    "Plain ",
-    "zero-knowledge",
-    "zkp",
-    "plaintext",
-    "plain_text",
-    "quadratic",
-    1,
-  ]) {
+  for (const field of ["window", "votingMode", "mode"]) {
     assert.throws(
-      () => buildProposeDeployContractInstruction({ ...base, votingMode }),
-      /must be either 'Zk' or 'Plain'/u,
+      () => buildProposeDeployContractInstruction({ ...base, [field]: null }),
+      new RegExp(field, "u"),
     );
   }
 
-  for (const mode of ["zk", "plain", " Zk", "Plain "]) {
+  for (const field of ["window", "mode", "code_hash_hex", "abi_hash_hex"]) {
     assert.throws(
       () =>
         encodeInstruction({
           ProposeDeployContract: {
             contract_address: base.contractAddress,
-            code_hash_hex: base.codeHash,
-            abi_hash_hex: base.abiHash,
-            abi_version: "1",
-            mode,
+            code_hash: base.codeHash,
+            abi_hash: base.abiHash,
+            abi_version: 1,
+            [field]: null,
           },
         }),
-      /must be Zk or Plain/u,
+      new RegExp(field, "u"),
     );
   }
 });
@@ -2668,9 +2649,9 @@ baseTest("direct governance Norito validation runs before native dispatch", () =
         ProposeDeployContract: {
           contract_address:
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-          code_hash_hex: "aa".repeat(32),
-          abi_hash_hex: "bb".repeat(32),
-          abi_version: "1",
+          code_hash: "aa".repeat(32),
+          abi_hash: "bb".repeat(32),
+          abi_version: 1,
           limits: {},
         },
       }),
@@ -2715,21 +2696,18 @@ baseTest("direct pure-JS CastZkBallot preserves a raw max-u64 JSON token", () =>
   );
 });
 
-baseTest("direct pure-JS deploy proposal preserves raw max-u64 window tokens", () => {
+baseTest("direct pure-JS deploy proposal roundtrips typed hashes and ABI V1", () => {
   const instructionJson =
     '{"ProposeDeployContract":{' +
     '"contract_address":"irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",' +
-    `"code_hash_hex":"blake2b32:0x${"AA".repeat(32)}",` +
-    `"abi_hash_hex":"${"BB".repeat(32)}",` +
-    '"abi_version":"1","window":{"lower":0,"upper":18446744073709551615}}}';
+    `"code_hash":"${"aa".repeat(32)}",` +
+    `"abi_hash":"${"bb".repeat(32)}",` +
+    '"abi_version":1}}';
   const decoded = withPureJsInstructionCodec(() =>
     noritoDecodeInstruction(noritoEncodeInstruction(instructionJson)));
-  assert.deepEqual(decoded.ProposeDeployContract.window, {
-    lower: "0",
-    upper: "18446744073709551615",
-  });
-  assert.equal(decoded.ProposeDeployContract.code_hash_hex, "aa".repeat(32));
-  assert.equal(decoded.ProposeDeployContract.abi_hash_hex, "bb".repeat(32));
+  assert.equal(decoded.ProposeDeployContract.code_hash, "aa".repeat(32));
+  assert.equal(decoded.ProposeDeployContract.abi_hash, "bb".repeat(32));
+  assert.equal(decoded.ProposeDeployContract.abi_version, 1);
 });
 
 baseTest("buildCastZkBallotInstruction rejects empty proof bytes", () => {
@@ -2887,74 +2865,6 @@ test("CastPlainBallot pure-JS bytes match native compact framing", () => {
     "CastPlainBallot",
   );
   assert.equal(encoded[39], 0x02);
-});
-
-test("buildEnactReferendumInstruction normalizes hashes and window defaults", () => {
-  const instruction = buildEnactReferendumInstruction({
-    referendumId: Buffer.alloc(32, 0x11),
-    preimageHash: Buffer.alloc(32, 0xbb),
-  });
-  const expected = {
-    EnactReferendum: {
-      referendum_id: toByteArray(Buffer.alloc(32, 0x11)),
-      preimage_hash: toByteArray(Buffer.alloc(32, 0xbb)),
-      at_window: { lower: "0", upper: "0" },
-    },
-  };
-  assert.deepEqual(instruction, expected);
-  assert.deepEqual(encodeAndDecode(instruction), expected);
-});
-
-test("buildFinalizeReferendumInstruction encodes one exact proposal digest", () => {
-  const proposalId = "ab".repeat(32);
-  const instruction = buildFinalizeReferendumInstruction({
-    referendumId: proposalId,
-    proposalId: Buffer.alloc(32, 0xab),
-  });
-  const expected = {
-    FinalizeReferendum: {
-      referendum_id: proposalId,
-      proposal_id: toByteArray(Buffer.alloc(32, 0xab)),
-    },
-  };
-  assert.deepEqual(instruction, expected);
-  assert.deepEqual(encodeAndDecode(instruction), expected);
-});
-
-baseTest("buildFinalizeReferendumInstruction rejects aliases and mismatch", () => {
-  const proposalId = "ab".repeat(32);
-  for (const [invalid, expectedError] of [
-    [{ referendumId: "ref-3", proposalId }, /64 lowercase hexadecimal characters/],
-    [
-      { referendumId: proposalId.toUpperCase(), proposalId },
-      /64 lowercase hexadecimal characters/,
-    ],
-    [
-      { referendumId: proposalId, proposalId: `0x${proposalId}` },
-      /64 lowercase hexadecimal characters/,
-    ],
-    [
-      { referendumId: proposalId, proposalId: proposalId.toUpperCase() },
-      /64 lowercase hexadecimal characters/,
-    ],
-    [
-      { referendumId: proposalId, proposalId: ` ${proposalId}` },
-      /surrounding whitespace/,
-    ],
-  ]) {
-    assert.throws(
-      () => buildFinalizeReferendumInstruction(invalid),
-      expectedError,
-    );
-  }
-  assert.throws(
-    () =>
-      buildFinalizeReferendumInstruction({
-        referendumId: proposalId,
-        proposalId: Buffer.alloc(32, 0x67),
-      }),
-    /referendumId must equal proposalId/,
-  );
 });
 
 test("buildPersistCouncilForEpochInstruction validates members", () => {
@@ -3172,6 +3082,7 @@ descriptorTest("retired generic confidential instructions stay absent from build
     assert.equal(noritoSource.includes(wireId), false, wireId);
   }
 });
+
 test("buildCreateElectionInstruction normalizes verifying keys", () => {
   const instruction = buildCreateElectionInstruction({
     electionId: "election-1",

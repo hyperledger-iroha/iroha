@@ -129,31 +129,6 @@
     "path": "waitForIsoMessageStatus.options.retryProfile",
     "message": "waitForIsoMessageStatus.options.retryProfile must not be empty"
   },
-  "governanceFinalizeReferendum_referendum_required": {
-    "code": "ERR_INVALID_STRING",
-    "path": "governanceFinalizeReferendum.referendumId",
-    "message": "governanceFinalizeReferendum.referendumId is required"
-  },
-  "governanceFinalizeReferendum_proposal_required": {
-    "code": "ERR_INVALID_STRING",
-    "path": "governanceFinalizeReferendum.proposalId",
-    "message": "governanceFinalizeReferendum.proposalId is required"
-  },
-  "governanceEnactProposal_window_lower_required": {
-    "code": "ERR_INVALID_NUMERIC",
-    "path": "governanceEnactProposal.window.lower",
-    "message": "governanceEnactProposal.window.lower is required"
-  },
-  "governanceEnactProposal_window_upper_required": {
-    "code": "ERR_INVALID_NUMERIC",
-    "path": "governanceEnactProposal.window.upper",
-    "message": "governanceEnactProposal.window.upper is required"
-  },
-  "governanceEnactProposal_window_bounds": {
-    "code": "ERR_VALUE_OUT_OF_RANGE",
-    "path": "governanceEnactProposal.window.upper",
-    "message": "governanceEnactProposal.window.upper must be greater than or equal to lower"
-  },
   "getSorafsPorWeeklyReport_iso_week_empty": {
     "code": "ERR_INVALID_STRING",
     "path": "getSorafsPorWeeklyReport.isoWeek",

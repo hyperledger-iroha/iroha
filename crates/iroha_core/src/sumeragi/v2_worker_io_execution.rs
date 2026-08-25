@@ -135,10 +135,8 @@ fn recv_cleanup_completion(
     io: &V2IoHandle,
     deadline: Instant,
 ) -> Result<V2IoCompletion, CleanupCompletionWaitError> {
-    let remaining = deadline
-        .checked_duration_since(Instant::now())
-        .filter(|remaining| !remaining.is_zero())
-        .ok_or(CleanupCompletionWaitError::DeadlineElapsed)?;
+    // Zero remains a useful non-blocking poll for an already-buffered completion.
+    let remaining = deadline.saturating_duration_since(Instant::now());
     io.recv_completion_timeout(remaining)
         .map_err(|error| match error {
             mpsc::RecvTimeoutError::Timeout => CleanupCompletionWaitError::DeadlineElapsed,

@@ -6,8 +6,8 @@ JAVA_HOME_OVERRIDE="${PRIVACY_JVM_SDK_JAVA_HOME:-}"
 PYTHON_BIN="${PRIVACY_JVM_SDK_PYTHON_BIN:-python3}"
 CARGO_BIN="${PRIVACY_JVM_SDK_CARGO_BIN:-cargo}"
 RUSTC_BIN="${PRIVACY_JVM_SDK_RUSTC_BIN:-rustc}"
-FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492"
+FROZEN_CARGO_LOCK_SHA256="9d6421d36fde972b4ba31889d46f5e2231ac9241558455f9ba1be9c66e63a744"
+TRACKED_ROOT_CARGO_LOCK_SHA256="71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2"
 ABI22_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"
 JAVA_OUT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-java-sdk-test.XXXXXX")"
 NATIVE_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-jvm-native.XXXXXX")"
@@ -81,7 +81,7 @@ case "${HOST_TRIPLE}" in
   *) NATIVE_LIBRARY="${TARGET_ARTIFACT_DIR}/libconnect_norito_bridge.so" ;;
 esac
 [[ -f "${NATIVE_LIBRARY}" && ! -L "${NATIVE_LIBRARY}" ]] \
-  || fail "fresh ABI22 privacy JVM bridge is unavailable: ${NATIVE_LIBRARY}"
+  || fail "fresh ABI23 privacy JVM bridge is unavailable: ${NATIVE_LIBRARY}"
 NATIVE_LIBRARY_DIR="$(cd "$(dirname "${NATIVE_LIBRARY}")" && pwd -P)"
 NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi22.json"
 CSHARP_NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi22-csharp.json"

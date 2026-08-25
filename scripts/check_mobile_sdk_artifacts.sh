@@ -25,7 +25,7 @@ integration:
   - Kotlin/Android SDK modules are included and publishable; when Android
     outputs are required, raw cargo-ndk and generated stripped libraries match
     embedded provenance, and generated/AAR bytes are identical while binding
-    the exact ABI-22 feature state.
+    the exact ABI-23 feature state.
 
 By default Android build outputs are not required. Pass --require-built-android
 or set MOBILE_SDK_REQUIRE_ANDROID_OUTPUTS=1 to require jar/aar outputs too.
@@ -37,8 +37,9 @@ MOBILE_SDK_ALLOW_DIRTY_SOURCE=1) permits a local integration artifact only when
 its manifest dirty bit and exact dependency-closure fingerprint match.
 MOBILE_SDK_APPLE_ARTIFACT_DIR may point Apple validation at a staged artifact
 directory; it defaults to <root>/dist.
-Apple source authentication always binds <root>/Cargo.lock. Alternate lockfiles
-are not part of the first-release artifact contract.
+Apple source authentication binds <root>/Cargo.lock by default. The privacy SDK
+release corridor may select its authenticated external Cargo.lock through
+IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH.
 Source authentication requires Python 3.12, exact Rust 1.93.1 RUSTC/RUSTDOC,
 and an explicit canonical writable CARGO_TARGET_DIR outside the Iroha source
 tree. The reviewed envelope uses CARGO_BUILD_JOBS=1, CARGO_INCREMENTAL=0,
@@ -124,7 +125,15 @@ if [[ -n "${MOBILE_SDK_APPLE_CARGO_LOCK_PATH+x}" ]]; then
   echo "[mobile-sdk-artifacts] ERROR: MOBILE_SDK_APPLE_CARGO_LOCK_PATH is not part of the first-release artifact contract" >&2
   exit 64
 fi
-APPLE_CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
+if [[ -n "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH+x}" ]]; then
+  if [[ -z "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH}" ]]; then
+    echo "[mobile-sdk-artifacts] ERROR: IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH must not be empty" >&2
+    exit 64
+  fi
+  APPLE_CARGO_LOCKFILE="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH}"
+else
+  APPLE_CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
+fi
 
 resolve_trusted_python312() {
   local candidate canonical
@@ -508,7 +517,7 @@ KAGEMUSHA_CANDIDATE_LAB_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeRedeemV4
 )
 
-# The first mobile release is one exact ABI-22/V4 contract. Keep the complete
+# The first mobile release is one exact ABI-23/V4 contract. Keep the complete
 # Kagemusha C export allow-list here so Apple archives, Android shared objects,
 # checked-out Rust, and the checked-in header are all compared against the same
 # surface. V2 suffixes below are unchanged note, authorization, membership, and
@@ -1636,11 +1645,11 @@ non_single_shipping = sorted(
 if (
     len(abi_aliases) != 1
     or abi_aliases[0].group(1).strip() != "PRIVACY_BRIDGE_ABI_VERSION_V1"
-    or header_abis != ["22"]
+    or header_abis != ["23"]
     or protocol_abis != header_abis
 ):
     errors.append(
-        "bridge ABI must be exact public-header 22 with the canonical Rust alias "
+        "bridge ABI must be exact public-header 23 with the canonical Rust alias "
         "and privacy protocol constant"
     )
 missing = sorted(expected - actual)
@@ -1919,7 +1928,7 @@ for label, actual, expected in inventories:
     retired_or_extra = sorted(actual - expected)
     if missing or retired_or_extra:
         errors.append(
-            f"Swift Kagemusha {label} inventory is not exact ABI-22/V4 "
+            f"Swift Kagemusha {label} inventory is not exact ABI-23/V4 "
             f"(missing={missing}, retired_or_unexpected={retired_or_extra})"
         )
 if re.search(r"\bpublic\s+(?:struct|enum|class|typealias|protocol)\s+[A-Za-z0-9_]*V3\b", text):
@@ -2041,7 +2050,7 @@ for path in paths:
         retired_or_extra = sorted(actual - expected)
         if missing or retired_or_extra:
             errors.append(
-                f"{path}: {label} inventory is not exact ABI-22/V4 "
+                f"{path}: {label} inventory is not exact ABI-23/V4 "
                 f"(missing={missing}, retired_or_unexpected={retired_or_extra})"
             )
     if re.search(r"\b(?:data\s+class|class|interface|record|enum)\s+[A-Za-z0-9_]*V3\b", text):
@@ -2547,7 +2556,7 @@ PY
       fi
     done
 
-    require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*22([[:space:]]*[,}])' "exact first-release NoritoBridge ABI 22"
+    require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*23([[:space:]]*[,}])' "exact first-release NoritoBridge ABI 23"
     require_regex "$manifest" '"source_commit"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{40}"' "NoritoBridge source commit"
     require_regex "$manifest" '"source_tree_dirty"[[:space:]]*:[[:space:]]*(true|false)' "NoritoBridge source dirty state"
     require_regex "$manifest" '"source_fingerprint_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge source fingerprint"
@@ -2670,7 +2679,7 @@ protocol_abis = re.findall(
     re.MULTILINE,
 )
 if (
-    header_abis != ["22"]
+    header_abis != ["23"]
     or bridge_aliases != ["PRIVACY_BRIDGE_ABI_VERSION_V1"]
     or protocol_abis != header_abis
 ):
@@ -2679,8 +2688,8 @@ print(header_abis[0])
 PY
 )" || source_abi=""
       manifest_abi="$(manifest_json_value "$manifest" native_bridge_abi_version 2>/dev/null || true)"
-      if [[ "$source_abi" != "22" || "$manifest_abi" != "22" ]]; then
-        fail "NoritoBridge artifact ABI must match exact public-header 22, canonical Rust alias, and privacy protocol constant"
+      if [[ "$source_abi" != "23" || "$manifest_abi" != "23" ]]; then
+        fail "NoritoBridge artifact ABI must match exact public-header 23, canonical Rust alias, and privacy protocol constant"
       fi
       manifest_commit="$(manifest_json_value "$manifest" source_commit 2>/dev/null || true)"
       source_relationship="$(
@@ -2911,7 +2920,7 @@ retired_or_extra = sorted(actual - expected)
 if missing:
     print(
         f"[mobile-sdk-artifacts] ERROR: client-android {abi} bridge is missing "
-        "ABI22/V4 symbols: " + ", ".join(missing),
+        "ABI23/V4 symbols: " + ", ".join(missing),
         file=sys.stderr,
     )
 if retired_or_extra:
@@ -3177,8 +3186,8 @@ with archive:
         )
     if manifest["schema"] != "iroha.android-native-build-provenance.v1":
         fail("client-android native provenance schema is not v1")
-    if type(manifest["native_bridge_abi_version"]) is not int or manifest["native_bridge_abi_version"] != 22:
-        fail("client-android native provenance does not bind exact ABI 22")
+    if type(manifest["native_bridge_abi_version"]) is not int or manifest["native_bridge_abi_version"] != 23:
+        fail("client-android native provenance does not bind exact ABI 23")
     if manifest["build_profile"] != "release" or manifest["cargo_locked"] is not True:
         fail("client-android native provenance must bind a locked Cargo release build")
     production = manifest["privacy_production_enabled"]

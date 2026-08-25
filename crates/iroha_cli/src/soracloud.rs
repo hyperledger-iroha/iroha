@@ -43,17 +43,20 @@ use iroha::{
             SORA_APP_INFRA_SERVICE_REF_VERSION_V1, SORA_APP_ROUTE_PROJECTION_VERSION_V1,
             SORA_APP_STATIC_SITE_BINDING_VERSION_V1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
             SORA_INROU_MANIFEST_VERSION_V1, SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
-            SORA_STATE_BINDING_VERSION_V1, SecretEnvelopeV1, SoraAppInfraManifestV1,
-            SoraAppInfraServiceRefV1, SoraAppRouteProjectionV1, SoraAppStaticSiteBindingV1,
-            SoraArtifactDistributionPolicyV1, SoraArtifactKindV1, SoraArtifactRefV1,
-            SoraCertifiedResponsePolicyV1, SoraConfigExportV1, SoraContainerManifestV1,
+            SORA_STATE_BINDING_VERSION_V1, SecretEnvelopeV1,
+            SoraAppInfraExactCurrentRevisionPreconditionV1, SoraAppInfraManifestV1,
+            SoraAppInfraMutationPreconditionV1, SoraAppInfraServiceRefV1, SoraAppRouteProjectionV1,
+            SoraAppStaticSiteBindingV1, SoraArtifactDistributionPolicyV1, SoraArtifactKindV1,
+            SoraArtifactRefV1, SoraCertifiedResponsePolicyV1, SoraConfigExportV1,
+            SoraContainerManifestV1,
             SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
             SoraHfModelFormatV1, SoraInrouGuestIsaV1, SoraInrouGuestOsV1, SoraInrouManifestV1,
             SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1, SoraMailboxContractV1,
             SoraModelHostCapabilityRecordV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
             SoraPublishedInrouGuestImageArtifactV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
-            SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-            SoraServiceLeaseStatusV1, SoraServiceManifestV1, SoraStateBindingV1,
+            SoraServiceExactCurrentRevisionPreconditionV1, SoraServiceExecutionPlaneV1,
+            SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1,
+            SoraServiceLeaseStatusV1, SoraServiceMutationPreconditionV1, SoraStateBindingV1,
             SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
             SoraUploadedModelBundleV1, encode_agent_artifact_allow_provenance_payload,
             encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
@@ -89,7 +92,7 @@ use iroha::{
     },
 };
 use iroha_core::soracloud_runtime::{
-    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
+    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_BLOCKS,
     build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
 };
 use iroha_crypto::{Hash, KeyPair, Signature};
@@ -191,8 +194,7 @@ const TAIRA_INROU_STAGE_SOURCE_MANIFEST_MAX_BYTES_V1: u64 = 1024 * 1024;
 const TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1: u64 = 10 * 1024 * 1024 * 1024;
 const TAIRA_INROU_STAGE_STREAM_BUFFER_BYTES: usize = 1024 * 1024;
 const TAIRA_INROU_CANARY_SERVICE_NAME_V1: &str = "taira_inrou_canary";
-const TAIRA_INROU_CANARY_DEPLOY_VERSION_V1: &str = "1.0.0";
-const TAIRA_INROU_CANARY_UPGRADE_VERSION_V1: &str = "1.0.1";
+const TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1: &str = "artifact-";
 const TAIRA_INROU_CANARY_ROUTE_HOST_V1: &str = "taira-inrou-canary.sora";
 const TAIRA_INROU_CANARY_ROUTE_PREFIX_V1: &str = "/api/v1";
 const TAIRA_INROU_CANARY_SERVICE_PORT_V1: u16 = 8787;
@@ -1703,6 +1705,78 @@ impl AppDeployArgs {
         )?;
         let routes = build_app_local_plan_output(&manifest_path)?.routes;
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
+        let app_version = manifest
+            .app_version
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                eyre!(
+                    "live app deploy/upgrade requires an explicit `app_version` so the authoritative app preflight can reject replays before artifact publication"
+                )
+            })?;
+        let (_, app_preflight_status) = fetch_torii_soracloud_app_infra_status(
+            &torii_url,
+            None,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        let app_precondition = derive_app_infra_mutation_precondition(
+            &app_preflight_status,
+            &manifest.app_name,
+            app_version,
+            mode,
+            "Soracloud app infra",
+        )?;
+        let (_, service_preflight_status) = fetch_torii_soracloud_status(
+            &torii_url,
+            None,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        let planned_service_mutations = manifest
+            .services
+            .iter()
+            .map(|service| {
+                let container_manifest =
+                    resolve_manifest_path(&manifest_dir, &service.container_manifest);
+                let service_manifest =
+                    resolve_manifest_path(&manifest_dir, &service.service_manifest);
+                let container: SoraContainerManifestV1 = load_json(&container_manifest)?;
+                let service_manifest_payload: SoraServiceManifestV1 = load_json(&service_manifest)?;
+                ensure_app_service_ref_matches_manifest_name(
+                    &service.service_name,
+                    &service_manifest,
+                    &service_manifest_payload,
+                )?;
+                let bundle = SoraDeploymentBundleV1 {
+                    schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+                    container,
+                    service: service_manifest_payload,
+                };
+                bundle.validate_for_admission()?;
+                let precondition = derive_service_mutation_precondition(
+                    &service_preflight_status,
+                    &service.service_name,
+                    &bundle.service.service_version,
+                    mode,
+                    "Soracloud app service",
+                )?;
+                preflight_service_upgrade_identity(
+                    &service_preflight_status,
+                    &bundle,
+                    mode,
+                    "Soracloud app service",
+                )?;
+                Ok((
+                    service,
+                    container_manifest,
+                    service_manifest,
+                    bundle,
+                    precondition,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let mode_label = match mode {
             MutationMode::Deploy => "deploy",
             MutationMode::Upgrade => "upgrade",
@@ -1735,23 +1809,9 @@ impl AppDeployArgs {
         let mut app_infra_bundles = Vec::with_capacity(manifest.services.len());
         let mut hosted_http_service_count = 0_u32;
         let mut deterministic_service_count = 0_u32;
-        for service in manifest.services.iter() {
-            let container_manifest =
-                resolve_manifest_path(&manifest_dir, &service.container_manifest);
-            let service_manifest = resolve_manifest_path(&manifest_dir, &service.service_manifest);
-            let container: SoraContainerManifestV1 = load_json(&container_manifest)?;
-            let service_manifest_payload: SoraServiceManifestV1 = load_json(&service_manifest)?;
-            ensure_app_service_ref_matches_manifest_name(
-                &service.service_name,
-                &service_manifest,
-                &service_manifest_payload,
-            )?;
-            let bundle = SoraDeploymentBundleV1 {
-                schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-                container,
-                service: service_manifest_payload,
-            };
-            bundle.validate_for_admission()?;
+        for (service, container_manifest, service_manifest, bundle, precondition) in
+            planned_service_mutations
+        {
             let is_hosted_http = bundle.service.execution_plane
                 == SoraServiceExecutionPlaneV1::HttpService
                 && bundle.container.runtime == SoraContainerRuntimeV1::Inrou;
@@ -1845,6 +1905,7 @@ impl AppDeployArgs {
                 bundle,
                 initial_service_configs,
                 initial_service_secrets,
+                precondition,
                 Some(authority),
                 key_pair,
             )?;
@@ -1904,6 +1965,7 @@ impl AppDeployArgs {
             mode,
             app_infra_manifest,
             signed_service_requests.clone(),
+            app_precondition,
             key_pair,
         )?;
         let app_infra_response = run_app_infra_mutation(
@@ -2827,6 +2889,7 @@ impl AppSimulateArgs {
             MutationMode::Deploy,
             app_infra_manifest,
             Vec::new(),
+            SoraAppInfraMutationPreconditionV1::AppAbsent,
             key_pair,
         )?;
         let app_infra_request_value = json::to_value(&app_infra_request)
@@ -4210,6 +4273,26 @@ macro_rules! impl_service_bundle_mutation {
                 let initial_service_secrets =
                     load_initial_service_secrets(self.initial_secrets.as_deref())?;
                 let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
+                let service_name = bundle.service.service_name.to_string();
+                let (_, preflight_status) = fetch_torii_soracloud_status(
+                    &torii_url,
+                    Some(&service_name),
+                    self.api_token.as_deref(),
+                    self.timeout_secs,
+                )?;
+                let precondition = derive_service_mutation_precondition(
+                    &preflight_status,
+                    &service_name,
+                    &bundle.service.service_version,
+                    mode,
+                    "Soracloud service",
+                )?;
+                preflight_service_upgrade_identity(
+                    &preflight_status,
+                    &bundle,
+                    mode,
+                    "Soracloud service",
+                )?;
                 let workspace_dir = direct_service_artifact_workspace_dir(
                     &self.container,
                     &self.service,
@@ -4238,6 +4321,7 @@ macro_rules! impl_service_bundle_mutation {
                     bundle,
                     initial_service_configs,
                     initial_service_secrets,
+                    precondition,
                     &torii_url,
                     self.api_token.as_deref(),
                     self.timeout_secs,
@@ -4738,7 +4822,7 @@ define_live_mutation_args! {
         manifest: PathBuf,
         /// Lease length, measured in deterministic control-plane sequence ticks.
         #[arg(long, value_name = "TICKS", default_value_t = 120)]
-        lease_ticks: u64,
+        lease_blocks: u64,
         /// Initial autonomy execution budget units.
         #[arg(long, value_name = "UNITS", default_value_t = AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS)]
         autonomy_budget_units: u64,
@@ -4746,7 +4830,7 @@ define_live_mutation_args! {
 }
 impl AgentDeployArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        if self.lease_ticks == 0 {
+        if self.lease_blocks == 0 {
             return Err(eyre!("--lease-ticks must be greater than zero"));
         }
         if self.autonomy_budget_units == 0 {
@@ -4758,7 +4842,7 @@ impl AgentDeployArgs {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_agent_deploy_request(
             manifest,
-            self.lease_ticks,
+            self.lease_blocks,
             self.autonomy_budget_units,
             authority,
             key_pair,
@@ -4783,18 +4867,18 @@ define_live_mutation_args! {
         apartment_name: String,
         /// Lease extension ticks.
         #[arg(long, value_name = "TICKS", default_value_t = 120)]
-        lease_ticks: u64,
+        lease_blocks: u64,
     }
 }
 impl AgentLeaseRenewArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        if self.lease_ticks == 0 {
+        if self.lease_blocks == 0 {
             return Err(eyre!("--lease-ticks must be greater than zero"));
         }
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_agent_lease_renew_request(
             &self.apartment_name,
-            self.lease_ticks,
+            self.lease_blocks,
             authority,
             key_pair,
         )?;
@@ -6439,12 +6523,6 @@ impl MutationMode {
             Self::Upgrade => "upgrade.sh",
         }
     }
-    const fn taira_service_version(self) -> &'static str {
-        match self {
-            Self::Deploy => TAIRA_INROU_CANARY_DEPLOY_VERSION_V1,
-            Self::Upgrade => TAIRA_INROU_CANARY_UPGRADE_VERSION_V1,
-        }
-    }
 }
 impl From<crate::taira::InrouCanaryMode> for MutationMode {
     fn from(mode: crate::taira::InrouCanaryMode) -> Self {
@@ -6575,7 +6653,7 @@ fn canonical_taira_inrou_canary_deploy_bundle() -> Result<(SoraDeploymentBundleV
     inrou.ssh_authorized_keys.clear();
 
     service.service_name = service_name;
-    service.service_version = TAIRA_INROU_CANARY_DEPLOY_VERSION_V1.to_owned();
+    service.service_version = "staging-placeholder".to_owned();
     service.rollout.canary_percent = 100;
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     service.replicas = NonZeroU16::new(4).expect("four replicas");
@@ -6610,12 +6688,13 @@ fn canonical_taira_inrou_canary_deploy_bundle() -> Result<(SoraDeploymentBundleV
     ];
     service.container.manifest_hash = Hash::new(Encode::encode(&container));
     service.container.expected_schema_version = container.schema_version;
-    let bundle = SoraDeploymentBundleV1 {
+    let mut bundle = SoraDeploymentBundleV1 {
         schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
         container,
         service,
     };
-    validate_taira_inrou_canary_bundle(&bundle, MutationMode::Deploy)?;
+    install_taira_inrou_canary_service_version(&mut bundle)?;
+    validate_taira_inrou_canary_bundle(&bundle)?;
     validate_taira_inrou_canary_bundle_payload(&bundle_payload)?;
     Ok((bundle, bundle_payload))
 }
@@ -6723,17 +6802,10 @@ fn validate_taira_inrou_canary_container(container: &SoraContainerManifestV1) ->
     }
     Ok(())
 }
-fn validate_taira_inrou_canary_service(
-    service: &SoraServiceManifestV1,
-    mode: MutationMode,
-) -> Result<()> {
-    let expected_version = mode.taira_service_version();
-    if service.service_name.as_ref() != TAIRA_INROU_CANARY_SERVICE_NAME_V1
-        || service.service_version != expected_version
-    {
+fn validate_taira_inrou_canary_service(service: &SoraServiceManifestV1) -> Result<()> {
+    if service.service_name.as_ref() != TAIRA_INROU_CANARY_SERVICE_NAME_V1 {
         return Err(eyre!(
-            "Taira Inrou {} canary requires canonical service identity `{TAIRA_INROU_CANARY_SERVICE_NAME_V1}` version `{expected_version}`",
-            mode.label_lowercase()
+            "Taira Inrou canary requires canonical service identity `{TAIRA_INROU_CANARY_SERVICE_NAME_V1}`"
         ));
     }
     if service.replicas.get() != 4 {
@@ -6769,6 +6841,22 @@ fn validate_taira_inrou_canary_service(
             "Taira Inrou canary requires rollout.canary_percent = 100 so upgrades promote atomically without doubling four-replica placement demand"
         ));
     }
+    Ok(())
+}
+fn derive_taira_inrou_canary_service_version(bundle: &SoraDeploymentBundleV1) -> Result<String> {
+    let mut revision_seed = bundle.clone();
+    revision_seed.service.service_version.clear();
+    let revision_digest = Hash::new(
+        json::to_vec(&revision_seed)
+            .wrap_err("encode the canonical Taira Inrou revision identity")?,
+    );
+    Ok(format!(
+        "{TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1}{}",
+        hex::encode(revision_digest.as_ref())
+    ))
+}
+fn install_taira_inrou_canary_service_version(bundle: &mut SoraDeploymentBundleV1) -> Result<()> {
+    bundle.service.service_version = derive_taira_inrou_canary_service_version(bundle)?;
     Ok(())
 }
 fn validate_taira_inrou_canary_storage(
@@ -6815,10 +6903,7 @@ fn validate_taira_inrou_canary_storage(
     }
     Ok(())
 }
-fn validate_taira_inrou_canary_bundle(
-    bundle: &SoraDeploymentBundleV1,
-    mode: MutationMode,
-) -> Result<()> {
+fn validate_taira_inrou_canary_bundle(bundle: &SoraDeploymentBundleV1) -> Result<()> {
     bundle.validate_for_admission()?;
     if bundle.container.runtime != SoraContainerRuntimeV1::Inrou
         || bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
@@ -6828,8 +6913,14 @@ fn validate_taira_inrou_canary_bundle(
         ));
     }
     validate_taira_inrou_canary_container(&bundle.container)?;
-    validate_taira_inrou_canary_service(&bundle.service, mode)?;
+    validate_taira_inrou_canary_service(&bundle.service)?;
     validate_taira_inrou_canary_storage(&bundle.container, &bundle.service)?;
+    let expected_service_version = derive_taira_inrou_canary_service_version(bundle)?;
+    if bundle.service.service_version != expected_service_version {
+        return Err(eyre!(
+            "Taira Inrou canary service version must be the exact artifact-derived revision `{expected_service_version}`"
+        ));
+    }
     Ok(())
 }
 fn validate_taira_inrou_canary_source_bundle(bundle: &SoraDeploymentBundleV1) -> Result<()> {
@@ -7478,7 +7569,7 @@ fn validate_generated_taira_inrou_workspace(output_dir: &Path) -> Result<()> {
         container,
         service,
     };
-    validate_taira_inrou_canary_bundle(&bundle, MutationMode::Deploy)?;
+    validate_taira_inrou_canary_bundle(&bundle)?;
     let bundle_payload = taira_stage_regular_file_bytes(
         &bundle_path,
         "Taira Inrou workspace bundle",
@@ -8020,12 +8111,9 @@ pub(crate) fn stage_taira_inrou_canary_deployment(
         container,
         service,
     };
-    // Both stages are derived from one canonical 1.0.0 source template.  The
-    // stage owns the only allowed version transition so callers cannot smuggle
-    // an arbitrary revision into the release canary.
-    validate_taira_inrou_canary_bundle(&bundle, MutationMode::Deploy)?;
+    install_taira_inrou_canary_service_version(&mut bundle)?;
+    validate_taira_inrou_canary_bundle(&bundle)?;
     validate_taira_inrou_canary_source_bundle(&bundle)?;
-    bundle.service.service_version = mode.taira_service_version().to_owned();
     reject_prepublished_inrou_guest_images(&bundle)?;
     let bundle_bytes = taira_stage_regular_file_bytes(
         bundle_file,
@@ -8153,7 +8241,8 @@ pub(crate) fn stage_taira_inrou_canary_deployment(
             distribution,
         });
         bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-        validate_taira_inrou_canary_bundle(&bundle, mode)?;
+        install_taira_inrou_canary_service_version(&mut bundle)?;
+        validate_taira_inrou_canary_bundle(&bundle)?;
         let container_manifest_hash = bundle.container_manifest_hash().to_string();
         let service_manifest_hash = bundle.service_manifest_hash().to_string();
         write_taira_stage_json(
@@ -8243,12 +8332,13 @@ fn validate_taira_stage_layout(
         ));
     }
     if receipt.mutation_mode != expected_mode.label_lowercase()
-        || receipt.service_version != expected_mode.taira_service_version()
+        || !receipt
+            .service_version
+            .starts_with(TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1)
     {
         return Err(eyre!(
-            "Taira Inrou stage must be exact {} revision `{}`, found mode `{}` revision `{}`",
+            "Taira Inrou stage must be an artifact-derived {} revision, found mode `{}` revision `{}`",
             expected_mode.label_lowercase(),
-            expected_mode.taira_service_version(),
             receipt.mutation_mode,
             receipt.service_version
         ));
@@ -8564,7 +8654,7 @@ fn load_verified_taira_inrou_stage(
         container,
         service,
     };
-    validate_taira_inrou_canary_bundle(&bundle, expected_mode)?;
+    validate_taira_inrou_canary_bundle(&bundle)?;
     let image = bundle
         .container
         .inrou
@@ -8655,6 +8745,8 @@ fn load_verified_taira_inrou_stage(
 pub(crate) struct TairaInrouCanaryDeployment {
     pub service_name: String,
     pub service_version: String,
+    pub service_manifest_hash: String,
+    pub container_manifest_hash: String,
     pub route_host: String,
     pub route_path_prefix: String,
     pub healthcheck_path: String,
@@ -8666,6 +8758,335 @@ pub(crate) struct TairaInrouCanaryDeployment {
     pub guest_manifest_digest_hex: String,
     pub submitted_tx_hash: String,
     pub mutation_response_digest: String,
+}
+fn derive_service_mutation_precondition(
+    status: &norito::json::Value,
+    service_name: &str,
+    service_version: &str,
+    mode: MutationMode,
+    context: &str,
+) -> Result<SoraServiceMutationPreconditionV1> {
+    let services = status
+        .get("control_plane")
+        .and_then(norito::json::Value::as_object)
+        .and_then(|control_plane| control_plane.get("services"))
+        .and_then(norito::json::Value::as_array)
+        .ok_or_else(|| eyre!("{context} mutation preflight is missing control-plane services"))?;
+    let mut matching = services.iter().filter(|service| {
+        service
+            .get("service_name")
+            .and_then(norito::json::Value::as_str)
+            == Some(service_name)
+    });
+    let current = matching.next();
+    if matching.next().is_some() {
+        return Err(eyre!(
+            "{context} mutation preflight found duplicate service `{service_name}` snapshots"
+        ));
+    }
+    match (mode, current) {
+        (MutationMode::Deploy, None) => Ok(SoraServiceMutationPreconditionV1::ServiceAbsent),
+        (MutationMode::Deploy, Some(_)) => Err(eyre!(
+            "{context} deploy requires service `{service_name}` to be absent before artifact publication"
+        )),
+        (MutationMode::Upgrade, None) => Err(eyre!(
+            "{context} upgrade requires service `{service_name}` to exist before artifact publication"
+        )),
+        (MutationMode::Upgrade, Some(service)) => {
+            let current_version = service
+                .get("current_version")
+                .and_then(norito::json::Value::as_str)
+                .filter(|version| !version.trim().is_empty())
+                .ok_or_else(|| {
+                    eyre!(
+                        "{context} upgrade preflight found no current version for service `{service_name}`"
+                    )
+                })?;
+            if current_version == service_version {
+                return Err(eyre!(
+                    "{context} upgrade refuses already-current immutable revision `{service_version}` before artifact publication"
+                ));
+            }
+            if service
+                .get("active_rollout")
+                .is_some_and(|rollout| !matches!(rollout, norito::json::Value::Null))
+            {
+                return Err(eyre!(
+                    "{context} upgrade refuses to supersede the active rollout for service `{service_name}` before artifact publication"
+                ));
+            }
+            let revision = service
+                .get("latest_revision")
+                .and_then(norito::json::Value::as_object)
+                .ok_or_else(|| {
+                    eyre!(
+                        "{context} upgrade preflight found no exact current revision for service `{service_name}`"
+                    )
+                })?;
+            let revision_version = revision
+                .get("service_version")
+                .and_then(norito::json::Value::as_str)
+                .filter(|version| !version.trim().is_empty())
+                .ok_or_else(|| {
+                    eyre!(
+                        "{context} upgrade preflight found no exact revision version for service `{service_name}`"
+                    )
+                })?;
+            if revision_version != current_version {
+                return Err(eyre!(
+                    "{context} upgrade preflight current version and latest revision disagree for service `{service_name}`"
+                ));
+            }
+            let service_manifest_hash = revision
+                .get("service_manifest_hash")
+                .and_then(norito::json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    eyre!(
+                        "{context} upgrade preflight found no service manifest hash for service `{service_name}`"
+                    )
+                })?
+                .parse::<Hash>()
+                .wrap_err_with(|| {
+                    format!(
+                        "{context} upgrade preflight found an invalid service manifest hash for service `{service_name}`"
+                    )
+                })?;
+            let container_manifest_hash = revision
+                .get("container_manifest_hash")
+                .and_then(norito::json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    eyre!(
+                        "{context} upgrade preflight found no container manifest hash for service `{service_name}`"
+                    )
+                })?
+                .parse::<Hash>()
+                .wrap_err_with(|| {
+                    format!(
+                        "{context} upgrade preflight found an invalid container manifest hash for service `{service_name}`"
+                    )
+                })?;
+            let process_generation = revision
+                .get("process_generation")
+                .and_then(norito::json::Value::as_u64)
+                .filter(|generation| *generation > 0)
+                .ok_or_else(|| {
+                    eyre!(
+                        "{context} upgrade preflight found no positive process generation for service `{service_name}`"
+                    )
+                })?;
+            let config_generation = service
+                .get("config_generation")
+                .and_then(norito::json::Value::as_u64)
+                .ok_or_else(|| {
+                    eyre!(
+                        "{context} upgrade preflight found no config generation for service `{service_name}`"
+                    )
+                })?;
+            let secret_generation = service
+                .get("secret_generation")
+                .and_then(norito::json::Value::as_u64)
+                .ok_or_else(|| {
+                    eyre!(
+                        "{context} upgrade preflight found no secret generation for service `{service_name}`"
+                    )
+                })?;
+            Ok(SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+                SoraServiceExactCurrentRevisionPreconditionV1 {
+                    service_version: current_version.to_owned(),
+                    service_manifest_hash,
+                    container_manifest_hash,
+                    process_generation,
+                    config_generation,
+                    secret_generation,
+                },
+            ))
+        }
+    }
+}
+fn derive_app_infra_mutation_precondition(
+    status: &norito::json::Value,
+    app_name: &str,
+    app_version: &str,
+    mode: MutationMode,
+    context: &str,
+) -> Result<SoraAppInfraMutationPreconditionV1> {
+    let apps = status
+        .get("apps")
+        .and_then(norito::json::Value::as_array)
+        .ok_or_else(|| eyre!("{context} mutation preflight is missing authoritative apps"))?;
+    let mut matching = apps
+        .iter()
+        .filter(|app| app.get("app_name").and_then(norito::json::Value::as_str) == Some(app_name));
+    let current = matching.next();
+    if matching.next().is_some() {
+        return Err(eyre!(
+            "{context} mutation preflight found duplicate app `{app_name}` snapshots"
+        ));
+    }
+    match (mode, current) {
+        (MutationMode::Deploy, None) => Ok(SoraAppInfraMutationPreconditionV1::AppAbsent),
+        (MutationMode::Deploy, Some(_)) => Err(eyre!(
+            "{context} deploy requires app `{app_name}` to be absent before artifact publication"
+        )),
+        (MutationMode::Upgrade, None) => Err(eyre!(
+            "{context} upgrade requires app `{app_name}` to exist before artifact publication"
+        )),
+        (MutationMode::Upgrade, Some(app)) => {
+            let current_app_version = app
+                .get("current_app_version")
+                .and_then(norito::json::Value::as_str)
+                .filter(|version| !version.trim().is_empty())
+                .ok_or_else(|| {
+                    eyre!(
+                        "{context} upgrade preflight found no current version for app `{app_name}`"
+                    )
+                })?;
+            if current_app_version == app_version {
+                return Err(eyre!(
+                    "{context} upgrade refuses already-current app revision `{app_version}` before artifact publication"
+                ));
+            }
+            let manifest_hash = app
+                .get("current_manifest_hash")
+                .and_then(norito::json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    eyre!(
+                        "{context} upgrade preflight found no current manifest hash for app `{app_name}`"
+                    )
+                })?
+                .parse::<Hash>()
+                .wrap_err_with(|| {
+                    format!(
+                        "{context} upgrade preflight found an invalid manifest hash for app `{app_name}`"
+                    )
+                })?;
+            let revision_count = app
+                .get("revision_count")
+                .and_then(norito::json::Value::as_u64)
+                .and_then(|count| u32::try_from(count).ok())
+                .filter(|count| *count > 0)
+                .ok_or_else(|| {
+                    eyre!(
+                        "{context} upgrade preflight found no positive revision count for app `{app_name}`"
+                    )
+                })?;
+            Ok(SoraAppInfraMutationPreconditionV1::ExactCurrentRevision(
+                SoraAppInfraExactCurrentRevisionPreconditionV1 {
+                    app_version: current_app_version.to_owned(),
+                    manifest_hash,
+                    revision_count,
+                },
+            ))
+        }
+    }
+}
+fn preflight_taira_inrou_mutation_target(
+    status: &norito::json::Value,
+    service_name: &str,
+    service_version: &str,
+    mode: MutationMode,
+) -> Result<SoraServiceMutationPreconditionV1> {
+    derive_service_mutation_precondition(status, service_name, service_version, mode, "Taira Inrou")
+}
+fn status_tagged_enum_name<'a>(value: &'a norito::json::Value, field: &str) -> Option<&'a str> {
+    value.as_object()?.get(field)?.as_str()
+}
+fn preflight_service_upgrade_identity(
+    status: &norito::json::Value,
+    bundle: &SoraDeploymentBundleV1,
+    mode: MutationMode,
+    context: &str,
+) -> Result<()> {
+    if mode == MutationMode::Deploy {
+        return Ok(());
+    }
+    let service_name = bundle.service.service_name.as_ref();
+    let service = status
+        .get("control_plane")
+        .and_then(norito::json::Value::as_object)
+        .and_then(|control_plane| control_plane.get("services"))
+        .and_then(norito::json::Value::as_array)
+        .and_then(|services| {
+            services.iter().find(|service| {
+                service
+                    .get("service_name")
+                    .and_then(norito::json::Value::as_str)
+                    == Some(service_name)
+            })
+        })
+        .ok_or_else(|| {
+            eyre!(
+                "{context} upgrade preflight found no authoritative service identity for `{service_name}`"
+            )
+        })?;
+    let revision = service
+        .get("latest_revision")
+        .and_then(norito::json::Value::as_object)
+        .ok_or_else(|| {
+            eyre!(
+                "{context} upgrade preflight found no authoritative route identity for service `{service_name}`"
+            )
+        })?;
+    let expected_execution_plane = format!("{:?}", bundle.service.execution_plane);
+    let expected_runtime = format!("{:?}", bundle.container.runtime);
+    let execution_identity_matches = revision
+        .get("execution_plane")
+        .and_then(|value| status_tagged_enum_name(value, "execution_plane"))
+        == Some(expected_execution_plane.as_str())
+        && revision
+            .get("runtime")
+            .and_then(|value| status_tagged_enum_name(value, "runtime"))
+            == Some(expected_runtime.as_str());
+    let route_identity_matches = bundle.service.route.as_ref().map_or_else(
+        || {
+            [
+                "route_host",
+                "route_path_prefix",
+                "route_service_port",
+                "route_visibility",
+                "route_tls_mode",
+            ]
+            .iter()
+            .all(|field| {
+                revision
+                    .get(*field)
+                    .is_none_or(|value| matches!(value, norito::json::Value::Null))
+            })
+        },
+        |route| {
+            let expected_visibility = format!("{:?}", route.visibility);
+            let expected_tls_mode = format!("{:?}", route.tls_mode);
+            revision
+                .get("route_host")
+                .and_then(norito::json::Value::as_str)
+                == Some(route.host.as_str())
+                && revision
+                    .get("route_path_prefix")
+                    .and_then(norito::json::Value::as_str)
+                    == Some(route.path_prefix.as_str())
+                && revision
+                    .get("route_service_port")
+                    .and_then(norito::json::Value::as_u64)
+                    == Some(u64::from(route.service_port.get()))
+                && revision
+                    .get("route_visibility")
+                    .and_then(norito::json::Value::as_str)
+                    == Some(expected_visibility.as_str())
+                && revision
+                    .get("route_tls_mode")
+                    .and_then(norito::json::Value::as_str)
+                    == Some(expected_tls_mode.as_str())
+        },
+    );
+    if !execution_identity_matches || !route_identity_matches {
+        return Err(eyre!(
+            "{context} upgrade cannot change route identity, execution plane, or container runtime for service `{service_name}` before artifact publication"
+        ));
+    }
+    Ok(())
 }
 fn require_taira_inrou_submitted_mutation(response: &json::Value) -> Result<String> {
     let root = response
@@ -8728,6 +9149,20 @@ pub(crate) fn run_taira_inrou_canary_deployment(
     });
     let authority = &config.account;
     let key_pair = &config.key_pair;
+    let service_name = staged.bundle.service.service_name.to_string();
+    let (_, status) = fetch_torii_soracloud_status(
+        &torii_url,
+        Some(&service_name),
+        api_token.as_deref(),
+        timeout_secs,
+    )?;
+    let precondition = preflight_taira_inrou_mutation_target(
+        &status,
+        &service_name,
+        &staged.receipt.service_version,
+        mode,
+    )?;
+    preflight_service_upgrade_identity(&status, &staged.bundle, mode, "Taira Inrou")?;
     register_built_sorafs_manifest(
         &staged.bundle_manifest,
         "preseeded Taira service bundle",
@@ -8744,12 +9179,12 @@ pub(crate) fn run_taira_inrou_canary_deployment(
         key_pair,
         timeout_secs,
     )?;
-    let service_name = staged.bundle.service.service_name.to_string();
     let response = run_service_bundle_mutation(
         mode,
         staged.bundle,
         BTreeMap::new(),
         BTreeMap::new(),
+        precondition,
         &torii_url,
         api_token.as_deref(),
         timeout_secs,
@@ -8761,6 +9196,8 @@ pub(crate) fn run_taira_inrou_canary_deployment(
     Ok(TairaInrouCanaryDeployment {
         service_name,
         service_version: staged.receipt.service_version,
+        service_manifest_hash: staged.receipt.service_manifest_hash,
+        container_manifest_hash: staged.receipt.container_manifest_hash,
         route_host,
         route_path_prefix,
         healthcheck_path,
@@ -8859,8 +9296,7 @@ enum RolloutStage {
 #[norito(deny_unknown_fields)]
 struct RolloutRuntimeState {
     rollout_handle: String,
-    #[norito(required)]
-    baseline_version: Option<String>,
+    baseline_version: String,
     candidate_version: String,
     canary_percent: u8,
     traffic_percent: u8,
@@ -9006,7 +9442,7 @@ struct ServiceStatusOutput {
     #[norito(required)]
     service_lease_status: Option<SoraServiceLeaseStatusV1>,
     #[norito(required)]
-    lease_expires_sequence: Option<u64>,
+    lease_expires_height: Option<u64>,
     #[norito(required)]
     prepaid_runtime_balance: Option<Quantity>,
     #[norito(required)]
@@ -9912,6 +10348,7 @@ struct SignedBundleRequest {
     bundle: SoraDeploymentBundleV1,
     initial_service_configs: BTreeMap<String, Json>,
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    precondition: SoraServiceMutationPreconditionV1,
     provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -9920,6 +10357,7 @@ struct SignedAppInfraRequest {
     deploy_services: Vec<SignedBundleRequest>,
     upgrade_services: Vec<SignedBundleRequest>,
     manifest: SoraAppInfraManifestV1,
+    precondition: SoraAppInfraMutationPreconditionV1,
     provenance: ManifestProvenance,
 }
 #[derive(
@@ -9963,7 +10401,7 @@ struct RolloutAdvancePayload {
 #[norito(deny_unknown_fields)]
 struct AgentDeployPayload {
     manifest: AgentApartmentManifestV1,
-    lease_ticks: u64,
+    lease_blocks: u64,
     autonomy_budget_units: u64,
 }
 #[derive(
@@ -9977,7 +10415,7 @@ struct AgentDeployPayload {
 #[norito(deny_unknown_fields)]
 struct AgentLeaseRenewPayload {
     apartment_name: String,
-    lease_ticks: u64,
+    lease_blocks: u64,
 }
 #[derive(
     Clone,
@@ -10461,6 +10899,7 @@ fn run_service_bundle_mutation(
     bundle: SoraDeploymentBundleV1,
     initial_service_configs: BTreeMap<String, Json>,
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    precondition: SoraServiceMutationPreconditionV1,
     torii_url: &str,
     api_token: Option<&str>,
     timeout_secs: u64,
@@ -10471,6 +10910,7 @@ fn run_service_bundle_mutation(
         bundle,
         initial_service_configs,
         initial_service_secrets,
+        precondition,
         Some(authority),
         key_pair,
     )?;
@@ -11639,6 +12079,7 @@ fn signed_bundle_request(
     bundle: SoraDeploymentBundleV1,
     initial_service_configs: BTreeMap<String, Json>,
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    precondition: SoraServiceMutationPreconditionV1,
     _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedBundleRequest> {
@@ -11646,12 +12087,14 @@ fn signed_bundle_request(
         &bundle,
         &initial_service_configs,
         &initial_service_secrets,
+        &precondition,
     )
     .wrap_err("failed to encode deployment bundle payload for signing")?;
     Ok(SignedBundleRequest {
         bundle,
         initial_service_configs,
         initial_service_secrets,
+        precondition,
         provenance: signed_manifest_provenance(key_pair, &payload)?,
     })
 }
@@ -11659,9 +12102,10 @@ fn signed_app_infra_request(
     mode: MutationMode,
     manifest: SoraAppInfraManifestV1,
     services: Vec<SignedBundleRequest>,
+    precondition: SoraAppInfraMutationPreconditionV1,
     key_pair: &KeyPair,
 ) -> Result<SignedAppInfraRequest> {
-    let payload = encode_app_infra_provenance_payload(&manifest)
+    let payload = encode_app_infra_provenance_payload(&manifest, &precondition)
         .wrap_err("failed to encode app infra manifest payload for signing")?;
     let (deploy_services, upgrade_services) = match mode {
         MutationMode::Deploy => (services, Vec::new()),
@@ -11671,6 +12115,7 @@ fn signed_app_infra_request(
         deploy_services,
         upgrade_services,
         manifest,
+        precondition,
         provenance: signed_manifest_provenance(key_pair, &payload)?,
     })
 }
@@ -12038,14 +12483,14 @@ fn signed_rollout_request(
 }
 fn signed_agent_deploy_request(
     manifest: AgentApartmentManifestV1,
-    lease_ticks: u64,
+    lease_blocks: u64,
     autonomy_budget_units: u64,
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentDeployRequest> {
     let payload = AgentDeployPayload {
         manifest,
-        lease_ticks,
+        lease_blocks,
         autonomy_budget_units,
     };
     let encoded = encode_agent_deploy_signature_payload(&payload)
@@ -12057,19 +12502,19 @@ fn signed_agent_deploy_request(
 }
 fn signed_agent_lease_renew_request(
     apartment_name: &str,
-    lease_ticks: u64,
+    lease_blocks: u64,
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentLeaseRenewRequest> {
     if apartment_name.trim().is_empty() {
         return Err(eyre!("--apartment-name must not be empty"));
     }
-    if lease_ticks == 0 {
+    if lease_blocks == 0 {
         return Err(eyre!("--lease-ticks must be greater than zero"));
     }
     let payload = AgentLeaseRenewPayload {
         apartment_name: apartment_name.to_owned(),
-        lease_ticks,
+        lease_blocks,
     };
     let encoded = encode_agent_lease_renew_signature_payload(&payload)
         .wrap_err("failed to encode agent lease renew payload for signing")?;
@@ -12171,9 +12616,13 @@ fn sign_generated_hf_service_provenance(
     bundle: &SoraDeploymentBundleV1,
     key_pair: &KeyPair,
 ) -> Result<ManifestProvenance> {
-    let payload =
-        encode_bundle_with_materials_provenance_payload(bundle, &BTreeMap::new(), &BTreeMap::new())
-            .wrap_err("failed to encode generated HF service bundle for signing")?;
+    let payload = encode_bundle_with_materials_provenance_payload(
+        bundle,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &SoraServiceMutationPreconditionV1::ServiceAbsent,
+    )
+    .wrap_err("failed to encode generated HF service bundle for signing")?;
     Ok(ManifestProvenance {
         signer: key_pair.public_key().clone(),
         signature: sign_soracloud_payload(key_pair, &payload)?,
@@ -12185,7 +12634,7 @@ fn sign_generated_hf_apartment_provenance(
 ) -> Result<ManifestProvenance> {
     let payload = encode_agent_deploy_provenance_payload(
         manifest.clone(),
-        HF_GENERATED_AGENT_LEASE_TICKS,
+        HF_GENERATED_AGENT_LEASE_BLOCKS,
         Some(HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS),
     )
     .wrap_err("failed to encode generated HF apartment manifest for signing")?;
@@ -13119,7 +13568,7 @@ fn encode_rollout_signature_payload(payload: &RolloutAdvancePayload) -> Result<V
 fn encode_agent_deploy_signature_payload(payload: &AgentDeployPayload) -> Result<Vec<u8>> {
     encode_agent_deploy_provenance_payload(
         payload.manifest.clone(),
-        payload.lease_ticks,
+        payload.lease_blocks,
         Some(payload.autonomy_budget_units),
     )
     .wrap_err("failed to encode agent deploy signature payload tuple")
@@ -13127,7 +13576,7 @@ fn encode_agent_deploy_signature_payload(payload: &AgentDeployPayload) -> Result
 fn encode_agent_lease_renew_signature_payload(payload: &AgentLeaseRenewPayload) -> Result<Vec<u8>> {
     encode_agent_lease_renew_provenance_payload(
         payload.apartment_name.as_str(),
-        payload.lease_ticks,
+        payload.lease_blocks,
     )
     .wrap_err("failed to encode agent lease renew signature payload tuple")
 }
@@ -14054,6 +14503,36 @@ fn fetch_torii_soracloud_status(
     )?;
     filter_soracloud_status_payload(&mut payload, service_name);
     Ok((endpoint, payload))
+}
+
+/// Fetch the authoritative Taira Inrou canary topology through the same
+/// canonical account-authenticated GET boundary as every protected Soracloud
+/// read. The caller retains the HTTP status so convergence diagnostics remain
+/// fail-closed without treating an authentication failure as topology data.
+#[cfg(test)]
+pub(crate) fn fetch_taira_inrou_canary_status(
+    torii_url: &str,
+    timeout_secs: u64,
+) -> Result<(u16, Option<norito::json::Value>)> {
+    let endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid Taira Inrou canary Torii URL `{torii_url}`"))?
+        .join("v1/soracloud/status")
+        .wrap_err("failed to derive Taira Inrou canary status URL")?;
+    let (_, status, body) = send_torii_soracloud_authenticated_get(
+        endpoint,
+        None,
+        timeout_secs,
+        "Taira Inrou canary status",
+    )?;
+    let payload = if body.is_empty() {
+        None
+    } else {
+        Some(
+            json::from_slice(&body)
+                .wrap_err("failed to decode Taira Inrou canary status JSON payload")?,
+        )
+    };
+    Ok((status.as_u16(), payload))
 }
 fn fetch_torii_soracloud_app_infra_status(
     torii_url: &str,
@@ -15621,7 +16100,8 @@ fn service_handler(
                     max_pending_messages: NonZeroU32::new(max_pending_messages)
                         .expect("nonzero literal"),
                     max_message_bytes: NonZeroU64::new(max_message_bytes).expect("nonzero literal"),
-                    retention_blocks: NonZeroU32::new(retention_blocks).expect("nonzero literal"),
+                    retention_blocks: NonZeroU32::new(retention_blocks)
+                        .expect("nonzero literal"),
                 }
             },
         ),
@@ -17437,16 +17917,18 @@ mod tests {
     fn refresh_taira_container_reference(bundle: &mut SoraDeploymentBundleV1) {
         bundle.service.container.manifest_hash = Hash::new(Encode::encode(&bundle.container));
         bundle.service.container.expected_schema_version = bundle.container.schema_version;
+        install_taira_inrou_canary_service_version(bundle)
+            .expect("refresh canonical Taira revision identity");
     }
     fn assert_taira_canary_validation_error(bundle: &SoraDeploymentBundleV1, needle: &str) {
-        let error = validate_taira_inrou_canary_bundle(bundle, MutationMode::Deploy)
+        let error = validate_taira_inrou_canary_bundle(bundle)
             .expect_err("noncanonical Taira canary must fail");
         assert!(error.to_string().contains(needle), "{error}");
     }
     #[test]
     fn taira_inrou_canary_validator_accepts_exact_v1_bundle() {
         let bundle = canonical_taira_inrou_bundle_fixture();
-        validate_taira_inrou_canary_bundle(&bundle, MutationMode::Deploy)
+        validate_taira_inrou_canary_bundle(&bundle)
             .expect("canonical Taira Inrou V1 bundle");
         validate_taira_inrou_canary_source_bundle(&bundle)
             .expect("canonical Taira Inrou V1 source bundle");
@@ -17458,7 +17940,7 @@ mod tests {
             NonZeroU32::new(lifecycle.container.lifecycle.start_grace_secs.get() + 1)
                 .expect("nonzero lifecycle grace");
         refresh_taira_container_reference(&mut lifecycle);
-        validate_taira_inrou_canary_bundle(&lifecycle, MutationMode::Deploy)
+        validate_taira_inrou_canary_bundle(&lifecycle)
             .expect("generic admission still accepts the alternate lifecycle");
         validate_taira_inrou_canary_source_bundle(&lifecycle)
             .expect_err("release staging must reject an alternate lifecycle");
@@ -17467,7 +17949,9 @@ mod tests {
         rollout.service.rollout.health_window_secs =
             NonZeroU32::new(rollout.service.rollout.health_window_secs.get() + 1)
                 .expect("nonzero rollout window");
-        validate_taira_inrou_canary_bundle(&rollout, MutationMode::Deploy)
+        install_taira_inrou_canary_service_version(&mut rollout)
+            .expect("refresh immutable rollout revision identity");
+        validate_taira_inrou_canary_bundle(&rollout)
             .expect("generic admission still accepts the alternate rollout policy");
         validate_taira_inrou_canary_source_bundle(&rollout)
             .expect_err("release staging must reject an alternate rollout policy");
@@ -17639,7 +18123,7 @@ mod tests {
             container,
             service,
         };
-        validate_taira_inrou_canary_bundle(&generated, MutationMode::Deploy)
+        validate_taira_inrou_canary_bundle(&generated)
             .expect("generated deploy bundle is canonical");
         assert_eq!(generated.container.bundle_hash, Hash::new(&bundle_payload));
         assert_eq!(
@@ -17814,14 +18298,12 @@ mod tests {
         drop(reserved);
 
         let mut command = taira_inrou_canary_python_command();
+        let expected_version = "artifact-test-health-revision";
         let mut child = command
             .env("PORT", port.to_string())
             .env("HTTP_SERVICE_NAME", TAIRA_INROU_CANARY_SERVICE_NAME_V1)
             .env("SORACLOUD_REPLICA_SLOT", "3")
-            .env(
-                "SORACLOUD_SERVICE_VERSION",
-                TAIRA_INROU_CANARY_UPGRADE_VERSION_V1,
-            )
+            .env("SORACLOUD_SERVICE_VERSION", expected_version)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -17874,7 +18356,7 @@ mod tests {
         );
         assert_eq!(
             object.get("service_version").and_then(Value::as_str),
-            Some(TAIRA_INROU_CANARY_UPGRADE_VERSION_V1)
+            Some(expected_version)
         );
         assert_eq!(object.get("runtime").and_then(Value::as_str), Some("Inrou"));
         assert_eq!(object.get("replica_slot").and_then(Value::as_u64), Some(3));
@@ -17884,20 +18366,437 @@ mod tests {
         );
     }
     #[test]
-    fn taira_inrou_canary_validator_requires_mode_exact_revision() {
-        let mut upgrade = canonical_taira_inrou_bundle_fixture();
-        upgrade.service.service_version = TAIRA_INROU_CANARY_UPGRADE_VERSION_V1.to_owned();
-        validate_taira_inrou_canary_bundle(&upgrade, MutationMode::Upgrade)
-            .expect("canonical Taira upgrade bundle");
-        assert!(validate_taira_inrou_canary_bundle(&upgrade, MutationMode::Deploy).is_err());
-        let deploy = canonical_taira_inrou_bundle_fixture();
-        assert!(validate_taira_inrou_canary_bundle(&deploy, MutationMode::Upgrade).is_err());
-    }
-    #[test]
     fn taira_inrou_canary_validator_rejects_non_atomic_rollout() {
         let mut bundle = canonical_taira_inrou_bundle_fixture();
         bundle.service.rollout.canary_percent = 99;
         assert_taira_canary_validation_error(&bundle, "rollout.canary_percent = 100");
+    }
+    #[test]
+    fn taira_inrou_canary_version_is_the_exact_immutable_revision_identity() {
+        let first = canonical_taira_inrou_bundle_fixture();
+        let same = canonical_taira_inrou_bundle_fixture();
+        assert_eq!(first.service.service_version, same.service.service_version);
+        assert!(
+            first
+                .service
+                .service_version
+                .starts_with(TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1)
+        );
+
+        let mut next = first.clone();
+        next.container.bundle_hash = Hash::new(b"next immutable Taira canary artifact");
+        refresh_taira_container_reference(&mut next);
+        assert_ne!(first.service.service_version, next.service.service_version);
+        validate_taira_inrou_canary_bundle(&next)
+            .expect("a distinct artifact derives a distinct valid revision");
+
+        let mut forged = first;
+        forged.service.service_version = "1.0.0".to_owned();
+        assert_taira_canary_validation_error(&forged, "artifact-derived revision");
+    }
+    #[test]
+    fn app_infra_mutation_preflight_is_exact_and_rejects_duplicate_snapshots() {
+        let app_name = "portal_app";
+        let next_version = "2.0.0";
+        let absent = norito::json!({"apps": []});
+        assert_eq!(
+            derive_app_infra_mutation_precondition(
+                &absent,
+                app_name,
+                next_version,
+                MutationMode::Deploy,
+                "app test",
+            )
+            .expect("new app must bind absence"),
+            SoraAppInfraMutationPreconditionV1::AppAbsent
+        );
+        let current_manifest_hash = Hash::new(b"current app manifest");
+        let present = norito::json!({
+            "apps": [{
+                "app_name": app_name,
+                "current_app_version": "1.0.0",
+                "current_manifest_hash": (current_manifest_hash.to_string()),
+                "revision_count": 3
+            }]
+        });
+        assert_eq!(
+            derive_app_infra_mutation_precondition(
+                &present,
+                app_name,
+                next_version,
+                MutationMode::Upgrade,
+                "app test",
+            )
+            .expect("upgrade must bind the exact app topology"),
+            SoraAppInfraMutationPreconditionV1::ExactCurrentRevision(
+                SoraAppInfraExactCurrentRevisionPreconditionV1 {
+                    app_version: "1.0.0".to_owned(),
+                    manifest_hash: current_manifest_hash,
+                    revision_count: 3,
+                }
+            )
+        );
+        assert!(
+            derive_app_infra_mutation_precondition(
+                &present,
+                app_name,
+                "1.0.0",
+                MutationMode::Upgrade,
+                "app test",
+            )
+            .expect_err("already-current app version must fail before publication")
+            .to_string()
+            .contains("already-current app revision")
+        );
+        let duplicate = norito::json!({
+            "apps": [
+                {
+                    "app_name": app_name,
+                    "current_app_version": "1.0.0",
+                    "current_manifest_hash": (current_manifest_hash.to_string()),
+                    "revision_count": 3
+                },
+                {
+                    "app_name": app_name,
+                    "current_app_version": "1.0.0",
+                    "current_manifest_hash": (current_manifest_hash.to_string()),
+                    "revision_count": 3
+                }
+            ]
+        });
+        assert!(
+            derive_app_infra_mutation_precondition(
+                &duplicate,
+                app_name,
+                next_version,
+                MutationMode::Upgrade,
+                "app test",
+            )
+            .expect_err("duplicate authoritative app snapshots must fail closed")
+            .to_string()
+            .contains("duplicate app")
+        );
+    }
+    #[test]
+    fn service_upgrade_preflight_accepts_an_exact_absent_route_identity() {
+        assert_eq!(
+            status_tagged_enum_name(&norito::json!("HttpService"), "execution_plane"),
+            None
+        );
+        let mut bundle = canonical_taira_inrou_bundle_fixture();
+        bundle.service.route = None;
+        let service_name = bundle.service.service_name.to_string();
+        let status = norito::json!({
+            "control_plane": {
+                "services": [{
+                    "service_name": (service_name),
+                    "latest_revision": {
+                        "execution_plane": {"execution_plane": "HttpService"},
+                        "runtime": {"runtime": "Inrou"}
+                    }
+                }]
+            }
+        });
+
+        preflight_service_upgrade_identity(
+            &status,
+            &bundle,
+            MutationMode::Upgrade,
+            "route-free service",
+        )
+        .expect("an upgrade may retain an exact route-free identity");
+    }
+    #[test]
+    fn taira_inrou_mutation_preflight_is_exact_and_runs_before_publication() {
+        let service_name = TAIRA_INROU_CANARY_SERVICE_NAME_V1;
+        let staged_version = format!(
+            "{TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1}{}",
+            "22".repeat(32)
+        );
+        let absent = norito::json!({
+            "control_plane": { "services": [] }
+        });
+        let deploy_precondition = preflight_taira_inrou_mutation_target(
+            &absent,
+            service_name,
+            &staged_version,
+            MutationMode::Deploy,
+        )
+        .expect("deploy requires the service to be absent");
+        assert_eq!(
+            deploy_precondition,
+            SoraServiceMutationPreconditionV1::ServiceAbsent
+        );
+        assert!(
+            preflight_taira_inrou_mutation_target(
+                &absent,
+                service_name,
+                &staged_version,
+                MutationMode::Upgrade,
+            )
+            .expect_err("upgrade requires an existing service")
+            .to_string()
+            .contains("to exist before artifact publication")
+        );
+
+        let current_version = format!(
+            "{TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1}{}",
+            "11".repeat(32)
+        );
+        let current_service_manifest_hash = Hash::new(b"current service manifest");
+        let current_container_manifest_hash = Hash::new(b"current container manifest");
+        let present = norito::json!({
+            "control_plane": {
+                "services": [{
+                    "service_name": service_name,
+                    "current_version": (current_version.clone()),
+                    "config_generation": 3,
+                    "secret_generation": 5,
+                    "latest_revision": {
+                        "service_version": (current_version.clone()),
+                        "service_manifest_hash": (current_service_manifest_hash.to_string()),
+                        "container_manifest_hash": (current_container_manifest_hash.to_string()),
+                        "execution_plane": {"execution_plane": "HttpService"},
+                        "runtime": {"runtime": "Inrou"},
+                        "route_host": TAIRA_INROU_CANARY_ROUTE_HOST_V1,
+                        "route_path_prefix": TAIRA_INROU_CANARY_ROUTE_PREFIX_V1,
+                        "route_service_port": TAIRA_INROU_CANARY_SERVICE_PORT_V1,
+                        "route_visibility": "Public",
+                        "route_tls_mode": "Required",
+                        "process_generation": 7
+                    }
+                }]
+            }
+        });
+        let upgrade_precondition = preflight_taira_inrou_mutation_target(
+            &present,
+            service_name,
+            &staged_version,
+            MutationMode::Upgrade,
+        )
+        .expect("upgrade requires a distinct immutable revision");
+        assert_eq!(
+            upgrade_precondition,
+            SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+                SoraServiceExactCurrentRevisionPreconditionV1 {
+                    service_version: current_version.clone(),
+                    service_manifest_hash: current_service_manifest_hash,
+                    container_manifest_hash: current_container_manifest_hash,
+                    process_generation: 7,
+                    config_generation: 3,
+                    secret_generation: 5,
+                },
+            )
+        );
+        let candidate_bundle = canonical_taira_inrou_bundle_fixture();
+        preflight_service_upgrade_identity(
+            &present,
+            &candidate_bundle,
+            MutationMode::Upgrade,
+            "Taira Inrou",
+        )
+        .expect("unchanged deployment route identity");
+        let mut route_drift_bundle = candidate_bundle;
+        route_drift_bundle
+            .service
+            .route
+            .as_mut()
+            .expect("Taira route")
+            .host = "replacement.taira.sora.org".to_owned();
+        assert!(
+            preflight_service_upgrade_identity(
+                &present,
+                &route_drift_bundle,
+                MutationMode::Upgrade,
+                "Taira Inrou",
+            )
+            .expect_err("route drift must fail before artifact publication")
+            .to_string()
+            .contains("cannot change route identity")
+        );
+        let in_flight = norito::json!({
+            "control_plane": {
+                "services": [{
+                    "service_name": service_name,
+                    "current_version": (current_version.clone()),
+                    "config_generation": 3,
+                    "secret_generation": 5,
+                    "active_rollout": {
+                        "baseline_version": "older",
+                        "candidate_version": (current_version.clone())
+                    },
+                    "latest_revision": {
+                        "service_version": (current_version.clone()),
+                        "service_manifest_hash": (current_service_manifest_hash.to_string()),
+                        "container_manifest_hash": (current_container_manifest_hash.to_string()),
+                        "process_generation": 7
+                    }
+                }]
+            }
+        });
+        assert!(
+            preflight_taira_inrou_mutation_target(
+                &in_flight,
+                service_name,
+                &staged_version,
+                MutationMode::Upgrade,
+            )
+            .expect_err("upgrade must not publish while another rollout is active")
+            .to_string()
+            .contains("refuses to supersede the active rollout")
+        );
+        assert!(
+            preflight_taira_inrou_mutation_target(
+                &present,
+                service_name,
+                &staged_version,
+                MutationMode::Deploy,
+            )
+            .expect_err("deploy must not overwrite an existing service")
+            .to_string()
+            .contains("to be absent before artifact publication")
+        );
+
+        let same = norito::json!({
+            "control_plane": {
+                "services": [{
+                    "service_name": service_name,
+                    "current_version": staged_version
+                }]
+            }
+        });
+        assert!(
+            preflight_taira_inrou_mutation_target(
+                &same,
+                service_name,
+                &staged_version,
+                MutationMode::Upgrade,
+            )
+            .expect_err("same-version upgrade must fail before publication")
+            .to_string()
+            .contains("already-current immutable revision")
+        );
+
+        let duplicate = norito::json!({
+            "control_plane": {
+                "services": [
+                    { "service_name": service_name, "current_version": "first" },
+                    { "service_name": service_name, "current_version": "second" }
+                ]
+            }
+        });
+        assert!(
+            preflight_taira_inrou_mutation_target(
+                &duplicate,
+                service_name,
+                &staged_version,
+                MutationMode::Upgrade,
+            )
+            .expect_err("duplicate status snapshots must fail closed")
+            .to_string()
+            .contains("duplicate service")
+        );
+
+        let revision_drift = norito::json!({
+            "control_plane": {
+                "services": [{
+                    "service_name": service_name,
+                    "current_version": (current_version.clone()),
+                    "config_generation": 3,
+                    "secret_generation": 5,
+                    "latest_revision": {
+                        "service_version": "different-current-revision",
+                        "service_manifest_hash": (current_service_manifest_hash.to_string()),
+                        "container_manifest_hash": (current_container_manifest_hash.to_string()),
+                        "process_generation": 7
+                    }
+                }]
+            }
+        });
+        assert!(
+            preflight_taira_inrou_mutation_target(
+                &revision_drift,
+                service_name,
+                &staged_version,
+                MutationMode::Upgrade,
+            )
+            .expect_err("current and latest revision versions must agree")
+            .to_string()
+            .contains("current version and latest revision disagree")
+        );
+
+        let zero_generation = norito::json!({
+            "control_plane": {
+                "services": [{
+                    "service_name": service_name,
+                    "current_version": (current_version.clone()),
+                    "config_generation": 3,
+                    "secret_generation": 5,
+                    "latest_revision": {
+                        "service_version": (current_version.clone()),
+                        "service_manifest_hash": (current_service_manifest_hash.to_string()),
+                        "container_manifest_hash": (current_container_manifest_hash.to_string()),
+                        "process_generation": 0
+                    }
+                }]
+            }
+        });
+        assert!(
+            preflight_taira_inrou_mutation_target(
+                &zero_generation,
+                service_name,
+                &staged_version,
+                MutationMode::Upgrade,
+            )
+            .expect_err("upgrade snapshot must carry a positive process generation")
+            .to_string()
+            .contains("positive process generation")
+        );
+
+        let malformed_hash = norito::json!({
+            "control_plane": {
+                "services": [{
+                    "service_name": service_name,
+                    "current_version": (current_version.clone()),
+                    "config_generation": 3,
+                    "secret_generation": 5,
+                    "latest_revision": {
+                        "service_version": (current_version.clone()),
+                        "service_manifest_hash": "not-a-hash",
+                        "container_manifest_hash": (current_container_manifest_hash.to_string()),
+                        "process_generation": 7
+                    }
+                }]
+            }
+        });
+        assert!(
+            preflight_taira_inrou_mutation_target(
+                &malformed_hash,
+                service_name,
+                &staged_version,
+                MutationMode::Upgrade,
+            )
+            .expect_err("upgrade snapshot must carry exact parseable hashes")
+            .to_string()
+            .contains("invalid service manifest hash")
+        );
+
+        let malformed = norito::json!({
+            "control_plane": {
+                "services": [{ "service_name": service_name }]
+            }
+        });
+        assert!(
+            preflight_taira_inrou_mutation_target(
+                &malformed,
+                service_name,
+                &staged_version,
+                MutationMode::Upgrade,
+            )
+            .expect_err("upgrade snapshot without a current version must fail closed")
+            .to_string()
+            .contains("found no current version")
+        );
     }
     #[test]
     fn taira_inrou_canary_validator_accepts_published_v1_bundle() {
@@ -17920,7 +18819,7 @@ mod tests {
             distribution: SoraArtifactDistributionPolicyV1::default(),
         });
         refresh_taira_container_reference(&mut bundle);
-        validate_taira_inrou_canary_bundle(&bundle, MutationMode::Deploy)
+        validate_taira_inrou_canary_bundle(&bundle)
             .expect("canonical published Taira Inrou V1 bundle");
     }
     #[test]
@@ -18002,7 +18901,10 @@ mod tests {
             schema_version: TAIRA_INROU_STAGE_SCHEMA_VERSION_V1,
             mutation_mode: "deploy".to_owned(),
             service_name: "taira_inrou_canary".to_owned(),
-            service_version: "1.0.0".to_owned(),
+            service_version: format!(
+                "{TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1}{}",
+                "11".repeat(32)
+            ),
             container_file: TAIRA_INROU_STAGE_CONTAINER_FILE_V1.to_owned(),
             service_file: TAIRA_INROU_STAGE_SERVICE_FILE_V1.to_owned(),
             bundle_payload_file: TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1.to_owned(),
@@ -18947,6 +19849,7 @@ mod tests {
                 services: Vec::new(),
             },
             Vec::new(),
+            SoraAppInfraMutationPreconditionV1::AppAbsent,
             &key_pair,
         )
         .expect("signed app infra request");
@@ -19246,6 +20149,7 @@ mod tests {
     struct CapturedHttpRequest {
         method: String,
         path: String,
+        headers: BTreeMap<String, String>,
         body: Vec<u8>,
     }
     #[derive(Clone, Debug)]
@@ -19555,6 +20459,7 @@ mod tests {
         let request = CapturedHttpRequest {
             method: "POST".to_owned(),
             path: "/v1/sorafs/pin/register".to_owned(),
+            headers: BTreeMap::new(),
             body: transaction.encode_versioned(),
         };
         let registration =
@@ -19687,7 +20592,12 @@ mod tests {
             }
         }
         body.truncate(content_length);
-        CapturedHttpRequest { method, path, body }
+        CapturedHttpRequest {
+            method,
+            path,
+            headers,
+            body,
+        }
     }
     fn node_available() -> bool {
         match Command::new("node").arg("--version").output() {
@@ -20267,7 +21177,7 @@ mod tests {
             secret_entry_count: 0,
             quota_class: None,
             service_lease_status: None,
-            lease_expires_sequence: None,
+            lease_expires_height: None,
             prepaid_runtime_balance: None,
             remaining_runtime_balance: None,
             public_discovery_content_cid: Some("bafyteststatus".to_owned()),
@@ -20323,7 +21233,7 @@ mod tests {
             }),
             active_rollout: Some(RolloutRuntimeState {
                 rollout_handle: "rollout-1".to_owned(),
-                baseline_version: Some("1.2.2".to_owned()),
+                baseline_version: "1.2.2".to_owned(),
                 candidate_version: "1.2.3".to_owned(),
                 canary_percent: 10,
                 traffic_percent: 10,
@@ -21483,6 +22393,54 @@ mod tests {
         assert!(err.to_string().contains("invalid --torii-url"));
     }
     #[test]
+    fn taira_inrou_status_requires_and_uses_protected_read_signer() {
+        let status_payload = mock_control_plane_status_payload(&["taira_inrou_canary"]);
+        let server = MockHttpServer::start(BTreeMap::from([(
+            "/v1/soracloud/status".to_owned(),
+            MockHttpResponse::json(
+                json::to_vec(&status_payload).expect("encode Taira Inrou status payload"),
+            ),
+        )]));
+        SORACLOUD_SUBMISSION_CONFIG.with(|slot| *slot.borrow_mut() = None);
+        SORACLOUD_FEE_PAYMENT.with(|slot| *slot.borrow_mut() = None);
+
+        let error = fetch_taira_inrou_canary_status(&server.base_url, 5)
+            .expect_err("protected Taira Inrou status must require a local signer");
+        assert!(
+            error
+                .to_string()
+                .contains("initialized local account signer")
+        );
+        assert!(server.requests().is_empty());
+
+        install_mock_protected_read_signer();
+        let (status, payload) = fetch_taira_inrou_canary_status(&server.base_url, 5)
+            .expect("signed Taira Inrou status read");
+        assert_eq!(status, 200);
+        assert_eq!(payload, Some(status_payload));
+        let requests = server.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(requests[0].path, "/v1/soracloud/status");
+        for header in [
+            HEADER_IROHA_ACCOUNT,
+            HEADER_IROHA_SIGNATURE,
+            HEADER_IROHA_TIMESTAMP_MS,
+            HEADER_IROHA_NONCE,
+        ] {
+            assert!(
+                requests[0]
+                    .headers
+                    .get(&header.to_ascii_lowercase())
+                    .is_some_and(|value| !value.is_empty()),
+                "signed Taira Inrou status read omitted {header}"
+            );
+        }
+
+        SORACLOUD_SUBMISSION_CONFIG.with(|slot| *slot.borrow_mut() = None);
+        SORACLOUD_FEE_PAYMENT.with(|slot| *slot.borrow_mut() = None);
+    }
+    #[test]
     fn fetch_torii_agent_autonomy_status_rejects_invalid_url() {
         let err = fetch_torii_soracloud_agent_autonomy_status("not-a-url", "ops_agent", None, 5)
             .expect_err("invalid URL must fail");
@@ -21607,6 +22565,7 @@ mod tests {
                 services: Vec::new(),
             },
             Vec::new(),
+            SoraAppInfraMutationPreconditionV1::AppAbsent,
             &key_pair,
         )
         .expect("signed app infra request");
@@ -21634,6 +22593,7 @@ mod tests {
             bundle,
             BTreeMap::new(),
             BTreeMap::new(),
+            SoraServiceMutationPreconditionV1::ServiceAbsent,
             Some(&authority),
             &key_pair,
         )
@@ -21642,6 +22602,7 @@ mod tests {
             &request.bundle,
             &request.initial_service_configs,
             &request.initial_service_secrets,
+            &request.precondition,
         )
         .expect("encode payload");
         request
@@ -21649,6 +22610,53 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_request_has_no_inline_signing_fields(&request);
+    }
+    #[test]
+    fn signed_app_infra_request_binds_the_exact_mutation_precondition() {
+        let key_pair = soracloud_fixture_key_pair(0x23);
+        let manifest = SoraAppInfraManifestV1 {
+            schema_version: SORA_APP_INFRA_MANIFEST_VERSION_V1,
+            app_name: "signed_app".parse().expect("valid app name"),
+            app_version: "1.0.0".to_owned(),
+            public_url: "https://signed-app.example.test".to_owned(),
+            static_site: None,
+            services: Vec::new(),
+        };
+        let request = signed_app_infra_request(
+            MutationMode::Deploy,
+            manifest,
+            Vec::new(),
+            SoraAppInfraMutationPreconditionV1::AppAbsent,
+            &key_pair,
+        )
+        .expect("signed app-infra request");
+        let payload = encode_app_infra_provenance_payload(&request.manifest, &request.precondition)
+            .expect("encode app-infra provenance payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+
+        let tampered_precondition = SoraAppInfraMutationPreconditionV1::ExactCurrentRevision(
+            SoraAppInfraExactCurrentRevisionPreconditionV1 {
+                app_version: "0.9.0".to_owned(),
+                manifest_hash: Hash::new(b"previous app manifest"),
+                revision_count: 1,
+            },
+        );
+        let tampered_payload =
+            encode_app_infra_provenance_payload(&request.manifest, &tampered_precondition)
+                .expect("encode tampered app-infra provenance payload");
+        assert!(
+            request
+                .provenance
+                .signature
+                .verify(&request.provenance.signer, &tampered_payload)
+                .is_err(),
+            "changing the signed app-infra precondition must invalidate the signature"
+        );
         assert_request_has_no_inline_signing_fields(&request);
     }
     #[test]
@@ -21696,6 +22704,7 @@ mod tests {
             bundle,
             BTreeMap::new(),
             BTreeMap::new(),
+            SoraServiceMutationPreconditionV1::ServiceAbsent,
             Some(&authority),
             &key_pair,
         )
@@ -21704,6 +22713,7 @@ mod tests {
             &request.bundle,
             &request.initial_service_configs,
             &request.initial_service_secrets,
+            &request.precondition,
         )
         .expect("encode canonical payload");
         request
@@ -21876,6 +22886,7 @@ mod tests {
                     ),
                     &BTreeMap::new(),
                     &BTreeMap::new(),
+                    &SoraServiceMutationPreconditionV1::ServiceAbsent,
                 )
                 .expect("generated bundle payload"),
             )
@@ -22403,7 +23414,7 @@ mod tests {
 
         let state = RolloutRuntimeState {
             rollout_handle: "web_portal:rollout:2".to_owned(),
-            baseline_version: None,
+            baseline_version: "1.0.0".to_owned(),
             candidate_version: "2.0.0".to_owned(),
             canary_percent: 10,
             traffic_percent: 10,
@@ -22419,7 +23430,8 @@ mod tests {
         assert!(
             canonical
                 .get("baseline_version")
-                .is_some_and(norito::json::Value::is_null)
+                .and_then(norito::json::Value::as_str)
+                == Some("1.0.0")
         );
         let mut missing = canonical.clone();
         assert!(
@@ -22437,7 +23449,7 @@ mod tests {
             .expect("rollout runtime state JSON object")
             .insert("baseline_version".to_owned(), norito::json::Value::Null);
         norito::json::from_value::<RolloutRuntimeState>(explicit_null)
-            .expect("rollout runtime state must accept explicit null baseline_version");
+            .expect_err("rollout runtime state must reject null baseline_version");
     }
     #[test]
     fn soracloud_cli_output_graph_rejects_unknown_fields() {
@@ -22867,7 +23879,7 @@ mod tests {
 
         let agent_deploy = AgentDeployPayload {
             manifest: fixture_agent_apartment(),
-            lease_ticks: 120,
+            lease_blocks: 120,
             autonomy_budget_units: 500,
         };
         let mut missing_budget = json::to_value(&agent_deploy).expect("serialize agent deploy");
@@ -23015,13 +24027,13 @@ mod tests {
         agent_deploy_signature_payload_layout_is_canonical_tuple,
         payload = AgentDeployPayload {
             manifest: fixture_agent_apartment(),
-            lease_ticks: 120,
+            lease_blocks: 120,
             autonomy_budget_units: 500,
         },
         encode_agent_deploy_signature_payload,
         (
             payload.manifest.clone(),
-            payload.lease_ticks,
+            payload.lease_blocks,
             Some(payload.autonomy_budget_units),
         )
     );
@@ -23029,10 +24041,10 @@ mod tests {
         agent_lease_renew_signature_payload_layout_is_canonical_tuple,
         payload = AgentLeaseRenewPayload {
             apartment_name: "ops_agent".to_owned(),
-            lease_ticks: 120,
+            lease_blocks: 120,
         },
         encode_agent_lease_renew_signature_payload,
-        (payload.apartment_name.as_str(), payload.lease_ticks)
+        (payload.apartment_name.as_str(), payload.lease_blocks)
     );
     signature_payload_layout_case!(
         agent_restart_signature_payload_layout_is_canonical_tuple,

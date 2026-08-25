@@ -3,8 +3,8 @@ package org.hyperledger.iroha.android.model;
 import java.util.Arrays;
 import java.util.Objects;
 
-/** Internal parser for canonical ABI V1 contract addresses accepted by Core. */
-final class ContractAddressValidator {
+/** Parser for canonical ABI V1 contract addresses accepted by Core. */
+public final class ContractAddressValidator {
   private static final int BECH32M_CHECKSUM = 0x2BC830A3;
   private static final int CONTRACT_ADDRESS_VERSION_V1 = 1;
   private static final int CONTRACT_ADDRESS_PAYLOAD_BYTES_V1 = 29;
@@ -19,7 +19,8 @@ final class ContractAddressValidator {
 
   private ContractAddressValidator() {}
 
-  static String requireCanonicalV1(final String value) {
+  /** Validates and returns one exact canonical ABI V1 contract address. */
+  public static String requireCanonicalV1(final String value) {
     final String nonNull = Objects.requireNonNull(value, "contractAddress");
     if (nonNull.trim().isEmpty()) {
       throw invalid("contractAddress must not be blank");

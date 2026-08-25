@@ -29,7 +29,7 @@ CHAOS_MARKER = (
     "deferred_validation_completions=400312 "
     "deferred_application_completions=400000 duplicate_commit_qcs=3124 "
     "reordered_commit_batches=75000 reordered_tc_batches=75000 "
-    "insufficient_dual_qcs=1030 count_only_qcs=515 power_only_qcs=515 "
+    "insufficient_dual_qcs=1030 count_only_qcs=0 power_only_qcs=0 "
     "restart_interval=64 duplicate_interval=32 under_quorum_interval=97 "
     "certificate_source=external_fixture"
 )
@@ -55,8 +55,8 @@ CHAOS_FIELDS = {
     "reordered_commit_batches": "75000",
     "reordered_tc_batches": "75000",
     "insufficient_dual_qcs": "1030",
-    "count_only_qcs": "515",
-    "power_only_qcs": "515",
+    "count_only_qcs": "0",
+    "power_only_qcs": "0",
     "restart_interval": "64",
     "duplicate_interval": "32",
     "under_quorum_interval": "97",
@@ -103,7 +103,7 @@ case "${{CHAOS_FAKE_RUN_MODE:-pass}}" in
       '{CHAOS_MARKER}' \\
       'test accelerated_100_000_block_chaos_preserves_chain_prefix ... ok' \\
       '' \\
-      'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s'
+      'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.01s'
     ;;
   zero)
     printf '%s\n' 'running 0 tests' \\
@@ -114,7 +114,7 @@ case "${{CHAOS_FAKE_RUN_MODE:-pass}}" in
       'running 1 test' \\
       'test accelerated_100_000_block_chaos_preserves_chain_prefix ... ok' \\
       '' \\
-      'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s'
+      'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.01s'
     ;;
   wrong-counters)
     printf '%s\n' \\
@@ -122,7 +122,7 @@ case "${{CHAOS_FAKE_RUN_MODE:-pass}}" in
       '{CHAOS_MARKER.replace("wal_append_restarts=314", "wal_append_restarts=315")}' \\
       'test accelerated_100_000_block_chaos_preserves_chain_prefix ... ok' \\
       '' \\
-      'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s'
+      'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.01s'
     ;;
   duplicate-marker)
     printf '%s\n' \\
@@ -131,7 +131,7 @@ case "${{CHAOS_FAKE_RUN_MODE:-pass}}" in
       '{CHAOS_MARKER}' \\
       'test accelerated_100_000_block_chaos_preserves_chain_prefix ... ok' \\
       '' \\
-      'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s'
+      'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.01s'
     ;;
   duplicate-test-line)
     printf '%s\n' \\
@@ -140,7 +140,7 @@ case "${{CHAOS_FAKE_RUN_MODE:-pass}}" in
       'test accelerated_100_000_block_chaos_preserves_chain_prefix ... ok' \\
       'test accelerated_100_000_block_chaos_preserves_chain_prefix ... ok' \\
       '' \\
-      'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s'
+      'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.01s'
     ;;
   fail) exit 73 ;;
 esac

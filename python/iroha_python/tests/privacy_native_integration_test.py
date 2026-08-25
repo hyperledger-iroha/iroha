@@ -1,4 +1,4 @@
-"""Mandatory execution checks against the freshly installed PyO3 ABI22 module."""
+"""Mandatory execution checks against the freshly installed PyO3 ABI23 module."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from iroha_python.crypto import (
 )
 
 
-def test_authenticated_pyo3_abi22_executes_the_privacy_catalog_contract() -> None:
+def test_authenticated_pyo3_abi23_executes_the_privacy_catalog_contract() -> None:
     native = importlib.import_module("iroha_python._crypto")
     assert native.connect_norito_bridge_abi_version() == PRIVACY_REQUIRED_BRIDGE_ABI_VERSION
     assert native.privacy_bridge_abi_version() == PRIVACY_REQUIRED_BRIDGE_ABI_VERSION

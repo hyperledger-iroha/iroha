@@ -217,18 +217,16 @@ def source_seal_home() -> pathlib.Path:
 def selected_lockfile_path(
     root: pathlib.Path, configured: pathlib.Path | None = None
 ) -> pathlib.Path:
-    """Return the canonical, non-symbolic root Cargo lock used by the build."""
+    """Return the canonical, non-symbolic Cargo lock used by the build."""
 
-    candidate = root / "Cargo.lock"
-    if configured is not None and configured != candidate:
-        raise RuntimeError(
-            f"source sealing requires the explicit root Cargo lock: {candidate}"
-        )
+    candidate = root / "Cargo.lock" if configured is None else configured
     if not candidate.is_absolute():
         raise RuntimeError("selected Cargo lock path must be absolute")
     canonical_spelling = pathlib.Path(os.path.abspath(candidate))
     if candidate != canonical_spelling:
         raise RuntimeError("selected Cargo lock path must be canonical")
+    if candidate.name != "Cargo.lock":
+        raise RuntimeError("selected Cargo lock path must end in Cargo.lock")
     try:
         metadata = candidate.lstat()
         resolved = candidate.resolve(strict=True)

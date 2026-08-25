@@ -25,6 +25,7 @@ import {
 import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
 import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
 import { parseCanonicalContractAddress } from "./contractAddress.js";
+import { networkIdBytes } from "./networkId.js";
 import { stringifyStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 import {
   KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS,
@@ -116,15 +117,6 @@ function rejectValidationFeeSnakeCaseInputs(source, context) {
       );
     }
   }
-}
-
-function normalizeFinalizeProposalId(value, name) {
-  if (typeof value === "string") {
-    return Array.from(
-      Buffer.from(requireExactLowerHex32String(value, name), "hex").values(),
-    );
-  }
-  return normalizeFixedBytes(value, name);
 }
 
 function readSingleAlias(source, aliases, name, description) {
@@ -2951,34 +2943,6 @@ function normalizeManifestTriggerRepeats(value, name) {
   );
 }
 
-function normalizeAtWindow(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  const source = assertPlainObject(value, name);
-  assertExactFields(source, ["lower", "upper"], name);
-  const lower = normalizeGovernanceU64(source.lower, `${name}.lower`);
-  const upper = normalizeGovernanceU64(source.upper, `${name}.upper`);
-  if (upper < lower) {
-    fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
-      `${name}.upper must be greater than or equal to lower`,
-      `${name}.upper`,
-    );
-  }
-  return { lower: lower.toString(10), upper: upper.toString(10) };
-}
-
-function normalizeVotingMode(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  if (value === "Zk" || value === "Plain") {
-    return value;
-  }
-  fail(ValidationErrorCode.INVALID_STRING, `${name} must be either 'Zk' or 'Plain'`, name);
-}
-
 function normalizeJsonPayload(value, name) {
   if (value === null || value === undefined) {
     return "{}";
@@ -4978,8 +4942,6 @@ export function buildProposeDeployContractInstruction(options) {
       "codeHash",
       "abiHash",
       "abiVersion",
-      "window",
-      "votingMode",
       "manifestProvenance",
     ]),
     "proposeDeployContract",
@@ -4995,11 +4957,11 @@ export function buildProposeDeployContractInstruction(options) {
   }
   const abiVersion = Object.prototype.hasOwnProperty.call(source, "abiVersion")
     ? source.abiVersion
-    : "1";
-  if (abiVersion !== "1") {
+    : 1;
+  if (abiVersion !== 1) {
     fail(
-      ValidationErrorCode.INVALID_STRING,
-      "abiVersion must be exactly '1'",
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      "abiVersion must be exactly 1",
       "abiVersion",
     );
   }
@@ -5008,21 +4970,9 @@ export function buildProposeDeployContractInstruction(options) {
       source.contractAddress,
       "proposeDeployContract.contractAddress",
     ),
-    code_hash_hex: normalizeGovernanceHex32(source.codeHash, "codeHash"),
-    abi_hash_hex: normalizeGovernanceHex32(source.abiHash, "abiHash"),
+    code_hash: normalizeGovernanceHex32(source.codeHash, "codeHash"),
+    abi_hash: normalizeGovernanceHex32(source.abiHash, "abiHash"),
     abi_version: abiVersion,
-    window: normalizeAtWindow(
-      Object.prototype.hasOwnProperty.call(source, "window")
-        ? source.window
-        : undefined,
-      "window",
-    ),
-    mode: normalizeVotingMode(
-      Object.prototype.hasOwnProperty.call(source, "votingMode")
-        ? source.votingMode
-        : undefined,
-      "votingMode",
-    ),
   };
   if (
     Object.prototype.hasOwnProperty.call(source, "manifestProvenance") &&
@@ -5044,18 +4994,19 @@ export function buildProposeDeployContractInstruction(options) {
  */
 export function buildProposeSccpRouteGovernanceInstruction(options) {
   const source = assertPlainObject(options, "proposeSccpRouteGovernance");
-  for (const key of Object.keys(source)) {
-    if (!["action", "window", "mode"].includes(key)) {
-      throw new TypeError(
-        `proposeSccpRouteGovernance contains unknown or retired field \`${key}\``,
-      );
-    }
-  }
+  rejectGovernancePrivateKeyFieldsDeep(source, "proposeSccpRouteGovernance");
+  assertAllowedFields(
+    source,
+    new Set(["networkId", "action"]),
+    "proposeSccpRouteGovernance",
+  );
+  networkIdBytes(source.networkId, "proposeSccpRouteGovernance.networkId");
   return {
     ProposeSccpRouteGovernance: {
-      action: normalizeSccpRouteGovernanceAction(source.action),
-      window: normalizeAtWindow(source.window, "window"),
-      mode: normalizeVotingMode(source.mode, "mode"),
+      anchor: {
+        network_id: source.networkId.literal,
+        action: normalizeSccpRouteGovernanceAction(source.action),
+      },
     },
   };
 }
@@ -5116,65 +5067,6 @@ export function buildCastPlainBallotInstruction(options) {
         "durationBlocks",
       ),
       direction: normalizeDirection(source.direction, "direction"),
-    },
-  };
-}
-
-/**
- * Build an `EnactReferendum` instruction payload.
- * @param {object} options
- * @returns {{EnactReferendum: object}}
- */
-export function buildEnactReferendumInstruction(options) {
-  const source = assertPlainObject(options, "enactReferendum");
-  const window =
-    normalizeAtWindow(source.window ?? source.atWindow, "window") ?? {
-      lower: "0",
-      upper: "0",
-    };
-  const referendumId = normalizeFixedBytes(
-    source.referendumId ?? source.referendum_id,
-    "enactReferendum.referendumId",
-  );
-  const preimageHash = normalizeFixedBytes(
-    source.preimageHash ?? source.preimage_hash,
-    "enactReferendum.preimageHash",
-  );
-  return {
-    EnactReferendum: {
-      referendum_id: referendumId,
-      preimage_hash: preimageHash,
-      at_window: window,
-    },
-  };
-}
-
-/**
- * Build a `FinalizeReferendum` instruction payload.
- * @param {object} options
- * @returns {{FinalizeReferendum: object}}
- */
-export function buildFinalizeReferendumInstruction(options) {
-  const source = assertPlainObject(options, "finalizeReferendum");
-  const referendumId = requireExactLowerHex32String(
-    source.referendumId ?? source.referendum_id,
-    "finalizeReferendum.referendumId",
-  );
-  const proposalId = normalizeFinalizeProposalId(
-    source.proposalId ?? source.proposal_id,
-    "finalizeReferendum.proposalId",
-  );
-  if (Buffer.from(proposalId).toString("hex") !== referendumId) {
-    fail(
-      ValidationErrorCode.INVALID_HEX,
-      "finalizeReferendum.referendumId must equal proposalId",
-      "finalizeReferendum.referendumId",
-    );
-  }
-  return {
-    FinalizeReferendum: {
-      referendum_id: referendumId,
-      proposal_id: proposalId,
     },
   };
 }

@@ -33,6 +33,12 @@ install_tracked_test_root_lock() {
   install -m 600 "${SOURCE_ROOT}/Cargo.lock" "$1/Cargo.lock"
 }
 
+install_test_release_lock() {
+  privacy_sdk_materialize_release_lock \
+    "${SOURCE_ROOT}/Cargo.lock" "$1" || return 1
+  chmod 600 "$1"
+}
+
 write_test_rust_toolchain() {
   local root="$1"
   printf '%s\n' '[toolchain]' 'channel = "1.93.1"' \
@@ -1269,8 +1275,9 @@ if [[ "$("${TEST_PYTHON}" -c 'import sys; print(".".join(map(str, sys.version_in
 fi
 
 # Exercise the checked-in CI provisioning corridor with fake Cargo. The fake
-# implements only generate-lockfile and records the exact unstable-option and
-# external-lock arguments; no real Cargo command runs in this self-test.
+# implements only the mutable-registry resolution probe and records its exact
+# unstable-option and external-lock arguments; the selected release lock is a
+# deterministic projection of the tracked root lock.
 PROVISION_REPOSITORY="${TEST_ROOT}/provision-repository"
 PROVISION_CORRIDOR="${TEST_ROOT}/provision-corridor"
 PROVISION_BIN="${TEST_ROOT}/provision-toolchain/1.93.1-x86_64-unknown-linux-gnu/bin"
@@ -1562,7 +1569,7 @@ prepare_provision_failure_fixture \
 : >"${PROVISION_CARGO_LOG}"
 : >"${PROVISION_BIN}/rustup-args.log"
 expect_failure \
-  "Cargo failed to generate the required external Cargo.lock" \
+  "Cargo failed to generate the external resolution probe" \
   env \
   FAKE_PROVISION_EXIT_AFTER_LOCK=1 \
   PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
@@ -1578,7 +1585,8 @@ expect_failure \
   "${TEST_PYTHON}"
 [[ ! -s "${PROVISION_CARGO_FAILURE_ENV}" ]]
 [[ ! -s "${PROVISION_CARGO_FAILURE_PATH}" ]]
-[[ -f "${PROVISION_CARGO_FAILURE_CORRIDOR}/lock/Cargo.lock" ]]
+[[ -f "${PROVISION_CARGO_FAILURE_CORRIDOR}/resolution-probe/Cargo.lock" ]]
+[[ ! -e "${PROVISION_CARGO_FAILURE_CORRIDOR}/lock/Cargo.lock" ]]
 assert_exact_lines "${PROVISION_CARGO_LOG}" \
   "invocation" \
   "CARGO_HOME=${PROVISION_CARGO_FAILURE_CORRIDOR}/cargo-home" \
@@ -1589,7 +1597,7 @@ assert_exact_lines "${PROVISION_CARGO_LOG}" \
   "arg=--manifest-path" \
   "arg=${PROVISION_CARGO_FAILURE_REPOSITORY}/Cargo.toml" \
   "arg=--lockfile-path" \
-  "arg=${PROVISION_CARGO_FAILURE_CORRIDOR}/lock/Cargo.lock"
+  "arg=${PROVISION_CARGO_FAILURE_CORRIDOR}/resolution-probe/Cargo.lock"
 assert_exact_lines "${PROVISION_BIN}/rustup-args.log" \
   "which --toolchain 1.93.1-x86_64-unknown-linux-gnu cargo" \
   "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustc" \
@@ -1642,8 +1650,8 @@ PATH="${PROVISION_BIN}:${PATH}" \
     "${PROVISION_BIN}/rustup" \
     "1.93.1-x86_64-unknown-linux-gnu" \
     "${TEST_PYTHON}" >/dev/null
-if [[ -e "${PROVISION_REPOSITORY}/Cargo.lock" || -L "${PROVISION_REPOSITORY}/Cargo.lock" ]]; then
-  echo "CI provisioning created workspace Cargo.lock" >&2
+if ! cmp -s "${SOURCE_ROOT}/Cargo.lock" "${PROVISION_REPOSITORY}/Cargo.lock"; then
+  echo "CI provisioning changed the tracked root Cargo.lock" >&2
   exit 1
 fi
 assert_exact_lines "${PROVISION_CARGO_LOG}" \
@@ -1656,7 +1664,12 @@ assert_exact_lines "${PROVISION_CARGO_LOG}" \
   "arg=--manifest-path" \
   "arg=${PROVISION_REPOSITORY}/Cargo.toml" \
   "arg=--lockfile-path" \
-  "arg=${PROVISION_CORRIDOR}/lock/Cargo.lock"
+  "arg=${PROVISION_CORRIDOR}/resolution-probe/Cargo.lock"
+grep -Fxq \
+  '# privacy-sdk-release-source-sha256 = 71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2' \
+  "${PROVISION_CORRIDOR}/lock/Cargo.lock"
+[[ "$("${TEST_PYTHON}" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${PROVISION_CORRIDOR}/lock/Cargo.lock")" == \
+  "9d6421d36fde972b4ba31889d46f5e2231ac9241558455f9ba1be9c66e63a744" ]]
 assert_exact_lines "${PROVISION_BIN}/rustup-args.log" \
   "which --toolchain 1.93.1-x86_64-unknown-linux-gnu cargo" \
   "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustc" \
@@ -1816,7 +1829,7 @@ cp "${SOURCE_ROOT}/.cargo/config.toml" \
 : >"${PROVISION_BAD_ENV}"
 : >"${PROVISION_BAD_PATH}"
 expect_failure \
-  "external lock generation created workspace Cargo.lock" \
+  "external lock generation changed the tracked root Cargo.lock" \
   env \
   FAKE_PROVISION_WORKSPACE_LOCK="${PROVISION_BAD_REPOSITORY}/Cargo.lock" \
   PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
@@ -1858,12 +1871,18 @@ INTEGRATION_VENV="${TEST_ROOT}/fake venv"$'\n'"record-boundary"
 INTEGRATION_BIN="${TEST_ROOT}/integration-toolchain/1.93.1-aarch64-apple-darwin/bin"
 INTEGRATION_SELECTED_LOCK="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock"
 prepare_python_guard_root "${INTEGRATION_ROOT}"
+INTEGRATION_WORKSPACE_STATE="$(
+  privacy_sdk_capture_optional_file_state \
+    "${INTEGRATION_ROOT}/Cargo.lock" \
+    "integration workspace Cargo.lock" \
+    "${TEST_PYTHON}"
+)"
 mkdir -p \
   "${INTEGRATION_PRIVATE_ROOT}" \
   "$(dirname "${INTEGRATION_SELECTED_LOCK}")" \
   "${INTEGRATION_VENV}/bin" \
   "${INTEGRATION_BIN}"
-install -m 600 "${SOURCE_ROOT}/Cargo.lock" "${INTEGRATION_SELECTED_LOCK}"
+install_test_release_lock "${INTEGRATION_SELECTED_LOCK}"
 
 INTEGRATION_CARGO_LOG="${TEST_ROOT}/integration-cargo.log"
 INTEGRATION_PYTHON_LOG="${TEST_ROOT}/integration-python.log"
@@ -2312,14 +2331,12 @@ dependencies = verifier.authenticate_dependency_roots(
     torii_root=torii_root,
 )
 
-
 def member(name, payload=b"fixture\n", mode=stat.S_IFREG | 0o644):
     info = zipfile.ZipInfo(name)
     info.create_system = 3
     info.external_attr = mode << 16
     info.compress_type = zipfile.ZIP_STORED
     return info, payload
-
 
 def write_wheel(path, entries):
     with warnings.catch_warnings():
@@ -2329,14 +2346,12 @@ def write_wheel(path, entries):
                 wheel.writestr(info, payload)
     return path
 
-
 class NonSeekableWheelBuffer(io.BytesIO):
     def seekable(self):
         return False
 
     def seek(self, *_args, **_kwargs):
         raise OSError("fixture intentionally disables seeking")
-
 
 def write_streamed_wheel(path, entries):
     destination = NonSeekableWheelBuffer()
@@ -2346,12 +2361,10 @@ def write_streamed_wheel(path, entries):
     path.write_bytes(destination.getvalue())
     return path
 
-
 def record_hash(payload):
     digest = hashlib.sha256(payload).digest()
     encoded = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
     return f"sha256={encoded}"
-
 
 def with_record(entries):
     record_name = "iroha_python-0.0.0.dist-info/RECORD"
@@ -2362,7 +2375,6 @@ def with_record(entries):
     ]
     rows.append(f"{record_name},,")
     return entries + [member(record_name, ("\n".join(rows) + "\n").encode())]
-
 
 def valid_entries(
     *,
@@ -2384,7 +2396,6 @@ def valid_entries(
         ),
     ])
 
-
 def write_installed_record():
     record_path = dist_info_root / "RECORD"
     installed_files = sorted(
@@ -2403,7 +2414,6 @@ def write_installed_record():
         rows.append(f"{relative},{record_hash(payload)},{len(payload)}")
     rows.append("iroha_python-0.0.0.dist-info/RECORD,,")
     record_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
-
 
 def install_dist_info(wheel):
     dist_info_root.mkdir(exist_ok=True)
@@ -2432,13 +2442,11 @@ def install_dist_info(wheel):
     )
     write_installed_record()
 
-
 def seal(path):
     metadata = os.stat(path, follow_symlinks=False)
     return verifier.FileSeal.from_stat(
         hashlib.sha256(path.read_bytes()).hexdigest(), metadata
     ).render()
-
 
 def expect_failure(fragment, callback):
     try:
@@ -2448,7 +2456,6 @@ def expect_failure(fragment, callback):
             raise AssertionError(f"missing {fragment!r} in verifier failure: {error}")
     else:
         raise AssertionError(f"wheel verifier accepted negative control: {fragment}")
-
 
 expect_failure(
     "source root is unavailable",
@@ -2513,14 +2520,12 @@ expect_failure(
 )
 source_symlink.unlink()
 
-
 def preflight(path):
     return verifier.preflight_wheel(
         path,
         seal(path),
         extension_suffixes=(".abi3.so",),
     )
-
 
 wheel_path = write_wheel(fixture_root / "fresh.whl", valid_entries())
 wheel = preflight(wheel_path)
@@ -2555,14 +2560,12 @@ if type(native_spec.loader) is not importlib.machinery.ExtensionFileLoader:
 if native_spec.origin != str(native_path) or native_spec.loader_state is not None:
     raise AssertionError("native spec did not retain its trusted origin/state")
 
-
 class InertExtensionLoader(importlib.machinery.ExtensionFileLoader):
     def create_module(self, spec):
         return types.ModuleType(spec.name)
 
     def exec_module(self, module):
         module.INERT_EXTENSION_LOADED = True
-
 
 inert_loader = InertExtensionLoader(
     "iroha_python._crypto",
@@ -2607,7 +2610,6 @@ for loaded_name in tuple(sys.modules):
     ):
         sys.modules.pop(loaded_name, None)
 
-
 class HostileCachedFinder:
     calls = 0
 
@@ -2615,15 +2617,12 @@ class HostileCachedFinder:
         type(self).calls += 1
         raise AssertionError("preseeded importer cache was consulted")
 
-
 hostile_hook_calls = 0
-
 
 def hostile_path_hook(_path):
     global hostile_hook_calls
     hostile_hook_calls += 1
     raise AssertionError("preseeded path hook was consulted")
-
 
 saved_path_hooks = tuple(sys.path_hooks)
 saved_importer_cache = dict(sys.path_importer_cache)
@@ -2848,7 +2847,6 @@ mutating_package_spec, _mutating_native_spec = verifier.trusted_import_specs(
     mutating_layout
 )
 
-
 def import_mutating_package_and_reverify():
     verifier.load_from_trusted_specs(
         wheel=mutating_wheel,
@@ -2858,7 +2856,6 @@ def import_mutating_package_and_reverify():
         dependencies=dependencies,
     )
     verifier.verify_installed_files(mutating_wheel, mutating_layout)
-
 
 expect_failure(
     "does not match the fresh wheel",
@@ -2877,7 +2874,6 @@ for loaded_name in tuple(sys.modules):
 package_path.write_bytes(package_bytes)
 package_sibling_path.write_bytes(sibling_bytes)
 install_dist_info(wheel)
-
 
 expect_failure(
     "expected shell-provided seal",
@@ -3092,7 +3088,6 @@ expect_failure(
 
 saved_file_finder = verifier.importlib.machinery.FileFinder
 
-
 class SpoofedNativeFinder:
     calls = 0
 
@@ -3111,7 +3106,6 @@ class SpoofedNativeFinder:
             origin=str(native_path),
         )
 
-
 try:
     verifier.importlib.machinery.FileFinder = SpoofedNativeFinder
     expect_failure(
@@ -3120,7 +3114,6 @@ try:
     )
 finally:
     verifier.importlib.machinery.FileFinder = saved_file_finder
-
 
 class LoaderStateFinder:
     calls = 0
@@ -3134,7 +3127,6 @@ class LoaderStateFinder:
             return package_spec
         native_spec.loader_state = {"spoofed": True}
         return native_spec
-
 
 try:
     verifier.importlib.machinery.FileFinder = LoaderStateFinder
@@ -3376,7 +3368,10 @@ fi
 
 MISSING_WORKSPACE_ROOT="${TEST_ROOT}/missing-workspace-lock-repository"
 prepare_python_guard_root "${MISSING_WORKSPACE_ROOT}"
-run_python_guard_for_root "${MISSING_WORKSPACE_ROOT}" env \
+rm "${MISSING_WORKSPACE_ROOT}/Cargo.lock"
+expect_failure \
+  "privacy SDK CI requires the sealed tracked root Cargo.lock" \
+  run_python_guard_for_root "${MISSING_WORKSPACE_ROOT}" env \
   INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
   IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock" \
   IROHA_PRIVACY_REAL_CARGO="${INTEGRATION_BIN}/cargo" \
@@ -3398,7 +3393,7 @@ fi
 CREATED_WORKSPACE_ROOT="${TEST_ROOT}/created-workspace-lock-repository"
 prepare_python_guard_root "${CREATED_WORKSPACE_ROOT}"
 expect_failure \
-  "workspace Cargo.lock was created" \
+  "workspace Cargo.lock changed" \
   run_python_guard_for_root "${CREATED_WORKSPACE_ROOT}" \
   env \
   FAKE_MATURIN_MUTATE_PATH="${CREATED_WORKSPACE_ROOT}/Cargo.lock" \
@@ -3446,7 +3441,7 @@ fi
 
 privacy_sdk_assert_optional_file_state \
   "${INTEGRATION_ROOT}/Cargo.lock" \
-  "absent" \
+  "${INTEGRATION_WORKSPACE_STATE}" \
   "integration workspace Cargo.lock" \
   "${TEST_PYTHON}"
 privacy_sdk_assert_file_seal \
@@ -3575,13 +3570,11 @@ venv = Path(sys.argv[3])
 verifier = Path(sys.argv[4])
 cargo_log_path = Path(sys.argv[5])
 
-
 def nul_records(path: Path) -> list[str]:
     records = path.read_bytes().split(b"\0")
     if not records or records[-1] != b"":
         raise SystemExit(f"transcript is not NUL terminated: {path}")
     return [os.fsdecode(record) for record in records[:-1]]
-
 
 groups: list[dict[str, object]] = []
 for record in nul_records(log_path):
@@ -3618,12 +3611,10 @@ if [group["kind"] for group in groups] != expected_kinds:
         f"{[group['kind'] for group in groups]!r}"
     )
 
-
 def arguments(index: int) -> list[str]:
     result = groups[index]["arguments"]
     assert isinstance(result, list)
     return result
-
 
 if arguments(0) != [
     "-I",
@@ -3633,7 +3624,6 @@ if arguments(0) != [
     raise SystemExit("venv Python-version probe transcript drifted")
 if arguments(1) != ["-I", "--version"]:
     raise SystemExit("venv Python executable probe transcript drifted")
-
 
 requirements = root / "python/iroha_python/requirements-ci.lock"
 if arguments(2) != [
@@ -3665,7 +3655,6 @@ cargo_targets = [
     for record in nul_records(cargo_log_path)
     if record.startswith("CARGO_TARGET_DIR=")
 ]
-
 
 def checked_maturin_layout(
     maturin_arguments: list[str],
@@ -3705,7 +3694,6 @@ def checked_maturin_layout(
             f"{observed_cargo_targets!r} != {[target_path, target_path]!r}"
         )
     return target_path, wheel_path
-
 
 maturin = arguments(4)
 target, wheel_directory = checked_maturin_layout(maturin, cargo_targets)
@@ -4167,7 +4155,7 @@ run_wheel_mutation_negative_control() {
   local wheel_selected="${TEST_ROOT}/wheel-${phase}-private/Cargo.lock"
   prepare_python_guard_root "${wheel_root}"
   mkdir -p "$(dirname "${wheel_selected}")"
-  install -m 600 "${SOURCE_ROOT}/Cargo.lock" "${wheel_selected}"
+  install_test_release_lock "${wheel_selected}"
   expect_failure \
     "fresh private wheel changed" \
     run_python_guard_for_root "${wheel_root}" \
@@ -4194,11 +4182,11 @@ run_mutation_negative_control() {
   local expected_failure
   prepare_python_guard_root "${mutation_root}"
   mkdir -p "$(dirname "${mutation_selected}")"
-  install -m 600 "${SOURCE_ROOT}/Cargo.lock" "${mutation_selected}"
+  install_test_release_lock "${mutation_selected}"
   case "${target_kind}" in
     workspace)
       mutation_target="${mutation_root}/Cargo.lock"
-      expected_failure="workspace Cargo.lock was created"
+      expected_failure="workspace Cargo.lock changed"
       ;;
     selected)
       mutation_target="${mutation_selected}"
@@ -4245,7 +4233,7 @@ run_artifact_set_negative_control() {
   local artifact_directory="${artifact_root}/python/iroha_python/src/iroha_python"
   prepare_python_guard_root "${artifact_root}"
   mkdir -p "$(dirname "${artifact_selected}")"
-  install -m 600 "${SOURCE_ROOT}/Cargo.lock" "${artifact_selected}"
+  install_test_release_lock "${artifact_selected}"
   expect_failure \
     "checkout Python native artifacts" \
     run_python_guard_for_root "${artifact_root}" \
@@ -4268,12 +4256,12 @@ run_artifact_set_negative_control delete
 run_artifact_set_negative_control hardlink
 run_artifact_set_negative_control symlink
 
-# JavaScript's native builder still requires a root-selected lock. Until it is
-# requalified for the distinct external cd9e authority, the gate must stop
-# before Cargo rather than replacing the tracked 4bcc root.
-grep -Fq 'TRACKED_ROOT_CARGO_LOCK_SHA256="4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
-grep -Fq 'FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
-grep -Fq 'external-lock requalification' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+# JavaScript consumes the authenticated external projection without replacing
+# or mutating the tracked root authority.
+grep -Fq 'TRACKED_ROOT_CARGO_LOCK_SHA256="71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+grep -Fq 'FROZEN_CARGO_LOCK_SHA256="9d6421d36fde972b4ba31889d46f5e2231ac9241558455f9ba1be9c66e63a744"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+grep -Fq 'export IROHA_JS_CARGO_LOCKFILE_PATH="${PRIVACY_RELEASE_CARGO_LOCK}"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+! grep -Fq 'external-lock requalification' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 ! grep -Eq '(install|rm -f --).*\$\{WORKSPACE_CARGO_LOCKFILE\}' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 
 # Source-level CI coverage: the root lock is tracked as the exact source
@@ -4313,9 +4301,11 @@ grep -Fq 'RUSTC_BOOTSTRAP=1 \' "${LOCK_HELPER_PATH}"
 grep -Fq '"${real_cargo}" -Z unstable-options generate-lockfile \' \
   "${LOCK_HELPER_PATH}"
 grep -Fq 'CARGO_HOME="${private_cargo_home}"' "${LOCK_HELPER_PATH}"
-[[ "$(grep -Fc -- '--lockfile-path "${lock_path}"' "${LOCK_HELPER_PATH}")" -eq 1 ]]
+[[ "$(grep -Fc -- '--lockfile-path "${resolution_probe_lock_path}"' "${LOCK_HELPER_PATH}")" -eq 1 ]]
 grep -Fq 'PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256=' "${LOCK_HELPER_PATH}"
 grep -Fq 'PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256=' "${LOCK_HELPER_PATH}"
+grep -Fq 'PRIVACY_SDK_RELEASE_LOCK_TRAILER=' "${LOCK_HELPER_PATH}"
+grep -Fq 'privacy_sdk_materialize_release_lock' "${LOCK_HELPER_PATH}"
 grep -Fq 'privacy_sdk_validate_repository_cargo_configuration' "${LOCK_HELPER_PATH}"
 grep -Fq 'privacy_sdk_prepare_private_cargo_home' "${LOCK_HELPER_PATH}"
 grep -Fq 'privacy_sdk_assert_ci_executable_path_order' "${LOCK_HELPER_PATH}"
@@ -4599,7 +4589,7 @@ fi
 "${TEST_PYTHON}" -I - "${WORKFLOW_PATH}" <<'PY'
 import re, sys
 from pathlib import Path
-workflow = Path(sys.argv[1]).read_text(encoding="utf-8"); frozen = "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+workflow = Path(sys.argv[1]).read_text(encoding="utf-8"); frozen = "9d6421d36fde972b4ba31889d46f5e2231ac9241558455f9ba1be9c66e63a744"
 private = {
     "privacy_native_bridge_tests": ("privacy SDK", "native Cargo", "cargo test -p connect_norito_bridge", None, 0, False),
     "privacy_jvm_sdk_tests": ("privacy JVM", "JVM native", "ci/check_privacy_jvm_sdk.sh", "privacy-jvm-python", 4, True),
@@ -4672,7 +4662,7 @@ def validate(source: str) -> None:
             (
                 "Install host-qualified privacy",
                 "Download frozen source-bound privacy lock input",
-                "Authenticate distinct privacy release lock and enforce requalification blocker",
+                "Authenticate deterministic privacy release lock",
                 frozen,
                 fetch,
                 "cargo fetch --locked",
@@ -4705,6 +4695,6 @@ PY
 [[ "$(grep -Ec 'install -m 600 .*Cargo\.lock.*Cargo\.lock' "${WORKFLOW_PATH}")" -eq 0 ]] && grep -Fxq '**/Cargo.lock' "${SOURCE_ROOT}/.gitignore" && grep -Fxq '!/Cargo.lock' "${SOURCE_ROOT}/.gitignore"
 ROOT_LOCK_INDEX_ENTRY="$(git -C "${SOURCE_ROOT}" ls-files --stage -- Cargo.lock)"; ROOT_LOCK_HEAD_ENTRY="$(git -C "${SOURCE_ROOT}" ls-tree HEAD -- Cargo.lock)"
 [[ "${ROOT_LOCK_INDEX_ENTRY}" =~ ^100644\ ([0-9a-f]{40})\ 0$'\t'Cargo\.lock$ ]]; ROOT_LOCK_INDEX_OID="${BASH_REMATCH[1]}"
-[[ "${ROOT_LOCK_HEAD_ENTRY}" =~ ^100644\ blob\ ([0-9a-f]{40})$'\t'Cargo\.lock$ ]]; ROOT_LOCK_HEAD_OID="${BASH_REMATCH[1]}"; [[ "${ROOT_LOCK_INDEX_OID}" == "${ROOT_LOCK_HEAD_OID}" && "$(git -C "${SOURCE_ROOT}" hash-object --no-filters -- Cargo.lock)" == "${ROOT_LOCK_INDEX_OID}" && "$(python3 -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SOURCE_ROOT}/Cargo.lock")" == "4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492" ]]
+[[ "${ROOT_LOCK_HEAD_ENTRY}" =~ ^100644\ blob\ ([0-9a-f]{40})$'\t'Cargo\.lock$ ]]; ROOT_LOCK_HEAD_OID="${BASH_REMATCH[1]}"; [[ "${ROOT_LOCK_INDEX_OID}" == "${ROOT_LOCK_HEAD_OID}" && "$(git -C "${SOURCE_ROOT}" hash-object --no-filters -- Cargo.lock)" == "${ROOT_LOCK_INDEX_OID}" && "$(python3 -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SOURCE_ROOT}/Cargo.lock")" == "71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2" ]]
 grep -Fq 'PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" && grep -Fq 'PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
 printf '%s\n' "privacy SDK authenticated Cargo.lock guard tests passed"

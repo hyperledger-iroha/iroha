@@ -10899,7 +10899,7 @@ final class ToriiClientTests: XCTestCase {
         let payload = """
         {
           "cash_handoff_capability": "cash_handoff_v1",
-          "required_bridge_abi_version": 22,
+          "required_bridge_abi_version": 23,
           "max_hops": 8,
           "ready": true
         }
@@ -10920,7 +10920,7 @@ final class ToriiClientTests: XCTestCase {
 
         let status = try await makeClient().getOfflineCapability()
         XCTAssertEqual(status.cashHandoffCapability, "cash_handoff_v1")
-        XCTAssertEqual(status.requiredBridgeAbiVersion, 22)
+        XCTAssertEqual(status.requiredBridgeAbiVersion, 23)
         XCTAssertEqual(status.maxHops, 8)
         XCTAssertTrue(status.ready)
     }
@@ -10928,14 +10928,14 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineCapabilityRejectsNonUniversalClaims() async throws {
         let invalidPayloads = [
-            #"{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":22,"max_hops":8,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":9,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[]}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"blockers":[]}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"future":true}"#,
+            #"{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":23,"max_hops":8,"ready":true}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":9,"ready":true}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":false}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"assets":[]}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"blockers":[]}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"future":true}"#,
         ]
 
         for payload in invalidPayloads {
@@ -10960,7 +10960,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineCapabilityRejectsDuplicateKeysAndInvalidUtf8() async throws {
         let payloads = [
-            Data(#"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"ready":true}"#.utf8),
+            Data(#"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"ready":true}"#.utf8),
             Data([0xff, 0xfe, 0xfd]),
         ]
         for payload in payloads {
@@ -11587,7 +11587,7 @@ final class ToriiClientTests: XCTestCase {
         let payload = """
         {
           "cash_handoff_capability": "cash_handoff_v1",
-          "required_bridge_abi_version": 22,
+          "required_bridge_abi_version": 23,
           "max_hops": 8,
           "ready": true,
           "assets": [],
@@ -19386,20 +19386,19 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testSubmitGovernanceDeployContractProposalEncodesAliasSelector() {
         let expectation = expectation(description: "governance proposal")
         let proposalId = String(repeating: "3", count: 64)
-        let codeHash = String(repeating: "4", count: 64)
-        let encodedCodeHash = "BlAkE2b32:0X\(codeHash)"
-        let abiHash = String(repeating: "5", count: 64)
+        let codeHash = Data(repeating: 0x44, count: 32)
+        let abiHash = Data(repeating: 0x55, count: 32)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/gov/proposals/deploy-contract")
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             let body = self.bodyJSON(from: request)
             XCTAssertEqual(body["contract_alias"] as? String, "demo::universal")
-            XCTAssertEqual(body["code_hash"] as? String, codeHash)
-            XCTAssertEqual(body["abi_hash"] as? String, abiHash)
-            XCTAssertEqual(body["abi_version"] as? String, "1")
-            XCTAssertEqual(body["mode"] as? String, "Plain")
-            XCTAssertNil(body["limits"])
+            XCTAssertEqual(body["code_hash"] as? String, codeHash.hexLowercased())
+            XCTAssertEqual(body["abi_hash"] as? String, abiHash.hexLowercased())
+            XCTAssertEqual((body["abi_version"] as? NSNumber)?.uint16Value, 1)
+            XCTAssertNil(body["window"])
+            XCTAssertNil(body["mode"])
             let provenance = body["manifest_provenance"] as? [String: Any]
             XCTAssertEqual(provenance?["signer"] as? String, "ed25519:public")
             XCTAssertEqual(provenance?["signature"] as? String, "ed25519:signature")
@@ -19408,17 +19407,14 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let payload = """
-            {"ok":true,"proposal_id":"\(proposalId)","tx_instructions":[{"wire_id":"FinalizeReferendum","payload_hex":"00ff"}]}
+            {"proposal_id":"\(proposalId)","tx_instructions":[{"wire_id":"iroha_data_model::isi::governance::ProposeDeployContract","payload_hex":"00ff"}]}
             """.data(using: .utf8)!
             return (response, payload)
         }
 
         let request = ToriiGovernanceDeployContractProposalRequest(contractAlias: "demo::universal",
-                                                                   codeHashHex: encodedCodeHash,
-                                                                   abiHashHex: abiHash,
-                                                                   abiVersion: "1",
-                                                                   window: ToriiGovernanceWindow(lower: 10, upper: 20),
-                                                                   mode: .plain,
+                                                                   codeHash: codeHash,
+                                                                   abiHash: abiHash,
                                                                    manifestProvenance: .init(
                                                                     signer: "ed25519:public",
                                                                     signature: "ed25519:signature"
@@ -19426,9 +19422,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         makeClient().submitGovernanceDeployContractProposal(request, canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success(let response):
-                XCTAssertTrue(response.ok)
                 XCTAssertEqual(response.proposalId, proposalId)
-                XCTAssertEqual(response.txInstructions.first?.wireId, "FinalizeReferendum")
+                XCTAssertEqual(
+                    response.txInstructions.first?.wireId,
+                    "iroha_data_model::isi::governance::ProposeDeployContract"
+                )
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
             }
@@ -19441,8 +19439,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let request = ToriiGovernanceDeployContractProposalRequest(
             contractAddress: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             contractAlias: "demo::universal",
-            codeHashHex: String(repeating: "4", count: 64),
-            abiHashHex: String(repeating: "5", count: 64)
+            codeHash: Data(repeating: 0x44, count: 32),
+            abiHash: Data(repeating: 0x55, count: 32)
         )
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
             guard case let ToriiClientError.invalidPayload(message) = error else {
@@ -19453,11 +19451,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     }
 
     func testGovernanceDeployContractProposalRejectsNonV1AbiVersion() {
-        for abiVersion in ["2", "01", " 1", "1 "] {
+        for abiVersion: UInt16 in [0, 2, .max] {
             let request = ToriiGovernanceDeployContractProposalRequest(
                 contractAlias: "demo::universal",
-                codeHashHex: String(repeating: "4", count: 64),
-                abiHashHex: String(repeating: "5", count: 64),
+                codeHash: Data(repeating: 0x44, count: 32),
+                abiHash: Data(repeating: 0x55, count: 32),
                 abiVersion: abiVersion
             )
             XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
@@ -19469,161 +19467,57 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
-    func testGovernanceWindowEncodesEntireUInt64Domain() throws {
-        let window = ToriiGovernanceWindow(lower: 0, upper: UInt64.max)
-        let data = try JSONEncoder().encode(window)
-        let decoded = try JSONDecoder().decode(ToriiGovernanceWindow.self, from: data)
-        XCTAssertEqual(decoded.lower, 0)
-        XCTAssertEqual(decoded.upper, UInt64.max)
-        XCTAssertTrue(
-            String(decoding: data, as: UTF8.self)
-                .contains("\"upper\":18446744073709551615")
-        )
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGovernanceWindowRejectsReversedBoundsBeforeTransportDispatch() async {
-        var dispatched = false
-        StubURLProtocol.handler = { request in
-            dispatched = true
-            XCTFail("reversed governance window reached transport dispatch: \(request)")
-            return (
-                HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: 500,
-                    httpVersion: nil,
-                    headerFields: nil
-                )!,
-                Data()
-            )
-        }
-        let request = ToriiGovernanceDeployContractProposalRequest(
-            contractAlias: "demo::universal",
-            codeHashHex: String(repeating: "4", count: 64),
-            abiHashHex: String(repeating: "5", count: 64),
-            window: .init(lower: 2, upper: 1)
-        )
-
-        await XCTAssertThrowsErrorAsync(
-            try await makeClient().submitGovernanceDeployContractProposal(request, canonicalAuth: canonicalReadAuth)
-        ) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                return XCTFail("unexpected error: \(error)")
-            }
-            XCTAssertTrue(reason.contains("upper bound must not precede"))
-        }
-        XCTAssertFalse(dispatched)
-    }
-
-    func testGovernanceDeployContractProposalRejectsUndeclaredHashAliases() {
-        let hash = String(repeating: "4", count: 64)
-        for codeHash in [
-            ":\(hash)",
-            " \(hash)",
-            "\(hash) ",
-            "blake2b32:\(hash):ignored",
-            "sha256:\(hash)"
-        ] {
+    func testGovernanceDeployContractProposalRejectsWrongHashLengths() {
+        for length in [0, 31, 33] {
             let request = ToriiGovernanceDeployContractProposalRequest(
                 contractAlias: "demo::universal",
-                codeHashHex: codeHash,
-                abiHashHex: String(repeating: "5", count: 64)
+                codeHash: Data(repeating: 0x44, count: length),
+                abiHash: Data(repeating: 0x55, count: 32)
             )
             XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
                 guard case let ToriiClientError.invalidPayload(message) = error else {
                     return XCTFail("unexpected error: \(error)")
                 }
-                XCTAssertTrue(message.contains("code_hash must be a 32-byte hex string"))
+                XCTAssertTrue(message.contains("code_hash must contain exactly 32 bytes"))
             }
         }
     }
 
-    func testFinalizeGovernanceRequiresOneExactProposalFingerprint() throws {
-        let proposalId = String(repeating: "ab", count: 32)
-        let request = ToriiGovernanceFinalizeRequest(
-            referendumId: proposalId,
-            proposalId: proposalId
+    func testGovernanceProposalResponseRejectsLegacyOkField() {
+        let proposalId = String(repeating: "3", count: 64)
+        let legacy = Data(
+            """
+            {"ok":true,"proposal_id":"\(proposalId)","tx_instructions":[{"wire_id":"iroha_data_model::isi::governance::ProposeDeployContract","payload_hex":"00ff"}]}
+            """.utf8
         )
-        let data = try JSONEncoder().encode(request)
-        let json = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: data) as? [String: Any]
-        )
-        XCTAssertEqual(json["referendum_id"] as? String, proposalId)
-        XCTAssertEqual(json["proposal_id"] as? String, proposalId)
-
-        for invalidReferendum in [
-            "", "ref-1", " ref-1", "ref-1 ", "ref 1", "ref\t1", "ref\u{0000}1",
-            "ref/1", ".hidden", "ref%31", "投票", String(repeating: "a", count: 129),
-            "0x\(proposalId)", proposalId.uppercased()
-        ] {
-            XCTAssertThrowsError(
-                try JSONEncoder().encode(
-                    ToriiGovernanceFinalizeRequest(
-                        referendumId: invalidReferendum,
-                        proposalId: proposalId
-                    )
-                )
-            )
-        }
-        for invalidProposal in [
-            ":\(proposalId)",
-            "0x\(proposalId)",
-            proposalId.uppercased(),
-            " \(proposalId)",
-            "\(proposalId) ",
-            "blake2b32:\(proposalId)",
-            "sha256:\(proposalId)"
-        ] {
-            XCTAssertThrowsError(
-                try JSONEncoder().encode(
-                    ToriiGovernanceFinalizeRequest(
-                        referendumId: proposalId,
-                        proposalId: invalidProposal
-                    )
-                )
-            )
-        }
         XCTAssertThrowsError(
-            try JSONEncoder().encode(
-                ToriiGovernanceFinalizeRequest(
-                    referendumId: proposalId,
-                    proposalId: String(repeating: "7", count: 64)
-                )
-            )
-        ) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                return XCTFail("unexpected error: \(error)")
-            }
-            XCTAssertTrue(reason.contains("referendum_id must equal proposal_id"))
-        }
+            try JSONDecoder().decode(ToriiGovernanceProposalResponse.self, from: legacy)
+        )
     }
 
-    func testEnactGovernanceEncodesOnlyExactLowercaseProposalId() throws {
-        let proposalId = String(repeating: "7", count: 64)
-        let data = try JSONEncoder().encode(ToriiGovernanceEnactRequest(proposalId: proposalId))
-        let json = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: data) as? [String: Any]
-        )
-        XCTAssertEqual(json["proposal_id"] as? String, proposalId)
-        XCTAssertEqual(Set(json.keys), Set(["proposal_id"]))
-
-        for invalid in ["0x\(proposalId)", String(repeating: "A", count: 64), " \(proposalId)"] {
+    func testGovernanceProposalResponseRequiresOneFullWireInstruction() {
+        let proposalId = String(repeating: "3", count: 64)
+        for instructions in [
+            "[]",
+            "[{\"wire_id\":\"ProposeDeployContract\",\"payload_hex\":\"00ff\"}]",
+            "[{\"wire_id\":\"iroha_data_model::isi::governance::ProposeDeployContract\",\"payload_hex\":\"00ff\"},{\"wire_id\":\"iroha_data_model::isi::governance::ProposeDeployContract\",\"payload_hex\":\"00ff\"}]",
+        ] {
+            let data = Data(
+                """
+                {"proposal_id":"\(proposalId)","tx_instructions":\(instructions)}
+                """.utf8
+            )
             XCTAssertThrowsError(
-                try JSONEncoder().encode(ToriiGovernanceEnactRequest(proposalId: invalid))
-            ) { error in
-                guard case let ToriiClientError.invalidPayload(reason) = error else {
-                    return XCTFail("unexpected error: \(error)")
-                }
-                XCTAssertTrue(reason.contains("exactly 64 lowercase hexadecimal"))
-            }
+                try JSONDecoder().decode(ToriiGovernanceProposalResponse.self, from: data)
+            )
         }
     }
 
     func testGetGovernanceProposalDecodesRecord() {
         let expectation = expectation(description: "proposal lookup")
         let proposalId = String(repeating: "6", count: 64)
-        let codeHash = String(repeating: "7", count: 64)
-        let abiHash = String(repeating: "8", count: 64)
+        let codeHash = Data(repeating: 0x77, count: 32)
+        let abiHash = Data(repeating: 0x88, count: 32)
         let contractAddress = "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/gov/proposals/\(proposalId)")
@@ -19632,7 +19526,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let payload = """
-            {"found":true,"proposal":{"proposer":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","kind":{"DeployContract":{"contract_address":"\(contractAddress)","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","abi_version":"1"}},"created_height":42,"status":"Approved"}}
+            {"found":true,"proposal":{"proposer":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","kind":{"kind":"DeployContract","payload":{"contract_address":"\(contractAddress)","code_hash":"\(codeHash.hexLowercased())","abi_hash":"\(abiHash.hexLowercased())","abi_version":1,"manifest_provenance":{"signer":"ed25519:public","signature":"ed25519:signature"}}},"created_height":42,"status":"Enacted"}}
             """.data(using: .utf8)!
             return (response, payload)
         }
@@ -19646,6 +19540,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                     return XCTFail("expected deploy contract kind")
                 }
                 XCTAssertEqual(payload.contractAddress, contractAddress)
+                XCTAssertEqual(payload.codeHash, codeHash)
+                XCTAssertEqual(payload.abiHash, abiHash)
+                XCTAssertEqual(payload.abiVersion, 1)
+                XCTAssertEqual(payload.manifestProvenance?.signer, "ed25519:public")
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
             }

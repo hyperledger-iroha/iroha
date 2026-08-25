@@ -182,7 +182,7 @@ pub fn validate_production_runtime_handle(value: &str) -> Result<(), ProductionR
         .any(|component| {
             matches!(
                 component,
-                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
+                "null" | "mock" | "test" | "dev" | "demo" | "fake" | "dummy" | "placeholder"
             )
         })
     {
@@ -222,6 +222,7 @@ mod tests {
             "https://host/%73ource",
             "hsm://sorafs/provider-ingest/dummy",
             "hsm://sorafs/provider-ingest/test",
+            "hsm://sorafs/provider-ingest/demo",
             "provider ingest",
             "provider\\ingest",
             "provider\nprimary",

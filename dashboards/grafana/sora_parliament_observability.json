@@ -1,0 +1,73 @@
+{
+  "title": "SORA Parliament Operations",
+  "uid": "sora-parliament-ops",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "tags": ["sora", "governance", "parliament", "privacy"],
+  "time": {"from": "now-24h", "to": "now"},
+  "templating": {"list": []},
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Committed attempts by status",
+      "id": 1,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [{
+        "expr": "sum by (status) (governance_parliament_attempts_by_status)",
+        "legendFormat": "{{status}}",
+        "refId": "A"
+      }],
+      "fieldConfig": {"defaults": {"unit": "none", "min": 0}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "description": "Aggregate committed lifecycle status. No attempt or proposal identifier is exported."
+    },
+    {
+      "type": "timeseries",
+      "title": "Committed attempts by stage",
+      "id": 2,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [{
+        "expr": "sum by (stage) (governance_parliament_attempts_by_stage)",
+        "legendFormat": "{{stage}}",
+        "refId": "A"
+      }],
+      "fieldConfig": {"defaults": {"unit": "none", "min": 0}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "description": "Aggregate committed stage distribution for operational progress checks."
+    },
+    {
+      "type": "timeseries",
+      "title": "Accepted lifecycle transitions",
+      "id": 3,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 8},
+      "targets": [{
+        "expr": "sum by (transition) (rate(governance_parliament_transitions_total[5m]))",
+        "legendFormat": "{{transition}}",
+        "refId": "A"
+      }],
+      "fieldConfig": {"defaults": {"unit": "ops", "min": 0}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "description": "Only the closed transition enum is used as a label."
+    },
+    {
+      "type": "timeseries",
+      "title": "Deterministic no-result classes",
+      "id": 4,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 8},
+      "targets": [{
+        "expr": "sum by (class) (increase(governance_parliament_no_result_total[1h]))",
+        "legendFormat": "{{class}}",
+        "refId": "A"
+      }],
+      "fieldConfig": {"defaults": {"unit": "none", "min": 0}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "description": "Aggregate Core-derived failure classes; private ballots, shares, roots, and accounts never appear."
+    }
+  ]
+}

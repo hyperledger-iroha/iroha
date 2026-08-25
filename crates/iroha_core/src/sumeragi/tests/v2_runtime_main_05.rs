@@ -179,14 +179,44 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
     runtime
         .take_effect_ownership(store_effects.len())
         .expect("ValidateBody retains the body pipeline lifecycle owner");
+
+    // Use a separate reducer with a real signer fence for the rebind case.
+    // The completed pipeline above cannot make an unrelated body Busy: it has
+    // no matching reducer work and is correctly ignored instead.
+    let busy_directory = TempDir::new().expect("temporary Busy-destination directory");
+    let (mut runtime, context, _keys) = authenticated_network_runtime_with_local_validator(
+        &busy_directory,
+        RuntimeQueueConfig::new(8, 1, 1),
+        Some(0),
+    );
+    let now = Instant::now();
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm runtime before opening a signer fence");
+    let RuntimeStep::Advanced(timeout_effects) = runtime
+        .step(now + runtime.round_timeout())
+        .expect("open a runtime-owned TimeoutVote signer fence")
+    else {
+        panic!("timeout dispatch unexpectedly idled")
+    };
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("timeout dispatch retains exact scheduler ownership");
+    let timeout_ownership = runtime
+        .take_effect_ownership(timeout_effects.len())
+        .expect("TimeoutVote Sign retains its lifecycle owner");
+    let [timeout_ownership] = timeout_ownership.as_slice() else {
+        panic!("TimeoutVote Sign has one exact owner")
+    };
+    runtime
+        .set_external_lifecycle_owners(vec![timeout_ownership.owner().clone()])
+        .expect("publish the pending TimeoutVote signer owner");
+    let source_tag = runtime.round_tag();
     let rebound = EventTag::new(
         source_tag.height(),
         source_tag.view() + 1,
         Generation::new(source_tag.generation().get() + 1),
     );
-    // The body reconstructed above already owns a terminal serviced-
-    // candidate record. Use another exact body to exercise the live Busy
-    // lane instead of asking the adapter to resurrect that terminal.
     let rebound_manifest = runtime_manifest(&context, 0x8E);
     let (body_ordinal, body_owner) = defer_persistent_body_available_for_test(
         &mut runtime,
@@ -660,6 +690,98 @@ fn local_proposal_ready_is_owned_by_its_validate_predecessor() {
     assert!(!store.exactly_authorizes_body_pipeline_successor(&store_effect, tag, &evidence,));
     assert!(validate.exactly_authorizes_body_pipeline_successor(&validate_effect, tag, &evidence,));
 }
+
+#[test]
+fn body_stage_completion_previews_preserve_later_queued_ingress_exactly() {
+    use crate::sumeragi::v2::{
+        CertifiedFetchStoreAdapterPreparationV1, DurableStoreValidateAdapterPreparationV1,
+    };
+
+    let directory = TempDir::new().expect("temporary body-stage completion directory");
+    let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(8, 2, 2),
+        Some(0),
+    );
+    let now = Instant::now();
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm body-stage runtime");
+    runtime
+        .enqueue_network(signed_runtime_proposal(&context, &keys, 0x90))
+        .expect("enqueue body-stage proposal");
+    let RuntimeStep::Advanced(effects) = runtime.step(now).expect("dispatch proposal") else {
+        panic!("proposal unexpectedly idled")
+    };
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("proposal retains its scheduler owner");
+    let (tag, manifest) = match effects.as_slice() {
+        [
+            AdapterEffect::FetchBody {
+                tag,
+                manifest: Some(manifest),
+                ..
+            },
+        ] => (*tag, manifest.clone()),
+        effects => panic!("unexpected proposal effects: {effects:?}"),
+    };
+    runtime
+        .take_effect_ownership(effects.len())
+        .expect("proposal Fetch retains exact ownership");
+    drop(runtime.take_leader_wire_runtime_terminals());
+
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(signed_runtime_quorum_certificate(
+                &context, &keys, 0x91,
+            )),
+        ))
+        .expect("queue unrelated later ingress");
+    let incumbent = |runtime: &SerializedV2Runtime| {
+        let queued = runtime
+            .ingress
+            .commands
+            .front()
+            .expect("one queued incumbent");
+        (
+            queued
+                .command
+                .exact_runtime_command_identity()
+                .canonical_bytes,
+            queued.lifecycle_owner().expect("incumbent lifecycle owner"),
+            queued.admission_ordinal,
+            queued.queue_occurrence_owner.clone(),
+            queued.ingress_ownership.clone(),
+        )
+    };
+    let incumbent_before = incumbent(&runtime);
+    let CertifiedFetchStoreAdapterPreparationV1::Applied(fetch) = runtime
+        .prepare_certified_fetch_store(tag, &manifest)
+        .expect("preview Fetch ahead of later ingress")
+    else {
+        panic!("Fetch must project Store")
+    };
+    fetch.commit_after_durable_publication();
+    assert_eq!(incumbent(&runtime), incumbent_before);
+
+    let durable = DurableBodyReceipt::for_test(
+        context.id(),
+        manifest.round,
+        manifest.subject,
+        HashOf::new(&manifest),
+    );
+    let DurableStoreValidateAdapterPreparationV1::Applied(store) = runtime
+        .prepare_durable_store_validate(tag, manifest.round, manifest.subject, &durable)
+        .expect("preview Store ahead of later ingress")
+    else {
+        panic!("Store must project Validate")
+    };
+    store.commit_after_durable_publication();
+    assert_eq!(incumbent(&runtime), incumbent_before);
+    assert_eq!(runtime.queued_commands(), 1);
+}
+
 #[test]
 fn ready_validate_local_publication_preserves_unrelated_queued_ingress_order_and_owner() {
     let directory = TempDir::new().expect("temporary Ready Validate ingress directory");

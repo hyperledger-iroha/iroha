@@ -413,7 +413,7 @@ final class KagemushaNFCTests: XCTestCase {
     func testCardStateMachineCommitsTypedPaymentAndTracksEveryAckByte() throws {
         try requireNativeTestCapability(
             KagemushaRecursiveSpend.hasRequiredNativeSymbols,
-            "ABI-22 Kagemusha bridge is not linked in this test host"
+            "ABI-23 Kagemusha bridge is not linked in this test host"
         )
         let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
         let request = try offer.project(

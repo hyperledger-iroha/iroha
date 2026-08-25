@@ -1290,7 +1290,7 @@ _SERVICED_CANDIDATE_V4_STORE_ITEM_SHA256 = {
         "3e025a26fdd14c00e5664a2d34355169bc7b650de2534939586f3a7b50ebb9d4"
     ),
     "leader_wire_load_and_reconcile": (
-        "56b48215d914a764d9eadf2c4f7d49ba7c380289d9c4c89f9fc2238da7d98f17"
+        "dfdd5e26961ac56d3cdb189d65ddc634a31f0163d125511325cc8a850749e710"
     ),
     "store_open": (
         "a87131cdea8fcf204ab3a04992f93e05fc32400f475abcda450f2636d08b97de"
@@ -1458,7 +1458,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "1696486255d16af1779a46c10dee8e213104aa4c900d089f3ab0f962b11607eb"
     ),
     "freeze_due_clock_owners": (
-        "86b2abb4734419e69faafa8bd5fd0473626fb2441b94469a81a448e5f661c76e"
+        "d1c028eb58483adffe8eb1415b431d3f031714167535af7382d3ee39b5cf4027"
     ),
     "minimum_active_lifecycle_ordinal": (
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
@@ -1481,9 +1481,6 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
     "dispatch_one_pacemaker_progress": (
         "fc7d5f12b41f703242826e8926dd91f4267b78d775b1d8c2453d85006a3ac965"
-    ),
-    "step_recovery": (
-        "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
     ),
     "dispatch_one_fence_dependency": (
         "539239fa96fca8ea08dc56ac89041b7be0bb6f5f3d33f65259ad8e7833173b69"

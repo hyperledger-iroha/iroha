@@ -1,7 +1,7 @@
 // Authoritative SoraCloud execution-result regression.
 #[test]
 fn execute_apartment_returns_authoritative_status_and_commitment() -> Result<()> {
-    let mut state = test_state()?;
+    let mut state = test_state();
     let apartment = sample_agent_record()?;
     {
         let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;

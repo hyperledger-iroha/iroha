@@ -2534,8 +2534,26 @@ fn all_eight_auxiliary_broadcast_payloads_are_explicitly_rejected() {
             vrf_proof: vec![0x67],
             bls_sig: vec![0x67],
         }),
+        wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(
+            wire::GlobalBeaconPartialSignature {
+                round: fixture.round,
+                partial: iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1 {
+                    session_id: [0x68; 32],
+                    signer_index: 1,
+                    signature_share: [0x69; 48],
+                    proof:
+                        iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureProofV1 {
+                            x: [0x6A; 96],
+                            y: [0x6B; 48],
+                            z_s: [0x6C; 32],
+                            z_r: [0x6D; 32],
+                            z_u: [0x6E; 32],
+                        },
+                },
+            },
+        ),
     ];
-    assert_eq!(payloads.len(), 8);
+    assert_eq!(payloads.len(), 9);
     for (ordinal, payload) in (60_u128..).zip(payloads) {
         let effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(payload));
         let ownership = bound_ownership(&effect, fixture.tag, ordinal);

@@ -1,9 +1,13 @@
 #[test]
 fn release_openapi_rendering_uses_one_final_newline() {
-    let rendered =
-        render_release_openapi(&empty_openapi_stub()).expect("render release OpenAPI document");
+    let mut source = json::to_string_pretty(&empty_openapi_stub())
+        .expect("render release OpenAPI document")
+        .into_bytes();
+    source.extend_from_slice(b"\r\n\n");
+    let rendered = render_release_openapi(source);
 
-    assert!(rendered.ends_with("}\n"));
+    assert!(rendered.ends_with(b"}\n"));
+    assert!(!rendered.ends_with(b"}\n\n"));
 }
 
 #[test]

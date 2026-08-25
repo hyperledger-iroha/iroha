@@ -897,6 +897,10 @@ mod tests {
             operation_response_schema_ref(execute, "200", "private uploaded-model execute",),
             "#/components/schemas/PrivateUploadedModelExecuteResponse"
         );
+        assert_eq!(
+            operation_response_schema_ref(execute, "202", "private uploaded-model execute",),
+            "#/components/schemas/PrivateUploadedModelExecuteResponse"
+        );
         assert_strict_object_schema(
             schemas,
             "PrivateUploadedModelExecuteRequest",
@@ -905,21 +909,25 @@ mod tests {
                 "model_name",
                 "bundle_root",
                 "service_name",
+                "service_version",
                 "weight_version",
-                "policy_id",
-                "model",
-                "plaintext_input_i32",
-                "input_artifact",
-                "output_artifact",
-                "emitted_sequence",
                 "decryption_request_id",
+                "input_artifact",
+                "output_recipient",
             ],
             &[],
         );
         assert_strict_object_schema(
             schemas,
             "PrivateUploadedModelExecuteResponse",
-            &["schema_version", "status", "receipt", "tx_instructions"],
+            &[
+                "schema_version",
+                "status",
+                "submission_status",
+                "transaction_hash",
+                "receipt",
+                "output_artifact",
+            ],
             &[],
         );
         assert_eq!(
@@ -941,21 +949,40 @@ mod tests {
             "SoraPrivateUploadedModelExecutionReceiptV1",
             &[
                 "schema_version",
+                "network_id",
                 "receipt_id",
                 "service_name",
+                "service_version",
                 "model_id",
                 "weight_version",
                 "runtime_version",
                 "model_manifest_digest",
                 "model_bundle_root",
                 "policy_id",
+                "decryption_request_id",
+                "attesting_validator",
                 "input_artifact",
                 "output_artifact",
                 "input_commitment",
                 "output_commitment",
+                "output_recipient",
                 "request_commitment",
                 "result_commitment",
                 "emitted_sequence",
+                "emitted_block_height",
+            ],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SoraPrivateModelArtifactRefV1",
+            &[
+                "schema_version",
+                "sorafs_manifest_digest",
+                "sorafs_root_cid",
+                "artifact_hash",
+                "ciphertext_bytes",
+                "artifact_role",
             ],
             &[],
         );
@@ -974,39 +1001,6 @@ mod tests {
             ],
             &[],
         );
-        assert_strict_object_schema(
-            schemas,
-            "PrivateUploadedModelQuantizedCpuModelDto",
-            &[
-                "input_len",
-                "output_len",
-                "weights_i8",
-                "bias_i32",
-                "output_shift",
-                "output_min",
-                "output_max",
-            ],
-            &[],
-        );
-        assert_eq!(
-            component_properties(schemas, "PrivateUploadedModelQuantizedCpuModelDto")["input_len"]
-                .get("minimum")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            component_properties(schemas, "PrivateUploadedModelQuantizedCpuModelDto")["output_len"]
-                .get("minimum")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            component_properties(schemas, "PrivateUploadedModelQuantizedCpuModelDto")
-                ["output_shift"]
-                .get("maximum")
-                .and_then(Value::as_u64),
-            Some(30)
-        );
         let artifact_roles =
             component_properties(schemas, "SoraPrivateModelArtifactRefV1")["artifact_role"]
                 .get("enum")
@@ -1016,6 +1010,38 @@ mod tests {
                 .map(|role| role.as_str().expect("private model artifact role"))
                 .collect::<BTreeSet<_>>();
         assert_eq!(artifact_roles, BTreeSet::from(["input", "output"]));
+        let ciphertext_bytes =
+            &component_properties(schemas, "SoraPrivateModelArtifactRefV1")["ciphertext_bytes"];
+        assert_eq!(
+            ciphertext_bytes.get("minimum").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            ciphertext_bytes.get("maximum").and_then(Value::as_u64),
+            Some(
+                u64::try_from(
+                    iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_MAX_BYTES_V1,
+                )
+                .expect("private encrypted artifact limit fits u64")
+            )
+        );
+        let remaining_items = &component_properties(
+            schemas,
+            "PrivateUploadedModelReceiptListResponse",
+        )["remaining_items"];
+        let remaining_variants = remaining_items["anyOf"]
+            .as_array()
+            .expect("private receipt remaining_items nullable variants");
+        assert!(
+            remaining_variants
+                .iter()
+                .any(|variant| variant["type"].as_str() == Some("integer"))
+        );
+        assert!(
+            remaining_variants
+                .iter()
+                .any(|variant| variant["type"].as_str() == Some("null"))
+        );
 
         let parameters =
             document["paths"]["/v1/soracloud/model/upload/private/receipts"]["get"]["parameters"]
@@ -1032,6 +1058,33 @@ mod tests {
             .map(|variant| variant.as_str().expect("count_mode string variant"))
             .collect::<BTreeSet<_>>();
         assert_eq!(variants, BTreeSet::from(["bounded", "exact"]));
+        let limit = parameters
+            .iter()
+            .find(|parameter| parameter["name"].as_str() == Some("limit"))
+            .expect("private uploaded-model receipt limit parameter");
+        assert_eq!(limit["schema"]["minimum"].as_u64(), Some(1));
+        assert_eq!(
+            limit["schema"]["default"].as_u64(),
+            Some(u64::from(
+                crate::soracloud::PRIVATE_UPLOADED_MODEL_RECEIPT_DEFAULT_LIMIT
+            ))
+        );
+        assert_eq!(
+            limit["schema"]["maximum"].as_u64(),
+            Some(u64::from(
+                crate::soracloud::PRIVATE_UPLOADED_MODEL_RECEIPT_MAX_LIMIT
+            ))
+        );
+        let cursor = parameters
+            .iter()
+            .find(|parameter| parameter["name"].as_str() == Some("cursor"))
+            .expect("private uploaded-model receipt cursor parameter");
+        assert_eq!(cursor["schema"]["minLength"].as_u64(), Some(114));
+        assert_eq!(cursor["schema"]["maxLength"].as_u64(), Some(114));
+        assert_eq!(
+            cursor["schema"]["pattern"].as_str(),
+            Some("^[A-Za-z0-9_-]{114}$")
+        );
     }
     #[test]
     #[expect(
@@ -1635,6 +1688,7 @@ mod tests {
                 "ServiceConfigSetRequest".to_owned(),
                 "ServiceConfigStatusEntry".to_owned(),
                 "SignedBundleRequest".to_owned(),
+                "SoraServiceConfigEntryV1".to_owned(),
             ]),
             "only explicitly dynamic configuration/runtime JSON fields may use JsonValue"
         );
@@ -2363,7 +2417,7 @@ mod tests {
     #[test]
     fn sccp_schema_serialization_excludes_retired_and_secret_fields() {
         assert_eq!(
-            iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX,
+            iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64,
             9_007_199_254_740_991
         );
         let schemas = sccp_schemas();
@@ -3669,7 +3723,7 @@ mod tests {
         );
         assert_eq!(
             capability_properties["required_bridge_abi_version"]["const"].as_u64(),
-            Some(22)
+            Some(23)
         );
         assert_eq!(capability_properties["max_hops"]["const"].as_u64(), Some(8));
         assert_eq!(
@@ -4616,12 +4670,25 @@ mod tests {
         }
     }
     #[test]
-    fn retired_sumeragi_mutation_surfaces_are_absent() {
-        let doc = generate_spec();
-        let paths = doc
+    fn retired_sumeragi_vrf_surfaces_are_absent() {
+        for (surface, source) in [
+            ("Torii runtime handlers", include_str!("routing.rs")),
+            ("Torii router mounts", include_str!("lib.rs")),
+        ] {
+            assert!(
+                !source.contains("handle_v1_sumeragi_vrf_"),
+                "retired Sumeragi VRF handler reappeared in {surface}"
+            );
+            assert!(
+                !source.contains("/v1/sumeragi/vrf/"),
+                "retired Sumeragi VRF route reappeared in {surface}"
+            );
+        }
+        let canonical = canonical_document();
+        let paths = canonical
             .get("paths")
             .and_then(Value::as_object)
-            .expect("paths section");
+            .expect("canonical paths section");
         let evidence = paths
             .get("/v1/sumeragi/evidence")
             .and_then(Value::as_object)
@@ -4631,22 +4698,184 @@ mod tests {
             !evidence.contains_key("post"),
             "retired evidence submission operation remains documented"
         );
-        for retired_path in ["/v1/sumeragi/vrf/commit", "/v1/sumeragi/vrf/reveal"] {
+        for retired_path in [
+            "/v1/sumeragi/vrf/commit",
+            "/v1/sumeragi/vrf/epoch/{epoch}",
+            "/v1/sumeragi/vrf/penalties/{epoch}",
+            "/v1/sumeragi/vrf/reveal",
+        ] {
             assert!(
                 !paths.contains_key(retired_path),
-                "retired Sumeragi mutation path remains documented: {retired_path}"
+                "retired Sumeragi VRF path remains in the canonical full-profile document: {retired_path}"
             );
         }
-        let schemas = doc
+        let compiled_paths = generate_spec()
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("compiled paths section")
+            .clone();
+        assert!(
+            compiled_paths
+                .keys()
+                .all(|path| !path.starts_with("/v1/sumeragi/vrf/")),
+            "compiled OpenAPI profile must not expose retired Sumeragi VRF paths"
+        );
+        let schemas = canonical
             .get("components")
             .and_then(Value::as_object)
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
-            .expect("schemas section");
+            .expect("canonical schemas section");
         for retired_schema in ["SumeragiVrfCommitRequest", "SumeragiVrfRevealRequest"] {
             assert!(
                 !schemas.contains_key(retired_schema),
-                "retired Sumeragi mutation schema remains documented: {retired_schema}"
+                "retired Sumeragi VRF request schema remains documented: {retired_schema}"
+            );
+        }
+    }
+    #[test]
+    fn validation_fee_plaintext_contracts_stay_retired_and_parliament_capabilities_are_exact() {
+        const RETIRED_PATH: &str = "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft";
+        for (surface, source) in [
+            (
+                "Torii validation-fee implementation",
+                include_str!("validation_fee_api.rs"),
+            ),
+            ("Torii router mounts", include_str!("lib.rs")),
+            (
+                "canonical route catalog",
+                include_str!("../../iroha_torii_shared/src/route_catalog.rs"),
+            ),
+        ] {
+            assert!(
+                !source.contains(RETIRED_PATH),
+                "retired validation-fee PLAIN ballot draft reappeared in {surface}"
+            );
+            assert!(
+                !source.contains("ValidationFeePlain"),
+                "retired validation-fee plaintext type reappeared in {surface}"
+            );
+        }
+        for (label, document) in [
+            ("canonical", canonical_document()),
+            ("compiled", generate_spec()),
+        ] {
+            let paths = document
+                .get("paths")
+                .and_then(Value::as_object)
+                .expect("OpenAPI paths section");
+            assert!(
+                !paths.contains_key(RETIRED_PATH),
+                "retired validation-fee PLAIN ballot draft remains in {label} OpenAPI"
+            );
+            assert!(
+                paths.keys().all(|path| {
+                    !path.starts_with("/v1/validation-fee/") || !path.contains("plain")
+                }),
+                "retired validation-fee plaintext route remains in {label} OpenAPI"
+            );
+            let schemas = document
+                .get("components")
+                .and_then(Value::as_object)
+                .and_then(|components| components.get("schemas"))
+                .and_then(Value::as_object)
+                .expect("OpenAPI schemas section");
+            for retired_schema in [
+                "ValidationFeePlainBallotDraftRequestV1",
+                "ValidationFeePlainBallotDraftResponseV1",
+                "ValidationFeePlainElectorateMemberV1",
+                "ValidationFeePlainElectorateRulesV1",
+                "ValidationFeePlainElectorateSnapshotV1",
+            ] {
+                assert!(
+                    !schemas.contains_key(retired_schema),
+                    "retired schema {retired_schema} remains in {label} OpenAPI"
+                );
+            }
+            assert!(
+                schemas
+                    .keys()
+                    .all(|name| !name.starts_with("ValidationFeePlain")),
+                "retired validation-fee plaintext schema remains in {label} OpenAPI"
+            );
+
+            assert_strict_object_schema(
+                schemas,
+                "GovernanceCapabilitiesV1",
+                &[
+                    "schema",
+                    "version",
+                    "network_id",
+                    "current_height",
+                    "network_prefix",
+                    "abi_version",
+                    "data_model_version",
+                    "approval_mode",
+                    "private_ballot_protocol",
+                    "mandatory_private_ballots",
+                    "proposal_backed_referendum_ballots_supported",
+                    "standalone_plain_ballots_supported",
+                    "standalone_zk_ballots_supported",
+                    "citizenship_asset_id",
+                    "citizenship_bond_amount",
+                    "citizenship_escrow_account",
+                    "voting_asset_id",
+                    "min_bond_amount",
+                    "bond_escrow_account",
+                    "min_enactment_delay",
+                    "invitation_phase_blocks",
+                    "registration_phase_blocks",
+                    "survivor_freeze_phase_blocks",
+                    "commitment_phase_blocks",
+                    "release_delay_blocks",
+                    "opening_phase_blocks",
+                    "max_ballot_retries",
+                    "max_corpus_entries",
+                    "target_body_sizes",
+                    "supported_proposal_kinds",
+                    "supported_routes",
+                ],
+                &[],
+            );
+            let capabilities = component_properties(schemas, "GovernanceCapabilitiesV1");
+            for retired_field in [
+                "approval_threshold_denominator",
+                "approval_threshold_numerator",
+                "auto_finalize_plain",
+                "auto_finalize_plain_scope",
+                "conviction_step_blocks",
+                "max_conviction",
+                "min_turnout",
+                "parliament_quorum_bps",
+                "plain_voting_enabled",
+                "validation_fee_plain_electorate_rules",
+                "validation_fee_plain_requires_explicit_finalization",
+                "window_span",
+            ] {
+                assert!(
+                    !capabilities.contains_key(retired_field),
+                    "retired GovernanceCapabilitiesV1 field {retired_field} remains in {label} OpenAPI"
+                );
+            }
+            assert_eq!(
+                capabilities["approval_mode"]["const"].as_str(),
+                Some("PARLIAMENT_ATTEMPT_TIMED_OVN_V1")
+            );
+            assert_eq!(
+                capabilities["private_ballot_protocol"]["const"].as_str(),
+                Some("TIMED_OVN_TLE_THRESHOLD_BLS_V1")
+            );
+            assert_eq!(
+                capabilities["mandatory_private_ballots"]["const"].as_bool(),
+                Some(true)
+            );
+            assert_eq!(
+                capabilities["proposal_backed_referendum_ballots_supported"]["const"].as_bool(),
+                Some(false)
+            );
+            assert_eq!(
+                capabilities["standalone_zk_ballots_supported"]["const"].as_bool(),
+                Some(true)
             );
         }
     }
@@ -4858,5 +5087,7 @@ mod tests {
     include!("openapi/tests/diagnostics_schemas.rs");
     include!("openapi/tests/finality_app_contracts.rs");
     include!("openapi/tests/iso20022_auth.rs");
+    include!("openapi/tests/json_value_contract.rs");
+    include!("openapi/tests/soracloud_lease_contracts.rs");
     include!("openapi/tests/vpn_da.rs");
 }

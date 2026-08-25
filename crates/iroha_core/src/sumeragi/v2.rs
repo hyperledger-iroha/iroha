@@ -76,11 +76,12 @@ use super::{
         ReadyValidateSignPredecessorAuthority, ReadyValidatedAdapterAuthority,
         RecoveredDecisionApplyCandidateLineageV1, RecoveredDecisionApplyPendingLineageV1,
         RecoveredDecisionApplyRegistryProjectionPermit, RecoveredDecisionFetchStoreProjectionV1,
-        RecoveredLifecycleNextWalVoteSealV1, RecoveredWalControlReplayEvidenceV1,
-        RecoveredWalDecisionFetchReplayEvidenceV1, RecoveredWalParentFactoryError,
-        RecoveredWalProductionOwnerOpenV1, RecoveredWalVoteReplayEvidenceV1,
-        SealedInvalidBodyReportProjectionPermit, SealedLiveWalPersistedEffectV1,
-        SealedValidateApplyProjectionPermit, SealedValidateSignProjectionPermit,
+        RecoveredDecisionValidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
+        RecoveredWalControlReplayEvidenceV1, RecoveredWalDecisionFetchReplayEvidenceV1,
+        RecoveredWalParentFactoryError, RecoveredWalProductionOwnerOpenV1,
+        RecoveredWalVoteReplayEvidenceV1, SealedInvalidBodyReportProjectionPermit,
+        SealedLiveWalPersistedEffectV1, SealedValidateApplyProjectionPermit,
+        SealedValidateSignProjectionPermit,
     },
     v2_runtime::{
         PendingRuntimeEffectBinding, RecoveredWalCandidateProjectionPermit,
@@ -142,284 +143,7 @@ const MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP: usize = 4;
 // relation fails at compile time as well as at the runtime checks below.
 const _: () =
     assert!(MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP <= MAX_ADAPTER_EFFECTS_PER_MACRO_STEP);
-/// WAL-record class used to select the exact adapter macro-step budget.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PersistenceMacroStepClass {
-    /// Locally validated proposal intent.
-    ProposalIntent,
-    /// Local Prepare-vote intent.
-    PrepareIntent,
-    /// Newly observed highest Prepare certificate.
-    ObservePrepare,
-    /// Atomic lock and local Commit-vote intent.
-    LockAndCommit,
-    /// Local timeout-vote intent.
-    TimeoutIntent,
-    /// Installed timeout certificate.
-    InstallTimeout,
-    /// Durable Commit certificate decision.
-    Decision,
-}
-impl PersistenceMacroStepClass {
-    /// Classify every safety-WAL record; a new record cannot silently inherit a
-    /// budget because the exhaustive match must be deliberately extended.
-    fn from_record(record: &reducer::WalRecord) -> Self {
-        match record {
-            reducer::WalRecord::ProposalIntent(_) => Self::ProposalIntent,
-            reducer::WalRecord::PrepareIntent(_) => Self::PrepareIntent,
-            reducer::WalRecord::ObservePrepare(_) => Self::ObservePrepare,
-            reducer::WalRecord::LockAndCommit { .. } => Self::LockAndCommit,
-            reducer::WalRecord::TimeoutIntent(_) => Self::TimeoutIntent,
-            reducer::WalRecord::InstallTimeout(_) => Self::InstallTimeout,
-            reducer::WalRecord::Decision(_) => Self::Decision,
-        }
-    }
-    /// Return the exact reviewed upper bounds for the source transition and
-    /// its persistence acknowledgement continuation.
-    fn budget(self) -> PersistenceMacroStepBudget {
-        match self {
-            // LocalProposalReady emits only Persist; Persisted emits Sign.
-            Self::ProposalIntent => PersistenceMacroStepBudget::new(1, 1),
-            // Signed Proposal may prefix the PrepareIntent Persist with its
-            // Proposal broadcast; Persisted emits one Prepare Sign.
-            Self::PrepareIntent => PersistenceMacroStepBudget::new(2, 1),
-            // Signed Prepare can prefix ObservePrepare with the vote and QC
-            // broadcasts plus one fetch. Its None continuation can emit at
-            // most one already queued, still-authorized signature.
-            Self::ObservePrepare => PersistenceMacroStepBudget::new(4, 1),
-            // Signed Prepare can prefix LockAndCommit with vote and QC
-            // broadcasts; Persisted emits one Commit Sign.
-            Self::LockAndCommit => PersistenceMacroStepBudget::new(3, 1),
-            // TimeoutElapsed emits only Persist; Persisted emits Sign.
-            Self::TimeoutIntent => PersistenceMacroStepBudget::new(1, 1),
-            // A quorum-forming signed TimeoutVote is subsumed by its TC and
-            // emits only Persist; Persisted can emit EnterView, fetch, the TC
-            // broadcast, and Sign.
-            Self::InstallTimeout => PersistenceMacroStepBudget::new(1, 4),
-            // Signed CommitVote can prefix Persist with its vote broadcast;
-            // Persisted can emit the CommitQC broadcast and one body/apply
-            // stage. Decision invalidates every queued pre-decision signer.
-            Self::Decision => PersistenceMacroStepBudget::new(2, 2),
-        }
-    }
-    /// Canonical class inventory for exhaustive bound tests.
-    #[cfg(test)]
-    const ALL: [Self; 7] = [
-        Self::ProposalIntent,
-        Self::PrepareIntent,
-        Self::ObservePrepare,
-        Self::LockAndCommit,
-        Self::TimeoutIntent,
-        Self::InstallTimeout,
-        Self::Decision,
-    ];
-}
-/// Reviewed source/continuation lengths for one WAL-record class.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PersistenceMacroStepBudget {
-    /// Maximum effects in the reducer transition containing `Persist`.
-    initial_effects: usize,
-    /// Maximum effects emitted by the matching `Persisted` transition.
-    continuation_effects: usize,
-}
-impl PersistenceMacroStepBudget {
-    /// Construct one compile-time record-specific budget.
-    const fn new(initial_effects: usize, continuation_effects: usize) -> Self {
-        Self {
-            initial_effects,
-            continuation_effects,
-        }
-    }
-    /// Maximum returned effects after replacing the sole `Persist` effect with
-    /// the acknowledgement continuation.
-    const fn flattened_effects(self) -> usize {
-        self.initial_effects - 1 + self.continuation_effects
-    }
-}
-/// Node-local fingerprints exported through the compact v2 status record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct AdapterFingerprints {
-    /// Hash of the node's consensus identity.
-    pub node: Hash,
-    /// Hash identifying the running build.
-    pub build: Hash,
-    /// Hash of all consensus-relevant configuration.
-    pub config: Hash,
-}
-/// Read-only reducer facts needed by the bounded local proposal assembler.
-///
-/// The reducer remains the sole owner of lock and view state. Candidate code
-/// receives only this snapshot and cannot mutate safety state or manufacture a
-/// proposal justification.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct LocalProposalDirective {
-    tag: reducer::EventTag,
-    leader: wire::ValidatorIndex,
-    locked_round: Option<wire::ConsensusRound>,
-    locked_subject: Option<wire::BlockSubject>,
-    decided_subject: Option<wire::BlockSubject>,
-}
-impl LocalProposalDirective {
-    /// Build an exact directive fixture without exposing reducer-owned fields
-    /// in production builds.
-    #[cfg(test)]
-    pub(crate) const fn for_test(
-        tag: reducer::EventTag,
-        leader: wire::ValidatorIndex,
-        locked_round: Option<wire::ConsensusRound>,
-        locked_subject: Option<wire::BlockSubject>,
-        decided_subject: Option<wire::BlockSubject>,
-    ) -> Self {
-        Self {
-            tag,
-            leader,
-            locked_round,
-            locked_subject,
-            decided_subject,
-        }
-    }
-    /// Exact height/view/generation which owns candidate work.
-    pub(crate) const fn tag(self) -> reducer::EventTag {
-        self.tag
-    }
-    /// Frozen-roster validator expected to propose in this view.
-    pub(crate) const fn leader(self) -> wire::ValidatorIndex {
-        self.leader
-    }
-    /// Subject whose exact immutable body must remain recoverable while locked.
-    pub(crate) const fn locked_subject(self) -> Option<wire::BlockSubject> {
-        self.locked_subject
-    }
-    /// Exact round/subject pair protected by the active durable lock.
-    pub(crate) fn locked_body(self) -> Option<(wire::ConsensusRound, wire::BlockSubject)> {
-        self.locked_round.zip(self.locked_subject)
-    }
-    /// Subject already decided at this height, if application is pending.
-    pub(crate) const fn decided_subject(self) -> Option<wire::BlockSubject> {
-        self.decided_subject
-    }
-}
-/// Opaque authenticated frontier for restoring validation-marker authority.
-///
-/// Construction is restricted to a fully replayed adapter, so a checksummed
-/// body-store marker cannot select itself for recovery. The bounded key set is
-/// derived only from the durable lock/decision and the adapter's first replay
-/// batch.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RecoveredValidationAuthority {
-    context_id: wire::HeightContextId,
-    height: wire::Height,
-    keys: BTreeSet<(wire::ConsensusRound, wire::BlockSubject)>,
-}
-impl RecoveredValidationAuthority {
-    /// Whether this capability belongs to the exact immutable height context.
-    pub(crate) fn authorizes_context(&self, context: &wire::HeightContext) -> bool {
-        self.context_id == context.id() && self.height == context.height
-    }
-    /// Whether one exact proposal origin belongs to the authenticated frontier.
-    pub(crate) fn authorizes(
-        &self,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-    ) -> bool {
-        self.keys.contains(&(round, subject))
-    }
-    /// Number of exact identities in the bounded replay frontier.
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.keys.len()
-    }
-    /// Construct a bounded exact frontier for body-store seam tests.
-    #[cfg(test)]
-    pub(crate) fn for_test(
-        context: &wire::HeightContext,
-        keys: impl IntoIterator<Item = (wire::ConsensusRound, wire::BlockSubject)>,
-    ) -> Self {
-        let keys = keys.into_iter().collect::<BTreeSet<_>>();
-        assert!(keys.len() <= MAX_RECOVERED_VALIDATION_AUTHORITIES);
-        assert!(keys.iter().all(|(round, _)| {
-            round.context_id == context.id() && round.height == context.height
-        }));
-        Self {
-            context_id: context.id(),
-            height: context.height,
-            keys,
-        }
-    }
-}
-// RECOVERED_WAL_VOTE_SIGN_SEAL_BEGIN
-/// Opaque identity of one exact verified and fsynced safety-WAL frame.
-///
-/// The scalar parts never leave this module as an authority-bearing tuple.
-/// Sibling recovery stages may only retain the complete value and ask whether
-/// it is internally exact or equal to another sealed identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RecoveredWalFrameIdentity {
-    frame_sequence: u64,
-    persistence_id: u64,
-    frame_hash: [u8; 32],
-}
-/// Opaque identity minted only from one successful live WAL append.
-///
-/// Unlike recovered startup authority, this move-only seal requires the exact
-/// fsync receipt and the retained in-memory frame produced by that append. It
-/// exposes no sequence, persistence identifier, frame hash, or recovered-vote
-/// conversion.
-#[derive(PartialEq, Eq)]
-pub(super) struct LiveWalFrameIdentity {
-    frame_sequence: u64,
-    persistence_id: u64,
-    frame_hash: [u8; 32],
-    _linearity: LiveWalFrameLinearity,
-}
-#[derive(PartialEq, Eq)]
-struct LiveWalFrameLinearity;
-impl Drop for LiveWalFrameLinearity {
-    fn drop(&mut self) {}
-}
-impl LiveWalFrameIdentity {
-    fn from_append_receipt(
-        record: &RecoveredRecord,
-        receipt: SafetyWalAppendReceipt,
-        persistence_id: u64,
-    ) -> Option<Self> {
-        if !record.exactly_matches_receipt(receipt) {
-            return None;
-        }
-        let identity = Self {
-            frame_sequence: record.sequence(),
-            persistence_id,
-            frame_hash: record.frame_hash(),
-            _linearity: LiveWalFrameLinearity,
-        };
-        identity.is_exact().then_some(identity)
-    }
-    /// Return whether the live append has the canonical reducer relation.
-    pub(super) const fn is_exact(&self) -> bool {
-        match self.frame_sequence.checked_add(1) {
-            Some(next) => next == self.persistence_id,
-            None => false,
-        }
-    }
-    /// Project inert codec evidence without exposing locator scalar parts.
-    pub(super) const fn persisted_locator(&self) -> PersistedWalFrameLocatorV1 {
-        PersistedWalFrameLocatorV1 {
-            frame_sequence: self.frame_sequence,
-            persistence_id: self.persistence_id,
-            frame_hash: self.frame_hash,
-        }
-    }
-    /// Construct a move-only live identity for focused authority tests.
-    #[cfg(test)]
-    pub(super) fn for_test(frame_sequence: u64, persistence_id: u64, frame_hash: [u8; 32]) -> Self {
-        Self {
-            frame_sequence,
-            persistence_id,
-            frame_hash,
-            _linearity: LiveWalFrameLinearity,
-        }
-    }
-}
+include!("v2_adapter_persistence_and_wal_types.rs");
 impl RecoveredWalFrameIdentity {
     fn from_recovered_record(record: &RecoveredRecord, persistence_id: u64) -> Option<Self> {
         let identity = Self {
@@ -1673,6 +1397,9 @@ impl ProductionLifecycleAdapterStartupV1 {
         preview.commit_after_durable_settlement();
         Ok((Self::recovered(adapter, effects), store))
     }
+}
+include!("v2_recovered_decision_validate_adapter_startup.rs");
+impl ProductionLifecycleAdapterStartupV1 {
     /// Rebuild one already-fsynced Vote/Timeout `Signed` transition.
     ///
     /// The cold authority has already joined the WAL Sign, its exact
@@ -4690,7 +4417,8 @@ impl RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1 {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => false,
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => false,
         };
         relation_is_exact.then_some(Self {
             broadcast,
@@ -9052,7 +8780,8 @@ fn ingress_equivocation_identity(
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
         | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
+        | wire::ConsensusMessageV2Payload::VrfReveal(_)
+        | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => None,
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -9080,7 +8809,8 @@ impl IngressEquivocationArtifact {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => None,
         }
     }
     fn conflict_with(
@@ -9506,6 +9236,8 @@ pub(crate) struct SumeragiV2Adapter {
     /// Whether reducer transitions may publish current-height global status;
     /// recovered startup keeps this closed until lifecycle activation.
     status_publication_enabled: bool,
+    #[cfg(test)]
+    status_publication_attempts: usize,
     fail_closed: bool,
 }
 enum SafetyWalOpenTarget<'kura> {
@@ -9924,6 +9656,8 @@ impl SumeragiV2Adapter {
             reducer_fence_generation: 0,
             replay_complete: false,
             status_publication_enabled: publish_initial_status,
+            #[cfg(test)]
+            status_publication_attempts: 0,
             fail_closed: false,
         };
         adapter.reconcile_restored_reserved_producer_frontier()?;
@@ -11373,7 +11107,8 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => {}
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {}
         }
         Ok(())
     }
@@ -11602,7 +11337,8 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => {
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
                 return Ok((None, None));
             }
         }
@@ -11865,7 +11601,8 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => {
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
                 return Err(AdapterError::TransportPayload);
             }
         }
@@ -11975,14 +11712,33 @@ impl SumeragiV2Adapter {
             validated_receipt.execution_commitment(),
         )?;
         self.registry = staged_registry;
+        let previous_active_subject = self.active_subject;
         self.active_subject = Some((round, subject));
-        self.step_with_completion_evidence(
+        let result = self.step_with_completion_evidence_and_status(
             reducer::Event::LocalProposalReady {
                 tag,
                 manifest: core_manifest,
             },
             Some(completion_evidence),
-        )
+            false,
+        );
+        match &result {
+            Ok(outcome) => {
+                let retain = outcome.disposition() == reducer::StepDisposition::Applied
+                    || (outcome.disposition()
+                        == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+                        && outcome.deferred_admission_ordinal().is_some());
+                if !retain {
+                    self.active_subject = previous_active_subject;
+                }
+                // Publish after deciding whether this completion owns the active
+                // subject. In particular, the no-effect stale path must not expose a
+                // provisional subject to the monotone external progress clock.
+                self.publish_status()?;
+            }
+            Err(_) => self.active_subject = previous_active_subject,
+        }
+        result
     }
     /// Bind an exact body-store validation marker into the wire registry.
     ///
@@ -16273,6 +16029,14 @@ impl SumeragiV2Adapter {
         event: reducer::Event,
         completion_evidence: Option<BodyPipelineCompletionEvidence>,
     ) -> Result<AdapterOutcome, AdapterError> {
+        self.step_with_completion_evidence_and_status(event, completion_evidence, true)
+    }
+    fn step_with_completion_evidence_and_status(
+        &mut self,
+        event: reducer::Event,
+        completion_evidence: Option<BodyPipelineCompletionEvidence>,
+        publish_status: bool,
+    ) -> Result<AdapterOutcome, AdapterError> {
         let priority = match &event {
             reducer::Event::ResumeAfterReplay { .. }
             | reducer::Event::LocalProposalReady { .. }
@@ -16291,8 +16055,16 @@ impl SumeragiV2Adapter {
             | reducer::Event::QuorumCertificateReceived { .. }
             | reducer::Event::TimeoutCertificateReceived { .. } => DeferredPriority::Normal,
         };
-        self.step_with_defer_policy(event, false, priority, None, completion_evidence, None)
-            .map(|result| result.outcome)
+        self.step_with_defer_policy(
+            event,
+            false,
+            priority,
+            None,
+            completion_evidence,
+            None,
+            publish_status,
+        )
+        .map(|result| result.outcome)
     }
     #[cfg(test)]
     fn step_authenticated_ingress(
@@ -16327,6 +16099,7 @@ impl SumeragiV2Adapter {
             admission,
             None,
             authenticated_wire_identity,
+            true,
         )
     }
     fn step_with_defer_policy(
@@ -16337,6 +16110,7 @@ impl SumeragiV2Adapter {
         admission: Option<IngressAdmission>,
         completion_evidence: Option<BodyPipelineCompletionEvidence>,
         authenticated_wire_identity: Option<Arc<[u8]>>,
+        publish_status: bool,
     ) -> Result<DeferPolicyOutcome, AdapterError> {
         self.ensure_ingress()?;
         let queued = event.clone();
@@ -16355,7 +16129,9 @@ impl SumeragiV2Adapter {
             }
             let disposition = reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate);
             self.record_disposition(disposition);
-            self.publish_status()?;
+            if publish_status {
+                self.publish_status()?;
+            }
             self.log_body_progress(&queued, disposition, 0);
             return Ok(DeferPolicyOutcome {
                 outcome: AdapterOutcome {
@@ -16404,7 +16180,9 @@ impl SumeragiV2Adapter {
             }
             let disposition = reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate);
             self.record_disposition(disposition);
-            self.publish_status()?;
+            if publish_status {
+                self.publish_status()?;
+            }
             self.log_body_progress(&queued, disposition, 0);
             return Ok(DeferPolicyOutcome {
                 outcome: AdapterOutcome {
@@ -16472,7 +16250,9 @@ impl SumeragiV2Adapter {
             {
                 self.record_ingress_delivery(admission);
             }
-            self.publish_status()?;
+            if publish_status {
+                self.publish_status()?;
+            }
             return Ok(DeferPolicyOutcome {
                 outcome: AdapterOutcome {
                     disposition,
@@ -16522,7 +16302,9 @@ impl SumeragiV2Adapter {
         if let Some(admission) = admission {
             self.record_ingress_delivery(admission);
         }
-        self.publish_status()?;
+        if publish_status {
+            self.publish_status()?;
+        }
         self.log_body_progress(&queued, disposition, effects.len());
         Ok(DeferPolicyOutcome {
             outcome: AdapterOutcome {
@@ -17068,7 +16850,8 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => return false,
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return false,
         };
         if let Some(key) = semantic_key {
             // Any existing semantic record can terminate as a duplicate or an
@@ -17125,7 +16908,8 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => false,
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => false,
         }
     }
     /// Service at most one adapter-owned Busy-deferred reducer transition.
@@ -17521,6 +17305,10 @@ impl SumeragiV2Adapter {
         Ok(None)
     }
     fn publish_status(&mut self) -> Result<(), AdapterError> {
+        #[cfg(test)]
+        {
+            self.status_publication_attempts = self.status_publication_attempts.saturating_add(1);
+        }
         let status = self.status()?;
         if self.status_publication_enabled {
             super::status::set_v2_status(status);

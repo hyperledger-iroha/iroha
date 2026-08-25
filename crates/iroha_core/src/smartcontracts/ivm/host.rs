@@ -2826,7 +2826,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         host.set_durable_state_snapshot_from_world(view.world());
         host.set_output_limits_from_parameters(view.world().parameters().smart_contract());
         host.set_public_inputs_from_parameters(view.world().parameters());
-        host.set_vrf_epoch_seeds_from_world(view.world());
+        host.set_vrf_epoch_seeds_from_state(&view);
         host.set_bound_contract_records_by_subject_snapshot(
             crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(&view),
         );
@@ -4152,13 +4152,69 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         Ok(roots)
     }
-    /// Hydrate VRF epoch seed snapshots from world storage.
-    pub fn set_vrf_epoch_seeds_from_world(&mut self, world: &impl WorldReadOnly) {
-        self.vrf_epoch_seeds = world
-            .vrf_epochs()
-            .iter()
-            .map(|(epoch, record)| (*epoch, record.seed))
-            .collect();
+    /// Hydrate the ABI-V1 `VRF_EPOCH_SEED` projection from finalized global pulses.
+    ///
+    /// The syscall name and response layout remain stable, but consensus
+    /// commit/reveal records are retired. Only pulses at the exact configured
+    /// epoch boundary are projected, after full public-session/signature and
+    /// canonical block-anchor verification. Missing or conflicting evidence
+    /// leaves that epoch absent so the syscall fails closed with `found=false`.
+    pub fn set_vrf_epoch_seeds_from_state(&mut self, state: &impl StateReadOnly) {
+        let Some(epoch_length) = state
+            .world()
+            .sumeragi_npos_parameters()
+            .map(|params| params.epoch_length_blocks().get())
+        else {
+            self.vrf_epoch_seeds.clear();
+            return;
+        };
+        let maximum_height = u64::try_from(state.height()).unwrap_or(u64::MAX);
+        let mut projected = BTreeMap::new();
+        let mut conflicted = BTreeSet::new();
+        for (_, candidate) in state.world().global_beacon_pulses().iter() {
+            let Some(boundary_height) = candidate.height.checked_add(1) else {
+                continue;
+            };
+            if candidate.height > maximum_height
+                || boundary_height % epoch_length != 0
+                || candidate.finalized_chain_anchor.height.checked_add(1) != Some(candidate.height)
+            {
+                continue;
+            }
+            let Some(anchor_index) = candidate
+                .finalized_chain_anchor
+                .height
+                .checked_sub(1)
+                .and_then(|height| usize::try_from(height).ok())
+            else {
+                continue;
+            };
+            if state.block_hashes().get(anchor_index)
+                != Some(&candidate.finalized_chain_anchor.block_hash)
+            {
+                continue;
+            }
+            let Ok(pulse) = crate::beacon::verified_persisted_global_threshold_beacon_pulse_v1(
+                state.world(),
+                state.network_id(),
+                *candidate,
+            ) else {
+                continue;
+            };
+            let successor_epoch = boundary_height / epoch_length;
+            let seed = crate::beacon::global_threshold_beacon_npos_successor_seed_v1(
+                &pulse,
+                boundary_height,
+                successor_epoch,
+            );
+            if projected.insert(successor_epoch, seed).is_some() {
+                conflicted.insert(successor_epoch);
+            }
+        }
+        for epoch in conflicted {
+            projected.remove(&epoch);
+        }
+        self.vrf_epoch_seeds = projected;
     }
     /// Hydrate ZK snapshots (roots, elections, verifying keys) from a world view.
     ///
@@ -6322,6 +6378,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 Some(dsid),
                 Some(policy.target_lane),
                 "empty proof payload",
+            );
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof.payload) {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(dsid),
+                Some(policy.target_lane),
+                format!(
+                    "proof payload exceeds the {}-byte decode limit",
+                    fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                ),
             );
             return Err(ivm::VMError::NoritoInvalid);
         }
@@ -9564,6 +9632,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         target_lane: LaneId,
         proof: Option<&ProofBlob>,
     ) -> Result<axt::ResolvedHandleAmount, ivm::VMError> {
+        if proof.is_some_and(|proof| {
+            crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof.payload)
+        }) {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(intent.asset_dsid),
+                Some(target_lane),
+                format!(
+                    "proof payload exceeds the {}-byte decode limit",
+                    fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                ),
+            );
+            return Err(ivm::VMError::NoritoInvalid);
+        }
         axt::resolve_handle_amount(intent, proof).map_err(|err| {
             let (reason, detail) = match err {
                 axt::HandleAmountResolutionError::MissingAmount => (
@@ -9797,6 +9879,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             consumed_by_proof.consume(proof_group_index, commitment);
         }
         for group in consumed_by_proof.into_groups() {
+            if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&group.proof.payload) {
+                self.record_axt_reject(
+                    AxtRejectReason::Proof,
+                    None,
+                    None,
+                    format!(
+                        "final FASTPQ proof exceeds the {}-byte decode limit",
+                        fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                    ),
+                );
+                return Err(ivm::VMError::NoritoInvalid);
+            }
             let envelope = decode_canonical_norito::<ModelAxtProofEnvelope>(&group.proof.payload)
                 .map_err(|_| {
                 self.record_axt_reject(
@@ -13816,6 +13910,30 @@ seiyaku PrivilegedBinding {
                 .detail
                 .contains("authoritative finalized source-state anchor")
         );
+    }
+
+    #[test]
+    fn axt_proof_validation_rejects_oversized_payload_before_decode() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(104);
+        let manifest_root = [0xA4; 32];
+        let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
+        let mut host = CoreHost::new(ALICE_ID.clone())
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
+        let policy = host.policy_entry_for(dsid).expect("policy entry");
+        let proof = ProofBlob {
+            payload: vec![0u8; fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1],
+            expiry_slot: Some(20),
+        };
+
+        assert_eq!(
+            host.validate_axt_proof(dsid, &proof, policy, AxtProofAdmission::AuthenticatedHandle,),
+            Err(VMError::NoritoInvalid)
+        );
+        let reject = host.take_axt_reject_for_tests().expect("reject context");
+        assert_eq!(reject.reason, AxtRejectReason::Proof);
+        assert!(reject.detail.contains("decode limit"));
     }
 
     #[test]
@@ -26475,7 +26593,7 @@ seiyaku DurableOwner {
         );
     }
     #[test]
-    fn vrf_epoch_seed_syscall_reads_world_snapshot() {
+    fn vrf_epoch_seed_syscall_ignores_retired_commit_reveal_snapshot() {
         crate::test_alias::ensure();
         let mut world = World::new();
         world.vrf_epochs.insert(
@@ -26548,9 +26666,9 @@ seiyaku DurableOwner {
         assert!(gas <= quote);
         let resp: ivm::vrf::VrfEpochSeedResponse =
             norito::decode_from_bytes(tlv.payload).expect("decode response");
-        assert!(resp.found);
+        assert!(!resp.found);
         assert_eq!(resp.epoch, 7);
-        assert_eq!(resp.seed, [0x11; 32]);
+        assert_eq!(resp.seed, [0; 32]);
         let fallback_req = ivm::vrf::VrfEpochSeedRequest {
             epoch: 99,
             fallback_to_latest: true,
@@ -26578,9 +26696,9 @@ seiyaku DurableOwner {
         assert!(gas <= quote);
         let resp: ivm::vrf::VrfEpochSeedResponse =
             norito::decode_from_bytes(tlv.payload).expect("decode fallback response");
-        assert!(resp.found);
-        assert_eq!(resp.epoch, 9);
-        assert_eq!(resp.seed, [0x22; 32]);
+        assert!(!resp.found);
+        assert_eq!(resp.epoch, 99);
+        assert_eq!(resp.seed, [0; 32]);
     }
     #[test]
     fn vrf_epoch_seed_syscall_reports_missing_without_fallback() {

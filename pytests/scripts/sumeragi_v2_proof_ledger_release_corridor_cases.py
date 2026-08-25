@@ -8,10 +8,10 @@ def test_release_inventory_constants_match_current_source_seal(
     module = load_checker()
     assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 864
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "a7364ee89cfab31a3a48d13e7f74b6e353bc34871619da907200b84cdf482a07"
+        "331123d12b08027a9ac0ed0157ed84007eac5a8659b1995bf4c77c3eedb231c2"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "cd8ff3e24c006a404d0a05d1696557ff92909fb96676851b59647ac48965a295"
+        "69d53011718b53968649ac86dd5d77fc29e5e89b69776225bdd5e4b66ecde307"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -29,7 +29,7 @@ def test_release_inventory_constants_match_current_source_seal(
             "66d33b07c062bd6dc4a1b879b0b3624bc0403e59305cbc44763d409f97d109fc"
         ),
         "LockedPreparedFairIngressExactDequeue::commit": (
-            "2df7516317611dcc3fc0f959cca1e80a7b6aa3670a90d2add798f744cfebbd4c"
+            "abdd5434d703b75f26bb2053ac05942564deffb181ddfe040609f6583405ebe9"
         ),
         "locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit": (
             "ea093accfdb33740bc7f21e9c26b17e74a1d7600c885ff45a5718caed8cb457a"
@@ -1560,7 +1560,6 @@ kura.claim_autonomous_lifecycle_process_generation(
             ("sumeragi::v2_effects::tests::", test_name, effects_source)
             for test_name in (
                 "live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks",
-                "recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks",
             )
         ),
         *(
@@ -1582,7 +1581,7 @@ kura.claim_autonomous_lifecycle_process_generation(
                 "adapter_command_identity_is_derived_from_exact_immutable_payload",
                 "admission_ordinal_exhaustion_fails_runtime_closed",
                 "runtime_rejects_replayed_foreign_and_mutated_deferred_tokens",
-                "scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches",
+                "scheduler_owner_carrier_covers_live_and_typed_deferred_branches",
                 "scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields",
                 "scheduler_owner_must_be_taken_before_a_later_step_can_enter",
                 "selected_owner_without_a_runtime_minted_ordinal_fails_closed",
@@ -2217,7 +2216,7 @@ kura.claim_autonomous_lifecycle_process_generation(
             predecessor_durability_regression
             in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
         )
-    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 445
+    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 444
     assert "readonly expected_production_liveness_test_count=864" in release_source
     assert (
         "readonly expected_typed_rollover_formal_mutation_count=45"
@@ -3217,8 +3216,8 @@ kura.claim_autonomous_lifecycle_process_generation(
         "--lib -- --test-threads=1", unit_ignored_inventory
     )
     assert unit_branch < unit_inventory < unit_ignored_inventory < unit_run
-    assert "expected exactly 140 Sumeragi v2 reducer unit tests" in harness_source
-    assert "reducer unit gate requires all 140 tests to be runnable" in harness_source
+    assert "expected exactly 187 Sumeragi v2 reducer unit tests" in harness_source
+    assert "reducer unit gate requires all 187 tests to be runnable" in harness_source
 
     replay_branch = harness_source.index("--model-replay)")
     replay_inventory = harness_source.index("model_replay_test_list=", replay_branch)
@@ -3516,7 +3515,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "baf080f72349404d56b6a4eff0c6ad1b"',
+            '    "331123d12b08027a9ac0ed0157ed8400"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),
@@ -3906,9 +3905,9 @@ def test_workspace_excluded_harness_pins_complete_unit_inventory() -> None:
     unit_run = source.index("--lib -- --test-threads=1", ignored_inventory)
 
     assert unit_branch < unit_inventory < ignored_inventory < unit_run
-    assert "if ((${#listed_unit_tests[@]} != 140)); then" in source
-    assert "expected exactly 140 Sumeragi v2 reducer unit tests" in source
-    assert "reducer unit gate requires all 140 tests to be runnable" in source
+    assert "if ((${#listed_unit_tests[@]} != 187)); then" in source
+    assert "expected exactly 187 Sumeragi v2 reducer unit tests" in source
+    assert "reducer unit gate requires all 187 tests to be runnable" in source
 
 
 def test_workspace_excluded_harness_names_every_required_fast_simulation() -> None:

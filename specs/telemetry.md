@@ -193,9 +193,44 @@ Public operator guidance and escalation procedures are maintained at
 
 ## Governance telemetry
 
+- `governance_parliament_transitions_total{transition}` (counter): accepted
+  Parliament reducer transitions and automatic execution outcomes grouped by
+  the closed `ParliamentLifecycleTransitionKindV1` vocabulary.
+- `governance_parliament_no_result_total{class}` (counter): only Core-derived
+  terminal no-result outcomes, grouped by the seven closed
+  `ParliamentNoResultKindV1` classes. Public findings use
+  `public_finding_quorum_unreachable` or `public_finding_deadline_expired`;
+  private ballots use `ballot_registration_deadline_expired`,
+  `ballot_survivor_deadline_expired`, `ballot_commitment_deadline_expired`,
+  `ballot_release_pulse_unavailable`, or `ballot_opening_deadline_expired`.
+  A class attached to an incompatible transition kind is ignored by telemetry.
+- `governance_parliament_attempts_by_status{status}` and
+  `governance_parliament_attempts_by_stage{stage}` (gauges): aggregate committed
+  attempt counts. The node recomputes them from persisted Parliament state at
+  startup and after each committed attempt mutation, including automatic
+  execution, so a rejected or dropped transaction cannot leave a gauge delta
+  behind.
+- These four families deliberately have one closed, low-cardinality label.
+  They never use proposal, governance-attempt, body, ballot, assignment, pulse,
+  session, certificate, or account identifiers as labels and never export
+  roots, registration records, masked ballots, threshold shares, individual
+  openings, or account labels. The lifecycle event retains its existing audit
+  identifiers and digest, but the metrics projection consumes only the bounded
+  transition kind and optional Core-derived no-result class.
+- Import `dashboards/grafana/sora_parliament_observability.json` for aggregate
+  status, stage, transition-rate, and deterministic no-result panels. The
+  companion `dashboards/alerts/sora_parliament_rules.yml` pack warns only from
+  those bounded aggregates: active/certified attempts with no progress after a
+  complete 30-minute observation window plus 15-minute hold, phase-deadline
+  expiry, unavailable release pulses, and isolated automatic-execution
+  failures. Validate it with
+  `promtool test rules dashboards/alerts/tests/sora_parliament_rules.test.yml`.
+  Alert annotations likewise contain no attempt, proposal, body, account,
+  pulse, session, certificate, root, ballot, share, or opening identifier.
 - `governance_proposals_status{status}` (gauge): current proposal counts grouped by
-  status (`proposed`, `approved`, `rejected`, `enacted`). The `/status` JSON exposes
-  the same data under `governance.proposals`, and the gauges are seeded from the
+  status (`proposed`, `rejected`, `enacted`, `superseded`, `execution_failed`).
+  The `/status` JSON exposes the same closed set under `governance.proposals`,
+  and the gauges are seeded from the
   recovered world state on startup so they reflect persisted proposals even
   before new transitions occur.
 - `governance_protected_namespace_total{outcome}` (counter): admission enforcement
@@ -212,7 +247,8 @@ Public operator guidance and escalation procedures are maintained at
   decisions. Currently `hook="runtime_upgrade"` is emitted with outcomes
   `allowed` / `rejected` whenever runtime upgrade submissions pass or fail manifest policy.
 - `governance_manifest_activations_total{event}` (counter): manifest lifecycle
-  events emitted by `EnactReferendum`. `event="manifest_inserted"` counts new
+  events emitted when Core executes an exact-due Parliament certificate.
+  `event="manifest_inserted"` counts new
   manifests keyed by `code_hash`; `event="instance_bound"` counts canonical
   contract activations.
 - `/status` now includes a `governance` object with proposal counts, protected
@@ -227,9 +263,10 @@ Example `governance` excerpt from `/status`:
 "governance": {
   "proposals": {
     "proposed": 2,
-    "approved": 1,
     "rejected": 0,
-    "enacted": 1
+    "enacted": 1,
+    "superseded": 1,
+    "execution_failed": 0
   },
   "protected_namespace": {
     "total_checks": 5,
@@ -285,8 +322,8 @@ deploys flowed through the protected gate.
     mismatch, quorum, namespace, runtime hook).
   - `Manifest Activations (5m)` — charts
     `increase(governance_manifest_activations_total{event=…}[5m])`, confirming
-    that `EnactReferendum` inserted manifests and bound namespaces to the new
-    `code_hash`.
+    that automatic certificate execution inserted manifests and bound
+    namespaces to the new `code_hash`.
   - `Rejected Deploys (24h)` — a daily stat over
     `increase(governance_protected_namespace_total{outcome="rejected"}[24h])`
     highlighting unexpected admission failures.
@@ -354,8 +391,9 @@ trigger remediation workflows when drops exceed acceptable limits.
   `increase(governance_manifest_activations_total{event="instance_bound"}[30m]) == 0`
   during an upgrade rollout window; a namespace binding never landed on-chain.
 - Proposal drift: alert when `governance_proposals_status{status="proposed"}`
-  remains non-zero for longer than the agreed SLA (e.g., 24 h) while
-  `status="approved"` stays flat — council approvals are stuck in enactment.
+  remains non-zero for longer than the agreed SLA (e.g., 24 h) while the
+  Parliament transition counters remain flat. Inspect the proposal's latest
+  attempt; proposal records do not carry an intermediate approval state.
 
 **Triage checklist**
 1. Run `iroha_cli app gov deploy audit --namespace <ns>` (optionally filter by
@@ -369,9 +407,10 @@ trigger remediation workflows when drops exceed acceptable limits.
    If it spiked, grab Torii logs for the failing deploy and ensure the proposal
    was enacted; re-run `iroha_cli app gov protected get` to confirm the namespace
    list.
-4. Verify that `governance_proposals_status{status="approved"}` decreased while
-   `status="enacted"` increased after the rollout. If counts drift, queue an
-   `EnactReferendum` check and confirm the `iroha_cli app gov enact` automation ran.
+4. Verify that `governance_proposals_status{status="enacted"}` increased at the
+   certificate's exact due height. If counts drift, inspect the retained
+   Parliament attempt and its typed automatic outcome for `Superseded` or
+   `ExecutionFailed`; there is no client enactment command to retry or accelerate.
 5. Inspect `increase(governance_manifest_hook_total{hook="runtime_upgrade", outcome="rejected"}[5m])`
    to spot runtime upgrade submissions blocked by manifest policy. Correlate
    spikes with Torii admission logs and confirm the manifest allowlist /
@@ -675,8 +714,9 @@ labels:
 annotations:
   summary: "Validator skipped VRF commit and reveal windows"
   description: |
-    Non-participation penalties incremented (count={{ $value }}). Inspect `iroha_cli --operator-private-key-file /absolute/runtime/operator.key ops sumeragi vrf-epoch --epoch <current>`
-    to identify the offline signer and stage reconfiguration or slashing if the validator cannot recover.
+    Non-participation penalties incremented (count={{ $value }}). Correlate the authenticated Sumeragi status roster with
+    `sumeragi_vrf_no_participation_by_signer` to identify the offline seat and stage reconfiguration or slashing if it cannot recover.
+    The retired `vrf-epoch`/`vrf-penalties` CLI commands and `/v1/sumeragi/vrf/*` routes are not recovery paths.
 
 alert: SumeragiVrfNonReveal
 expr: increase(sumeragi_vrf_non_reveal_penalties_total[140m]) > 0
@@ -685,7 +725,8 @@ labels:
 annotations:
   summary: "Validator missed VRF reveal deadline"
   description: |
-    Non-reveal penalties incremented (count={{ $value }}). Use `sumeragi_vrf_non_reveal_by_signer` labels to page the validator and re-submit the reveal.
+    Non-reveal penalties incremented (count={{ $value }}). Use `sumeragi_vrf_non_reveal_by_signer` labels to page the validator
+    and restore its authenticated consensus peer transport before the next window; operators cannot submit a reveal through Torii.
 
 alert: SumeragiVrfPayloadReject
 expr: increase(sumeragi_vrf_rejects_total_by_reason{reason!="late"}[5m]) > 0
@@ -694,7 +735,8 @@ labels:
 annotations:
   summary: "VRF payload rejected"
   description: |
-    Instance {{ $labels.instance }} rejected a VRF payload for reason {{ $labels.reason }}. Confirm the validator is on the latest parameters and re-issue the payload.
+    Instance {{ $labels.instance }} rejected a VRF payload for reason {{ $labels.reason }}. Confirm the validator uses the current
+    signed parameters, key, and peer session; payload production and retransmission remain inside the authenticated consensus protocol.
 
 alert: SumeragiVrfCommitStall
 expr: rate(sumeragi_vrf_commits_emitted_total[5m]) == 0 and increase(sumeragi_blocks_committed_total[5m]) > 0
@@ -704,7 +746,8 @@ labels:
 annotations:
   summary: "Epoch commitments stalled while blocks continue"
   description: |
-    No VRF commitments observed during an active epoch. Verify validators are online and check `/v1/sumeragi/status.vrf_penalty_epoch`.
+    No VRF commitments observed during an active epoch. Verify validators are online and inspect the authenticated
+    `/v1/sumeragi/status` response and its `vrf_penalty_epoch` field.
 ```
 
 Adjust the 140 minute window to match the governed

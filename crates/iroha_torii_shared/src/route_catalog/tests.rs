@@ -168,7 +168,7 @@ mod tests {
         }
     }
     #[test]
-    fn canonical_catalog_retires_direct_sumeragi_mutation_routes() {
+    fn canonical_catalog_retires_direct_sumeragi_mutation_and_vrf_snapshot_routes() {
         assert_eq!(sumeragi::EVIDENCE_LIST.method(), HttpMethod::Get);
         assert_eq!(sumeragi::EVIDENCE_LIST.path(), "/v1/sumeragi/evidence");
         for (stable_route_id, path) in [
@@ -189,10 +189,15 @@ mod tests {
                 "retired Sumeragi mutation route remains cataloged: POST {path}"
             );
         }
-        for path in ["/v1/sumeragi/vrf/commit", "/v1/sumeragi/vrf/reveal"] {
+        for path in [
+            "/v1/sumeragi/vrf/commit",
+            "/v1/sumeragi/vrf/epoch/{epoch}",
+            "/v1/sumeragi/vrf/penalties/{epoch}",
+            "/v1/sumeragi/vrf/reveal",
+        ] {
             assert!(
                 CATALOGED_ROUTES.iter().all(|route| route.path() != path),
-                "retired Sumeragi mutation path remains cataloged: {path}"
+                "retired Sumeragi VRF path remains cataloged: {path}"
             );
         }
     }
@@ -334,6 +339,36 @@ mod tests {
             runtime_governance::GOV_PROPOSE_SCCP.path(),
             crate::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE
         );
+    }
+    #[test]
+    fn parliament_cutover_excludes_legacy_governance_mutation_routes() {
+        for retired_path in [
+            "/v1/gov/parliament/ballots",
+            "/v1/gov/finalize",
+            "/v1/gov/enact",
+        ] {
+            assert!(
+                runtime_governance::ROUTES
+                    .iter()
+                    .all(|route| route.path() != retired_path),
+                "retired governance mutation route remains cataloged: {retired_path}"
+            );
+        }
+        for active_path in [
+            "/v1/gov/parliament/attempts/draft",
+            "/v1/gov/parliament/attempts/{governance_attempt_id}",
+            "/v1/gov/parliament/transitions/draft",
+            "/v1/gov/ballots/zk-v1",
+            "/v1/gov/ballots/zk-v1/ballot-proof",
+            "/v1/gov/ballots/plain",
+        ] {
+            assert!(
+                runtime_governance::ROUTES
+                    .iter()
+                    .any(|route| route.path() == active_path),
+                "Parliament or explicitly standalone referendum route is missing: {active_path}"
+            );
+        }
     }
     #[test]
     fn protected_namespace_update_is_an_explicit_operator_mcp_route() {
@@ -1217,6 +1252,8 @@ mod tests {
             "/v1/sumeragi/validator-sets",
             "/v1/sumeragi/validator-sets/{height}",
             "/v1/sumeragi/key-lifecycle",
+            "/v1/sumeragi/vrf/penalties/{epoch}",
+            "/v1/sumeragi/vrf/epoch/{epoch}",
         ] {
             assert!(
                 routes.iter().all(|route| route.path() != unsupported_path),
@@ -1249,8 +1286,6 @@ mod tests {
             sumeragi::PARAMETERS,
             sumeragi::EVIDENCE_COUNT,
             sumeragi::EVIDENCE_LIST,
-            sumeragi::VRF_PENALTIES,
-            sumeragi::VRF_EPOCH,
         ] {
             assert_eq!(route.surface(), ApiSurface::Operator, "{}", route.path());
             assert_eq!(

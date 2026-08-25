@@ -7,6 +7,9 @@ use iroha_crypto::Hash;
 use iroha_data_model::offline::{
     KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1, KagemushaActiveReceiverWitnessProofV1,
 };
+use iroha_data_model::parliament_casting::{
+    PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1, ParliamentTimedOvnCastingWitnessProofV1,
+};
 use iroha_data_model::validation_fee::{
     VALIDATION_FEE_POLICY_WITNESS_KEY_V1, ValidationFeePolicyWitnessProofV1,
 };
@@ -91,6 +94,50 @@ pub(crate) fn validation_fee_policy_witness_proof_v1(
     if !proof.verify(ordinary_root) {
         return Err(
             "constructed validation-fee witness proof does not reconstruct the ordinary-write root"
+                .to_owned(),
+        );
+    }
+    Ok((proof, ordinary_root))
+}
+/// Construct the exact fixed-key Parliament timed-OVN casting proof against the ordinary-write SMT.
+pub(crate) fn parliament_timed_ovn_casting_witness_proof_v1(
+    witness: &ExecWitness,
+) -> Result<(ParliamentTimedOvnCastingWitnessProofV1, Hash), String> {
+    let target_count = witness
+        .writes
+        .iter()
+        .filter(|entry| entry.key.as_slice() == PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1)
+        .count();
+    if target_count != 1 {
+        return Err(format!(
+            "execution witness contains {target_count} Parliament timed-OVN casting synthetic writes; expected exactly one"
+        ));
+    }
+    let mut canonical = BTreeMap::<Vec<u8>, Vec<u8>>::new();
+    for entry in &witness.writes {
+        canonical.insert(entry.key.clone(), entry.value.clone());
+    }
+    let ordinary = canonical
+        .into_iter()
+        .filter(|(key, _)| key.first() != Some(&KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG))
+        .map(|(key, value)| KvPair::new(key, value))
+        .collect::<Vec<_>>();
+    let ordinary_root = crate::sumeragi::smt::compute_post_state_root(&[], &ordinary);
+    let target = ordinary
+        .iter()
+        .find(|pair| pair.key.as_slice() == PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1)
+        .ok_or_else(|| {
+            "Parliament timed-OVN casting synthetic write is absent from ordinary writes".to_owned()
+        })?;
+    let siblings = sparse_smt_siblings(&ordinary, target)?;
+    let proof = ParliamentTimedOvnCastingWitnessProofV1 {
+        key: target.key.clone(),
+        value: target.value.clone(),
+        siblings,
+    };
+    if !proof.verify(ordinary_root) {
+        return Err(
+            "constructed Parliament timed-OVN casting witness proof does not reconstruct the ordinary-write root"
                 .to_owned(),
         );
     }
@@ -219,6 +266,7 @@ mod tests {
         KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_VERSION_V1, KagemushaActiveReceiverSnapshotCommitmentV1,
         KagemushaActiveReceiverSnapshotStatusV1,
     };
+    use iroha_data_model::parliament_casting::ParliamentTimedOvnCastingSnapshotCommitmentV1;
     fn snapshot_value() -> Vec<u8> {
         norito::to_bytes(&KagemushaActiveReceiverSnapshotCommitmentV1 {
             version: KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_VERSION_V1,
@@ -283,5 +331,71 @@ mod tests {
             fastpq_batches: Vec::new(),
         };
         assert!(active_receiver_witness_proof_v1(&duplicate).is_err());
+    }
+
+    #[test]
+    fn parliament_casting_fixed_write_has_256_siblings_and_rejects_tampering() {
+        let snapshot = ParliamentTimedOvnCastingSnapshotCommitmentV1::empty(7);
+        let witness = ExecWitness {
+            reads: Vec::new(),
+            writes: vec![
+                ExecKv {
+                    key: b"ordinary-a".to_vec(),
+                    value: b"one".to_vec(),
+                },
+                ExecKv {
+                    key: PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1.to_vec(),
+                    value: norito::to_bytes(&snapshot).expect("encode casting snapshot"),
+                },
+                ExecKv {
+                    key: b"ordinary-b".to_vec(),
+                    value: b"two".to_vec(),
+                },
+            ],
+            fastpq_transcripts: Vec::new(),
+            fastpq_batches: Vec::new(),
+        };
+        let (proof, root) =
+            parliament_timed_ovn_casting_witness_proof_v1(&witness).expect("casting proof");
+        assert_eq!(proof.siblings.len(), 256);
+        assert_eq!(proof.commitment().expect("snapshot commitment"), snapshot);
+        assert!(proof.verify(root));
+
+        let mut tampered = proof.clone();
+        tampered.siblings[127] = Hash::new(b"tampered casting sibling");
+        assert!(!tampered.verify(root));
+        let mut wrong_value = proof;
+        wrong_value.value.push(0);
+        assert!(!wrong_value.verify(root));
+    }
+
+    #[test]
+    fn parliament_casting_fixed_write_must_appear_exactly_once() {
+        let empty = ExecWitness {
+            reads: Vec::new(),
+            writes: Vec::new(),
+            fastpq_transcripts: Vec::new(),
+            fastpq_batches: Vec::new(),
+        };
+        assert!(parliament_timed_ovn_casting_witness_proof_v1(&empty).is_err());
+
+        let snapshot = ParliamentTimedOvnCastingSnapshotCommitmentV1::empty(7);
+        let value = norito::to_bytes(&snapshot).expect("encode casting snapshot");
+        let duplicate = ExecWitness {
+            reads: Vec::new(),
+            writes: vec![
+                ExecKv {
+                    key: PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1.to_vec(),
+                    value: value.clone(),
+                },
+                ExecKv {
+                    key: PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1.to_vec(),
+                    value,
+                },
+            ],
+            fastpq_transcripts: Vec::new(),
+            fastpq_batches: Vec::new(),
+        };
+        assert!(parliament_timed_ovn_casting_witness_proof_v1(&duplicate).is_err());
     }
 }

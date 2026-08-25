@@ -420,9 +420,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
     cfg.gov.min_enactment_delay = 1;
     cfg.gov.window_span = 1;
     cfg.gov.approval_threshold_q_den = 1;
-    cfg.gov.pipeline_study_sla_blocks = 1;
-    cfg.gov.pipeline_review_sla_blocks = 1;
-    cfg.gov.pipeline_enactment_sla_blocks = 2;
     cfg.accel.merkle_min_leaves_gpu = defaults::accel::MERKLE_MIN_LEAVES_GPU;
     cfg.concurrency.scheduler_min_threads = defaults::concurrency::SCHEDULER_MIN;
     cfg.concurrency.scheduler_max_threads = defaults::concurrency::SCHEDULER_MAX;

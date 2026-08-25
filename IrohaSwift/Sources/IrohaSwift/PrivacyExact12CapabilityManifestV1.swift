@@ -12,7 +12,7 @@ public enum PrivacyExact12CapabilityManifestErrorV1: Error, LocalizedError, Equa
     public var errorDescription: String? {
         switch self {
         case .nativeUnavailable:
-            return "Exact12 capability admission requires the exact ABI22 native bridge."
+            return "Exact12 capability admission requires the exact ABI23 native bridge."
         case let .invalidArchive(reason):
             return "Exact12 capability manifest is invalid: \(reason)"
         case let .unavailableProtocol(protocolId):
@@ -206,7 +206,7 @@ public struct PrivacyExact12CapabilityRowV1: Equatable, Sendable {
     public let activationState: PrivacyCapabilityActivationStateV1
     public let activation: PrivacyProtocolActivationRecordV1?
     public let limitation: PrivacyCapabilityLimitationV1?
-    /// True only after byte-exact comparison with the ABI22-validated local catalog.
+    /// True only after byte-exact comparison with the ABI23-validated local catalog.
     public let localCompiledTupleMatches: Bool
 
     public var isNetworkAvailable: Bool {
@@ -221,7 +221,7 @@ public struct PrivacyExact12CapabilityRowV1: Equatable, Sendable {
     let compiledProfileCanonicalNorito: Data
 }
 
-/// Immutable model issued only from exact Torii Norito plus an ABI22 local catalog.
+/// Immutable model issued only from exact Torii Norito plus an ABI23 local catalog.
 public final class PrivacyExact12CapabilityManifestV1: @unchecked Sendable {
     public static let versionV1: UInt32 = 1
     public static let maximumArchiveBytes = 256 * 1024
@@ -395,7 +395,7 @@ extension PrivacyProtocolIdV1 {
     }
 }
 
-/// Allocation-bounded canonical Norito decoder used after the ABI22 prerequisite.
+/// Allocation-bounded canonical Norito decoder used after the ABI23 prerequisite.
 enum PrivacyExact12CapabilityManifestCodecV1 {
     private static let manifestSchema = "iroha.privacy.exact12-capability-manifest.v1"
     private static let catalogSchema = "iroha.privacy.compiled-profile-catalog.v1"

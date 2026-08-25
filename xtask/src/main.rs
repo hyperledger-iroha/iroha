@@ -102,6 +102,7 @@ mod nexus;
 mod nexus_lane_maintenance;
 mod norito_rpc;
 mod openapi_git;
+mod openapi_validation;
 mod poseidon_bench;
 mod sm;
 mod sns;
@@ -9525,8 +9526,9 @@ fn generate_openapi(
     signing_payload: Option<PathBuf>,
     unsigned_manifest: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let spec = require_release_router_openapi(try_generate_router_openapi())?;
-    let formatted = render_release_openapi(&spec)?;
+    let spec_bytes = render_release_openapi(require_release_router_openapi(
+        try_generate_router_openapi(),
+    )?);
     let emits_manifest = signature_envelope.is_some() || unsigned_manifest;
     if emits_manifest
         && !outputs
@@ -9564,7 +9566,7 @@ fn generate_openapi(
         );
     }
     for path in &outputs {
-        write_openapi_file_atomic(path, formatted.as_bytes(), "OpenAPI output")?;
+        write_openapi_file_atomic(path, &spec_bytes, "OpenAPI output")?;
         println!("wrote {}", path.display());
     }
     if emits_manifest {
@@ -9592,81 +9594,30 @@ fn generate_openapi(
     Ok(())
 }
 /// Render a release authority with one canonical final LF.
-/// Normalize any formatter-provided line ending before appending it.
-fn render_release_openapi(spec: &Value) -> Result<String, Box<dyn Error>> {
-    let mut formatted = json::to_string_pretty(spec)?;
-    let content_len = formatted.trim_end_matches(&['\r', '\n'][..]).len();
-    formatted.truncate(content_len);
-    formatted.push('\n');
-    Ok(formatted)
+/// Normalize any router-provided line ending before appending it.
+fn render_release_openapi(mut spec_bytes: Vec<u8>) -> Vec<u8> {
+    while spec_bytes
+        .last()
+        .is_some_and(|byte| matches!(*byte, b'\r' | b'\n'))
+    {
+        spec_bytes.pop();
+    }
+    spec_bytes.push(b'\n');
+    spec_bytes
 }
 fn require_release_router_openapi(
-    generated: Result<Option<Value>, Box<dyn Error>>,
-) -> Result<Value, Box<dyn Error>> {
-    let spec = generated
-        .map_err(|err| format!("failed to load the OpenAPI authority through Torii router: {err}"))?
-        .ok_or("Torii did not expose its OpenAPI authority; replay failed closed")?;
-    validate_release_openapi_spec(&spec)?;
-    Ok(spec)
-}
-fn validate_release_openapi_spec(spec: &Value) -> Result<(), Box<dyn Error>> {
-    let document = spec
-        .as_object()
-        .ok_or("release OpenAPI document must be a JSON object")?;
-    let version = document
-        .get("openapi")
-        .and_then(Value::as_str)
-        .ok_or("release OpenAPI document is missing the openapi version")?;
-    if !version.starts_with("3.") {
-        return Err(format!(
-            "release OpenAPI document uses unsupported version `{version}`; expected OpenAPI 3.x"
-        )
-        .into());
-    }
-    let info = document
-        .get("info")
-        .and_then(Value::as_object)
-        .ok_or("release OpenAPI document is missing the info object")?;
-    for field in ["title", "version"] {
-        if info
-            .get(field)
-            .and_then(Value::as_str)
-            .is_none_or(|value| value.trim().is_empty())
-        {
-            return Err(format!(
-                "release OpenAPI document info.{field} must be a non-empty string"
-            )
-            .into());
-        }
-    }
-    let paths = document
-        .get("paths")
-        .and_then(Value::as_object)
-        .ok_or("release OpenAPI document is missing the paths object")?;
-    if paths.is_empty() {
-        return Err(
-            "release OpenAPI document must define at least one path; empty/stub specifications are forbidden"
-                .into(),
-        );
-    }
-    let schemas = document
-        .get("components")
-        .and_then(Value::as_object)
-        .and_then(|components| components.get("schemas"))
-        .and_then(Value::as_object)
-        .ok_or("release OpenAPI document is missing components.schemas")?;
-    if schemas.is_empty() {
-        return Err(
-            "release OpenAPI document must define at least one component schema; empty/stub specifications are forbidden"
-                .into(),
-        );
-    }
-    Ok(())
+    generated: Result<Option<Vec<u8>>, Box<dyn Error>>,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let spec_bytes = generated
+        .map_err(|err| format!("failed to generate OpenAPI from Torii router: {err}"))?
+        .ok_or("Torii OpenAPI generation failed closed: the router exposed no authority")?;
+    validate_release_openapi_bytes(&spec_bytes)?;
+    Ok(spec_bytes)
 }
 fn validate_release_openapi_bytes(spec_bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     let spec = norito::json::from_slice::<Value>(spec_bytes)
         .map_err(|err| format!("failed to parse release OpenAPI document as JSON: {err}"))?;
-    validate_release_openapi_spec(&spec)
+    openapi_validation::validate_release_openapi_spec(&spec)
 }
 const OPENAPI_MANIFEST_VERSION: u32 = 2;
 const OPENAPI_MANIFEST_SIGNATURE_DOMAIN_V2: &[u8] = b"iroha.openapi.manifest.signature.v2";
@@ -12056,13 +12007,30 @@ mod openapi_tests {
                 .to_string()
                 .contains("failed to generate OpenAPI from Torii router")
         );
-        let empty = require_release_router_openapi(Ok(Some(empty_openapi_stub())))
-            .expect_err("an empty OpenAPI document must never be accepted");
+        let empty = require_release_router_openapi(Ok(Some(
+            norito::json::to_vec(&empty_openapi_stub()).expect("serialize empty OpenAPI"),
+        )))
+        .expect_err("an empty OpenAPI document must never be accepted");
         assert!(
             empty
                 .to_string()
                 .contains("empty/stub specifications are forbidden")
         );
+    }
+    #[test]
+    fn router_generation_preserves_exact_json_integer_bytes() {
+        let exact = br#"{
+  "openapi": "3.1.0",
+  "info": {"title": "Torii fixture", "version": "1.0.0"},
+  "paths": {"/health": {"get": {"responses": {"200": {"description": "ok"}}}}},
+  "components": {"schemas": {"Height": {"type": "integer", "maximum": 18446744073709551615}}}
+}"#
+        .to_vec();
+
+        let emitted = require_release_router_openapi(Ok(Some(exact.clone())))
+            .expect("exact router document must be accepted");
+
+        assert_eq!(emitted, exact);
     }
     #[test]
     fn router_state_uses_configured_genesis_identity() {
@@ -13688,13 +13656,13 @@ mod streaming_bundle_tests {
         );
     }
 }
-fn try_generate_router_openapi() -> Result<Option<Value>, Box<dyn Error>> {
+fn try_generate_router_openapi() -> Result<Option<Vec<u8>>, Box<dyn Error>> {
     let runtime = TokioRuntimeBuilder::new_current_thread()
         .enable_all()
         .build()?;
     runtime.block_on(generate_router_openapi_async())
 }
-async fn generate_router_openapi_async() -> Result<Option<Value>, Box<dyn Error>> {
+async fn generate_router_openapi_async() -> Result<Option<Vec<u8>>, Box<dyn Error>> {
     const OPENAPI_ENDPOINT_CANDIDATES: &[&str] = &["/openapi.json", "/openapi"];
     let data_dir = TestDataDirGuard::new();
     let mut cfg = mk_minimal_root_cfg();
@@ -13765,7 +13733,7 @@ fn openapi_router_state(
     );
     (network_id, Arc::new(state))
 }
-async fn fetch_openapi_from_router(router: Router, candidates: &[&str]) -> Option<Value> {
+async fn fetch_openapi_from_router(router: Router, candidates: &[&str]) -> Option<Vec<u8>> {
     let mut token_header = std::env::var("TORII_OPENAPI_TOKEN")
         .ok()
         .filter(|value| !value.is_empty());
@@ -13801,7 +13769,7 @@ async fn fetch_openapi_from_router(router: Router, candidates: &[&str]) -> Optio
             continue;
         }
         match norito::json::from_slice::<Value>(bytes.as_ref()) {
-            Ok(value) => return Some(value),
+            Ok(_) => return Some(bytes.to_vec()),
             Err(err) => {
                 eprintln!("failed to parse OpenAPI JSON from {path}: {err}");
             }

@@ -5155,14 +5155,16 @@ pub struct GovernanceStatus {
     crate::json_macros::JsonDeserialize,
 )]
 pub struct GovernanceProposalCounters {
-    /// Proposals currently awaiting review.
+    /// Proposals whose latest attempt is active or certified.
     pub proposed: u64,
-    /// Proposals approved but not yet enacted.
-    pub approved: u64,
-    /// Proposals rejected by governance.
+    /// Proposals whose latest attempt was rejected.
     pub rejected: u64,
     /// Proposals that completed enactment.
     pub enacted: u64,
+    /// Proposals whose certified compare-and-set predecessor was superseded.
+    pub superseded: u64,
+    /// Proposals whose certified effect failed atomically at execution.
+    pub execution_failed: u64,
 }
 /// Counters tracking protected-namespace admission decisions.
 #[derive(
@@ -5350,32 +5352,40 @@ impl<'a> DecodeFromSlice<'a> for GovernanceStatus {
 }
 impl norito::core::NoritoSerialize for GovernanceProposalCounters {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let payload = (self.proposed, self.approved, self.rejected, self.enacted);
+        let payload = (
+            self.proposed,
+            self.rejected,
+            self.enacted,
+            self.superseded,
+            self.execution_failed,
+        );
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceProposalCounters {
     fn deserialize(archived: &'a norito::core::Archived<GovernanceProposalCounters>) -> Self {
-        let (proposed, approved, rejected, enacted): (u64, u64, u64, u64) =
+        let (proposed, rejected, enacted, superseded, execution_failed): (u64, u64, u64, u64, u64) =
             norito::core::NoritoDeserialize::deserialize(archived.cast());
         Self {
             proposed,
-            approved,
             rejected,
             enacted,
+            superseded,
+            execution_failed,
         }
     }
 }
 impl<'a> DecodeFromSlice<'a> for GovernanceProposalCounters {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let ((proposed, approved, rejected, enacted), used) =
-            <(u64, u64, u64, u64)>::decode_from_slice(bytes)?;
+        let ((proposed, rejected, enacted, superseded, execution_failed), used) =
+            <(u64, u64, u64, u64, u64)>::decode_from_slice(bytes)?;
         Ok((
             Self {
                 proposed,
-                approved,
                 rejected,
                 enacted,
+                superseded,
+                execution_failed,
             },
             used,
         ))
@@ -5610,9 +5620,10 @@ fn governance_proposal_counters(metrics: &Metrics) -> GovernanceProposalCounters
     };
     GovernanceProposalCounters {
         proposed: fetch("proposed"),
-        approved: fetch("approved"),
         rejected: fetch("rejected"),
         enacted: fetch("enacted"),
+        superseded: fetch("superseded"),
+        execution_failed: fetch("execution_failed"),
     }
 }
 fn governance_protected_namespace_counters(
@@ -6313,6 +6324,14 @@ fields {
     pub storage_da_churn_bytes_total: int_counter_vec(&["component", "direction"]);
     /// Governance: proposal counts grouped by status
     pub governance_proposals_status: gauge_vec(&["status"]);
+    /// Parliament: accepted lifecycle transitions grouped by a closed transition kind.
+    pub governance_parliament_transitions_total: int_counter_vec(&["transition"]);
+    /// Parliament: Core-derived no-result outcomes grouped by a closed failure class.
+    pub governance_parliament_no_result_total: int_counter_vec(&["class"]);
+    /// Parliament: committed attempt counts grouped by a closed status.
+    pub governance_parliament_attempts_by_status: gauge_vec(&["status"]);
+    /// Parliament: committed attempt counts grouped by a closed stage.
+    pub governance_parliament_attempts_by_stage: gauge_vec(&["stage"]);
     /// Governance: latest council members count.
     pub governance_council_members: gauge();
     /// Governance: latest council alternates count.
@@ -8194,11 +8213,90 @@ construct {
         state_tiered_hot_budget_overflow_keys state_tiered_hot_budget_overflow_bytes
         state_tiered_last_snapshot_index storage_budget_bytes_used storage_budget_bytes_limit
         storage_budget_exceeded_total storage_da_cache_total storage_da_churn_bytes_total
-        governance_proposals_status]
+        governance_proposals_status governance_parliament_transitions_total
+        governance_parliament_no_result_total governance_parliament_attempts_by_status
+        governance_parliament_attempts_by_stage]
     {
-        for status in ["proposed", "approved", "rejected", "enacted"] {
+        for status in [
+            "proposed",
+            "rejected",
+            "enacted",
+            "superseded",
+            "execution_failed",
+        ] {
             governance_proposals_status
                 .with_label_values(&[status])
+                .set(0);
+        }
+        for transition in [
+            "escalate_risk",
+            "complete_qualification",
+            "register_sortition_request",
+            "consume_sortition_pulse_batch",
+            "begin_invitation_acceptance",
+            "fail_body_election_no_roster",
+            "seal_body_roster",
+            "advance_body_phase",
+            "record_attempt_absence",
+            "endorse_public_finding",
+            "fail_public_finding_no_result",
+            "register_ballot_attempt",
+            "close_ballot_registration",
+            "freeze_ballot_survivors",
+            "freeze_timed_ovn_corpus",
+            "begin_ballot_opening_batch",
+            "fail_ballot_no_result",
+            "finalize_opened_ballot",
+            "mark_enacted",
+            "mark_superseded",
+            "mark_execution_failed",
+            "record_invitation_response",
+            "register_ballot_participant",
+            "record_ballot_dropout",
+        ] {
+            let _ = governance_parliament_transitions_total
+                .with_label_values(&[transition]);
+        }
+        for class in [
+            "public_finding_quorum_unreachable",
+            "public_finding_deadline_expired",
+            "ballot_registration_deadline_expired",
+            "ballot_survivor_deadline_expired",
+            "ballot_commitment_deadline_expired",
+            "ballot_release_pulse_unavailable",
+            "ballot_opening_deadline_expired",
+        ] {
+            let _ = governance_parliament_no_result_total.with_label_values(&[class]);
+        }
+        for status in [
+            "active",
+            "certified",
+            "rejected",
+            "enacted",
+            "superseded",
+            "execution_failed",
+        ] {
+            governance_parliament_attempts_by_status
+                .with_label_values(&[status])
+                .set(0);
+        }
+        for stage in [
+            "qualification",
+            "rules",
+            "agenda",
+            "interest",
+            "review",
+            "coordination",
+            "mpc",
+            "fma",
+            "oversight",
+            "policy_jury",
+            "confirmation_jury",
+            "certification",
+            "enactment",
+        ] {
+            governance_parliament_attempts_by_stage
+                .with_label_values(&[stage])
                 .set(0);
         }
     }
@@ -8869,6 +8967,8 @@ initialize (metrics) {
         state_tiered_hot_budget_overflow_bytes state_tiered_last_snapshot_index
         storage_budget_bytes_used storage_budget_bytes_limit storage_budget_exceeded_total
         storage_da_cache_total storage_da_churn_bytes_total governance_proposals_status
+        governance_parliament_transitions_total governance_parliament_no_result_total
+        governance_parliament_attempts_by_status governance_parliament_attempts_by_stage
         governance_council_members governance_council_alternates governance_council_candidates
         governance_council_epoch governance_citizens_total governance_citizen_service_events_total
         governance_protected_namespace_total governance_manifest_admission_total
@@ -9192,12 +9292,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 821;
-const METRIC_CATALOG_V2_REGISTERED: usize = 776;
-const METRIC_CATALOG_V2_BYTES: usize = 111_834;
+const METRIC_CATALOG_V2_ROWS: usize = 825;
+const METRIC_CATALOG_V2_REGISTERED: usize = 780;
+const METRIC_CATALOG_V2_BYTES: usize = 112_456;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "e124915cc80e4c99abfd7b291fc4092baf777577789d1897b0ec47039b515f28";
+    "243d3497c82352252a050842ecd427c20d6c2bb446d9b21a393117b4bb53f4f4";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {
@@ -10394,26 +10494,7 @@ impl Metrics {
             .with_label_values(&[mode_label])
             .set(i64::try_from(bucket.bucket_start_unix).unwrap_or(i64::MAX));
         if bucket.is_suppressed() {
-            let reason_label = bucket
-                .suppression_reason
-                .map_or("unknown", SoranetPrivacySuppressionReasonV1::as_label);
-            self.soranet_privacy_bucket_suppressed
-                .with_label_values(&[mode_label])
-                .set(1.0);
-            self.soranet_privacy_suppression_total
-                .with_label_values(&[mode_label, reason_label])
-                .inc();
-            self.soranet_privacy_active_circuits_avg
-                .with_label_values(&[mode_label])
-                .set(0.0);
-            self.soranet_privacy_active_circuits_max
-                .with_label_values(&[mode_label])
-                .set(0.0);
-            for percentile in ["p50", "p90", "p99"] {
-                self.soranet_privacy_rtt_millis
-                    .with_label_values(&[mode_label, percentile])
-                    .set(0.0);
-            }
+            self.record_suppressed_soranet_privacy_bucket(mode_label, bucket);
             return;
         }
         self.soranet_privacy_bucket_suppressed
@@ -10493,6 +10574,34 @@ impl Metrics {
                 .inc_by(gar_reports);
         }
     }
+
+    fn record_suppressed_soranet_privacy_bucket(
+        &self,
+        mode_label: &str,
+        bucket: &SoranetPrivacyBucketMetricsV1,
+    ) {
+        let reason_label = bucket
+            .suppression_reason
+            .map_or("unknown", SoranetPrivacySuppressionReasonV1::as_label);
+        self.soranet_privacy_bucket_suppressed
+            .with_label_values(&[mode_label])
+            .set(1.0);
+        self.soranet_privacy_suppression_total
+            .with_label_values(&[mode_label, reason_label])
+            .inc();
+        self.soranet_privacy_active_circuits_avg
+            .with_label_values(&[mode_label])
+            .set(0.0);
+        self.soranet_privacy_active_circuits_max
+            .with_label_values(&[mode_label])
+            .set(0.0);
+        for percentile in ["p50", "p90", "p99"] {
+            self.soranet_privacy_rtt_millis
+                .with_label_values(&[mode_label, percentile])
+                .set(0.0);
+        }
+    }
+
     /// Update the privacy collector enabled flag.
     pub fn set_soranet_privacy_collector_enabled(&self, enabled: bool) {
         self.soranet_privacy_collector_enabled

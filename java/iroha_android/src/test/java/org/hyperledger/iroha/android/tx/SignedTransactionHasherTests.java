@@ -35,6 +35,7 @@ public final class SignedTransactionHasherTests {
 
   public static void main(final String[] args) throws Exception {
     hashHexMatchesCanonicalBytes();
+    payloadOnlyHashMatchesSubmittedTransactionIdentity();
     byteHelpersRejectRawHashingAndDoubleWrapping();
     byteHelpersRejectMalformedOrNonBareEncodings();
     hashIgnoresExportedKeyBundle();
@@ -57,6 +58,23 @@ public final class SignedTransactionHasherTests {
             SignedTransactionHasher.canonicalBytes(transaction),
             SignedTransactionHasher.canonicalBytesFromBare(bare))
         : "Object and byte-array paths must share the same External wrapper";
+  }
+
+  private static void payloadOnlyHashMatchesSubmittedTransactionIdentity() throws Exception {
+    final SignedTransaction transaction = newTransaction((byte) 0x10);
+    final byte[] payload = transaction.encodedPayload();
+    assert SignedTransactionHasher.hashHex(transaction)
+        .equals(SignedTransactionHasher.hashCanonicalTransactionPayloadHex(payload))
+        : "detached payload hash must equal the eventual signed transaction identity";
+
+    final byte[] trailing = Arrays.copyOf(payload, payload.length + 1);
+    try {
+      SignedTransactionHasher.hashCanonicalTransactionPayload(trailing);
+      throw new AssertionError("Expected non-canonical transaction payload rejection");
+    } catch (IllegalArgumentException expected) {
+      assert expected.getMessage().contains("exact canonical")
+          : "payload-only hash rejection should identify canonical encoding";
+    }
   }
 
   private static void byteHelpersRejectRawHashingAndDoubleWrapping() throws Exception {

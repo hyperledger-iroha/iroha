@@ -11,9 +11,24 @@
 # authenticated selection, never aliases or fallback inputs.
 
 readonly PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256=\
-"cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+"9d6421d36fde972b4ba31889d46f5e2231ac9241558455f9ba1be9c66e63a744"
 readonly PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256=\
-"4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492"
+"71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2"
+readonly PRIVACY_SDK_RELEASE_LOCK_TRAILER=\
+"# privacy-sdk-release-source-sha256 = ${PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256}"
+
+privacy_sdk_materialize_release_lock() {
+  local workspace_lock="$1"
+  local release_lock="$2"
+
+  if [[ -e "${release_lock}" || -L "${release_lock}" ]]; then
+    echo "error: privacy SDK external release Cargo.lock already exists" >&2
+    return 1
+  fi
+  install -m 600 "${workspace_lock}" "${release_lock}" || return 1
+  printf '%s\n' "${PRIVACY_SDK_RELEASE_LOCK_TRAILER}" \
+    >>"${release_lock}" || return 1
+}
 
 privacy_sdk_resolve_cargo_lockfile() {
   local repository_root="$1"
@@ -1281,6 +1296,7 @@ privacy_sdk_provision_ci_cargo_lock() {
   local python_bin="${7:-python3}"
   local canonical_repository_root canonical_corridor_root
   local workspace_lock workspace_lock_state lock_directory lock_path
+  local resolution_probe_directory resolution_probe_lock_path
   local resolved_lock resolved_lock_seal
   local real_cargo real_cargo_seal real_rustc real_rustc_seal
   local real_rustdoc real_rustdoc_seal rustup_seal toolchain_bin_directory
@@ -1401,11 +1417,13 @@ privacy_sdk_provision_ci_cargo_lock() {
   esac
 
   lock_directory="${canonical_corridor_root}/lock"
+  resolution_probe_directory="${canonical_corridor_root}/resolution-probe"
   cargo_wrapper_directory="${canonical_corridor_root}/bin"
   cargo_audit_path="${canonical_corridor_root}/cargo-audit"
   private_cargo_home="${canonical_corridor_root}/cargo-home"
   install -d -m 700 \
-    "${lock_directory}" "${cargo_wrapper_directory}" || return 1
+    "${lock_directory}" "${resolution_probe_directory}" \
+    "${cargo_wrapper_directory}" || return 1
   privacy_sdk_prepare_private_cargo_home \
     "${private_cargo_home}" "${python_bin}" || return 1
   if ! private_cargo_home="$(cd "${private_cargo_home}" && pwd -P)"; then
@@ -1443,6 +1461,12 @@ privacy_sdk_provision_ci_cargo_lock() {
   lock_path="${lock_directory}/Cargo.lock"
   if [[ -e "${lock_path}" || -L "${lock_path}" ]]; then
     echo "error: privacy SDK CI external Cargo.lock already exists" >&2
+    return 1
+  fi
+  resolution_probe_lock_path="${resolution_probe_directory}/Cargo.lock"
+  if [[ -e "${resolution_probe_lock_path}" || \
+    -L "${resolution_probe_lock_path}" ]]; then
+    echo "error: privacy SDK CI resolution-probe Cargo.lock already exists" >&2
     return 1
   fi
 
@@ -1513,9 +1537,9 @@ privacy_sdk_provision_ci_cargo_lock() {
     RUSTC_BOOTSTRAP=1 \
       "${real_cargo}" -Z unstable-options generate-lockfile \
         --manifest-path "${canonical_repository_root}/Cargo.toml" \
-        --lockfile-path "${lock_path}"
+        --lockfile-path "${resolution_probe_lock_path}"
   ); then
-    echo "error: Cargo failed to generate the required external Cargo.lock" >&2
+    echo "error: Cargo failed to generate the external resolution probe" >&2
     return 1
   fi
   if ! privacy_sdk_assert_optional_file_state \
@@ -1524,8 +1548,9 @@ privacy_sdk_provision_ci_cargo_lock() {
     echo "error: external lock generation changed the tracked root Cargo.lock" >&2
     return 1
   fi
-  if [[ ! -f "${lock_path}" || -L "${lock_path}" ]]; then
-    echo "error: Cargo did not generate the required external Cargo.lock" >&2
+  if [[ ! -f "${resolution_probe_lock_path}" || \
+    -L "${resolution_probe_lock_path}" ]]; then
+    echo "error: Cargo did not generate the external resolution probe" >&2
     return 1
   fi
   privacy_sdk_validate_repository_cargo_configuration \
@@ -1553,6 +1578,15 @@ privacy_sdk_provision_ci_cargo_lock() {
       "${canonical_repository_root}" \
       "${python_bin}" || return 1
 
+  chmod 400 "${resolution_probe_lock_path}" || return 1
+  privacy_sdk_materialize_release_lock \
+    "${workspace_lock}" "${lock_path}" || return 1
+  if ! privacy_sdk_assert_optional_file_state \
+    "${workspace_lock}" "${workspace_lock_state}" \
+    "tracked root Cargo.lock" "${python_bin}"; then
+    echo "error: external release projection changed the tracked root Cargo.lock" >&2
+    return 1
+  fi
   chmod 400 "${lock_path}" || return 1
   if ! lock_path="$(
     cd "$(dirname "${lock_path}")" && printf '%s/Cargo.lock\n' "$(pwd -P)"
@@ -1575,7 +1609,7 @@ privacy_sdk_provision_ci_cargo_lock() {
     "${PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256}:"*) ;;
     *)
       echo \
-        "error: generated privacy Cargo.lock candidate does not match the distinct immutable cd9e release authority; external release-artifact requalification is required" \
+        "error: projected privacy Cargo.lock does not match the immutable release authority" \
         >&2
       return 1
       ;;

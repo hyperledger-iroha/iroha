@@ -353,6 +353,17 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         Err(RuntimeClockError::PendingKuraRecovery),
         "pending Kura recovery must keep the ordinary pacemaker sealed",
     );
+    let mut non_local_executor = fixture.executor(EffectQueueConfig::default());
+    non_local_executor.pending_tip_recovery = Some(evidence.clone());
+    let mut non_local_services = fixture.services();
+    assert!(matches!(
+        non_local_executor.consume_pending_tip_recovery_effects(
+            vec![AdapterEffect::Broadcast(proposal(&fixture))],
+            &mut non_local_services,
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("non-local consensus effect")
+    ));
     let mut direct_apply_executor = fixture.executor(EffectQueueConfig::default());
     direct_apply_executor.validated_bodies = validations.clone();
     direct_apply_executor.pending_tip_recovery = Some(evidence.clone());

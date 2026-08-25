@@ -420,7 +420,7 @@ The managed SDK exposes universal offline discovery through
 `GetOfflineCapabilityAsync`, plus `SubmitKagemushaTopUpV4Async`,
 `SubmitKagemushaRedeemV4Async`, and `GetKagemushaOperationStatusAsync`.
 Discovery is asset-neutral and accepts only the exact four-field
-`cash_handoff_v1` capability response for bridge ABI 22.
+`cash_handoff_v1` capability response for bridge ABI 23.
 
 The C# surface is transport-only and does not claim a native prover. Top-up and
 redemption methods accept bounded canonical Norito archives created by a
@@ -524,7 +524,7 @@ envelopes, submit instructions, intent projections and digests, unsigned
 payloads, versioned signed transactions, and pipeline hashes for all twelve
 rows; `ValidateExact12FixtureBundleV1(...)` accepts only the canonical bundle
 and enforces a 2 MiB input ceiling. Native
-availability requires ABI 22, both compiled-catalog symbols, both exact-12 fixture
+availability requires ABI 23, both compiled-catalog symbols, both exact-12 fixture
 symbols, the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form algorithm selectors are absent;
 proofs use protocol-specific typed APIs.
@@ -559,7 +559,7 @@ changes, and whitespace normalization.
 
 `Hyperledger.Iroha.SoraFs.SoraFsReferenceValidators` validates canonical
 `GovernanceDagBlockV1` bytes and signed `GovernanceDagHeadV1` chains through
-`connect_norito_bridge` ABI 22. `ValidateGovernanceDagBlockJson(...)` accepts an
+`connect_norito_bridge` ABI 23. `ValidateGovernanceDagBlockJson(...)` accepts an
 optional expected block CID, while `ValidateGovernanceDagHeadChainJson(...)`
 accepts at most 64 root-to-head `SoraFsGovernanceDagBlockInput` snapshots. Both
 return the native `ValidationOutcomeV1` JSON only after strict UTF-8, exact V1
@@ -967,7 +967,7 @@ dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj \
 ```
 
 Both commands require the same clean Git revision recorded by all five
-canonical ABI-22 manifests. Missing, extra, noncanonical, substituted, or stale
+canonical ABI-23 manifests. Missing, extra, noncanonical, substituted, or stale
 inputs fail before NuGet packing. The project invokes `verify-stage` again
 immediately before `GenerateNuspec`; CI then runs `verify-package` against the
 primary `.nupkg` and exercises that package on all five native hosts. The
@@ -992,7 +992,7 @@ with warnings as errors, and runs managed Ed25519, canonical request, and SCCP
 route checks through the packed NuGet assembly. Set
 `CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER` to the current reviewed RID;
 the guard also verifies the NuGet runtime inventory and requires the packaged
-ABI-22 appeal-finance bridge:
+ABI-23 appeal-finance bridge:
 
 From the repository root, the equivalent consumer invocation is:
 

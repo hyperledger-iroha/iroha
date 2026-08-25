@@ -393,7 +393,7 @@ class Fixture:
             "do_not_ship_marker": "KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2",
             "candidate_feature_enabled": True,
             "production_capability_enabled": False,
-            "bridge_abi_version": 22,
+            "bridge_abi_version": 23,
             "target_triple": "aarch64-apple-ios",
             "architectures": ["arm64"],
             "simulator_slice_present": False,
@@ -570,7 +570,7 @@ class Fixture:
             "duplicate_input_rejected": True,
             "generation": "fixture-generation",
             "source_commit": session["source_commit"],
-            "bridge_abi_version": 22,
+            "bridge_abi_version": 23,
             "source_tree_sha256": session["source_tree_sha256"],
             "reviewed_source_closure_descriptor_sha256": session[
                 "reviewed_source_closure_descriptor_sha256"

@@ -294,13 +294,13 @@ pub fn parse_client_advertisement(bytes: &[u8]) -> Result<ClientAdvertisement, C
     let mut previous_ty = None;
     while cursor + 4 <= bytes.len() {
         let ty = u16::from_be_bytes([bytes[cursor], bytes[cursor + 1]]);
-        if let Some(previous) = previous_ty {
-            if ty < previous {
-                return Err(CapabilityError::NonCanonicalTypeOrder {
-                    previous,
-                    current: ty,
-                });
-            }
+        if let Some(previous) = previous_ty
+            && ty < previous
+        {
+            return Err(CapabilityError::NonCanonicalTypeOrder {
+                previous,
+                current: ty,
+            });
         }
         previous_ty = Some(ty);
         let len = u16::from_be_bytes([bytes[cursor + 2], bytes[cursor + 3]]) as usize;

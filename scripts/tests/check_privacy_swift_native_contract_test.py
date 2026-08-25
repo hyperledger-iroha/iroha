@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze the authenticated, no-skip ABI-22 Swift privacy lane."""
+"""Freeze the authenticated, no-skip ABI-23 Swift privacy lane."""
 
 from __future__ import annotations
 
@@ -78,8 +78,10 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             source.index('bash "${APPLE_ARTIFACT_CHECKER}" --apple-only'),
             source.index('"${SWIFT_BIN}" test'),
         )
-        blocker = "external-lock requalification"
-        self.assertIn(blocker, source)
+        self.assertNotIn("external-lock requalification", source)
+        authentication = source.index(
+            '"${FROZEN_CARGO_LOCK_SHA256}" ]] || {'
+        )
         for invocation in (
             'DEVELOPER_DIR="$(xcode-select -p)"',
             "xcodebuild -version",
@@ -87,9 +89,9 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             '"${SWIFTC_BIN}" --version',
             '"${SWIFT_BIN}" test',
         ):
-            self.assertLess(source.index(blocker), source.index(invocation))
+            self.assertLess(authentication, source.index(invocation))
 
-    def test_swift_requalification_blocker_stops_direct_execution(self) -> None:
+    def test_swift_external_lock_authentication_precedes_direct_execution(self) -> None:
         source = read("ci/check_privacy_swift_sdk.sh")
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary).resolve()
@@ -105,13 +107,14 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             fake_python = tools / "python"
             fake_python.write_text(
                 "#!/usr/bin/env bash\n"
-                f'[[ "${{!#}}" == "{tracked}" ]] && echo "4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492" || echo "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"\n',
+                f'[[ "${{!#}}" == "{tracked}" ]] && echo "71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2" || echo "{"0" * 64}"\n',
                 encoding="utf-8",
             )
             (tools / "uname").write_text("#!/usr/bin/env bash\necho Darwin\n", encoding="utf-8")
             tool_stub = (
                 '#!/usr/bin/env bash\necho "${0##*/}" >>"$PRIVACY_TEST_LOG"\n'
                 '[[ "${0##*/}" == xcode-select ]] && echo /Applications/Xcode.app/Contents/Developer\n'
+                "exit 0\n"
             )
             for name in ("xcode-select", "xcodebuild", "swiftc", "swift"):
                 (tools / name).write_text(tool_stub, encoding="utf-8")
@@ -140,16 +143,22 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
                 ["bash", str(gate)], env=environment, text=True, capture_output=True
             )
             self.assertEqual(result.returncode, 1)
-            self.assertIn("external-lock requalification", result.stderr)
-            self.assertFalse(log.exists(), "blocker allowed artifact/Xcode execution")
+            self.assertIn("external Cargo.lock is not the frozen release lock", result.stderr)
+            self.assertFalse(log.exists(), "lock rejection allowed artifact/Xcode execution")
 
-            marker = source.index("external-lock requalification")
-            exit_at = source.index("exit 1", marker)
-            gate.write_text(source[:exit_at] + ": # negative control" + source[exit_at + 6 :], encoding="utf-8")
+            fake_python.write_text(
+                "#!/usr/bin/env bash\n"
+                f'[[ "${{!#}}" == "{tracked}" ]] && echo "71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2" || echo "9d6421d36fde972b4ba31889d46f5e2231ac9241558455f9ba1be9c66e63a744"\n',
+                encoding="utf-8",
+            )
             result = subprocess.run(
                 ["bash", str(gate)], env=environment, text=True, capture_output=True
             )
-            self.assertIn("xcode-select", log.read_text(encoding="utf-8"))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = log.read_text(encoding="utf-8")
+            self.assertIn("xcode-select", calls)
+            self.assertIn("artifact-checker", calls)
+            self.assertIn("swift", calls)
 
     def test_package_manifest_requires_the_external_artifact(self) -> None:
         source = read("IrohaSwift/Package.swift")
@@ -158,7 +167,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             '"MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT"',
             "configuredArtifactDirectory == nil",
             "must be outside the reviewed Iroha source tree",
-            "requiredBridgeAbiVersion = 22",
+            "requiredBridgeAbiVersion = 23",
             '"NoritoBridge.artifacts.json"',
             'manifest["native_bridge_abi_version"]',
             "validateBridgeArtifact(at: bridgeAbsolutePath)",

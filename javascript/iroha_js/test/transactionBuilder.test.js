@@ -38,10 +38,9 @@ import {
   buildRegisterSmartContractBytesTransaction,
   buildRemoveSmartContractBytesTransaction,
   buildProposeDeployContractTransaction,
+  buildProposeSccpRouteGovernanceTransaction,
   buildCastZkBallotTransaction,
   buildCastPlainBallotTransaction,
-  buildEnactReferendumTransaction,
-  buildFinalizeReferendumTransaction,
   buildPersistCouncilForEpochTransaction,
   buildRegisterZkAssetTransaction,
   buildScheduleConfidentialPolicyTransitionTransaction,
@@ -61,6 +60,7 @@ import {
   buildRegisterDomainInstruction,
   buildSetAccountKeyValueInstruction,
   buildTransferAssetInstruction,
+  buildProposeSccpRouteGovernanceInstruction,
 } from "../src/instructionBuilders.js";
 import { AccountAddress } from "../src/address.js";
 import { ToriiClient } from "../src/toriiClient.js";
@@ -2981,7 +2981,6 @@ baseTest("buildProposeDeployContractTransaction wraps proposal", () => {
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           codeHash: "aa".repeat(32),
           abiHash: "bb".repeat(32),
-          window: { lower: 1, upper: 2 },
         },
         privateKey: PRIVATE_KEY,
       }),
@@ -2992,6 +2991,66 @@ baseTest("buildProposeDeployContractTransaction wraps proposal", () => {
     propose.contract_address,
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   );
+  assert.equal(propose.code_hash, "aa".repeat(32));
+  assert.equal(propose.abi_hash, "bb".repeat(32));
+  assert.equal(propose.abi_version, 1);
+  assert.equal(Object.hasOwn(propose, "window"), false);
+  assert.equal(Object.hasOwn(propose, "mode"), false);
+});
+
+baseTest("buildProposeSccpRouteGovernanceTransaction binds the exact network anchor", () => {
+  const captures = [];
+  const fakeResult = {
+    signed_transaction: Buffer.from([0x10]),
+    hash: Buffer.alloc(32, 0x10),
+  };
+  const action = buildSampleSccpRemoveAction();
+  withNativeBinding(
+    {
+      buildTransaction: (_network, _authority, instructions) => {
+        captures.push(JSON.parse(instructions[0]));
+        return fakeResult;
+      },
+    },
+    () => buildProposeSccpRouteGovernanceTransaction({
+      networkId: NETWORK_ID,
+      authority: AUTHORITY_ID_INPUT,
+      feePayment: AUTHORITY_FEE_PAYMENT,
+      action,
+      privateKey: PRIVATE_KEY,
+    }),
+  );
+  assert.deepEqual(captures, [{
+    ProposeSccpRouteGovernance: {
+      anchor: {
+        network_id: NETWORK_ID.toString(),
+        action,
+      },
+    },
+  }]);
+  for (const field of ["window", "mode", "anchor"]) {
+    assert.throws(
+      () => buildProposeSccpRouteGovernanceInstruction({
+        networkId: NETWORK_ID,
+        action,
+        [field]: null,
+      }),
+      new RegExp(field, "u"),
+    );
+  }
+  for (const field of ["proposal", "window", "mode", "anchor"]) {
+    assert.throws(
+      () => buildProposeSccpRouteGovernanceTransaction({
+        networkId: NETWORK_ID,
+        authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        action,
+        privateKey: PRIVATE_KEY,
+        [field]: null,
+      }),
+      new RegExp(field, "u"),
+    );
+  }
 });
 
 baseTest("buildCastZkBallotTransaction encodes ballot", () => {
@@ -3052,83 +3111,6 @@ test("buildCastPlainBallotTransaction normalizes amount", () => {
       }),
   );
   assert.equal(captures[0].CastPlainBallot.direction, 0);
-});
-
-test("buildEnactReferendumTransaction wraps enactment", () => {
-  const captures = [];
-  const fakeResult = {
-    signed_transaction: Buffer.from([0x13]),
-    hash: Buffer.alloc(32, 0x13),
-  };
-  withNativeBinding(
-    {
-      buildTransaction: (_chain, authority, instructions) => {
-        captures.push(JSON.parse(instructions[0]));
-        return fakeResult;
-      },
-    },
-    () =>
-      buildEnactReferendumTransaction({
-        networkId: NETWORK_ID,
-        authority: AUTHORITY_ID_INPUT,
-        feePayment: AUTHORITY_FEE_PAYMENT,
-        enactment: {
-          referendumId: Buffer.alloc(32, 0x33),
-          preimageHash: Buffer.alloc(32, 0x44),
-        },
-        privateKey: PRIVATE_KEY,
-      }),
-  );
-  assert.ok(captures[0].EnactReferendum);
-});
-
-test("buildFinalizeReferendumTransaction preserves one exact proposal digest", () => {
-  const captures = [];
-  const fakeResult = {
-    signed_transaction: Buffer.from([0x14]),
-    hash: Buffer.alloc(32, 0x14),
-  };
-  withNativeBinding(
-    {
-      buildTransaction: (_chain, authority, instructions) => {
-        captures.push(JSON.parse(instructions[0]));
-        return fakeResult;
-      },
-    },
-    () =>
-      buildFinalizeReferendumTransaction({
-        networkId: NETWORK_ID,
-        authority: AUTHORITY_ID_INPUT,
-        feePayment: AUTHORITY_FEE_PAYMENT,
-        finalization: {
-          referendumId: "55".repeat(32),
-          proposalId: Buffer.alloc(32, 0x55),
-        },
-        privateKey: PRIVATE_KEY,
-      }),
-  );
-  assert.deepEqual(
-    captures[0].FinalizeReferendum.proposal_id,
-    toByteArray(Buffer.alloc(32, 0x55)),
-  );
-  assert.equal(captures[0].FinalizeReferendum.referendum_id, "55".repeat(32));
-});
-
-baseTest("buildFinalizeReferendumTransaction rejects mismatch before native dispatch", () => {
-  assert.throws(
-    () =>
-      buildFinalizeReferendumTransaction({
-        networkId: NETWORK_ID,
-        authority: AUTHORITY_ID_INPUT,
-        feePayment: AUTHORITY_FEE_PAYMENT,
-        finalization: {
-          referendumId: "55".repeat(32),
-          proposalId: Buffer.alloc(32, 0x56),
-        },
-        privateKey: PRIVATE_KEY,
-      }),
-    /referendumId must equal proposalId/,
-  );
 });
 
 test("buildPersistCouncilForEpochTransaction wraps council", () => {

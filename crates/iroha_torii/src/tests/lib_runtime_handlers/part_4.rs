@@ -2270,7 +2270,7 @@ async fn core_info_handlers_ok() {
         health
             .get("required_bridge_abi_version")
             .and_then(norito::json::Value::as_u64),
-        Some(22)
+        Some(23)
     );
     assert_eq!(
         health.get("ready").and_then(norito::json::Value::as_bool),

@@ -69,19 +69,6 @@ extension ToriiClient {
     }
 
     @discardableResult
-    public func enactGovernanceProposal(
-        _ requestBody: ToriiGovernanceEnactRequest,
-        canonicalAuth: ToriiCanonicalRequestAuth,
-        completion: @escaping (Result<ToriiGovernanceEnactResponse, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.enactGovernanceProposal(
-                requestBody, canonicalAuth: canonicalAuth
-            )
-        }
-    }
-
-    @discardableResult
     public func getGovernanceProposal(
         idHex: String,
         canonicalAuth: ToriiCanonicalRequestAuth,

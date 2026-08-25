@@ -1,4 +1,8 @@
 // Iroha node executable and feature-isolated real-network consensus fault-injection control.
+#[cfg(all(feature = "test-network-parliament-signers", not(debug_assertions)))]
+compile_error!(
+    "the feature-isolated Parliament fixture signers cannot be compiled into an optimized daemon"
+);
 #[cfg(feature = "test-network-message-control")]
 mod consensus_message_control;
 /// Iroha server command-line interface and node bootstrap entrypoint.
@@ -144,12 +148,16 @@ use root_owned_artifact_publication::RootOwnedNoReplaceArtifactPublicationTarget
 use root_owned_artifact_publication::require_no_macos_extended_acl;
 pub use runtime_provider_broker::{
     BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
-    RuntimeProviderBrokerBackendRegistryV1, RuntimeProviderBrokerBackendsV1,
-    RuntimeProviderBrokerDeploymentV1, RuntimeProviderBrokerExecutableArgsV1,
-    RuntimeProviderBrokerExecutableErrorV1, RuntimeProviderBrokerExecutableV1,
-    RuntimeProviderBrokerLauncherErrorV1, RuntimeProviderBrokerLifecycleV1,
-    RuntimeProviderBrokerReadinessErrorV1, RuntimeProviderBrokerServerErrorV1,
-    StockGovernanceDagServiceRuntimeProviderRegistryV1,
+    BoundGlobalBeaconPartialSignerBrokerBackendV1,
+    BoundParliamentTlePartialReleaseSignerBrokerBackendV1, ConsensusSignerProviderQualificationV1,
+    GlobalBeaconPartialSignerBrokerBackendErrorV1, GlobalBeaconPartialSignerBrokerBackendV1,
+    ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
+    ParliamentTlePartialReleaseSignerBrokerBackendV1, RuntimeProviderBrokerBackendRegistryV1,
+    RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerDeploymentV1,
+    RuntimeProviderBrokerExecutableArgsV1, RuntimeProviderBrokerExecutableErrorV1,
+    RuntimeProviderBrokerExecutableV1, RuntimeProviderBrokerLauncherErrorV1,
+    RuntimeProviderBrokerLifecycleV1, RuntimeProviderBrokerReadinessErrorV1,
+    RuntimeProviderBrokerServerErrorV1, StockGovernanceDagServiceRuntimeProviderRegistryV1,
     load_runtime_provider_broker_catalog_file_v1, serve_runtime_provider_broker_v1,
     serve_runtime_provider_broker_with_fallible_readiness_v1,
     serve_runtime_provider_broker_with_lifecycle_v1,
@@ -1933,7 +1941,10 @@ impl ConsensusIngressLimiter {
                         | ConsensusMessageV2Payload::CommitCertificateRequest(_)
                         | ConsensusMessageV2Payload::CommitCertificateResponse(_)
                         | ConsensusMessageV2Payload::VrfCommit(_)
-                        | ConsensusMessageV2Payload::VrfReveal(_) => IngressPolicy::critical(),
+                        | ConsensusMessageV2Payload::VrfReveal(_)
+                        | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
+                            IngressPolicy::critical()
+                        }
                     }
                 }
             },
@@ -4525,6 +4536,11 @@ impl NetworkRelayShared {
             ),
             ConsensusMessageV2Payload::VrfCommit(_) => ("SumeragiV2VrfCommit", None, None),
             ConsensusMessageV2Payload::VrfReveal(_) => ("SumeragiV2VrfReveal", None, None),
+            ConsensusMessageV2Payload::GlobalBeaconPartialSignature(partial) => (
+                "SumeragiV2GlobalBeaconPartialSignature",
+                Some(partial.round.height),
+                Some(partial.round.view),
+            ),
         }
     }
 }
@@ -8868,6 +8884,22 @@ impl Iroha {
         } else {
             genesis
         };
+        let local_consensus_peer = config.common.trusted_peers.value().myself.id().clone();
+        match validate_threshold_signer_startup_readiness_v1(
+            &state,
+            &local_consensus_peer,
+            &runtime_deps,
+        )
+        .map_err(|message| Report::new(StartError::StartP2p).attach(message))?
+        {
+            ThresholdSignerStartupReadinessV1::Ready => {}
+            ThresholdSignerStartupReadinessV1::ParliamentTleShareUnavailable { key_session_id } => {
+                iroha_logger::warn!(
+                    key_session_id = ?key_session_id,
+                    "local Parliament TLE committee seat is not operational: no partial-release signer is resolved"
+                );
+            }
+        }
         let sumeragi_cfg = config.sumeragi.clone();
         log_startup_trace("irohad.sumeragi.starting", startup_trace_started_at);
         let (sumeragi, child) = SumeragiStartArgs {
@@ -8883,6 +8915,9 @@ impl Iroha {
             reputation_finalized_archive: prepared_sorafs_reputation_archive
                 .as_ref()
                 .map(|prepared| Arc::clone(prepared.archive())),
+            global_beacon_partial_signer: runtime_deps
+                .sumeragi_global_beacon_partial_signer
+                .clone(),
             startup_replay_plan: v2_replay_plan,
             startup_replay_inventory_guard,
             network: network.clone(),
@@ -8957,6 +8992,7 @@ impl Iroha {
         let bootle_lantern_issuance_provider_registry = runtime_deps
             .bootle_lantern_issuance_provider_registry
             .clone();
+        let parliament_tle_release_coordinator = runtime_deps.parliament_tle_release_coordinator();
         let moderation_quarantine_key_wrapper =
             runtime_deps.moderation_quarantine_key_wrapper.clone();
         let privacy_cycle_prf_provider = runtime_deps.privacy_cycle_prf_provider.clone();
@@ -9711,6 +9747,7 @@ impl Iroha {
                 sorafs_node.clone(),
             );
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
+            .with_parliament_tle_release_coordinator(parliament_tle_release_coordinator)
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
             .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
             .with_sorafs_node(sorafs_node)
@@ -9882,10 +9919,11 @@ impl Iroha {
         if let Some((_h, child)) = iroha_core::pipeline::zk_lane::start(&zk_cfg.halo2) {
             supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
         }
-        if let Some((_h, child)) = iroha_core::fastpq::lane::start_with_backpressure(
+        if let Some((_h, child)) = iroha_core::fastpq::lane::start_with_backpressure_and_shutdown(
             &zk_cfg.fastpq,
             Some(queue_backpressure),
             Some(kura.clone()),
+            supervisor.shutdown_signal(),
         ) {
             supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
         }
@@ -13184,6 +13222,40 @@ fn run_main_with_config_guard(
             .map_err(Report::new)
             .change_context(MainError::Config)
             .attach("failed to resolve deployment runtime-provider bindings")?;
+    #[cfg(feature = "test-network-parliament-signers")]
+    let runtime_deps = {
+        if runtime_deps.sumeragi_global_beacon_partial_signer.is_some()
+            || runtime_deps.parliament_tle_partial_release_signer.is_some()
+        {
+            return Err(Report::new(MainError::Config)
+                .attach("the test-network Parliament signers reject a second injected provider"));
+        }
+        let ordered_roster = filter_validators_from_trusted(config.common.trusted_peers.value());
+        let test_network_id = NetworkId::from_genesis_hash(config.genesis.expected_hash);
+        let beacon_signer = iroha_core::beacon::parliament_test_network_signer::
+            TestNetworkParliamentBeaconPartialSignerV1::try_new(
+                test_network_id,
+                ordered_roster.clone(),
+                &config.common.peer.id,
+            )
+            .map_err(|_| Report::new(MainError::Config))
+            .attach(
+                "failed to bind the feature-isolated Parliament beacon signer to the exact local validator seat",
+            )?;
+        let tle_signer = iroha_core::tle_release::parliament_test_network_signer::
+            TestNetworkParliamentTlePartialReleaseSignerV1::try_new(
+                test_network_id,
+                ordered_roster,
+                &config.common.peer.id,
+            )
+            .map_err(|_| Report::new(MainError::Config))
+            .attach(
+                "failed to bind the feature-isolated Parliament TLE signer to the exact local validator seat",
+            )?;
+        runtime_deps
+            .with_sumeragi_global_beacon_partial_signer(Arc::new(beacon_signer))
+            .with_parliament_tle_partial_release_signer(Arc::new(tle_signer))
+    };
     iroha_logger::info!(
         target: "config",
         protocol_version = u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
@@ -13553,7 +13625,7 @@ fn validate_config_for_check_mode(
             let outcome =
                 kagemusha_validator_qualification::try_build_kagemusha_validator_qualification_v1(
                     sources,
-                    Some(promotion),
+                    Some(&promotion),
                     Some(&capture),
                     Some(genesis),
                     Some(&runtime_effective_config),

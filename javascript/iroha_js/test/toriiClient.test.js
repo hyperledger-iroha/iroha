@@ -12656,7 +12656,13 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
       txs_rejected: 2,
       view_changes: 1,
       governance: {
-        proposals: { proposed: 4, approved: 2, rejected: 1, enacted: 1 },
+        proposals: {
+          proposed: 4,
+          rejected: 1,
+          enacted: 1,
+          superseded: 2,
+          execution_failed: 0,
+        },
         protected_namespace: { total_checks: 3, allowed: 2, rejected: 1 },
         manifest_admission: {
           total_checks: 5,
@@ -12762,7 +12768,13 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
       txs_rejected: 4,
       view_changes: 2,
       governance: {
-        proposals: { proposed: 5, approved: 3, rejected: 1, enacted: 1 },
+        proposals: {
+          proposed: 5,
+          rejected: 1,
+          enacted: 1,
+          superseded: 2,
+          execution_failed: 1,
+        },
         protected_namespace: { total_checks: 3, allowed: 2, rejected: 1 },
         manifest_admission: {
           total_checks: 6,
@@ -12885,6 +12897,13 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
   assert.equal(first.metrics.has_activity, false);
   assert.equal(first.status.raw.commit_time_ms, 420);
   assert.ok(first.status.governance);
+  assert.deepEqual(first.status.governance?.proposals, {
+    proposed: 4,
+    rejected: 1,
+    enacted: 1,
+    superseded: 2,
+    execution_failed: 0,
+  });
   assert.equal(first.status.governance?.manifest_admission.runtime_hook_rejected, 0);
   assert.deepEqual(first.status.lane_commitments, [
     {
@@ -13685,7 +13704,9 @@ registerToriiClientGovernanceTests({
   assert, APPLICATION_CANONICAL_AUTH,
   BASE_URL,
   FIXTURE_ALICE_ID,
+  FIXTURE_ALICE_TEST_ID,
   FIXTURE_BOB_ID,
+  FIXTURE_BOB_NARNIA_ID,
   FIXTURE_CAROL_ID,
   GOVERNANCE_NETWORK_ID: VK_SIGNING_NETWORK_ID,
   GOVERNANCE_LOCAL_SIGNING_CONTEXT: VK_LOCAL_SIGNING_CONTEXT,
@@ -20512,6 +20533,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
     ...verifyingKeyDraftForPayload(Buffer.from([1])),
     ok: true,
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    fee_payment: authorityFeePayment(),
     proposal_id: "a".repeat(64),
     instructions_hash: "a".repeat(64),
     tx_hash_hex: null,
@@ -20799,6 +20821,7 @@ test("proposeMultisig rejects malformed success responses", async () => {
     ...verifyingKeyDraftForPayload(Buffer.from([1])),
     ok: true,
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    fee_payment: authorityFeePayment(),
   };
 
   await assert.rejects(
@@ -20908,6 +20931,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
     ...verifyingKeyDraftForPayload(Buffer.from([1])),
     ok: true,
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    fee_payment: authorityFeePayment(5),
     proposal_id: "a".repeat(64),
     instructions_hash: "a".repeat(64),
     creation_time_ms: 123456,
@@ -20968,6 +20992,7 @@ test("approveMultisigContractCall posts concrete selector and normalizes respons
     ok: true,
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
     submitted: true,
+    fee_payment: authorityFeePayment(),
     proposal_id: "b".repeat(64),
     instructions_hash: "b".repeat(64),
     tx_hash_hex: "c".repeat(64),

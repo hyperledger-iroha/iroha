@@ -26,6 +26,8 @@ mod oracle_query_roundtrip;
 mod oracle_reference_fixtures;
 #[path = "../parameter_defaults.rs"]
 mod parameter_defaults;
+#[path = "../parliament_certificate_binding.rs"]
+mod parliament_certificate_binding;
 #[path = "../peer.rs"]
 mod peer;
 #[path = "../policy_jury_zk_roundtrip.rs"]

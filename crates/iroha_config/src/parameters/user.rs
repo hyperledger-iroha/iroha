@@ -400,6 +400,41 @@ use crate::{
     },
     snapshot::Mode as SnapshotMode,
 };
+
+fn validate_consensus_signer_provider_binding_v1(
+    handle: Option<&str>,
+    revision: Option<u64>,
+    policy_digest_hex: Option<&str>,
+) -> core::result::Result<Option<[u8; 32]>, &'static str> {
+    match (handle, revision, policy_digest_hex) {
+        (None, None, None) => Ok(None),
+        (Some(handle), Some(revision), Some(policy_digest_hex)) => {
+            if !is_production_runtime_handle(handle) {
+                return Err("provider handle is not a canonical production runtime handle");
+            }
+            if revision == 0 {
+                return Err("provider revision must be non-zero");
+            }
+            if policy_digest_hex.len() != 64
+                || !policy_digest_hex
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(
+                    "provider policy digest must be exactly 64 lowercase hexadecimal characters",
+                );
+            }
+            let mut policy_digest = [0_u8; 32];
+            hex::decode_to_slice(policy_digest_hex, &mut policy_digest)
+                .map_err(|_| "provider policy digest is malformed")?;
+            if policy_digest == [0; 32] {
+                return Err("provider policy digest must be non-zero");
+            }
+            Ok(Some(policy_digest))
+        }
+        _ => Err("provider handle, revision, and policy digest must be configured together"),
+    }
+}
 use iroha_primitives::{
     addr::SocketAddr,
     numeric::{Quantity, XorQuantity},
@@ -1403,7 +1438,38 @@ impl Root {
         let ivm = self.ivm.parse();
         let mut zk = self.zk.parse();
         let concurrency = self.concurrency.parse();
-        let gov = self.gov.parse();
+        let mut gov_provider_binding_valid = true;
+        if let Err(reason) = validate_consensus_signer_provider_binding_v1(
+            self.gov
+                .parliament_tle_partial_release_signer_provider_handle
+                .as_deref(),
+            self.gov
+                .parliament_tle_partial_release_signer_provider_revision,
+            self.gov
+                .parliament_tle_partial_release_signer_provider_policy_digest_hex
+                .as_deref(),
+        ) {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                    "governance Parliament TLE partial-release signer binding is invalid: {reason}"
+                )),
+            );
+            gov_provider_binding_valid = false;
+        }
+        if self
+            .gov
+            .parliament_tle_partial_release_signer_provider_handle
+            .is_some()
+            && sumeragi
+                .as_ref()
+                .is_some_and(|sumeragi| sumeragi.role == actual::NodeRole::Observer)
+        {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "an observer must not configure a Parliament TLE partial-release signer provider",
+            ));
+            gov_provider_binding_valid = false;
+        }
+        let gov = gov_provider_binding_valid.then(|| self.gov.parse());
         let nts = self.nts.parse();
         let nexus = self.nexus.parse(&mut emitter);
         let confidential = self.confidential.parse();
@@ -1464,6 +1530,7 @@ impl Root {
         let streaming =
             streaming.expect("streaming configuration should be valid when emitter succeeds");
         let compute = compute.expect("compute configuration should be valid when emitter succeeds");
+        let gov = gov.expect("governance provider binding should be valid when emitter succeeds");
         let genesis = genesis.expect("genesis configuration should be valid when emitter succeeds");
         let key_pair = key_pair.unwrap();
         let soranet_transport_key_pair = soranet_transport_key_pair
@@ -2250,6 +2317,62 @@ impl Default for RuntimeUpgradeProvenance {
         }
     }
 }
+/// Consensus-critical deterministic block-height and resource policy for private Parliament ballots.
+#[derive(Debug, ReadConfig, Clone, Copy)]
+pub struct ParliamentTimedOvn {
+    /// Consensus block-height span allotted to proof-validated registration submissions.
+    #[config(default = "defaults::governance::parliament_timed_ovn::REGISTRATION_PHASE_BLOCKS")]
+    pub registration_phase_blocks: u64,
+    /// Consensus block-height span allotted to freezing pre-ballot dropouts and survivors.
+    #[config(default = "defaults::governance::parliament_timed_ovn::SURVIVOR_FREEZE_PHASE_BLOCKS")]
+    pub survivor_freeze_phase_blocks: u64,
+    /// Consensus block-height span allotted to the exact masked-ballot commitment corpus.
+    #[config(default = "defaults::governance::parliament_timed_ovn::COMMITMENT_PHASE_BLOCKS")]
+    pub commitment_phase_blocks: u64,
+    /// Consensus block-height span between commitment close and the earliest timed release.
+    #[config(default = "defaults::governance::parliament_timed_ovn::RELEASE_DELAY_BLOCKS")]
+    pub release_delay_blocks: u64,
+    /// Consensus block-height grace window for aggregate opening after release begins.
+    #[config(default = "defaults::governance::parliament_timed_ovn::OPENING_PHASE_BLOCKS")]
+    pub opening_phase_blocks: u64,
+    /// Retry attempts permitted after the initial private ballot attempt, capped at 16.
+    #[config(default = "defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES")]
+    pub max_ballot_retries: u32,
+    /// Maximum entries retained in any registration, survivor, or ballot corpus, capped at 1,000.
+    #[config(default = "defaults::governance::parliament_timed_ovn::MAX_CORPUS_ENTRIES")]
+    pub max_corpus_entries: u32,
+}
+impl ParliamentTimedOvn {
+    fn parse(self) -> actual::ParliamentTimedOvn {
+        let policy = actual::ParliamentTimedOvn {
+            registration_phase_blocks: self.registration_phase_blocks,
+            survivor_freeze_phase_blocks: self.survivor_freeze_phase_blocks,
+            commitment_phase_blocks: self.commitment_phase_blocks,
+            release_delay_blocks: self.release_delay_blocks,
+            opening_phase_blocks: self.opening_phase_blocks,
+            max_ballot_retries: self.max_ballot_retries,
+            max_corpus_entries: self.max_corpus_entries,
+        };
+        policy.assert_valid();
+        policy
+    }
+}
+impl Default for ParliamentTimedOvn {
+    fn default() -> Self {
+        Self {
+            registration_phase_blocks:
+                defaults::governance::parliament_timed_ovn::REGISTRATION_PHASE_BLOCKS,
+            survivor_freeze_phase_blocks:
+                defaults::governance::parliament_timed_ovn::SURVIVOR_FREEZE_PHASE_BLOCKS,
+            commitment_phase_blocks:
+                defaults::governance::parliament_timed_ovn::COMMITMENT_PHASE_BLOCKS,
+            release_delay_blocks: defaults::governance::parliament_timed_ovn::RELEASE_DELAY_BLOCKS,
+            opening_phase_blocks: defaults::governance::parliament_timed_ovn::OPENING_PHASE_BLOCKS,
+            max_ballot_retries: defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES,
+            max_corpus_entries: defaults::governance::parliament_timed_ovn::MAX_CORPUS_ENTRIES,
+        }
+    }
+}
 /// Governance configuration (user view).
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Governance {
@@ -2488,6 +2611,25 @@ pub struct Governance {
         default = "crate::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS"
     )]
     pub parliament_quorum_bps: u16,
+    /// Consensus block-height span for immutable primary and alternate invitation responses.
+    #[config(
+        default = "crate::parameters::defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS"
+    )]
+    pub parliament_invitation_phase_blocks: u64,
+    /// Consensus block-height span for public-finding endorsements after Reflection begins.
+    #[config(
+        default = "crate::parameters::defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS"
+    )]
+    pub parliament_public_finding_phase_blocks: u64,
+    /// Consensus-critical timed-OVN phase and resource policy.
+    #[config(nested)]
+    pub parliament_timed_ovn: ParliamentTimedOvn,
+    /// Credential-free deployment handle for the Parliament TLE release-share signer.
+    pub parliament_tle_partial_release_signer_provider_handle: Option<String>,
+    /// Exact non-zero provider contract revision for the Parliament TLE release-share signer.
+    pub parliament_tle_partial_release_signer_provider_revision: Option<u64>,
+    /// Exact non-zero public-policy digest for the Parliament TLE signer.
+    pub parliament_tle_partial_release_signer_provider_policy_digest_hex: Option<String>,
     /// Rules Committee size.
     #[config(
         env = "GOV_RULES_COMMITTEE_SIZE",
@@ -2512,42 +2654,37 @@ pub struct Governance {
         default = "crate::parameters::defaults::governance::PARLIAMENT_REVIEW_PANEL_SIZE"
     )]
     pub review_panel_size: usize,
+    /// Coordination Council size.
+    #[config(
+        default = "crate::parameters::defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE"
+    )]
+    pub coordination_council_size: usize,
     /// Policy Jury size.
     #[config(
         env = "GOV_POLICY_JURY_SIZE",
         default = "crate::parameters::defaults::governance::PARLIAMENT_POLICY_JURY_SIZE"
     )]
     pub policy_jury_size: usize,
+    /// Maximum Confirmation Jury size.
+    #[config(
+        default = "crate::parameters::defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE"
+    )]
+    pub confirmation_jury_size: usize,
     /// Oversight Committee size.
     #[config(
         env = "GOV_OVERSIGHT_COMMITTEE_SIZE",
         default = "crate::parameters::defaults::governance::PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE"
     )]
     pub oversight_committee_size: usize,
-    /// MPC/FMA board size.
+    /// MPC Committee size.
+    #[config(default = "crate::parameters::defaults::governance::PARLIAMENT_MPC_COMMITTEE_SIZE")]
+    pub mpc_committee_size: usize,
+    /// FMA Committee size.
     #[config(
         env = "GOV_FMA_COMMITTEE_SIZE",
         default = "crate::parameters::defaults::governance::PARLIAMENT_FMA_COMMITTEE_SIZE"
     )]
     pub fma_committee_size: usize,
-    /// SLA (blocks) from proposal submission to referendum opening.
-    #[config(env = "GOV_PIPELINE_STUDY_SLA_BLOCKS")]
-    pub pipeline_study_sla_blocks: Option<u64>,
-    /// SLA (blocks) allotted to the referendum voting window.
-    #[config(env = "GOV_PIPELINE_REVIEW_SLA_BLOCKS")]
-    pub pipeline_review_sla_blocks: Option<u64>,
-    /// SLA (blocks) allotted to record the referendum decision.
-    #[config(env = "GOV_PIPELINE_DECISION_SLA_BLOCKS")]
-    pub pipeline_decision_sla_blocks: Option<u64>,
-    /// SLA (blocks) to enact an approved proposal after decision.
-    #[config(env = "GOV_PIPELINE_ENACTMENT_SLA_BLOCKS")]
-    pub pipeline_enactment_sla_blocks: Option<u64>,
-    /// SLA (blocks) for rules committee approvals.
-    #[config(env = "GOV_PIPELINE_RULES_SLA_BLOCKS")]
-    pub pipeline_rules_sla_blocks: Option<u64>,
-    /// SLA (blocks) for agenda council scheduling.
-    #[config(env = "GOV_PIPELINE_AGENDA_SLA_BLOCKS")]
-    pub pipeline_agenda_sla_blocks: Option<u64>,
 }
 impl Default for Governance {
     fn default() -> Self {
@@ -2606,31 +2743,74 @@ impl Default for Governance {
             ),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
             parliament_quorum_bps: defaults::governance::PARLIAMENT_QUORUM_BPS,
+            parliament_invitation_phase_blocks:
+                defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
+            parliament_public_finding_phase_blocks:
+                defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
+            parliament_timed_ovn: ParliamentTimedOvn::default(),
+            parliament_tle_partial_release_signer_provider_handle: None,
+            parliament_tle_partial_release_signer_provider_revision: None,
+            parliament_tle_partial_release_signer_provider_policy_digest_hex: None,
             rules_committee_size: defaults::governance::PARLIAMENT_RULES_COMMITTEE_SIZE,
             agenda_council_size: defaults::governance::PARLIAMENT_AGENDA_COUNCIL_SIZE,
             interest_panel_size: defaults::governance::PARLIAMENT_INTEREST_PANEL_SIZE,
             review_panel_size: defaults::governance::PARLIAMENT_REVIEW_PANEL_SIZE,
+            coordination_council_size: defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE,
             policy_jury_size: defaults::governance::PARLIAMENT_POLICY_JURY_SIZE,
+            confirmation_jury_size: defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE,
             oversight_committee_size: defaults::governance::PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE,
+            mpc_committee_size: defaults::governance::PARLIAMENT_MPC_COMMITTEE_SIZE,
             fma_committee_size: defaults::governance::PARLIAMENT_FMA_COMMITTEE_SIZE,
-            pipeline_study_sla_blocks: None,
-            pipeline_review_sla_blocks: None,
-            pipeline_decision_sla_blocks: None,
-            pipeline_enactment_sla_blocks: None,
-            pipeline_rules_sla_blocks: None,
-            pipeline_agenda_sla_blocks: None,
         }
     }
 }
 impl Governance {
     /// Convert user-supplied governance settings into the runtime representation.
     pub fn parse(self) -> actual::Governance {
+        let parliament_tle_partial_release_signer_provider_policy_digest =
+            validate_consensus_signer_provider_binding_v1(
+                self.parliament_tle_partial_release_signer_provider_handle
+                    .as_deref(),
+                self.parliament_tle_partial_release_signer_provider_revision,
+                self.parliament_tle_partial_release_signer_provider_policy_digest_hex
+                    .as_deref(),
+            )
+            .expect("invalid Parliament TLE partial-release signer provider binding");
         let citizen_service = self.citizen_service.parse();
         citizen_service.assert_valid();
+        assert!(
+            self.min_enactment_delay > 0,
+            "min_enactment_delay must be non-zero"
+        );
         assert!(
             (1..=10_000).contains(&self.parliament_quorum_bps),
             "parliament_quorum_bps must be within 1..=10_000 (basis points)"
         );
+        assert!(
+            self.parliament_invitation_phase_blocks > 0,
+            "parliament_invitation_phase_blocks must be non-zero"
+        );
+        assert!(
+            self.parliament_public_finding_phase_blocks > 0,
+            "parliament_public_finding_phase_blocks must be non-zero"
+        );
+        for (name, size) in [
+            ("rules_committee_size", self.rules_committee_size),
+            ("agenda_council_size", self.agenda_council_size),
+            ("interest_panel_size", self.interest_panel_size),
+            ("review_panel_size", self.review_panel_size),
+            ("coordination_council_size", self.coordination_council_size),
+            ("policy_jury_size", self.policy_jury_size),
+            ("confirmation_jury_size", self.confirmation_jury_size),
+            ("oversight_committee_size", self.oversight_committee_size),
+            ("mpc_committee_size", self.mpc_committee_size),
+            ("fma_committee_size", self.fma_committee_size),
+        ] {
+            assert!(
+                (1..=1_000).contains(&size),
+                "{name} must be within 1..=1_000"
+            );
+        }
         let viral_incentives = actual::ViralIncentives {
             incentive_pool_account: parse_account_id_literal(
                 &self.viral_incentive_pool_account,
@@ -2760,33 +2940,224 @@ impl Governance {
                 .expect("invalid parliament eligibility asset id"),
             parliament_alternate_size: self.parliament_alternate_size,
             parliament_quorum_bps: self.parliament_quorum_bps,
+            parliament_invitation_phase_blocks: self.parliament_invitation_phase_blocks,
+            parliament_public_finding_phase_blocks: self.parliament_public_finding_phase_blocks,
+            parliament_timed_ovn: self.parliament_timed_ovn.parse(),
+            parliament_tle_partial_release_signer_provider_handle: self
+                .parliament_tle_partial_release_signer_provider_handle,
+            parliament_tle_partial_release_signer_provider_revision: self
+                .parliament_tle_partial_release_signer_provider_revision,
+            parliament_tle_partial_release_signer_provider_policy_digest,
             rules_committee_size: self.rules_committee_size,
             agenda_council_size: self.agenda_council_size,
             interest_panel_size: self.interest_panel_size,
             review_panel_size: self.review_panel_size,
+            coordination_council_size: self.coordination_council_size,
             policy_jury_size: self.policy_jury_size,
+            confirmation_jury_size: self.confirmation_jury_size,
             oversight_committee_size: self.oversight_committee_size,
+            mpc_committee_size: self.mpc_committee_size,
             fma_committee_size: self.fma_committee_size,
-            pipeline_study_sla_blocks: self
-                .pipeline_study_sla_blocks
-                .unwrap_or(self.min_enactment_delay),
-            pipeline_review_sla_blocks: self.pipeline_review_sla_blocks.unwrap_or(self.window_span),
-            pipeline_decision_sla_blocks: self.pipeline_decision_sla_blocks.unwrap_or(1),
-            pipeline_enactment_sla_blocks: self
-                .pipeline_enactment_sla_blocks
-                .unwrap_or(self.window_span.saturating_mul(2)),
-            pipeline_rules_sla_blocks: self
-                .pipeline_rules_sla_blocks
-                .unwrap_or(defaults::governance::PIPELINE_RULES_SLA_BLOCKS),
-            pipeline_agenda_sla_blocks: self
-                .pipeline_agenda_sla_blocks
-                .unwrap_or(defaults::governance::PIPELINE_AGENDA_SLA_BLOCKS),
         }
     }
 }
 #[cfg(test)]
 mod governance_tests {
     use super::*;
+    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+
+    #[test]
+    fn parliament_invitation_window_is_file_configured_and_nonzero() {
+        let table: toml::Table = toml::from_str("parliament_invitation_phase_blocks = 17")
+            .expect("parse Parliament invitation policy TOML");
+        let parsed = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<Governance>()
+            .expect("read Governance with invitation policy")
+            .parse();
+
+        assert_eq!(parsed.parliament_invitation_phase_blocks, 17);
+    }
+
+    #[test]
+    fn parliament_public_finding_window_is_file_configured_and_nonzero() {
+        let table: toml::Table = toml::from_str("parliament_public_finding_phase_blocks = 19")
+            .expect("parse Parliament public-finding policy TOML");
+        let parsed = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<Governance>()
+            .expect("read Governance with public-finding policy")
+            .parse();
+
+        assert_eq!(parsed.parliament_public_finding_phase_blocks, 19);
+
+        let mut invalid = Governance::default();
+        invalid.parliament_public_finding_phase_blocks = 0;
+        assert!(
+            std::panic::catch_unwind(|| invalid.parse()).is_err(),
+            "zero public-finding phase must fail before Reflection can be entered"
+        );
+    }
+
+    #[test]
+    fn parliament_public_finding_window_defaults_to_one_hour_at_one_second_blocks() {
+        let parsed = Governance::default().parse();
+        assert_eq!(
+            parsed.parliament_public_finding_phase_blocks,
+            defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS
+        );
+        assert_eq!(parsed.parliament_public_finding_phase_blocks, 3_600);
+    }
+
+    #[test]
+    fn parliament_enactment_delay_rejects_zero_at_startup() {
+        let mut governance = Governance::default();
+        governance.min_enactment_delay = 0;
+        let panic = std::panic::catch_unwind(|| governance.parse());
+        assert!(
+            panic.is_err(),
+            "zero enactment delay must fail before a proposal can become stranded"
+        );
+    }
+
+    #[test]
+    fn parliament_timed_ovn_file_config_parses_deterministic_height_windows() {
+        let table: toml::Table = toml::from_str(
+            r#"
+[parliament_timed_ovn]
+registration_phase_blocks = 11
+survivor_freeze_phase_blocks = 12
+commitment_phase_blocks = 13
+release_delay_blocks = 14
+opening_phase_blocks = 15
+max_ballot_retries = 15
+max_corpus_entries = 16
+"#,
+        )
+        .expect("parse timed-OVN policy TOML");
+        let parsed = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<Governance>()
+            .expect("read Governance with timed-OVN policy")
+            .parse()
+            .parliament_timed_ovn;
+
+        assert_eq!(
+            parsed,
+            actual::ParliamentTimedOvn {
+                registration_phase_blocks: 11,
+                survivor_freeze_phase_blocks: 12,
+                commitment_phase_blocks: 13,
+                release_delay_blocks: 14,
+                opening_phase_blocks: 15,
+                max_ballot_retries: 15,
+                max_corpus_entries: 16,
+            }
+        );
+        assert_eq!(parsed.checked_attempt_span_blocks(), Some(65));
+        assert_eq!(parsed.checked_max_lifecycle_span_blocks(), Some(1_040));
+    }
+
+    #[test]
+    fn parliament_timed_ovn_defaults_are_bounded_and_valid() {
+        let parsed = ParliamentTimedOvn::default().parse();
+
+        assert_eq!(parsed.checked_attempt_span_blocks(), Some(8_700));
+        assert_eq!(parsed.checked_max_lifecycle_span_blocks(), Some(34_800));
+        assert_eq!(
+            parsed.opening_phase_blocks,
+            defaults::governance::parliament_timed_ovn::OPENING_PHASE_BLOCKS
+        );
+        assert_eq!(parsed.opening_phase_blocks, 600);
+        assert!(
+            parsed.max_ballot_retries
+                <= defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT
+        );
+        assert_eq!(
+            defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT,
+            16
+        );
+        assert_eq!(
+            parsed.max_corpus_entries,
+            u32::try_from(iroha_crypto::timed_ovn::TIMED_OVN_MAX_PARTICIPANTS_V1)
+                .expect("timed-OVN participant limit fits u32")
+        );
+        assert_eq!(
+            defaults::governance::parliament_timed_ovn::MAX_CORPUS_ENTRIES_LIMIT,
+            1_000
+        );
+
+        let no_retries = actual::ParliamentTimedOvn {
+            max_ballot_retries: 0,
+            ..parsed
+        };
+        no_retries.assert_valid();
+        let maximum_retries = actual::ParliamentTimedOvn {
+            max_ballot_retries:
+                defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT,
+            ..parsed
+        };
+        maximum_retries.assert_valid();
+    }
+
+    #[test]
+    fn parliament_timed_ovn_rejects_zero_overflow_and_resource_overruns() {
+        let valid = actual::ParliamentTimedOvn::default();
+        let invalid = [
+            actual::ParliamentTimedOvn {
+                registration_phase_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                survivor_freeze_phase_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                commitment_phase_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                release_delay_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                opening_phase_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                registration_phase_blocks: u64::MAX,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                registration_phase_blocks: u64::MAX / 2,
+                max_ballot_retries:
+                    defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                max_ballot_retries:
+                    defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT + 1,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                max_corpus_entries: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                max_corpus_entries:
+                    defaults::governance::parliament_timed_ovn::MAX_CORPUS_ENTRIES_LIMIT + 1,
+                ..valid
+            },
+        ];
+
+        for policy in invalid {
+            assert!(
+                std::panic::catch_unwind(|| policy.assert_valid()).is_err(),
+                "invalid timed-OVN policy must fail closed: {policy:?}"
+            );
+        }
+    }
+
     #[test]
     fn debug_trace_pipeline_defaults_false() {
         let cfg = Governance::default();
@@ -4324,7 +4695,7 @@ impl Sccp {
     fn parse(self) -> actual::Sccp {
         fn require_json_safe(value: NonZeroU64, name: &str) {
             assert!(
-                value.get() <= iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX,
+                value.get() <= iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64,
                 "zk.sccp.{name} must not exceed the SCCP V1 JSON-safe integer maximum"
             );
         }
@@ -4499,7 +4870,7 @@ mod sccp_limit_tests {
     #[test]
     fn rejects_byte_limits_outside_the_exact_json_integer_range() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
-        let maximum = iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX;
+        let maximum = iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
         let exact = NonZeroU64::new(maximum).expect("JSON-safe maximum is nonzero");
         let over = NonZeroU64::new(maximum + 1).expect("one above maximum is nonzero");
         let mut boundary = Sccp::default();
@@ -5909,6 +6280,12 @@ pub struct Sumeragi {
     /// Node-local participation role.
     #[config(default = "NodeRole::Validator")]
     pub role: NodeRole,
+    /// Credential-free deployment handle for the global beacon share signer.
+    pub global_beacon_partial_signer_provider_handle: Option<String>,
+    /// Exact non-zero provider contract revision for the global beacon share signer.
+    pub global_beacon_partial_signer_provider_revision: Option<u64>,
+    /// Exact non-zero public-policy digest for the global beacon signer.
+    pub global_beacon_partial_signer_provider_policy_digest_hex: Option<String>,
     /// Finite candidate block limits.
     #[config(nested)]
     pub block: SumeragiBlock,
@@ -6013,12 +6390,40 @@ impl Sumeragi {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Sumeragi> {
         let Self {
             role,
+            global_beacon_partial_signer_provider_handle,
+            global_beacon_partial_signer_provider_revision,
+            global_beacon_partial_signer_provider_policy_digest_hex,
             block,
             queues,
             limits,
             keys,
         } = self;
         let mut valid = true;
+        let global_beacon_partial_signer_provider_policy_digest =
+            match validate_consensus_signer_provider_binding_v1(
+                global_beacon_partial_signer_provider_handle.as_deref(),
+                global_beacon_partial_signer_provider_revision,
+                global_beacon_partial_signer_provider_policy_digest_hex.as_deref(),
+            ) {
+                Ok(policy_digest) => policy_digest,
+                Err(reason) => {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                            "sumeragi global beacon partial signer binding is invalid: {reason}"
+                        )),
+                    );
+                    valid = false;
+                    None
+                }
+            };
+        if global_beacon_partial_signer_provider_handle.is_some() && role != NodeRole::Validator {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "an observer must not configure a global beacon partial signer provider",
+                ),
+            );
+            valid = false;
+        }
         if queues.commands.get() < defaults::sumeragi::MIN_RUNTIME_COMMAND_CAPACITY {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
@@ -6155,6 +6560,9 @@ impl Sumeragi {
                 NodeRole::Validator => actual::NodeRole::Validator,
                 NodeRole::Observer => actual::NodeRole::Observer,
             },
+            global_beacon_partial_signer_provider_handle,
+            global_beacon_partial_signer_provider_revision,
+            global_beacon_partial_signer_provider_policy_digest,
             block: actual::SumeragiBlock {
                 max_transactions: block.max_transactions,
                 max_payload_bytes: block.max_payload_bytes,
@@ -31773,6 +32181,172 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let report = format!("{error:?}");
         assert!(report.contains(expected), "{report}");
     }
+    fn provider_table_mut<'a>(table: &'a mut Table, section: &str) -> &'a mut Table {
+        table
+            .entry(section)
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("provider configuration section")
+    }
+    fn set_global_beacon_provider_binding(
+        table: &mut Table,
+        handle: Option<&str>,
+        revision: Option<i64>,
+        policy_digest_hex: Option<&str>,
+    ) {
+        let section = provider_table_mut(table, "sumeragi");
+        if let Some(handle) = handle {
+            section.insert(
+                "global_beacon_partial_signer_provider_handle".into(),
+                Value::String(handle.to_owned()),
+            );
+        }
+        if let Some(revision) = revision {
+            section.insert(
+                "global_beacon_partial_signer_provider_revision".into(),
+                Value::Integer(revision),
+            );
+        }
+        if let Some(policy_digest_hex) = policy_digest_hex {
+            section.insert(
+                "global_beacon_partial_signer_provider_policy_digest_hex".into(),
+                Value::String(policy_digest_hex.to_owned()),
+            );
+        }
+    }
+    fn set_parliament_tle_provider_binding(
+        table: &mut Table,
+        handle: Option<&str>,
+        revision: Option<i64>,
+        policy_digest_hex: Option<&str>,
+    ) {
+        let section = provider_table_mut(table, "gov");
+        if let Some(handle) = handle {
+            section.insert(
+                "parliament_tle_partial_release_signer_provider_handle".into(),
+                Value::String(handle.to_owned()),
+            );
+        }
+        if let Some(revision) = revision {
+            section.insert(
+                "parliament_tle_partial_release_signer_provider_revision".into(),
+                Value::Integer(revision),
+            );
+        }
+        if let Some(policy_digest_hex) = policy_digest_hex {
+            section.insert(
+                "parliament_tle_partial_release_signer_provider_policy_digest_hex".into(),
+                Value::String(policy_digest_hex.to_owned()),
+            );
+        }
+    }
+    #[test]
+    fn consensus_signer_provider_bindings_are_exact_and_public_only() {
+        let beacon_digest = "11".repeat(32);
+        let tle_digest = "22".repeat(32);
+        let mut table = base_table();
+        set_global_beacon_provider_binding(
+            &mut table,
+            Some("hsm://iroha/global-beacon/primary"),
+            Some(7),
+            Some(&beacon_digest),
+        );
+        set_parliament_tle_provider_binding(
+            &mut table,
+            Some("hsm://iroha/parliament-tle/primary"),
+            Some(9),
+            Some(&tle_digest),
+        );
+        let parsed = load_root(table);
+        assert_eq!(
+            parsed
+                .sumeragi
+                .global_beacon_partial_signer_provider_policy_digest,
+            Some([0x11; 32])
+        );
+        assert_eq!(
+            parsed
+                .gov
+                .parliament_tle_partial_release_signer_provider_policy_digest,
+            Some([0x22; 32])
+        );
+    }
+    #[test]
+    fn consensus_signer_provider_bindings_reject_partial_inert_and_test_marked_values() {
+        let valid_digest = "31".repeat(32);
+        for (handle, revision, digest) in [
+            (Some("hsm://iroha/global-beacon/primary"), None, None),
+            (None, Some(1), Some(valid_digest.as_str())),
+            (Some(""), Some(1), Some(valid_digest.as_str())),
+            (Some("   "), Some(1), Some(valid_digest.as_str())),
+            (
+                Some("hsm://iroha/global-beacon/test"),
+                Some(1),
+                Some(valid_digest.as_str()),
+            ),
+            (
+                Some("hsm://iroha/global-beacon/mock"),
+                Some(1),
+                Some(valid_digest.as_str()),
+            ),
+            (
+                Some("hsm://iroha/global-beacon/demo"),
+                Some(1),
+                Some(valid_digest.as_str()),
+            ),
+            (
+                Some("hsm://iroha/global-beacon/primary"),
+                Some(0),
+                Some(valid_digest.as_str()),
+            ),
+            (
+                Some("hsm://iroha/global-beacon/primary"),
+                Some(1),
+                Some("00"),
+            ),
+        ] {
+            let mut table = base_table();
+            set_global_beacon_provider_binding(&mut table, handle, revision, digest);
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "invalid beacon provider binding must fail: {handle:?}/{revision:?}/{digest:?}"
+            );
+        }
+
+        let mut partial_tle = base_table();
+        set_parliament_tle_provider_binding(
+            &mut partial_tle,
+            Some("hsm://iroha/parliament-tle/primary"),
+            Some(1),
+            None,
+        );
+        assert!(actual::Root::from_toml_source(TomlSource::inline(partial_tle)).is_err());
+    }
+    #[test]
+    fn observer_cannot_configure_consensus_share_providers() {
+        let digest = "41".repeat(32);
+        for configure_tle in [false, true] {
+            let mut table = base_table();
+            provider_table_mut(&mut table, "sumeragi")
+                .insert("role".into(), Value::String("observer".into()));
+            if configure_tle {
+                set_parliament_tle_provider_binding(
+                    &mut table,
+                    Some("hsm://iroha/parliament-tle/primary"),
+                    Some(1),
+                    Some(&digest),
+                );
+            } else {
+                set_global_beacon_provider_binding(
+                    &mut table,
+                    Some("hsm://iroha/global-beacon/primary"),
+                    Some(1),
+                    Some(&digest),
+                );
+            }
+            assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
+        }
+    }
     #[test]
     fn torii_http_per_ip_connection_limit_must_not_exceed_global_limit() {
         assert_torii_http_config_rejected(
@@ -35221,7 +35795,7 @@ local_execution_enabled = true
         if let Some(enabled) = inrou_enabled {
             write!(
                 source,
-                r#"
+                r"
 [inrou]
 enabled = {enabled}
 portable_vm_uid = 70000
@@ -35231,7 +35805,7 @@ max_memory_bytes = 8589934592
 max_storage_bytes = 68719476736
 start_grace_ms = 30000
 stop_grace_ms = 10000
-"#,
+",
             )
             .expect("writing to an owned string cannot fail");
         }
@@ -35339,13 +35913,13 @@ max_bytes_per_minute = 1048576
     fn soracloud_runtime_portable_vm_requires_dedicated_identity() {
         let result =
             actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
-                r#"
+                r"
 [inrou]
 enabled = true
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-"#,
+",
             )));
         assert!(
             result.is_err(),
@@ -35358,14 +35932,14 @@ max_storage_bytes = 10737418240
             let identity_fields = format!("portable_vm_uid = {id}\nportable_vm_gid = {id}");
             let result = actual::Root::from_toml_source(TomlSource::inline(
                 table_with_soracloud_runtime(&format!(
-                    r#"
+                    r"
 [inrou]
 enabled = true
 {identity_fields}
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-"#,
+",
                 )),
             ));
             assert!(
@@ -35426,7 +36000,7 @@ max_storage_bytes = 10737418240
             let field = retired.split_once(' ').expect("retired selector name").0;
             let error = actual::Root::from_toml_source(TomlSource::inline(
                 table_with_soracloud_runtime(&format!(
-                    r#"
+                    r"
 [inrou]
 enabled = true
 portable_vm_uid = 70000
@@ -35435,7 +36009,7 @@ portable_vm_gid = 70000
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-"#,
+",
                 )),
             ))
             .expect_err("retired first-release selector must be unknown");

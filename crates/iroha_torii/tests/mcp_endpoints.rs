@@ -2205,23 +2205,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
         ),
         (10332, "iroha.gov.unlocks.stats", norito::json!({})),
         (10333, "iroha.gov.council.current", norito::json!({})),
-        (
-            10338,
-            "iroha.gov.enact",
-            norito::json!({
-                "body": { "proposal_id": ("11".repeat(32)) }
-            }),
-        ),
-        (
-            10339,
-            "iroha.gov.finalize",
-            norito::json!({
-                "body": {
-                    "referendum_id": ("11".repeat(32)),
-                    "proposal_id": ("11".repeat(32))
-                }
-            }),
-        ),
     ] {
         let (status, call) = post_mcp(
             &app,
@@ -2763,14 +2746,12 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
             .any(|name| name == "iroha.gov.council.derive_vrf"),
         "removed governance council derive-vrf MCP tool must remain absent"
     );
-    assert!(
-        names.iter().any(|name| name == "iroha.gov.enact"),
-        "expected agent-friendly governance enact MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.gov.finalize"),
-        "expected agent-friendly governance finalize MCP tool"
-    );
+    for retired_name in ["iroha.gov.enact", "iroha.gov.finalize"] {
+        assert!(
+            !names.iter().any(|name| name == retired_name),
+            "proposal-backed legacy governance tool must remain absent: {retired_name}"
+        );
+    }
     assert!(
         names.iter().any(|name| name == "iroha.aliases.resolve"),
         "expected agent-friendly alias-resolve MCP tool"

@@ -1,57 +1,3 @@
-#[test]
-fn governance_stage_decisions_are_equal_and_mutually_exclusive() {
-    let first = governance_stage_account(b"stage-decision-first");
-    let second = governance_stage_account(b"stage-decision-second");
-    let mut record = GovernanceStageApproval {
-        epoch: 1,
-        approvers: BTreeSet::new(),
-        rejections: BTreeSet::new(),
-        abstentions: BTreeSet::new(),
-        required: 2,
-        quorum_bps: 6_667,
-    };
-    assert!(record.record_decision(
-        first.clone(),
-        iroha_data_model::isi::governance::ParliamentDecision::Approve,
-    ));
-    assert!(record.record_decision(
-        first.clone(),
-        iroha_data_model::isi::governance::ParliamentDecision::Reject,
-    ));
-    assert!(!record.approvers.contains(&first));
-    assert!(record.rejections.contains(&first));
-    assert_eq!(record.rejections.len(), 1);
-    assert!(record.record_decision(
-        second,
-        iroha_data_model::isi::governance::ParliamentDecision::Reject,
-    ));
-    assert!(u32::try_from(record.rejections.len()).unwrap_or(u32::MAX) >= record.required);
-}
-#[test]
-fn governance_stage_rejection_quorum_requires_positive_threshold() {
-    let mut approvals = GovernanceStageApprovals::default();
-    approvals.stages.insert(
-        ParliamentBody::RulesCommittee,
-        GovernanceStageApproval {
-            epoch: 1,
-            approvers: BTreeSet::new(),
-            rejections: BTreeSet::new(),
-            abstentions: BTreeSet::new(),
-            required: 0,
-            quorum_bps: 0,
-        },
-    );
-    assert!(approvals.quorum_met(ParliamentBody::RulesCommittee, 1));
-    assert!(!approvals.rejection_quorum_met(ParliamentBody::RulesCommittee, 1));
-    let rejecter = governance_stage_account(b"stage-rejection-quorum");
-    let stage = approvals
-        .stages
-        .get_mut(&ParliamentBody::RulesCommittee)
-        .expect("stage present");
-    stage.required = 1;
-    stage.rejections.insert(rejecter);
-    assert!(approvals.rejection_quorum_met(ParliamentBody::RulesCommittee, 1));
-}
 fn fee_sponsor_activation_lease(
     program_id: FeeSponsorProgramId,
     revision: u64,
@@ -117,7 +63,7 @@ fn insert_fee_sponsor_activation_lease(
 }
 #[test]
 fn fee_sponsor_safe_activation_height_fails_closed_for_non_draining_lease() {
-    let sponsor = governance_stage_account(b"fee-sponsor-never-drains");
+    let sponsor = fee_sponsor_activation_account(b"fee-sponsor-never-drains");
     let program_id =
         FeeSponsorProgramId::new(sponsor, "never_drains".parse().expect("program name"));
     let record = fee_sponsor_activation_lease(program_id.clone(), 1, u64::MAX);
@@ -141,7 +87,7 @@ fn fee_sponsor_safe_activation_height_fails_closed_for_non_draining_lease() {
 }
 #[test]
 fn fee_sponsor_safe_activation_height_preserves_later_request() {
-    let sponsor = governance_stage_account(b"fee-sponsor-later-activation");
+    let sponsor = fee_sponsor_activation_account(b"fee-sponsor-later-activation");
     let program_id = FeeSponsorProgramId::new(sponsor, "later".parse().expect("program name"));
     let record = fee_sponsor_activation_lease(program_id.clone(), 1, 5);
     let mut world = World::default();
@@ -174,7 +120,7 @@ fn fee_sponsor_revision_activation_materializes_at_scheduled_block_height() {
     use iroha_data_model::nexus::{
         FeeSponsorEligibility, FeeSponsorProgramActivation, FeeSponsorProgramRevisionKey,
     };
-    let sponsor = governance_stage_account(b"fee-sponsor-activation");
+    let sponsor = fee_sponsor_activation_account(b"fee-sponsor-activation");
     let program_id = FeeSponsorProgramId::new(sponsor, "scheduled".parse().expect("program name"));
     let revision = FeeSponsorProgramRevision {
         program_id: program_id.clone(),
@@ -226,7 +172,7 @@ fn fee_sponsor_revision_activation_waits_for_old_lease_to_drain() {
     use iroha_data_model::nexus::{
         FeeSponsorEligibility, FeeSponsorProgramActivation, FeeSponsorProgramRevisionKey,
     };
-    let sponsor = governance_stage_account(b"fee-sponsor-drain-activation");
+    let sponsor = fee_sponsor_activation_account(b"fee-sponsor-drain-activation");
     let program_id = FeeSponsorProgramId::new(sponsor, "drain".parse().expect("program name"));
     let revision = |revision| FeeSponsorProgramRevision {
         program_id: program_id.clone(),
@@ -301,10 +247,10 @@ fn fee_sponsor_revision_activation_waits_for_old_lease_to_drain() {
     assert_eq!(activated.staged_revision, None);
     assert_eq!(activated.scheduled_activation, None);
 }
-fn governance_stage_account(seed: &[u8]) -> iroha_data_model::account::AccountId {
+fn fee_sponsor_activation_account(seed: &[u8]) -> iroha_data_model::account::AccountId {
     iroha_data_model::account::AccountId::new(
         iroha_crypto::KeyPair::try_from_seed(seed.to_vec(), iroha_crypto::Algorithm::Ed25519)
-            .expect("derive governance stage fixture key")
+            .expect("derive fee-sponsor activation fixture key")
             .public_key()
             .clone(),
     )

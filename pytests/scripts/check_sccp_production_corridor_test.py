@@ -182,7 +182,7 @@ def test_core_phase_runs_exact_governance_and_four_peer_admission() -> None:
     for expected in (
         "cargo test --locked -p iroha_core --lib sccp_ -- --nocapture",
         "cargo test --locked -p iroha_core --test iroha_core_group_01 bridge_proofs:: -- --nocapture",
-        "cargo test --locked -p iroha_core --test sccp_route_governance_isi -- --nocapture",
+        "cargo test --locked -p iroha_core --lib parliament_due_certificate_ -- --nocapture",
         "cargo test --locked -p integration_tests --test network_functional",
         "sccp_route_governance::exact_sccp_route_governance_converges_and_rejects_adversarial_updates",
     ):

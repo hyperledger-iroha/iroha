@@ -32,12 +32,10 @@ pub mod isi {
         asset::definition::{
             validate_asset_alias_against_names, validate_asset_description, validate_asset_name,
         },
-        governance::types::ProposalKind,
         isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         metadata::Metadata,
         name::Name,
         nexus::{AxtAssetIncarnationV1, DataSpaceCatalog, DataSpaceId, LaneVisibility},
-        validation_fee::ValidationFeePlainElectorateRulesV1,
     };
     use iroha_logger::prelude::*;
     use std::{
@@ -46,28 +44,6 @@ pub mod isi {
     };
     /// Alias grace window after lease expiry (369 hours).
     const ASSET_ALIAS_GRACE_MS: u64 = 369u64 * 60 * 60 * 1_000;
-    fn retained_validation_fee_plain_electorate_rules(
-        proposal: &crate::state::GovernanceProposalRecord,
-    ) -> Option<&ValidationFeePlainElectorateRulesV1> {
-        if !matches!(
-            proposal.status,
-            crate::state::GovernanceProposalStatus::Proposed
-                | crate::state::GovernanceProposalStatus::Approved
-        ) {
-            return None;
-        }
-        match &proposal.kind {
-            ProposalKind::ValidationFeePolicy(payload) => Some(&payload.plain_electorate_rules),
-            ProposalKind::ValidationFeePayoutLifecycle(payload) => {
-                Some(&payload.plain_electorate_rules)
-            }
-            ProposalKind::DeployContract(_)
-            | ProposalKind::RuntimeUpgrade(_)
-            | ProposalKind::SccpRouteGovernance(_)
-            | ProposalKind::SorafsProviderGovernance(_)
-            | ProposalKind::MusubiRegistryGovernance(_) => None,
-        }
-    }
     include!("domain/asset_alias_scope.rs");
     /// Restore or retarget the continuity record for an already validated alias binding.
     ///
@@ -1398,25 +1374,6 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some((proposal_id, _)) = state_transaction
-                .world
-                .governance_proposals
-                .iter()
-                .find(|(_, proposal)| {
-                    retained_validation_fee_plain_electorate_rules(proposal).is_some_and(|rules| {
-                        rules.bond_escrow_account == account_id
-                            || rules.slash_receiver_account == account_id
-                    })
-                })
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it is retained by immutable validation-fee proposal custody (proposal {proposal_id:?}); reject or supersede the proposal first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
             if account_id
                 == state_transaction
                     .gov
@@ -1873,25 +1830,6 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some((referendum_id, _)) = state_transaction
-                .world
-                .governance_stage_approvals
-                .iter()
-                .find(|(_, approvals)| {
-                    approvals
-                        .stages
-                        .values()
-                        .any(|stage| stage.approvers.contains(&account_id))
-                })
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it has active governance stage approval state (referendum {referendum_id}); retain approver account for governance audit references"
-                    )
-                    .into(),
-                )
-                .into());
-            }
             if let Some((referendum_id, _)) =
                 state_transaction
                     .world
@@ -2075,26 +2013,15 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some((proposal_id, _)) = state_transaction
+            if let Some((attempt_id, _)) = state_transaction
                 .world
-                .governance_proposals
+                .parliament_attempts
                 .iter()
-                .find(|(_, proposal)| {
-                    proposal
-                        .parliament_snapshot
-                        .bodies
-                        .rosters
-                        .values()
-                        .any(|roster| {
-                            roster.members.contains(&account_id)
-                                || roster.alternates.contains(&account_id)
-                        })
-                })
+                .find(|(_, attempt)| attempt.references_parliament_member(&account_id))
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it is present in governance proposal parliament snapshot state (proposal {}); retain account for governance audit references",
-                        hex::encode(*proposal_id)
+                        "cannot unregister account {account_id}: it is present in Parliament attempt state (attempt {attempt_id}); retain account for governance audit references"
                     )
                     .into(),
                 )
@@ -2398,23 +2325,6 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
                         "cannot unregister asset definition {asset_definition_id}: it is retained by immutable governance lock custody (referendum {referendum_id}); clear the governance locks first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if let Some((proposal_id, _)) = state_transaction
-                .world
-                .governance_proposals
-                .iter()
-                .find(|(_, proposal)| {
-                    retained_validation_fee_plain_electorate_rules(proposal)
-                        .is_some_and(|rules| rules.voting_asset_id == asset_definition_id)
-                })
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister asset definition {asset_definition_id}: it is retained by immutable validation-fee proposal custody (proposal {proposal_id:?}); reject or supersede the proposal first"
                     )
                     .into(),
                 )
@@ -3443,16 +3353,11 @@ mod tests {
         query::store::LiveQueryStore,
         smartcontracts::{ValidQuery, ValidSingularQuery},
         state::{
-            GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
-            GovernanceParliamentSnapshot, GovernancePipeline, GovernanceProposalRecord,
-            GovernanceProposalStatus, GovernanceReferendumMode, GovernanceReferendumRecord,
-            GovernanceReferendumStatus, GovernanceStageApprovals, State, WorldReadOnly,
+            GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum, State,
+            WorldReadOnly,
         },
     };
-    use iroha_crypto::{
-        Algorithm, Hash, KeyPair,
-        blake2::{Blake2b512, digest::Digest as _},
-    };
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         ChainId, IntoKeyValue,
         account::{
@@ -3472,14 +3377,9 @@ mod tests {
         events::data::space_directory::{
             SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestRevoked,
         },
-        governance::types::{
-            GovernanceFinalizationEvidence, ParliamentBodies, ParliamentBody, ParliamentRoster,
-            ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
-        },
         isi::{
             alias_setup::{CompareAndSetPrimaryAccountAlias, EnsureAlias, RebindAccountAlias},
             error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
-            governance::{CouncilDerivationKind, VotingMode},
         },
         metadata::Metadata,
         name::Name,
@@ -3497,14 +3397,6 @@ mod tests {
         role::{Role, RoleId},
         smart_contract::ContractAddress,
         sns::{NameControllerV1, NameRecordV1},
-        validation_fee::{
-            VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1,
-            VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            ValidationFeeChargingMode, ValidationFeePlainElectorateEligibilityRuleV1,
-            ValidationFeePlainElectorateMemberV1, ValidationFeePlainElectorateRulesV1,
-            ValidationFeePlainElectorateSnapshotV1, ValidationFeePolicyV1,
-            ValidationFeeTreasuryPayoutBindingV1, ValidationFeeTreasuryPayoutRecipientV1,
-        },
     };
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanManageAccountAlias, CanRegisterAccount,
@@ -3567,359 +3459,6 @@ mod tests {
                 .is_none()
         );
         key
-    }
-    #[derive(Clone, Copy, Debug)]
-    enum ValidationFeeProposalFixtureKind {
-        Policy,
-        PayoutLifecycle,
-    }
-    #[derive(Clone, Debug)]
-    struct ValidationFeeUnregisterTargets {
-        domain_id: DomainId,
-        voting_asset_id: AssetDefinitionId,
-        bond_escrow_account: AccountId,
-        slash_receiver_account: AccountId,
-    }
-    fn fixture_account(seed: u8) -> AccountId {
-        AccountId::new(
-            fixture_keypair(seed, Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        )
-    }
-    fn register_validation_fee_unregister_targets(
-        authority: &AccountId,
-        state_transaction: &mut crate::state::StateTransaction<'_, '_>,
-    ) -> ValidationFeeUnregisterTargets {
-        let domain_id =
-            DomainId::try_new("validation", "universal").expect("validation-fee guard domain");
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(authority, state_transaction)
-            .expect("register validation-fee guard domain");
-        if state_transaction.world.accounts.get(authority).is_none() {
-            Register::account(NewAccount::new(authority.clone()))
-                .execute(authority, state_transaction)
-                .expect("register validation-fee proposal operator");
-        }
-        let active_domain_id =
-            DomainId::try_new("active", "guard").expect("active governance guard domain");
-        Register::domain(Domain::new(active_domain_id.clone()))
-            .execute(authority, state_transaction)
-            .expect("register active governance guard domain");
-        let active_voting_asset_id = AssetDefinitionId::derive_from_components(
-            active_domain_id,
-            "replacement".parse().expect("replacement asset name"),
-        );
-        Register::asset_definition(AssetDefinition::numeric(
-            active_voting_asset_id.clone(),
-            "replacement".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        ))
-        .execute(authority, state_transaction)
-        .expect("register replacement governance voting asset");
-        let voting_asset_id = AssetDefinitionId::derive_from_components(
-            domain_id.clone(),
-            "xor".parse().expect("asset name"),
-        );
-        Register::asset_definition(AssetDefinition::numeric(
-            voting_asset_id.clone(),
-            "xor".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            Some(domain_id.clone()),
-        ))
-        .execute(authority, state_transaction)
-        .expect("register retained validation-fee voting asset");
-        let bond_escrow_account = fixture_account(0x91);
-        let slash_receiver_account = fixture_account(0x92);
-        let active_bond_escrow_account = fixture_account(0xB1);
-        let active_slash_receiver_account = fixture_account(0xB2);
-        for account_id in [
-            &bond_escrow_account,
-            &slash_receiver_account,
-            &active_bond_escrow_account,
-            &active_slash_receiver_account,
-        ] {
-            Register::account(NewAccount::new(account_id.clone()))
-                .execute(authority, state_transaction)
-                .expect("register validation-fee custody account");
-        }
-        ValidationFeeUnregisterTargets {
-            domain_id,
-            voting_asset_id,
-            bond_escrow_account,
-            slash_receiver_account,
-        }
-    }
-    fn validation_fee_unregister_rules(
-        targets: &ValidationFeeUnregisterTargets,
-    ) -> ValidationFeePlainElectorateRulesV1 {
-        let rules = ValidationFeePlainElectorateRulesV1 {
-            voting_asset_id: targets.voting_asset_id.clone(),
-            bond_escrow_account: targets.bond_escrow_account.clone(),
-            slash_receiver_account: targets.slash_receiver_account.clone(),
-            ballot_amount: Quantity::from(150_u32),
-            ballot_duration_blocks: 3_600,
-            citizenship_amount: Quantity::from(10_000_u32),
-            max_members: VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1,
-            conviction_step_blocks: 100,
-            max_conviction: 6,
-            min_turnout: 1,
-            approval_threshold_numerator: 1,
-            approval_threshold_denominator: 2,
-            eligibility_rule: ValidationFeePlainElectorateEligibilityRuleV1::
-                ProposalOperatorAtOrBeforeGateOthersAfterGate,
-        };
-        assert_eq!(
-            rules.invariant_error(),
-            None,
-            "unregister guard rules must be structurally valid"
-        );
-        rules
-    }
-    fn validation_fee_guard_ds_asset_id() -> AssetDefinitionId {
-        AssetDefinitionId::derive_from_components(
-            DomainId::try_new("ds", "guard").expect("DS guard domain"),
-            "ds".parse().expect("DS asset name"),
-        )
-    }
-    fn validation_fee_guard_network_id() -> iroha_data_model::NetworkId {
-        "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("exact validation-fee guard network id")
-    }
-    fn validation_fee_guard_payout_binding(
-        rules: &ValidationFeePlainElectorateRulesV1,
-    ) -> ValidationFeeTreasuryPayoutBindingV1 {
-        let controller = fixture_account(0xA0);
-        let contract_address = ContractAddress::derive(
-            &validation_fee_guard_network_id(),
-            &controller,
-            91,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive validation-fee payout contract address");
-        let binding = ValidationFeeTreasuryPayoutBindingV1 {
-            treasury_account_id: contract_address.subject_id(),
-            contract_address,
-            code_hash: [0xA5; 32],
-            entrypoint: "autonomous_validation_fee_tick"
-                .parse()
-                .expect("payout entrypoint"),
-            ds_asset_id: validation_fee_guard_ds_asset_id(),
-            xor_asset_id: rules.voting_asset_id.clone(),
-            pool_vault_account_id: fixture_account(0xA2),
-            batch_ds: iroha_data_model::validation_fee::validation_fee_payout_batch_ds(),
-            min_xor_out: iroha_data_model::validation_fee::validation_fee_payout_min_xor(),
-            max_xor_out: iroha_data_model::validation_fee::validation_fee_payout_max_xor(),
-            recipients: (0xA3..=0xA6)
-                .map(|seed| ValidationFeeTreasuryPayoutRecipientV1 {
-                    account_id: fixture_account(seed),
-                    share: iroha_data_model::validation_fee::validation_fee_payout_recipient_share(
-                    ),
-                })
-                .collect(),
-        };
-        assert_eq!(
-            binding.invariant_error(),
-            None,
-            "unregister guard payout binding must be structurally valid"
-        );
-        binding
-    }
-    fn validation_fee_unregister_proposal_kind(
-        fixture_kind: ValidationFeeProposalFixtureKind,
-        rules: &ValidationFeePlainElectorateRulesV1,
-    ) -> ProposalKind {
-        match fixture_kind {
-            ValidationFeeProposalFixtureKind::Policy => {
-                let policy = ValidationFeePolicyV1 {
-                    schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-                    network_id: validation_fee_guard_network_id(),
-                    policy_version: 1,
-                    previous_policy_hash: None,
-                    ds_asset_id: validation_fee_guard_ds_asset_id(),
-                    ds_scale: VALIDATION_FEE_DS_SCALE,
-                    fee: Quantity::zero(),
-                    treasury_account_id: fixture_account(0xA7),
-                    charging_mode: ValidationFeeChargingMode::Disabled,
-                    effective_from_height: VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS + 3_601,
-                    expires_after_height: None,
-                    exemption_classes: Vec::new(),
-                    treasury_payout_binding: None,
-                };
-                assert_eq!(
-                    policy.policy_invariant_error(),
-                    None,
-                    "unregister guard policy must be structurally valid"
-                );
-                ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
-                    policy,
-                    payout_lifecycle_proposal_id: None,
-                    plain_electorate_rules: rules.clone(),
-                })
-            }
-            ValidationFeeProposalFixtureKind::PayoutLifecycle => {
-                ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
-                    payout_binding: validation_fee_guard_payout_binding(rules),
-                    plain_electorate_rules: rules.clone(),
-                })
-            }
-        }
-    }
-    const VALIDATION_FEE_PARLIAMENT_BODIES: [ParliamentBody; 7] = [
-        ParliamentBody::RulesCommittee,
-        ParliamentBody::AgendaCouncil,
-        ParliamentBody::InterestPanel,
-        ParliamentBody::ReviewPanel,
-        ParliamentBody::PolicyJury,
-        ParliamentBody::OversightCommittee,
-        ParliamentBody::FmaCommittee,
-    ];
-    fn validation_fee_unregister_parliament_snapshot() -> GovernanceParliamentSnapshot {
-        let rosters = VALIDATION_FEE_PARLIAMENT_BODIES
-            .into_iter()
-            .map(|body| {
-                (
-                    body,
-                    ParliamentRoster {
-                        body,
-                        epoch: 1,
-                        members: vec![(*ALICE_ID).clone()],
-                        alternates: Vec::new(),
-                        candidate_count: 1,
-                        derived_by: CouncilDerivationKind::Sortition,
-                    },
-                )
-            })
-            .collect();
-        let bodies = ParliamentBodies {
-            selection_epoch: 1,
-            rosters,
-        };
-        let encoded = norito::encode_canonical(&bodies)
-            .expect("canonically encode unregister guard Parliament bodies");
-        let digest = Blake2b512::digest(encoded);
-        let mut roster_root = [0_u8; 32];
-        roster_root.copy_from_slice(&digest[..32]);
-        GovernanceParliamentSnapshot {
-            selection_epoch: 1,
-            beacon: [0x55; 32],
-            roster_root,
-            bodies,
-        }
-    }
-    fn insert_validation_fee_unregister_proposal(
-        state_transaction: &mut crate::state::StateTransaction<'_, '_>,
-        fixture_kind: ValidationFeeProposalFixtureKind,
-        status: GovernanceProposalStatus,
-        rules: &ValidationFeePlainElectorateRulesV1,
-    ) -> [u8; 32] {
-        let kind = validation_fee_unregister_proposal_kind(fixture_kind, rules);
-        let proposal_id = kind.fingerprint();
-        let referendum_status = match status {
-            GovernanceProposalStatus::Proposed => GovernanceReferendumStatus::Proposed,
-            GovernanceProposalStatus::Approved => GovernanceReferendumStatus::Closed,
-            GovernanceProposalStatus::Rejected
-            | GovernanceProposalStatus::Enacted
-            | GovernanceProposalStatus::Superseded => {
-                panic!("unregister guard fixture only supports retained proposal statuses")
-            }
-        };
-        let finalization_evidence = (status == GovernanceProposalStatus::Approved).then_some(
-            GovernanceFinalizationEvidence {
-                proposal_id,
-                referendum_id: proposal_id,
-                finalized_at_height: 3_601,
-                mode: VotingMode::Plain,
-                approve: 1,
-                reject: 0,
-                abstain: 0,
-                min_turnout: rules.min_turnout,
-                approval_threshold_numerator: rules.approval_threshold_numerator,
-                approval_threshold_denominator: rules.approval_threshold_denominator,
-                approved: true,
-            },
-        );
-        state_transaction.world.put_governance_proposal(
-            proposal_id,
-            GovernanceProposalRecord {
-                proposer: (*ALICE_ID).clone(),
-                kind,
-                created_height: 1,
-                status,
-                pipeline: GovernancePipeline::default(),
-                parliament_snapshot: validation_fee_unregister_parliament_snapshot(),
-                finalization_evidence,
-                enacted_at_height: None,
-            },
-        );
-        let referendum_id = hex::encode(proposal_id);
-        state_transaction.world.governance_referenda.insert(
-            referendum_id.clone(),
-            GovernanceReferendumRecord {
-                h_start: 2,
-                h_end: 3_601,
-                status: referendum_status,
-                mode: GovernanceReferendumMode::Plain,
-            },
-        );
-        if status == GovernanceProposalStatus::Approved {
-            let electorate = ValidationFeePlainElectorateSnapshotV1::from_canonical_members(
-                proposal_id,
-                (*ALICE_ID).clone(),
-                2,
-                1,
-                vec![ValidationFeePlainElectorateMemberV1 {
-                    account_id: (*ALICE_ID).clone(),
-                    bonded_height: 1,
-                    bonded_amount: rules.citizenship_amount.clone(),
-                }],
-            )
-            .expect("build unregister guard frozen electorate");
-            assert_eq!(
-                electorate.context_error(proposal_id, &ALICE_ID, rules),
-                None,
-                "unregister guard electorate must be valid for its proposal"
-            );
-            let mut approvals = GovernanceStageApprovals::default();
-            for body in VALIDATION_FEE_PARLIAMENT_BODIES {
-                approvals
-                    .ensure_stage(body, 1, 1, 10_000)
-                    .record((*ALICE_ID).clone());
-            }
-            approvals.approval_gate_height = Some(1);
-            approvals.validation_fee_plain_electorate_snapshot = Some(electorate);
-            state_transaction
-                .world
-                .governance_stage_approvals
-                .insert(referendum_id, approvals);
-        }
-        proposal_id
-    }
-    fn drift_validation_fee_governance_config(
-        state_transaction: &mut crate::state::StateTransaction<'_, '_>,
-    ) {
-        state_transaction.gov.voting_asset_id = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("active", "guard").expect("active guard domain"),
-            "replacement".parse().expect("replacement asset name"),
-        );
-        state_transaction.gov.bond_escrow_account = fixture_account(0xB1);
-        state_transaction.gov.slash_receiver_account = fixture_account(0xB2);
-    }
-    fn assert_validation_fee_governance_config_drift(
-        state_transaction: &crate::state::StateTransaction<'_, '_>,
-        rules: &ValidationFeePlainElectorateRulesV1,
-    ) {
-        assert_ne!(state_transaction.gov.voting_asset_id, rules.voting_asset_id);
-        assert_ne!(
-            state_transaction.gov.bond_escrow_account,
-            rules.bond_escrow_account
-        );
-        assert_ne!(
-            state_transaction.gov.slash_receiver_account,
-            rules.slash_receiver_account
-        );
     }
     fn instruction_error_contains(error: &InstructionExecutionError, expected: &str) -> bool {
         match error {
@@ -7391,163 +6930,6 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_account_rejects_zero_lock_validation_fee_proposal_custody_after_config_change() {
-        for fixture_kind in [
-            ValidationFeeProposalFixtureKind::Policy,
-            ValidationFeeProposalFixtureKind::PayoutLifecycle,
-        ] {
-            for status in [
-                GovernanceProposalStatus::Proposed,
-                GovernanceProposalStatus::Approved,
-            ] {
-                let state = test_state();
-                let authority = (*ALICE_ID).clone();
-                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-                let mut block = state.block(header);
-                let mut tx = block.transaction();
-                let targets = register_validation_fee_unregister_targets(&authority, &mut tx);
-                let rules = validation_fee_unregister_rules(&targets);
-                let proposal_id = insert_validation_fee_unregister_proposal(
-                    &mut tx,
-                    fixture_kind,
-                    status,
-                    &rules,
-                );
-                assert!(
-                    tx.world.governance_locks.iter().next().is_none(),
-                    "zero-lock regression fixture must not rely on ballot custody"
-                );
-                drift_validation_fee_governance_config(&mut tx);
-                assert_validation_fee_governance_config_drift(&tx, &rules);
-                for (reference, account_id) in [
-                    ("bond escrow", &targets.bond_escrow_account),
-                    ("slash receiver", &targets.slash_receiver_account),
-                ] {
-                    let err = Unregister::account(account_id.clone())
-                        .execute(&authority, &mut tx)
-                        .expect_err(
-                            "retained validation-fee proposal custody must block account removal",
-                        );
-                    assert!(
-                        err.to_string()
-                            .contains("retained by immutable validation-fee proposal custody"),
-                        "{fixture_kind:?} {status:?} proposal {proposal_id:?} must retain its \
-                         {reference} account without locks: {err}"
-                    );
-                    assert!(
-                        tx.world.accounts.get(account_id).is_some(),
-                        "{reference} account must remain after rejected unregister"
-                    );
-                }
-            }
-        }
-    }
-    #[test]
-    fn unregister_asset_definition_rejects_zero_lock_validation_fee_proposal_rules_after_config_change()
-     {
-        for fixture_kind in [
-            ValidationFeeProposalFixtureKind::Policy,
-            ValidationFeeProposalFixtureKind::PayoutLifecycle,
-        ] {
-            for status in [
-                GovernanceProposalStatus::Proposed,
-                GovernanceProposalStatus::Approved,
-            ] {
-                let state = test_state();
-                let authority = (*ALICE_ID).clone();
-                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-                let mut block = state.block(header);
-                let mut tx = block.transaction();
-                let targets = register_validation_fee_unregister_targets(&authority, &mut tx);
-                let rules = validation_fee_unregister_rules(&targets);
-                let proposal_id = insert_validation_fee_unregister_proposal(
-                    &mut tx,
-                    fixture_kind,
-                    status,
-                    &rules,
-                );
-                assert!(
-                    tx.world.governance_locks.iter().next().is_none(),
-                    "zero-lock regression fixture must not rely on ballot custody"
-                );
-                drift_validation_fee_governance_config(&mut tx);
-                assert_validation_fee_governance_config_drift(&tx, &rules);
-                let err = Unregister::asset_definition(targets.voting_asset_id.clone())
-                    .execute(&authority, &mut tx)
-                    .expect_err(
-                        "retained validation-fee proposal rules must block asset-definition removal",
-                    );
-                assert!(
-                    err.to_string()
-                        .contains("retained by immutable validation-fee proposal custody"),
-                    "{fixture_kind:?} {status:?} proposal {proposal_id:?} must retain its voting \
-                     asset without locks: {err}"
-                );
-                assert!(
-                    tx.world
-                        .asset_definitions
-                        .get(&targets.voting_asset_id)
-                        .is_some(),
-                    "voting asset definition must remain after rejected unregister"
-                );
-            }
-        }
-    }
-    #[test]
-    fn unregister_domain_rejects_zero_lock_validation_fee_proposal_rules_after_config_change() {
-        for fixture_kind in [
-            ValidationFeeProposalFixtureKind::Policy,
-            ValidationFeeProposalFixtureKind::PayoutLifecycle,
-        ] {
-            for status in [
-                GovernanceProposalStatus::Proposed,
-                GovernanceProposalStatus::Approved,
-            ] {
-                let state = test_state();
-                let authority = (*ALICE_ID).clone();
-                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-                let mut block = state.block(header);
-                let mut tx = block.transaction();
-                let targets = register_validation_fee_unregister_targets(&authority, &mut tx);
-                let rules = validation_fee_unregister_rules(&targets);
-                let proposal_id = insert_validation_fee_unregister_proposal(
-                    &mut tx,
-                    fixture_kind,
-                    status,
-                    &rules,
-                );
-                assert!(
-                    tx.world.governance_locks.iter().next().is_none(),
-                    "zero-lock regression fixture must not rely on ballot custody"
-                );
-                drift_validation_fee_governance_config(&mut tx);
-                assert_validation_fee_governance_config_drift(&tx, &rules);
-                let err = Unregister::domain(targets.domain_id.clone())
-                    .execute(&authority, &mut tx)
-                    .expect_err(
-                        "domain removal must retain validation-fee proposal rule references",
-                    );
-                assert!(
-                    err.to_string()
-                        .contains("retained by immutable validation-fee proposal custody"),
-                    "{fixture_kind:?} {status:?} proposal {proposal_id:?} must retain its voting \
-                     asset domain without locks: {err}"
-                );
-                assert!(
-                    tx.world.domains.get(&targets.domain_id).is_some(),
-                    "referenced domain must remain after rejected unregister"
-                );
-                assert!(
-                    tx.world
-                        .asset_definitions
-                        .get(&targets.voting_asset_id)
-                        .is_some(),
-                    "referenced asset definition must remain after rejected domain unregister"
-                );
-            }
-        }
-    }
-    #[test]
     fn unregister_account_removes_account_read_permissions_from_accounts_and_roles() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
@@ -8644,31 +8026,27 @@ mod tests {
                             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                                 .parse()
                                 .expect("contract address"),
-                        code_hash_hex: iroha_data_model::governance::types::ContractCodeHash::new(
+                        code_hash: iroha_data_model::governance::types::ContractCodeHash::new(
                             [0x11; 32],
                         ),
-                        abi_hash_hex: iroha_data_model::governance::types::ContractAbiHash::new(
+                        abi_hash: iroha_data_model::governance::types::ContractAbiHash::new(
                             [0x22; 32],
                         ),
                         abi_version: iroha_data_model::governance::types::AbiVersion::new(1),
                         manifest_provenance: None,
                     },
                 );
-                tx.world.put_governance_proposal(
-                    proposal_id,
-                    crate::state::GovernanceProposalRecord {
-                        proposer: account_id.clone(),
-                        kind,
-                        created_height: 1,
-                        status: crate::state::GovernanceProposalStatus::Proposed,
-                        pipeline: crate::state::GovernancePipeline::default(),
-                        parliament_snapshot: crate::state::governance_parliament_snapshot_for_tests(
-                            account_id, 1,
-                        ),
-                        finalization_evidence: None,
-                        enacted_at_height: None,
-                    },
-                );
+                tx.world
+                    .put_governance_proposal(
+                        proposal_id,
+                        crate::state::GovernanceProposalRecord {
+                            proposer: account_id.clone(),
+                            kind,
+                            created_height: 1,
+                            status: crate::state::GovernanceProposalStatus::Proposed,
+                        },
+                    )
+                    .expect("domain test proposal must satisfy first-release JSON bounds");
             },
             "account with governance proposal state must not be unregistered",
             "active governance proposal state",
@@ -8897,48 +8275,6 @@ mod tests {
                     "account should be removed when lane-relay override stores peers instead"
                 );
             },
-        );
-    }
-    #[test]
-    fn unregister_account_rejects_when_account_in_governance_parliament_snapshot_state() {
-        assert_account_unregister_guard(
-            |tx, _domain_id, authority, account_id| {
-                let proposal_id = [0xC5; 32];
-                let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
-                    iroha_data_model::governance::types::DeployContractProposal {
-                        contract_address:
-                            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
-                                .parse()
-                                .expect("contract address"),
-                        code_hash_hex: iroha_data_model::governance::types::ContractCodeHash::new(
-                            [0x51; 32],
-                        ),
-                        abi_hash_hex: iroha_data_model::governance::types::ContractAbiHash::new(
-                            [0x61; 32],
-                        ),
-                        abi_version: iroha_data_model::governance::types::AbiVersion::new(1),
-                        manifest_provenance: None,
-                    },
-                );
-                tx.world.put_governance_proposal(
-                    proposal_id,
-                    crate::state::GovernanceProposalRecord {
-                        proposer: authority.clone(),
-                        kind,
-                        created_height: 1,
-                        status: crate::state::GovernanceProposalStatus::Proposed,
-                        pipeline: crate::state::GovernancePipeline::default(),
-                        parliament_snapshot: crate::state::governance_parliament_snapshot_for_tests(
-                            account_id, 1,
-                        ),
-                        finalization_evidence: None,
-                        enacted_at_height: None,
-                    },
-                );
-            },
-            "account in governance parliament snapshot must not be unregistered",
-            "governance proposal parliament snapshot state",
-            "error should explain governance parliament snapshot conflict",
         );
     }
     #[test]

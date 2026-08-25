@@ -865,8 +865,8 @@ check = "bash scripts/tests/consistency.sh docker-compose"
 
 # Kagami profile generation consumes the tracked root Cargo.lock at runtime.
 # The fail-closed wrapper authenticates its stable regular-file bytes
-# before and after every child: size=311163,
-# sha256=4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492.
+# before and after every child: size=311205,
+# sha256=71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2.
 # Update both literal arguments only as a reviewed lock refresh, and keep the
 # tracked Cargo.lock listed in each owner's input closure.
 [[generated]]
@@ -889,7 +889,7 @@ outputs = [
   "defaults/kagami/iroha3-dev/peer3.toml",
   "defaults/kagami/iroha3-dev/verify.txt",
 ]
-generator = "python3 scripts/kagami_profile_owner.py --write --profile iroha3-dev --output-root \"${IROHA_KAGAMI_DEV_STAGE:?set an absent absolute private external stage root}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_DEV_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 311163 --cargo-lock-sha256 4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492"
+generator = "python3 scripts/kagami_profile_owner.py --write --profile iroha3-dev --output-root \"${IROHA_KAGAMI_DEV_STAGE:?set an absent absolute private external stage root}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_DEV_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 311205 --cargo-lock-sha256 71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2"
 generator_sources = [
   "scripts/kagami_profile_owner.py",
   "xtask/src/kagami_profiles.rs",
@@ -904,4 +904,4 @@ inputs = [
   "vendor/**",
   "xtask/Cargo.toml",
 ]
-check = "python3 scripts/kagami_profile_owner.py --check --profile iroha3-dev --root \"$PWD\" --stage-a \"${IROHA_KAGAMI_DEV_CHECK_STAGE_A:?set an absent absolute private external first check stage}\" --stage-b \"${IROHA_KAGAMI_DEV_CHECK_STAGE_B:?set an absent absolute private external second check stage}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_DEV_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 311163 --cargo-lock-sha256 4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492"
+check = "python3 scripts/kagami_profile_owner.py --check --profile iroha3-dev --root \"$PWD\" --stage-a \"${IROHA_KAGAMI_DEV_CHECK_STAGE_A:?set an absent absolute private external first check stage}\" --stage-b \"${IROHA_KAGAMI_DEV_CHECK_STAGE_B:?set an absent absolute private external second check stage}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_DEV_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 311205 --cargo-lock-sha256 71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2"

@@ -1,3 +1,5 @@
+use mv::storage::StorageReadOnly as _;
+
 /// Runtime-only daemon dependencies supplied by the deployment launcher.
 ///
 /// Implementations of the moderation wrapper, privacy-cycle PRF provider, stream-token and native
@@ -13,6 +15,10 @@
 /// stay inside those implementations and must never be sourced from `iroha_config`.
 #[derive(Clone, Default)]
 pub struct IrohaRuntimeDeps {
+    sumeragi_global_beacon_partial_signer:
+        Option<Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>>,
+    parliament_tle_partial_release_signer:
+        Option<Arc<dyn iroha_core::tle_release::TlePartialReleaseSignerV1>>,
     bootle_lantern_issuance_provider_registry: Option<
         Arc<
             dyn iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryV1,
@@ -145,6 +151,91 @@ pub struct IrohaRuntimeDeps {
     sorafs_musubi_provider_attestation_inventory:
         Option<Arc<dyn sorafs_node::MusubiProviderAttestationInventoryRuntimeV1>>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThresholdSignerStartupReadinessV1 {
+    Ready,
+    ParliamentTleShareUnavailable {
+        key_session_id: iroha_core::tle_release::TleKeySessionId,
+    },
+}
+
+fn require_global_beacon_signer_for_local_seat_v1(
+    local_has_committee_seat: bool,
+    signer_is_resolved: bool,
+) -> Result<(), &'static str> {
+    if local_has_committee_seat && !signer_is_resolved {
+        return Err("local global-beacon committee seat has no resolved partial signer");
+    }
+    Ok(())
+}
+
+fn parliament_tle_signer_readiness_for_local_seat_v1(
+    key_session_id: iroha_core::tle_release::TleKeySessionId,
+    local_has_committee_seat: bool,
+    signer_is_resolved: bool,
+) -> ThresholdSignerStartupReadinessV1 {
+    if local_has_committee_seat && !signer_is_resolved {
+        ThresholdSignerStartupReadinessV1::ParliamentTleShareUnavailable { key_session_id }
+    } else {
+        ThresholdSignerStartupReadinessV1::Ready
+    }
+}
+
+fn validate_threshold_signer_startup_readiness_v1(
+    state: &iroha_core::state::State,
+    local_peer: &PeerId,
+    runtime_deps: &IrohaRuntimeDeps,
+) -> Result<ThresholdSignerStartupReadinessV1, &'static str> {
+    use iroha_core::state::WorldReadOnly as _;
+
+    let world = state.world_view();
+    let topology = state.commit_topology_snapshot();
+    let topology_roster_hash =
+        iroha_core::beacon::global_threshold_beacon_roster_hash_v1(&topology);
+    let committed_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+    if let Some(active_session_id) = world.active_global_beacon_key_session() {
+        let record = world
+            .global_beacon_key_sessions()
+            .get(&active_session_id)
+            .ok_or("active global-beacon key session is absent")?;
+        record
+            .validate()
+            .map_err(|_| "active global-beacon key session is invalid")?;
+        if record.session.network_id != *state.network_id_ref()
+            || record.session.roster_hash != topology_roster_hash
+            || usize::from(record.session.committee_size) != topology.len()
+            || !record.is_active_at(committed_height.saturating_add(1))
+        {
+            return Err("active global-beacon key session is not bound to the startup roster");
+        }
+        require_global_beacon_signer_for_local_seat_v1(
+            topology.iter().any(|peer| peer == local_peer),
+            runtime_deps.sumeragi_global_beacon_partial_signer.is_some(),
+        )?;
+    }
+
+    let Some(tle_key_session_id) = world.active_tle_key_session() else {
+        return Ok(ThresholdSignerStartupReadinessV1::Ready);
+    };
+    let tle_session = world
+        .tle_key_sessions()
+        .get(&tle_key_session_id)
+        .ok_or("active Parliament TLE key session is absent")?;
+    tle_session
+        .clone()
+        .validate()
+        .map_err(|_| "active Parliament TLE key session is invalid")?;
+    if tle_session.network_id != *state.network_id_ref().as_bytes() {
+        return Err("active Parliament TLE key session belongs to another network");
+    }
+    Ok(parliament_tle_signer_readiness_for_local_seat_v1(
+        tle_key_session_id,
+        tle_session.roster_hash == topology_roster_hash
+            && topology.iter().any(|peer| peer == local_peer),
+        runtime_deps.parliament_tle_partial_release_signer.is_some(),
+    ))
+}
 macro_rules! define_runtime_dep_setters_v1 {
     (
         $(
@@ -170,7 +261,9 @@ impl IrohaRuntimeDeps {
     /// process-local authority when configuration requested no provider.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.bootle_lantern_issuance_provider_registry.is_none()
+        self.sumeragi_global_beacon_partial_signer.is_none()
+            && self.parliament_tle_partial_release_signer.is_none()
+            && self.bootle_lantern_issuance_provider_registry.is_none()
             && self.moderation_quarantine_key_wrapper.is_none()
             && self.privacy_cycle_prf_provider.is_none()
             && self.privacy_release_anchor.is_none()
@@ -232,7 +325,40 @@ impl IrohaRuntimeDeps {
                 .is_none()
             && self.sorafs_musubi_provider_attestation_inventory.is_none()
     }
+
+    /// Build the opaque Core coordinator used by Torii's authenticated local
+    /// Parliament partial-release route.
+    ///
+    /// A missing deployment provider produces a fail-closed coordinator. The
+    /// provider trait object is cloned only as an `Arc`; secret-share material
+    /// remains inside the runtime implementation and is never projected into
+    /// daemon configuration or route state.
+    pub(crate) fn parliament_tle_release_coordinator(
+        &self,
+    ) -> Arc<iroha_core::tle_release::TleReleaseCoordinatorV1> {
+        Arc::new(
+            self.parliament_tle_partial_release_signer
+                .clone()
+                .map_or_else(
+                    iroha_core::tle_release::TleReleaseCoordinatorV1::without_signer,
+                    iroha_core::tle_release::TleReleaseCoordinatorV1::from_signer,
+                ),
+        )
+    }
     define_runtime_dep_setters_v1! {
+        /// Attach the runtime-only adaptive threshold-beacon signing-share owner.
+        with_sumeragi_global_beacon_partial_signer(
+            signer: Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>,
+        ) => sumeragi_global_beacon_partial_signer;
+        /// Attach the runtime-only adaptive Parliament TLE signing-share owner.
+        ///
+        /// Private DKG components remain inside this provider. They are never
+        /// read from configuration, serialized, or logged by the daemon. A
+        /// production provider owns active/retiring session selection and keeps
+        /// old shares available through all committed opening deadlines.
+        with_parliament_tle_partial_release_signer(
+            signer: Arc<dyn iroha_core::tle_release::TlePartialReleaseSignerV1>,
+        ) => parliament_tle_partial_release_signer;
         /// Attach the deployment-owned Bootle/Lantern issuer and authentication registry.
         with_bootle_lantern_issuance_provider_registry(
             registry: Arc<
@@ -557,5 +683,60 @@ impl IrohaRuntimeDeps {
         with_sorafs_musubi_provider_attestation_inventory(
             inventory: Arc<dyn sorafs_node::MusubiProviderAttestationInventoryRuntimeV1>,
         ) => sorafs_musubi_provider_attestation_inventory;
+    }
+}
+
+#[cfg(test)]
+mod parliament_tle_release_tests {
+    use super::*;
+
+    struct UnavailableSigner;
+
+    impl iroha_core::tle_release::TlePartialReleaseSignerV1 for UnavailableSigner {
+        fn sign_partial_release(
+            &self,
+            _context: &iroha_core::tle_release::AuthorizedTleReleaseContextV1,
+        ) -> Result<iroha_core::tle_release::TlePartialReleaseShareV1, String> {
+            Err("unavailable".to_owned())
+        }
+    }
+
+    #[test]
+    fn parliament_tle_coordinator_is_fail_closed_or_runtime_injected() {
+        let absent = IrohaRuntimeDeps::default().parliament_tle_release_coordinator();
+        assert!(!absent.signer_is_available());
+
+        let injected = IrohaRuntimeDeps::default()
+            .with_parliament_tle_partial_release_signer(Arc::new(UnavailableSigner))
+            .parliament_tle_release_coordinator();
+        assert!(injected.signer_is_available());
+    }
+
+    #[test]
+    fn local_threshold_committee_seats_surface_missing_runtime_signers() {
+        assert_eq!(
+            require_global_beacon_signer_for_local_seat_v1(true, false),
+            Err("local global-beacon committee seat has no resolved partial signer")
+        );
+        assert_eq!(
+            require_global_beacon_signer_for_local_seat_v1(true, true),
+            Ok(())
+        );
+        assert_eq!(
+            require_global_beacon_signer_for_local_seat_v1(false, false),
+            Ok(())
+        );
+
+        let session_id = iroha_core::tle_release::TleKeySessionId::new([0x71; 32]);
+        assert_eq!(
+            parliament_tle_signer_readiness_for_local_seat_v1(session_id, true, false),
+            ThresholdSignerStartupReadinessV1::ParliamentTleShareUnavailable {
+                key_session_id: session_id,
+            }
+        );
+        assert_eq!(
+            parliament_tle_signer_readiness_for_local_seat_v1(session_id, true, true),
+            ThresholdSignerStartupReadinessV1::Ready
+        );
     }
 }

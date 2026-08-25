@@ -6934,6 +6934,7 @@ fn default_state_root() -> PathBuf {
     // environment select the persistence root, including for non-root capability deployments.
     PathBuf::from("/var/lib/sora-vpn-controller")
 }
+#[cfg(any(target_os = "linux", test))]
 fn load_helper_ticket_issuer_public_key() -> Result<PublicKey, ControllerError> {
     if effective_uid() != 0 {
         return Err(ControllerError::State(
@@ -6943,6 +6944,7 @@ fn load_helper_ticket_issuer_public_key() -> Result<PublicKey, ControllerError> 
     }
     load_helper_ticket_issuer_public_key_at(Path::new(HELPER_TICKET_ISSUER_PUBLIC_KEY_PATH), 0)
 }
+#[cfg(any(target_os = "linux", test))]
 fn load_helper_ticket_issuer_public_key_at(
     path: &Path,
     required_owner_uid: u32,
@@ -6995,6 +6997,7 @@ fn load_helper_ticket_issuer_public_key_at(
         ))
     })
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_privileged_caller_identity(
     real_uid: u32,
     effective_uid: u32,
@@ -7026,6 +7029,7 @@ fn validate_privileged_caller_identity(
         gid: real_gid,
     })
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_privileged_executable_custody(
     owner_uid: u32,
     mode: u32,

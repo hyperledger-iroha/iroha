@@ -187,7 +187,7 @@ def checker_source_paths() -> tuple[Path, ...]:
     """Return the canonical checker and its exact lexical component inventory."""
     module = load_checker()
     filenames = tuple(module._CHECKER_COMPONENT_FILES)
-    assert len(filenames) == len(set(filenames)) == 36
+    assert len(filenames) == len(set(filenames)) == 39
     return (SCRIPT, *(SCRIPT.with_name(filename) for filename in filenames))
 
 
@@ -9694,20 +9694,6 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
             "parent_statement.as_ref(),",
             "None,",
             "fence-completion candidate statement handoff must pass the statement into successor effect binding",
-        ),
-        (
-            "step_recovery",
-            _RUNTIME_SERIALIZED_IMPL,
-            "let parent_statement = command.candidate_semantic_statement;",
-            "let parent_statement = None;",
-            "recovery FIFO candidate statement handoff must recover the statement from the selected command",
-        ),
-        (
-            "step_recovery",
-            _RUNTIME_SERIALIZED_IMPL,
-            "parent_statement.as_ref(),",
-            "None,",
-            "recovery FIFO candidate statement handoff must pass the statement into successor effect binding",
         ),
         (
             "step",
@@ -34008,45 +33994,6 @@ def test_acyclic_liveness_debt_topology_rejects_vocabulary_weakening(
     assert any(
         "StableAvailableRetainedLock must equal only" in error for error in errors
     ), errors
-
-
-def test_async_release_requires_checked_type_closure_and_step_refinement(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
-    valid = r"""---- MODULE SumeragiV2AsyncLivenessProofs ----
-THEOREM AsyncStepRefinementObligation ==
-  AsyncNext => [Next]_vars
-BY DEF AsyncNext
-THEOREM AsyncTypeInvariantObligation ==
-  \A initialContext: AsyncSpecAt(initialContext) => []AsyncTypeInvariant
-BY PTL
-THEOREM AsyncNextPreservesNormalProposalPrepareCandidate ==
-  \A candidate:
-    /\ NormalProposalPrepareCandidate(candidate)
-    /\ AsyncNext
-    => NormalProposalPrepareCandidate(candidate)'
-BY PTL
-=============================================================================
-"""
-    path.write_text(valid, encoding="utf-8")
-
-    assert module._async_proof_architecture_errors(formal_dir) == []
-
-    path.write_text(
-        valid.replace(
-            "\\A initialContext: AsyncSpecAt(initialContext) => []AsyncTypeInvariant",
-            "AsyncTypeInvariant => []AsyncTypeInvariant",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._async_proof_architecture_errors(formal_dir)
-    assert any(
-        "AsyncTypeInvariantObligation must state only" in error for error in errors
-    )
 
 
 for _proof_ledger_test_component in PROOF_LEDGER_TEST_COMPONENT_FILES:

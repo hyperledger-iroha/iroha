@@ -26,7 +26,7 @@ from iroha_python import (
 from iroha_python.address import AccountAddress, AccountAddressError
 from client_expensive_query_test_support import authenticated_query_client
 
-CANONICAL_ACCOUNT_ID = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+CANONICAL_ACCOUNT_ID = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
 
 
 def _authority_fee_payment() -> Dict[str, Any]:

@@ -23,6 +23,12 @@ use thiserror::Error;
 /// block, so one proof can legitimately cover every same-dataspace handle
 /// without permitting an unbounded outer proof envelope.
 pub const MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1: usize = 65_536;
+/// Maximum encoded [`AxtProofEnvelope`] payload accepted from one [`ProofBlob`].
+///
+/// The inner FASTPQ batch/proof payload has its own one MiB verifier limit. This
+/// outer ceiling leaves one additional MiB for the envelope and binding while
+/// keeping every proof-envelope decode bounded at the shared data-model layer.
+pub const MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
 /// Canonical 32-byte binding derived from an AXT descriptor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -205,7 +211,8 @@ pub struct AxtTouchFragment {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct ProofBlob {
-    /// Norito-encoded AXT proof envelope bytes.
+    /// Norito-encoded AXT proof envelope bytes, bounded by
+    /// [`MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES`] at every proof-aware ingress.
     pub payload: Vec<u8>,
     /// Outer mirror of the proof-bound expiry slot.
     ///
@@ -217,17 +224,20 @@ pub struct ProofBlob {
 }
 /// Check whether the decoded proof envelope has the expected structural shape.
 ///
-/// This helper performs canonical decoding and compares untrusted outer fields;
-/// it does **not** verify the `FastPQ` proof or cryptographically authenticate
-/// the dataspace, manifest root, expiry, DA commitment, or binding. Consensus
-/// and host admission must use the `fastpq_prover` verifier instead.
+/// This helper enforces the shared payload ceiling, performs canonical decoding,
+/// and compares untrusted outer fields; it does **not** verify the `FastPQ`
+/// proof or cryptographically authenticate the dataspace, manifest root,
+/// expiry, DA commitment, or binding. Consensus and host admission must use the
+/// `fastpq_prover` verifier instead.
 #[must_use]
 pub fn proof_envelope_shape_matches_manifest(
     proof: &ProofBlob,
     dsid: DataSpaceId,
     manifest_root: [u8; 32],
 ) -> bool {
-    if manifest_root.iter().all(|byte| *byte == 0) {
+    if proof.payload.len() > MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES
+        || manifest_root.iter().all(|byte| *byte == 0)
+    {
         return false;
     }
     let Ok(envelope) = norito::decode_canonical::<AxtProofEnvelope>(&proof.payload) else {
@@ -4255,6 +4265,20 @@ mod tests {
         };
         assert!(!proof_envelope_shape_matches_manifest(
             &raw_proof,
+            dsid,
+            manifest_root
+        ));
+        let mut oversized_envelope = envelope;
+        oversized_envelope.proof = vec![0; MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES];
+        let oversized_payload =
+            norito::to_bytes(&oversized_envelope).expect("encode oversized canonical envelope");
+        assert!(oversized_payload.len() > MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES);
+        let oversized = ProofBlob {
+            payload: oversized_payload,
+            expiry_slot: None,
+        };
+        assert!(!proof_envelope_shape_matches_manifest(
+            &oversized,
             dsid,
             manifest_root
         ));

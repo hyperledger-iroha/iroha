@@ -1,2760 +1,1723 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! 4-peer SORA parliament lifecycle smoke: fund, bond citizenship, approve, vote, finalize, enact.
-#[path = "common/sora_runtime_governance.rs"]
-#[allow(dead_code)]
-pub(super) mod sora_runtime_governance;
-use eyre::{Result, WrapErr, eyre};
-use integration_tests::{sandbox, sync};
-use iroha::client::Client;
-use iroha::data_model::{
-    asset::AssetDefinition,
-    asset::id::AssetId,
-    domain::{Domain, DomainId},
-    governance::types::ParliamentBody,
-    isi::governance::{
-        ApproveGovernanceProposal, AtWindow, CastParliamentBallot, CastPlainBallot,
-        EnactReferendum, FinalizeReferendum, ParliamentDecision, PersistCouncilForEpoch,
-        ProposeDeployContract, ProposeRuntimeUpgradeProposal, RegisterCitizen, VotingMode,
+//! Four-validator modern SORA Parliament and mandatory timed-OVN lifecycle corridor.
+
+use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr as _, time::Duration};
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use eyre::{Result, WrapErr as _, eyre};
+use integration_tests::sandbox;
+use iroha::{
+    client::{
+        Client, ParliamentTimedOvnCastingContextResponseV1, ParliamentTlePartialReleaseShareV1,
+        ParliamentTleReleaseContextResponseV1,
     },
-    permission::Permission,
-    prelude::{
-        Account, AssetDefinitionId, FindAssetById, FindAssetsDefinitions, FindDomains, Grant, Mint,
-        QueryBuilderExt, Register, Transfer,
-    },
-    query::{account::prelude::FindAccounts, permission::prelude::FindPermissionsByAccountId},
-    runtime::RuntimeUpgradeManifest,
-    smart_contract::{
-        ContractAddress,
-        manifest::{ContractManifest, ManifestProvenance},
+    crypto::{Algorithm, Hash, KeyPair, Signature},
+    data_model::{
+        account::AccountId,
+        block::{
+            SignedBlock,
+            consensus_v2::{PROTOCOL_VERSION, SumeragiV2GenesisContextParameters},
+        },
+        governance::types::{
+            AbiVersion, BallotAttemptId, BallotAttemptStatusV1, BeaconPulseId, BeaconSessionId,
+            BodyElectionAttemptId, BodyInstanceId, BodyInstanceStatusV1, ContractAbiHash,
+            ContractCodeHash, DeliberationPhaseV1, DeployContractProposal, GovernanceAttemptId,
+            GovernanceAttemptStatusV1, GovernanceStageV1, ParliamentAggregateOutcomeV1,
+            ParliamentBody, ProposalKind, SortitionRequestV1, TleSessionId,
+            parliament_ballot_participant_hash_v1, parliament_candidate_root_v1,
+        },
+        isi::{
+            InstructionBox, Log,
+            consensus_keys::{
+                ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
+                ThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleSignatureV1,
+            },
+            governance::{
+                CreateParliamentGovernanceAttemptV1, ParliamentAdvanceBodyPhaseV1,
+                ParliamentBeginBallotOpeningBatchV1, ParliamentBeginInvitationAcceptanceV1,
+                ParliamentCloseBallotRegistrationV1, ParliamentConsumeSortitionPulseBatchV1,
+                ParliamentEndorsePublicFindingV1, ParliamentFinalizeOpenedBallotV1,
+                ParliamentFreezeBallotSurvivorsV1, ParliamentFreezeTimedOvnCorpusV1,
+                ParliamentInvitationDecisionV1, ParliamentLifecycleTransitionV1,
+                ParliamentRecordInvitationResponseV1, ParliamentRegisterBallotAttemptV1,
+                ParliamentRegisterBallotParticipantV1, ParliamentRegisterSortitionRequestV1,
+                ParliamentSealBodyRosterV1, ParliamentTleFinalReleaseSignatureV1,
+                ProposeDeployContract, RegisterCitizen, SubmitParliamentLifecycleTransitionV1,
+            },
+            smart_contract_code::{
+                FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
+                SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
+            },
+        },
+        parameter::{
+            Parameter, SetParameter,
+            system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
+        },
+        peer::PeerId,
+        permission::Permission,
+        prelude::{
+            Account, FeePaymentIntent, FindBlocks, Grant, Level, QueryBuilderExt as _, Register,
+        },
+        smart_contract::ContractAddress,
     },
 };
-use iroha_crypto::{Hash, KeyPair};
-use iroha_executor_data_model::permission::governance::{
-    CanEnactGovernance, CanManageParliament, CanProposeContractDeployment,
-    CanProposeRuntimeUpgrade, CanSubmitGovernanceBallot,
+use iroha_core::{
+    beacon::{
+        GlobalThresholdBeaconSessionBindingV1, global_threshold_beacon_roster_hash_v1,
+        parliament_test_network_signer::deterministic_parliament_beacon_key_record_v1,
+        validate_global_threshold_beacon_session_v1,
+        verify_finalized_global_threshold_beacon_pulse_v1,
+    },
+    governance::{
+        parliament::ParliamentAttemptStateV1,
+        timed_ovn::{TIMED_OVN_BALLOT_RECORD_BYTES_V1, TimedOvnReleaseIdentityPublicV1},
+    },
+    state::{
+        THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
+        threshold_key_lifecycle_certificate_preimage_v1,
+    },
+    tle_release::{
+        AuthorizedTleReleaseProjectionV1,
+        PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1,
+        ParliamentTimedOvnCastingContextArchiveV1, ParliamentTimedOvnCastingPhaseV1,
+        TLE_AUTHORIZED_RELEASE_IDENTITY_PAYLOAD_BYTES_V1,
+        TLE_AUTHORIZED_RELEASE_PROJECTION_VERSION_V1, TleAdaptiveDealerCommitmentV1,
+        TleAdaptivePublicShareV1, TleKeySessionPublicStateV1, TlePartialReleaseShareV1,
+        parliament_test_network_signer::deterministic_parliament_tle_key_public_state_v1,
+    },
 };
-use iroha_test_network::{NetworkBuilder, NetworkPeer, ensure_domain_setup_for_network};
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
-use std::{
-    collections::BTreeSet,
-    time::{Duration, Instant},
+use iroha_crypto::timed_ovn::{TimedOvnChoiceV1, TimedOvnRegistrationSecretV1};
+use iroha_executor_data_model::permission::{
+    governance::{CanManageParliament, CanProposeContractDeployment},
+    smart_contract::CanRegisterSmartContractCode,
 };
-const CITIZEN_COUNT: usize = 20;
-const CITIZEN_FUND: u128 = 15_000;
-const CITIZEN_BOND: u128 = 10_000;
-const BALLOT_LOCK: u128 = CITIZEN_FUND - CITIZEN_BOND;
-const BALLOT_DURATION_BLOCKS: u64 = 20;
-const FIRST_REFERENDUM_VOTERS: usize = 10;
-const FIRST_REFERENDUM_APPROVE_VOTERS: usize = 7;
-const SECOND_REFERENDUM_VOTERS: usize = CITIZEN_COUNT - FIRST_REFERENDUM_VOTERS;
-const SECOND_REFERENDUM_REJECT_VOTERS: usize = 8;
-const THIRD_REFERENDUM_VOTERS: usize = 8;
-const THIRD_REFERENDUM_APPROVE_VOTERS: usize = 5;
-const GOV_MAX_CONVICTION: u64 = 6;
-const GOV_DOMAIN_ID: &str = "govsmoke.universal";
-const FIRST_CONTRACT_ID: &str = "parliament.lifecycle.smoke.contract";
-const SECOND_CONTRACT_ID: &str = "parliament.lifecycle.smoke.reject.contract";
-const TX_STATUS_TIMEOUT: Duration = Duration::from_secs(900);
-const TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
-const TX_TTL: Duration = Duration::from_secs(1_200);
-const BALANCE_WAIT_TIMEOUT: Duration = Duration::from_secs(300);
-const HOSTILE_RULES_SIZE: usize = 3;
-const HOSTILE_PARLIAMENT_QUORUM_BPS: u16 = 6_667;
-const HOSTILE_ATTACKERS_BLOCKED: usize = 8;
-const HOSTILE_HONEST_BLOCKED: usize = 4;
-const HOSTILE_ATTACKERS_CAPTURED: usize = 18;
-const HOSTILE_HONEST_CAPTURED: usize = 2;
-const HOSTILE_DEPLOY_CONTRACT_ID: &str = "parliament.hostile.capture.deploy.contract";
-const HOSTILE_DEPLOY_CODE_HASH_HEX: &str =
-    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-const HOSTILE_RUNTIME_START_HEIGHT: u64 = 1_000;
-const HOSTILE_RUNTIME_END_HEIGHT: u64 = 1_060;
-fn canonical_abi_hex() -> String {
-    hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
+use iroha_test_network::NetworkBuilder;
+use iroha_test_samples::ALICE_ID;
+use norito::codec::Encode as _;
+use rand::{SeedableRng as _, rngs::StdRng};
+
+const VALIDATOR_COUNT: usize = 4;
+const CITIZEN_COUNT: usize = 24;
+const BODY_SEATS: u32 = 3;
+const INVITATION_PHASE_BLOCKS: u64 = 30;
+const REGISTRATION_PHASE_BLOCKS: u64 = 8;
+const SURVIVOR_PHASE_BLOCKS: u64 = 4;
+const COMMITMENT_PHASE_BLOCKS: u64 = 4;
+const RELEASE_DELAY_BLOCKS: u64 = 3;
+const OPENING_PHASE_BLOCKS: u64 = 8;
+const MIN_ENACTMENT_DELAY: u64 = 3;
+const OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
+const CONTRACT_ADDRESS: &str = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+
+fn fee() -> FeePaymentIntent {
+    FeePaymentIntent::authority(Vec::new(), None)
 }
-fn governance_escrow_account_literal() -> String {
-    ALICE_ID
-        .canonical_i105()
-        .expect("alice account id should encode to canonical I105")
-}
-fn governance_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::derive_from_components(
-        DomainId::parse_fully_qualified(GOV_DOMAIN_ID).expect("governance domain id must parse"),
-        "xor".parse().expect("governance asset name must parse"),
-    )
-}
-fn governance_contract_address(contract_id: &str) -> ContractAddress {
-    let deploy_nonce = match contract_id {
-        FIRST_CONTRACT_ID => 1,
-        SECOND_CONTRACT_ID => 2,
-        HOSTILE_DEPLOY_CONTRACT_ID => 3,
-        other => panic!("unexpected governance smoke contract id `{other}`"),
+
+fn minimal_contract_artifact() -> Vec<u8> {
+    let metadata = ivm::ProgramMetadata {
+        version_major: 1,
+        version_minor: 1,
+        mode: 0,
+        vector_length: 0,
+        max_cycles: 1_000,
+        abi_version: 1,
     };
-    ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
-        &ALICE_ID,
-        deploy_nonce,
-        iroha::data_model::nexus::DataSpaceId::UNIVERSAL,
-    )
-    .expect("governance smoke contract address")
-}
-fn tune_client_timeouts(client: &mut Client) {
-    client.transaction_status_timeout = TX_STATUS_TIMEOUT;
-    client.torii_request_timeout = TORII_REQUEST_TIMEOUT;
-    client.transaction_ttl = Some(TX_TTL);
-}
-async fn wait_for_ready_torii_peer(
-    network: &sandbox::SerializedNetwork,
-    http: &reqwest::Client,
-    timeout: Duration,
-) -> Result<usize> {
-    let deadline = Instant::now() + timeout;
-    let mut last_error = String::from("no response yet");
-    loop {
-        // Prefer later peers first; in this localnet smoke setup, the last-started
-        // peer tends to become HTTP-ready first and remain responsive.
-        for idx in (0..network.peers().len()).rev() {
-            let peer = &network.peers()[idx];
-            let status_url = format!("{}/status", peer.torii_url());
-            match http
-                .get(&status_url)
-                .header("Accept", "application/json")
-                .send()
-                .await
-            {
-                Ok(response) if response.status().is_success() => return Ok(idx),
-                Ok(response) => {
-                    last_error = format!(
-                        "peer #{idx} responded with non-success {}",
-                        response.status()
-                    );
-                }
-                Err(err) => {
-                    last_error = format!("peer #{idx} status request failed: {err}");
-                }
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "timed out waiting for a ready Torii peer within {:?}; last error: {}",
-                timeout,
-                last_error
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-fn parse_hex32(input: &str) -> [u8; 32] {
-    let bytes = hex::decode(input).expect("hex should decode");
-    let mut out = [0_u8; 32];
-    out.copy_from_slice(&bytes);
-    out
-}
-fn manifest_provenance(
-    code_hash_hex: &str,
-    abi_hash_hex: &str,
-    signer: &KeyPair,
-) -> ManifestProvenance {
-    let code_hash = Hash::prehashed(parse_hex32(code_hash_hex));
-    let abi_hash = Hash::prehashed(parse_hex32(abi_hash_hex));
-    ContractManifest {
-        seiyaku_name: None,
-        code_hash: Some(code_hash),
-        abi_hash: Some(abi_hash),
-        compiler_fingerprint: None,
-        features_bitmap: None,
+    let interface = ivm::EmbeddedContractInterfaceV1 {
+        seiyaku_name: "ParliamentLifecycleSmoke".to_owned(),
+        compiler_fingerprint: "integration-tests".to_owned(),
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        features_bitmap: 0,
         access_set_hints: None,
-        entrypoints: None,
-        states: None,
-        kotoba: None,
-        error_codes: None,
-        provenance: None,
-    }
-    .signed(signer)
-    .provenance
-    .expect("manifest should contain provenance")
+        kotoba: Vec::new(),
+        entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+            name: "main".to_owned(),
+            kind: iroha::data_model::smart_contract::manifest::EntryPointKind::View,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc: 0,
+        }],
+        error_codes: Vec::new(),
+        states: Vec::new(),
+    };
+    let mut artifact = metadata.encode();
+    artifact.extend_from_slice(&interface.encode_section());
+    artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    artifact
 }
-fn compute_proposal_id(
-    contract_address: &ContractAddress,
-    code_hash_hex: &str,
-    abi_hash_hex: &str,
-) -> [u8; 32] {
-    use iroha_crypto::blake2::{Blake2b512, Digest as _};
-    let code_hash = parse_hex32(code_hash_hex);
-    let abi_hash = parse_hex32(abi_hash_hex);
-    let contract_address = contract_address.as_str();
-    let contract_address_len =
-        u32::try_from(contract_address.len()).expect("contract address length fits");
-    let mut input = Vec::with_capacity(
-        b"iroha:gov:proposal:v1|".len()
-            + core::mem::size_of::<u32>()
-            + contract_address.len()
-            + code_hash.len()
-            + abi_hash.len(),
-    );
-    input.extend_from_slice(b"iroha:gov:proposal:v1|");
-    input.extend_from_slice(&contract_address_len.to_le_bytes());
-    input.extend_from_slice(contract_address.as_bytes());
-    input.extend_from_slice(&code_hash);
-    input.extend_from_slice(&abi_hash);
-    let digest = Blake2b512::digest(&input);
-    let mut out = [0_u8; 32];
-    out.copy_from_slice(&digest[..32]);
-    out
+
+fn citizen_keys() -> Vec<KeyPair> {
+    (0..CITIZEN_COUNT)
+        .map(|index| {
+            KeyPair::try_from_seed(
+                format!("sora-parliament-modern-citizen-{index:02}").into_bytes(),
+                Algorithm::Ed25519,
+            )
+            .expect("derive deterministic citizen key")
+        })
+        .collect()
 }
-fn json_u128(value: &norito::json::Value) -> Option<u128> {
-    value
-        .as_u64()
-        .map(u128::from)
-        .or_else(|| value.as_str().and_then(|raw| raw.parse::<u128>().ok()))
+
+fn citizen_accounts(keys: &[KeyPair]) -> Vec<AccountId> {
+    let mut accounts = keys
+        .iter()
+        .map(|key| AccountId::new(key.public_key().clone()))
+        .collect::<Vec<_>>();
+    accounts.sort_unstable();
+    accounts
 }
-fn integer_sqrt_u128(value: u128) -> u128 {
-    if value < 2 {
-        return value;
-    }
-    let mut x0 = value;
-    let mut x1 = (x0 + (value / x0)) / 2;
-    while x1 < x0 {
-        x0 = x1;
-        x1 = (x0 + (value / x0)) / 2;
-    }
-    x0
+
+fn client_for(base: &Client, account: &AccountId, keys: &[KeyPair]) -> Client {
+    let key = keys
+        .iter()
+        .find(|key| key.public_key() == account.signatory())
+        .expect("selected citizen owns one deterministic key")
+        .clone();
+    let mut client = base.clone();
+    client.account = account.clone();
+    client.key_pair = key;
+    client
 }
-fn expected_plain_total_weight(voter_count: usize) -> u128 {
-    let conviction_factor = (1_u64 + BALLOT_DURATION_BLOCKS).min(GOV_MAX_CONVICTION);
-    integer_sqrt_u128(BALLOT_LOCK)
-        .saturating_mul(u128::from(conviction_factor))
-        .saturating_mul(u128::try_from(voter_count).expect("voter count should fit u128"))
+
+fn current_height(client: &Client) -> Result<u64> {
+    Ok(client.get_status()?.blocks)
 }
-async fn wait_for_proposal_found(
-    client: &Client,
-    proposal_id_hex: &str,
-    timeout: Duration,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let mut last: String;
+
+fn tick(client: &Client, label: impl Into<String>) -> Result<u64> {
+    client.submit_blocking(Log::new(Level::INFO, label.into()), fee())?;
+    current_height(client)
+}
+
+fn advance_to_predecessor(client: &Client, target_height: u64, label: &str) -> Result<()> {
     loop {
-        match client.get_gov_proposal_json(proposal_id_hex) {
-            Ok(payload) => {
-                if payload.get("found").and_then(norito::json::Value::as_bool) == Some(true) {
-                    return Ok(());
-                }
-                last = format!("proposal payload did not report found=true: {payload:?}");
-            }
-            Err(err) => {
-                last = format!("proposal query failed: {err}");
-            }
+        let height = current_height(client)?;
+        if height + 1 == target_height {
+            return Ok(());
         }
-        if Instant::now() >= deadline {
+        if height + 1 > target_height {
             return Err(eyre!(
-                "timed out waiting for proposal `{proposal_id_hex}` to exist; last={last}"
+                "{label}: exact height {target_height} passed at finalized height {height}"
             ));
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tick(client, format!("{label} height tick {}", height + 1))?;
     }
 }
-async fn wait_for_referendum_found(
+
+fn submit_transition(
     client: &Client,
-    referendum_id: &str,
-    timeout: Duration,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let mut last: String;
-    loop {
-        match client.get_gov_referendum_json(referendum_id) {
-            Ok(payload) => {
-                if payload.get("found").and_then(norito::json::Value::as_bool) == Some(true) {
-                    return Ok(());
-                }
-                last = format!("referendum payload did not report found=true: {payload:?}");
-            }
-            Err(err) => {
-                last = format!("referendum query failed: {err}");
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "timed out waiting for referendum `{referendum_id}` to exist; last={last}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
+    attempt_id: GovernanceAttemptId,
+    transition: ParliamentLifecycleTransitionV1,
+) -> Result<u64> {
+    client.submit_blocking(
+        SubmitParliamentLifecycleTransitionV1 {
+            governance_attempt_id: attempt_id,
+            transition,
+        },
+        fee(),
+    )?;
+    current_height(client)
 }
-async fn wait_for_proposal_status(
+
+fn submit_transitions(
     client: &Client,
-    proposal_id_hex: &str,
-    expected_status: &str,
-    timeout: Duration,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let mut last: String;
-    loop {
-        match client.get_gov_proposal_json(proposal_id_hex) {
-            Ok(payload) => {
-                let status = payload
-                    .get("proposal")
-                    .and_then(|value| value.get("status"))
-                    .and_then(norito::json::Value::as_str)
-                    .unwrap_or_default();
-                last = status.to_string();
-                if status == expected_status {
-                    return Ok(());
-                }
-            }
-            Err(err) => {
-                last = format!("query failed: {err}");
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "timed out waiting for proposal `{proposal_id_hex}` status `{expected_status}`; last={last}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
+    attempt_id: GovernanceAttemptId,
+    transitions: impl IntoIterator<Item = ParliamentLifecycleTransitionV1>,
+) -> Result<u64> {
+    client.submit_all_blocking(
+        transitions.into_iter().map(|transition| {
+            InstructionBox::from(SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: attempt_id,
+                transition,
+            })
+        }),
+        fee(),
+    )?;
+    current_height(client)
 }
-async fn wait_for_referendum_status(
+
+fn assert_transition_rejected_without_state_change(
     client: &Client,
-    referendum_id: &str,
-    expected_status: &str,
-    timeout: Duration,
+    attempt_id: GovernanceAttemptId,
+    transition: ParliamentLifecycleTransitionV1,
+    label: &str,
 ) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let mut last: String;
-    loop {
-        match client.get_gov_referendum_json(referendum_id) {
-            Ok(payload) => {
-                let status = payload
-                    .get("referendum")
-                    .and_then(|value| value.get("status"))
-                    .and_then(norito::json::Value::as_str)
-                    .unwrap_or_default();
-                last = status.to_string();
-                if status == expected_status {
-                    return Ok(());
-                }
-            }
-            Err(err) => {
-                last = format!("query failed: {err}");
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "timed out waiting for referendum `{referendum_id}` status `{expected_status}`; last={last}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-async fn wait_for_tally_total(
-    client: &Client,
-    referendum_id: &str,
-    expected_total: u128,
-    timeout: Duration,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let mut last_total: Option<u128> = None;
-    let mut last_error: Option<String>;
-    loop {
-        match client.get_gov_tally_json(referendum_id) {
-            Ok(payload) => {
-                let approve = payload
-                    .get("approve")
-                    .and_then(json_u128)
-                    .unwrap_or_default();
-                let reject = payload
-                    .get("reject")
-                    .and_then(json_u128)
-                    .unwrap_or_default();
-                let total = approve.saturating_add(reject);
-                last_total = Some(total);
-                if total >= expected_total {
-                    return Ok(());
-                }
-                last_error = None;
-            }
-            Err(err) => {
-                last_error = Some(format!("{err}"));
-            }
-        }
-        if Instant::now() >= deadline {
-            let observed_total = last_total.unwrap_or_default();
-            if let Some(last_error) = last_error {
-                return Err(eyre!(
-                    "timed out waiting for tally total >= {expected_total}; last_total={observed_total}; last_error={last_error}"
-                ));
-            }
-            return Err(eyre!(
-                "timed out waiting for tally total >= {expected_total}; last_total={observed_total}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-async fn wait_for_account_registration(
-    client: &Client,
-    account_id: &iroha::data_model::account::AccountId,
-    timeout: Duration,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let mut last_error: String;
-    loop {
-        match client.query(FindAccounts::new()).execute_all() {
-            Ok(accounts) => {
-                if accounts
-                    .iter()
-                    .any(|account: &iroha::data_model::account::Account| &account.id == account_id)
-                {
-                    return Ok(());
-                }
-                last_error = format!(
-                    "account not present in FindAccounts snapshot (len={})",
-                    accounts.len()
-                );
-            }
-            Err(err) => {
-                last_error = format!("{err:?}");
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "timed out waiting for account `{account_id}` registration; last_error={last_error}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-fn group_permission_grants_by_account(
-    grants: &[(iroha::data_model::account::AccountId, Permission)],
-) -> Vec<(iroha::data_model::account::AccountId, Vec<Permission>)> {
-    let mut grouped = Vec::<(iroha::data_model::account::AccountId, Vec<Permission>)>::new();
-    for (account_id, permission) in grants {
-        if let Some((_, permissions)) = grouped
-            .iter_mut()
-            .find(|(existing_account, _)| existing_account == account_id)
-        {
-            if !permissions.iter().any(|existing| existing == permission) {
-                permissions.push(permission.clone());
-            }
-        } else {
-            grouped.push((account_id.clone(), vec![permission.clone()]));
-        }
-    }
-    grouped
-}
-async fn wait_for_account_permissions(
-    client: &Client,
-    account_id: &iroha::data_model::account::AccountId,
-    required_permissions: &[Permission],
-    timeout: Duration,
-    context: &str,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let mut last_observed = Vec::new();
-    loop {
-        let mut last_error = None::<String>;
-        match client
-            .query(FindPermissionsByAccountId::new(account_id.clone()))
-            .execute_all()
-        {
-            Ok(permissions) => {
-                let all_present = required_permissions
-                    .iter()
-                    .all(|required| permissions.iter().any(|permission| permission == required));
-                last_observed = permissions;
-                if all_present {
-                    return Ok(());
-                }
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-        if Instant::now() >= deadline {
-            let suffix = last_error
-                .map(|err| format!("; last permission query error: {err}"))
-                .unwrap_or_default();
-            return Err(eyre!(
-                "{context}: timed out waiting for permissions on `{account_id}`; required {required_permissions:?}; last observed {last_observed:?}{suffix}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-async fn submit_permission_grants_and_wait(
-    client: &Client,
-    grants: Vec<(iroha::data_model::account::AccountId, Permission)>,
-    timeout: Duration,
-    submit_context: &str,
-    wait_context: &str,
-) -> Result<()> {
-    if grants.is_empty() {
-        return Ok(());
-    }
-    let required_permissions = group_permission_grants_by_account(&grants);
-    let tx_hash = client
-        .submit_all(
-            grants
-                .into_iter()
-                .map(|(account_id, permission)| Grant::account_permission(permission, account_id)),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    let before = client.get_parliament_attempt(attempt_id)?.state_payload_hex;
+    if client
+        .submit_blocking(
+            SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: attempt_id,
+                transition,
+            },
+            fee(),
         )
-        .wrap_err_with(|| submit_context.to_owned())?;
-    for (account_id, permissions) in required_permissions {
-        wait_for_account_permissions(client, &account_id, &permissions, timeout, wait_context)
-            .await
-            .wrap_err_with(|| {
-                let tx_status = client.get_transaction_status(tx_hash).ok().flatten();
-                format!(
-                    "{wait_context}; permission grant tx hash {tx_hash}; tx status {tx_status:?}"
-                )
-            })?;
+        .is_ok()
+    {
+        return Err(eyre!("{label}: invalid Parliament transition was accepted"));
+    }
+    let after = client.get_parliament_attempt(attempt_id)?.state_payload_hex;
+    if after != before {
+        return Err(eyre!(
+            "{label}: rejected Parliament transition mutated reducer state"
+        ));
     }
     Ok(())
 }
-#[cfg(test)]
-mod helper_tests {
-    use super::*;
-    #[test]
-    fn group_permission_grants_by_account_deduplicates_permissions() {
-        let other_account = gen_account_in("wonderland").0;
-        let enact_perm: Permission = CanEnactGovernance.into();
-        let propose_perm: Permission = CanProposeContractDeployment {
-            contract_address: governance_contract_address(FIRST_CONTRACT_ID),
-        }
-        .into();
-        let grouped = group_permission_grants_by_account(&[
-            (ALICE_ID.clone(), enact_perm.clone()),
-            (ALICE_ID.clone(), enact_perm.clone()),
-            (ALICE_ID.clone(), propose_perm.clone()),
-            (other_account.clone(), enact_perm.clone()),
-        ]);
-        assert_eq!(grouped.len(), 2);
-        let alice_permissions = grouped
-            .iter()
-            .find(|(account_id, _)| account_id == &*ALICE_ID)
-            .map(|(_, permissions)| permissions)
-            .expect("alice permissions should be grouped");
-        assert_eq!(alice_permissions.len(), 2);
-        assert!(
-            alice_permissions
-                .iter()
-                .any(|permission| permission == &enact_perm)
-        );
-        assert!(
-            alice_permissions
-                .iter()
-                .any(|permission| permission == &propose_perm)
-        );
-        let other_permissions = grouped
-            .iter()
-            .find(|(account_id, _)| account_id == &other_account)
-            .map(|(_, permissions)| permissions)
-            .expect("other account permissions should be grouped");
-        assert_eq!(other_permissions, &vec![enact_perm]);
-    }
-}
-async fn wait_for_council_member_present(
+
+fn read_attempt(
     client: &Client,
-    expected_member: &iroha::data_model::account::AccountId,
-    expected_epoch: u64,
-    timeout: Duration,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let expected_member_str = expected_member.to_string();
-    let mut last_error: String;
-    loop {
-        match client.get_gov_council_json() {
-            Ok(payload) => {
-                let epoch = payload
-                    .get("epoch")
-                    .and_then(norito::json::Value::as_u64)
-                    .unwrap_or_default();
-                let member_found = payload
-                    .get("members")
-                    .and_then(norito::json::Value::as_array)
-                    .is_some_and(|members| {
-                        members.iter().any(|entry| {
-                            entry
-                                .get("account_id")
-                                .and_then(norito::json::Value::as_str)
-                                .is_some_and(|account| account == expected_member_str)
-                        })
-                    });
-                if epoch == expected_epoch && member_found {
-                    return Ok(());
-                }
-                last_error = format!(
-                    "council snapshot not ready: epoch={epoch}, member_found={member_found}, payload={payload:?}"
-                );
-            }
-            Err(err) => {
-                last_error = format!("{err:?}");
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "timed out waiting for council epoch={expected_epoch} member `{expected_member}`; last_error={last_error}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
+    attempt_id: GovernanceAttemptId,
+) -> Result<ParliamentAttemptStateV1> {
+    let response = client.get_parliament_attempt(attempt_id)?;
+    let frame = hex::decode(response.state_payload_hex)?;
+    norito::decode_canonical(&frame).wrap_err("decode canonical Parliament reducer projection")
 }
-fn parliament_body_json_key(body: ParliamentBody) -> &'static str {
-    match body {
-        ParliamentBody::RulesCommittee => "rules-committee",
-        ParliamentBody::AgendaCouncil => "agenda-council",
-        ParliamentBody::InterestPanel => "interest-panel",
-        ParliamentBody::ReviewPanel => "review-panel",
-        ParliamentBody::PolicyJury => "policy-jury",
-        ParliamentBody::OversightCommittee => "oversight-committee",
-        ParliamentBody::FmaCommittee => "fma-committee",
+
+fn ordered_validator_roster(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerId>> {
+    let roster = iroha_core::sumeragi::signed_genesis_voting_peers(&network.genesis().0)
+        .wrap_err("read exact signed genesis voting roster")?;
+    if roster.len() != VALIDATOR_COUNT {
+        return Err(eyre!("expected exactly four signed validators"));
     }
+    Ok(roster)
 }
-fn proposal_snapshot_body_members(
-    proposal_payload: &norito::json::Value,
-    body: ParliamentBody,
-) -> Result<Option<Vec<iroha::data_model::account::AccountId>>> {
-    let body_key = parliament_body_json_key(body);
-    let Some(parliament_snapshot) = proposal_payload
-        .get("proposal")
-        .and_then(|value| value.get("parliament_snapshot"))
-    else {
-        return Ok(None);
+
+fn lifecycle_certificate(
+    network: &sandbox::SerializedNetwork,
+    ordered_roster: &[PeerId],
+    action: ThresholdKeyLifecycleActionV1,
+    session_id: [u8; 32],
+    transcript_hash: [u8; 32],
+    public_state: Vec<u8>,
+    effective_height: u64,
+) -> Result<ApplyThresholdKeyLifecycleCertificateV1> {
+    let mut certificate = ThresholdKeyLifecycleCertificateV1 {
+        version: THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
+        action,
+        expected_active_session_id: None,
+        effective_height,
+        network_id: network.network_id(),
+        roster_hash: global_threshold_beacon_roster_hash_v1(ordered_roster),
+        committee_size: VALIDATOR_COUNT as u16,
+        quorum: 3,
+        session_id,
+        transcript_hash,
+        public_state,
+        signatures: Vec::new(),
     };
-    if matches!(parliament_snapshot, norito::json::Value::Null) {
-        return Ok(None);
-    }
-    let members = proposal_payload
-        .get("proposal")
-        .and_then(|_| Some(parliament_snapshot))
-        .and_then(|value| value.get("bodies"))
-        .and_then(|value| value.get("rosters"))
-        .and_then(|value| value.get(body_key))
-        .and_then(|value| value.get("members"))
-        .and_then(norito::json::Value::as_array)
-        .ok_or_else(|| {
-            eyre!("proposal payload missing roster members for body `{body_key}`: {proposal_payload:?}")
-        })?;
-    let mut parsed = Vec::with_capacity(members.len());
-    for entry in members {
-        let raw = entry
-            .as_str()
-            .ok_or_else(|| eyre!("invalid non-string roster member in `{body_key}`: {entry:?}"))?;
-        let account_id = iroha::data_model::account::AccountId::parse_encoded(raw)
-            .map(|parsed| parsed.into_account_id())
-            .wrap_err_with(|| {
-                format!("failed to parse roster member account id `{raw}` in `{body_key}`")
-            })?;
-        parsed.push(account_id);
-    }
-    if parsed.is_empty() {
-        return Err(eyre!(
-            "proposal roster members for body `{body_key}` is empty"
-        ));
-    }
-    Ok(Some(parsed))
-}
-fn find_account_keypair<'a>(
-    accounts: &'a [(iroha::data_model::account::AccountId, KeyPair)],
-    account_id: &iroha::data_model::account::AccountId,
-) -> Result<&'a KeyPair> {
-    accounts
+    let preimage = threshold_key_lifecycle_certificate_preimage_v1(&certificate)
+        .wrap_err("encode lifecycle QC preimage")?;
+    certificate.signatures = ordered_roster
         .iter()
-        .find(|(candidate_id, _)| candidate_id == account_id)
-        .map(|(_, keypair)| keypair)
-        .ok_or_else(|| eyre!("missing key pair for account `{account_id}`"))
+        .take(3)
+        .enumerate()
+        .map(|(index, peer_id)| {
+            let peer = network
+                .peers()
+                .iter()
+                .find(|peer| peer.id() == *peer_id)
+                .ok_or_else(|| eyre!("signed roster peer is absent from the network"))?;
+            let key = peer
+                .bls_key_pair()
+                .ok_or_else(|| eyre!("validator lacks its normal BLS keypair"))?;
+            Ok(ThresholdKeyLifecycleSignatureV1 {
+                signer_index: u16::try_from(index)?,
+                signature: Signature::try_new(key.private_key(), &preimage)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(ApplyThresholdKeyLifecycleCertificateV1 { certificate })
 }
-async fn wait_for_domain_registration(
+
+fn pulse_at(
     client: &Client,
-    domain_id: &DomainId,
-    timeout: Duration,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let mut last_error: String;
-    loop {
-        match client.query(FindDomains::new()).execute_all() {
-            Ok(domains) => {
-                if domains
-                    .iter()
-                    .any(|domain: &Domain| &domain.id == domain_id)
-                {
-                    return Ok(());
-                }
-                last_error = format!(
-                    "domain not present in FindDomains snapshot (len={})",
-                    domains.len()
-                );
+    height: u64,
+) -> Result<iroha::data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1> {
+    client
+        .query(FindBlocks)
+        .execute_all()?
+        .into_iter()
+        .find(|block| block.header().height().get() == height)
+        .and_then(|block| {
+            block
+                .npos_consensus_effects()
+                .and_then(|effects| effects.finalized_global_beacon_pulse)
+        })
+        .ok_or_else(|| eyre!("block {height} does not carry the demanded global beacon pulse"))
+}
+
+fn signed_consensus_handshake(
+    network: &sandbox::SerializedNetwork,
+) -> Result<ConsensusHandshakeMetadata> {
+    let mut handshakes = network
+        .genesis_isi()
+        .iter()
+        .flatten()
+        .filter_map(|instruction| instruction.as_any().downcast_ref::<SetParameter>())
+        .filter_map(|set_parameter| match set_parameter.inner() {
+            Parameter::Custom(custom)
+                if custom.id() == &consensus_metadata::handshake_meta_id() =>
+            {
+                Some(custom)
             }
-            Err(err) => {
-                last_error = format!("{err:?}");
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "timed out waiting for domain `{domain_id}` registration; last_error={last_error}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if handshakes.len() != 1 {
+        return Err(eyre!("expected one signed consensus handshake"));
+    }
+    norito::json::from_str(
+        handshakes
+            .pop()
+            .expect("handshake count checked")
+            .payload()
+            .get(),
+    )
+    .wrap_err("decode signed consensus handshake")
+}
+
+fn casting_archive(
+    response: &ParliamentTimedOvnCastingContextResponseV1,
+    ballot_attempt_id: BallotAttemptId,
+) -> Result<ParliamentTimedOvnCastingContextArchiveV1> {
+    response
+        .validate_for_ballot(ballot_attempt_id)
+        .map_err(|error| eyre!(error))?;
+    let bytes = BASE64_STANDARD
+        .decode(response.archive_norito_base64.as_bytes())
+        .wrap_err("decode padded canonical casting archive")?;
+    if bytes.len() > PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1 {
+        return Err(eyre!("casting archive exceeds its fixed V1 bound"));
+    }
+    let archive = norito::decode_canonical::<ParliamentTimedOvnCastingContextArchiveV1>(&bytes)
+        .wrap_err("decode canonical casting-context Norito frame")?;
+    archive
+        .validate_v1()
+        .wrap_err("replay-validate public casting archive")?;
+    Ok(archive)
+}
+
+fn release_projection(
+    context: &ParliamentTleReleaseContextResponseV1,
+) -> Result<AuthorizedTleReleaseProjectionV1> {
+    context
+        .validate_for_ballot(context.ballot_attempt_id)
+        .map_err(|error| eyre!(error))?;
+    let identity_payload: [u8; TLE_AUTHORIZED_RELEASE_IDENTITY_PAYLOAD_BYTES_V1] =
+        hex::decode(&context.identity_payload_hex)
+            .wrap_err("decode exact release identity payload")?
+            .try_into()
+            .map_err(|_| eyre!("release identity payload has the wrong width"))?;
+    let key_session = &context.tle_key_session;
+    Ok(AuthorizedTleReleaseProjectionV1 {
+        version: TLE_AUTHORIZED_RELEASE_PROJECTION_VERSION_V1,
+        ballot_attempt_id: context.ballot_attempt_id,
+        opening_deadline_height: context.opening_deadline_height,
+        finalized_height: context.current_height,
+        key_session: TleKeySessionPublicStateV1 {
+            version: key_session.version,
+            key_session_id: key_session.key_session_id,
+            network_id: key_session.network_id,
+            roster_hash: key_session.roster_hash,
+            committee_size: key_session.committee_size,
+            threshold: key_session.threshold,
+            generator_h: key_session.generator_h,
+            generator_v: key_session.generator_v,
+            qualified_dealers: key_session.qualified_dealers.clone(),
+            qualified_dealer_commitments: key_session
+                .qualified_dealer_commitments
+                .iter()
+                .map(|dealer| TleAdaptiveDealerCommitmentV1 {
+                    dealer_index: dealer.dealer_index,
+                    coefficient_commitments: dealer.coefficient_commitments.clone(),
+                    constant_pok_commitment: dealer.constant_pok_commitment,
+                    constant_pok_response: dealer.constant_pok_response,
+                })
+                .collect(),
+            dkg_event_hash: key_session.dkg_event_hash,
+            group_public_key: key_session.group_public_key,
+            public_shares: key_session
+                .public_shares
+                .iter()
+                .map(|share| TleAdaptivePublicShareV1 {
+                    index: share.index,
+                    participant_hash: share.participant_hash,
+                    public_key_share: share.public_key_share,
+                })
+                .collect(),
+            transcript_hash: key_session.transcript_hash,
+        },
+        public_release_identity: TimedOvnReleaseIdentityPublicV1 {
+            tle_key_session_id: context.release_identity.tle_key_session_id,
+            governance_attempt_id: *context.release_identity.governance_attempt_id.as_bytes(),
+            body_instance_id: *context.release_identity.body_instance_id.as_bytes(),
+            ballot_attempt_id: *context.release_identity.ballot_attempt_id.as_bytes(),
+            survivor_corpus_root: context.release_identity.survivor_corpus_root,
+            no_recovery_root: context.release_identity.no_recovery_root,
+            target_finalized_height: context.release_identity.target_finalized_height,
+            parameter_hash: context.release_identity.parameter_hash,
+        },
+        identity_payload,
+        identity_digest: context.identity_digest,
+    })
+}
+
+fn release_partial(partial: ParliamentTlePartialReleaseShareV1) -> TlePartialReleaseShareV1 {
+    TlePartialReleaseShareV1 {
+        key_session_id: partial.key_session_id,
+        identity_digest: partial.identity_digest,
+        participant_index: partial.participant_index,
+        sigma: partial.sigma,
+        proof_x: partial.proof_x,
+        proof_y: partial.proof_y,
+        z_s: partial.z_s,
+        z_r: partial.z_r,
+        z_u: partial.z_u,
     }
 }
-async fn wait_for_asset_definition_registration(
+
+fn stage_contract_artifact(
     client: &Client,
-    asset_definition_id: &AssetDefinitionId,
-    timeout: Duration,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let mut last_error: String;
-    loop {
-        match client.query(FindAssetsDefinitions::new()).execute_all() {
-            Ok(definitions) => {
-                if definitions
-                    .iter()
-                    .any(|definition| &definition.id == asset_definition_id)
-                {
-                    return Ok(());
-                }
-                last_error = format!(
-                    "asset definition not present in FindAssetsDefinitions snapshot (len={})",
-                    definitions.len()
+    artifact: &[u8],
+) -> Result<(ContractCodeHash, ContractAbiHash)> {
+    let verified = ivm::verify_contract_artifact(artifact)
+        .map_err(|error| eyre!("verify integration contract artifact: {error}"))?;
+    let manifest = verified
+        .manifest
+        .try_signed(&client.key_pair)
+        .map_err(|error| eyre!("sign integration contract manifest: {error}"))?;
+    let total_size = u64::try_from(artifact.len())?;
+    let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))?;
+    for (index, chunk) in artifact.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
+        let chunk_index = u32::try_from(index)?;
+        let mut instructions = vec![InstructionBox::from(UploadSmartContractCodeChunk {
+            code_hash: verified.code_hash,
+            total_size,
+            chunk_index,
+            chunk_count,
+            chunk: chunk.to_vec(),
+        })];
+        if chunk_index + 1 == chunk_count {
+            instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
+                code_hash: verified.code_hash,
+                total_size,
+                chunk_count,
+            }));
+        }
+        client.submit_all_blocking(instructions, fee())?;
+    }
+    client.submit_blocking(RegisterSmartContractCode { manifest }, fee())?;
+    let code_hash: [u8; 32] = verified
+        .code_hash
+        .as_ref()
+        .try_into()
+        .expect("IVM contract code hash is fixed at 32 bytes");
+    let abi_hash: [u8; 32] = verified
+        .abi_hash
+        .as_ref()
+        .try_into()
+        .expect("IVM ABI hash is fixed at 32 bytes");
+    Ok((
+        ContractCodeHash::new(code_hash),
+        ContractAbiHash::new(abi_hash),
+    ))
+}
+
+fn public_finding_root(attempt_id: GovernanceAttemptId, body: ParliamentBody) -> [u8; 32] {
+    let body = body.encode();
+    Hash::new_from_chunks(&[
+        b"iroha.integration.parliament.public-finding.v1\0",
+        attempt_id.as_bytes(),
+        &body,
+    ])
+    .into()
+}
+
+fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
+    client
+        .query(FindBlocks)
+        .execute_all()?
+        .into_iter()
+        .find(|block| block.header().height().get() == height)
+        .ok_or_else(|| eyre!("peer does not retain finalized block {height}"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn() -> Result<()> {
+    let citizen_keys = citizen_keys();
+    let citizens = citizen_accounts(&citizen_keys);
+    let contract_address = ContractAddress::from_str(CONTRACT_ADDRESS)?;
+    let mut builder = NetworkBuilder::new()
+        .with_peers(VALIDATOR_COUNT)
+        .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
+        .with_parliament_test_signers()
+        .with_block_cadence(Duration::from_secs(1))
+        .with_config_layer(|layer| {
+            layer
+                .write(["nexus", "lane_count"], 1_i64)
+                .write(["governance", "citizenship_bond_amount"], "0")
+                .write(
+                    ["governance", "min_enactment_delay"],
+                    MIN_ENACTMENT_DELAY as i64,
+                )
+                .write(["governance", "parliament_alternate_size"], 0_i64)
+                .write(
+                    ["governance", "parliament_invitation_phase_blocks"],
+                    INVITATION_PHASE_BLOCKS as i64,
+                )
+                .write(
+                    ["governance", "parliament_public_finding_phase_blocks"],
+                    20_i64,
+                )
+                .write(["governance", "rules_committee_size"], BODY_SEATS as i64)
+                .write(["governance", "agenda_council_size"], BODY_SEATS as i64)
+                .write(["governance", "interest_panel_size"], BODY_SEATS as i64)
+                .write(["governance", "review_panel_size"], BODY_SEATS as i64)
+                .write(
+                    ["governance", "oversight_committee_size"],
+                    BODY_SEATS as i64,
+                )
+                .write(["governance", "policy_jury_size"], BODY_SEATS as i64)
+                .write(
+                    [
+                        "governance",
+                        "parliament_timed_ovn",
+                        "registration_phase_blocks",
+                    ],
+                    REGISTRATION_PHASE_BLOCKS as i64,
+                )
+                .write(
+                    [
+                        "governance",
+                        "parliament_timed_ovn",
+                        "survivor_freeze_phase_blocks",
+                    ],
+                    SURVIVOR_PHASE_BLOCKS as i64,
+                )
+                .write(
+                    [
+                        "governance",
+                        "parliament_timed_ovn",
+                        "commitment_phase_blocks",
+                    ],
+                    COMMITMENT_PHASE_BLOCKS as i64,
+                )
+                .write(
+                    ["governance", "parliament_timed_ovn", "release_delay_blocks"],
+                    RELEASE_DELAY_BLOCKS as i64,
+                )
+                .write(
+                    ["governance", "parliament_timed_ovn", "opening_phase_blocks"],
+                    OPENING_PHASE_BLOCKS as i64,
+                )
+                .write(
+                    ["governance", "parliament_timed_ovn", "max_ballot_retries"],
+                    0_i64,
+                )
+                .write(
+                    ["governance", "parliament_timed_ovn", "max_corpus_entries"],
+                    8_i64,
                 );
-            }
-            Err(err) => {
-                last_error = format!("{err:?}");
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "timed out waiting for asset definition `{asset_definition_id}` registration; last_error={last_error}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-async fn wait_for_all_citizen_balances(
-    client: &Client,
-    asset_def_id: &AssetDefinitionId,
-    citizens: &[(iroha::data_model::account::AccountId, KeyPair)],
-    expected: u128,
-    timeout: Duration,
-    stage: &str,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let mut missing = Vec::new();
-        let mut first_mismatch: Option<(iroha::data_model::account::AccountId, Option<u128>)> =
-            None;
-        for (account_id, _) in citizens {
-            let observed = numeric_asset_balance_u128(
-                client,
-                AssetId::new(asset_def_id.clone(), account_id.clone()),
-            )?;
-            if observed != Some(expected) {
-                if first_mismatch.is_none() {
-                    first_mismatch = Some((account_id.clone(), observed));
-                }
-                missing.push(account_id.clone());
-            }
-        }
-        if missing.is_empty() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            let (first_account, first_observed) = first_mismatch
-                .as_ref()
-                .map_or((None, None), |(account, observed)| {
-                    (Some(account.to_string()), Some(*observed))
-                });
-            return Err(eyre!(
-                "{stage}: timed out waiting for all citizen balances={expected}; missing_count={}, first_missing={:?}, first_observed={:?}",
-                missing.len(),
-                first_account,
-                first_observed
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-fn numeric_asset_balance_u128(client: &Client, asset_id: AssetId) -> Result<Option<u128>> {
-    let asset = match client.query_single(FindAssetById::new(asset_id.clone())) {
-        Ok(asset) => asset,
-        Err(err) => {
-            let msg = format!("{err:?}");
-            if msg.contains("Failed to find asset")
-                || msg.contains("Find(Asset(")
-                || msg.contains("Find(Account(")
-                || msg.contains("QueryExecutionFail::Find")
-                || msg.contains("QueryExecutionFail::NotFound")
-                || msg.contains("QueryFailed(NotFound)")
-            {
-                return Ok(None);
-            }
-            return Err(eyre!("asset balance query failed for `{asset_id}`: {msg}"));
-        }
-    };
-    if asset.value().scale() != 0 {
-        return Err(eyre!(
-            "expected integer numeric value for `{asset_id}`, got scale={}",
-            asset.value().scale()
-        ));
-    }
-    Ok(asset.value().as_numeric().try_mantissa_u128())
-}
-async fn wait_for_asset_balance(
-    client: &Client,
-    asset_id: AssetId,
-    expected: u128,
-    timeout: Duration,
-    stage: &str,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let observed = numeric_asset_balance_u128(client, asset_id.clone())?;
-        if observed == Some(expected) || (expected == 0 && observed.is_none()) {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "{stage}: timed out waiting for `{asset_id}` balance={expected}, observed={observed:?}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
-    let status = payload
-        .get("content")
-        .and_then(|content| content.get("status"))
-        .or_else(|| payload.get("status"))?;
-    match status {
-        norito::json::Value::String(kind) => Some(kind.as_str()),
-        norito::json::Value::Object(map) => map.get("kind").and_then(norito::json::Value::as_str),
-        _ => None,
-    }
-}
-async fn wait_for_tx_applied(
-    http: &reqwest::Client,
-    torii_url: &reqwest::Url,
-    tx_hash_hex: &str,
-    timeout: Duration,
-    stage: &str,
-) -> Result<()> {
-    let mut status_url = torii_url.join("v1/pipeline/transactions/status")?;
-    status_url
-        .query_pairs_mut()
-        .append_pair("hash", tx_hash_hex)
-        .append_pair("scope", "local");
-    let deadline = Instant::now() + timeout;
-    let mut last_kind = String::from("unavailable");
-    let mut last_payload = String::new();
-    let mut last_error = String::new();
-    loop {
-        match http
-            .get(status_url.clone())
-            .header("Accept", "application/json")
-            .send()
-            .await
-        {
-            Ok(response)
-                if response.status() == reqwest::StatusCode::OK
-                    || response.status() == reqwest::StatusCode::ACCEPTED =>
-            {
-                let status = response.status();
-                let bytes = response.bytes().await?;
-                if bytes.is_empty() {
-                    last_kind = format!("http {status} with empty body");
-                } else {
-                    let payload: norito::json::Value = norito::json::from_slice(&bytes)?;
-                    if let Some(kind) = pipeline_status_kind(&payload) {
-                        last_kind = kind.to_string();
-                        last_payload = format!("{payload:?}");
-                        match kind {
-                            "Applied" => return Ok(()),
-                            "Rejected" => {
-                                return Err(eyre!(
-                                    "{stage}: tx `{tx_hash_hex}` rejected; payload={payload:?}"
-                                ));
-                            }
-                            "Expired" => {
-                                return Err(eyre!("{stage}: tx `{tx_hash_hex}` expired"));
-                            }
-                            _ => {}
-                        }
-                    } else {
-                        last_kind = "missing status kind".to_string();
-                        last_payload = format!("{payload:?}");
-                    }
-                }
-            }
-            Ok(response)
-                if response.status() == reqwest::StatusCode::NO_CONTENT
-                    || response.status() == reqwest::StatusCode::NOT_FOUND =>
-            {
-                last_kind = format!("http {}", response.status());
-            }
-            Ok(response) => {
-                last_error = format!(
-                    "http {} {}",
-                    response.status(),
-                    std::str::from_utf8(response.bytes().await?.as_ref()).unwrap_or("")
-                );
-            }
-            Err(err) => {
-                last_error = format!("{err}");
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "{stage}: timed out waiting for tx `{tx_hash_hex}` to reach Applied; last_kind={last_kind}, last_payload={last_payload}, last_error={last_error}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-async fn wait_for_tx_rejected(
-    http: &reqwest::Client,
-    torii_url: &reqwest::Url,
-    tx_hash_hex: &str,
-    timeout: Duration,
-    stage: &str,
-) -> Result<norito::json::Value> {
-    let mut status_url = torii_url.join("v1/pipeline/transactions/status")?;
-    status_url
-        .query_pairs_mut()
-        .append_pair("hash", tx_hash_hex)
-        .append_pair("scope", "local");
-    let deadline = Instant::now() + timeout;
-    let mut last_kind = String::from("unavailable");
-    let mut last_payload = String::new();
-    let mut last_error = String::new();
-    loop {
-        match http
-            .get(status_url.clone())
-            .header("Accept", "application/json")
-            .send()
-            .await
-        {
-            Ok(response)
-                if response.status() == reqwest::StatusCode::OK
-                    || response.status() == reqwest::StatusCode::ACCEPTED =>
-            {
-                let status = response.status();
-                let bytes = response.bytes().await?;
-                if bytes.is_empty() {
-                    last_kind = format!("http {status} with empty body");
-                } else {
-                    let payload: norito::json::Value = norito::json::from_slice(&bytes)?;
-                    if let Some(kind) = pipeline_status_kind(&payload) {
-                        last_kind = kind.to_string();
-                        last_payload = format!("{payload:?}");
-                        match kind {
-                            "Rejected" => return Ok(payload),
-                            "Applied" => {
-                                return Err(eyre!(
-                                    "{stage}: tx `{tx_hash_hex}` unexpectedly applied; payload={payload:?}"
-                                ));
-                            }
-                            "Expired" => {
-                                return Err(eyre!("{stage}: tx `{tx_hash_hex}` expired"));
-                            }
-                            _ => {}
-                        }
-                    } else {
-                        last_kind = "missing status kind".to_string();
-                        last_payload = format!("{payload:?}");
-                    }
-                }
-            }
-            Ok(response)
-                if response.status() == reqwest::StatusCode::NO_CONTENT
-                    || response.status() == reqwest::StatusCode::NOT_FOUND =>
-            {
-                last_kind = format!("http {}", response.status());
-            }
-            Ok(response) => {
-                last_error = format!(
-                    "http {} {}",
-                    response.status(),
-                    std::str::from_utf8(response.bytes().await?.as_ref()).unwrap_or("")
-                );
-            }
-            Err(err) => {
-                last_error = format!("{err}");
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "{stage}: timed out waiting for tx `{tx_hash_hex}` to reach Rejected; last_kind={last_kind}, last_payload={last_payload}, last_error={last_error}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-fn governance_builder_for_hostile_takeover() -> NetworkBuilder {
-    let alice_escrow_account = governance_escrow_account_literal();
-    let governance_asset_id = governance_asset_definition_id().to_string();
-    NetworkBuilder::new()
-        .with_peers(4)
+        })
         .with_genesis_instruction(Grant::account_permission(
-            CanProposeRuntimeUpgrade {
-                abi_version: 1,
-                abi_hash: parse_hex32(&canonical_abi_hex()),
-            },
+            Permission::from(CanRegisterSmartContractCode),
             ALICE_ID.clone(),
         ))
-        .with_config_layer(move |layer| {
-            layer
-                .write(["nexus", "governance", "default_module"], "parliament")
-                .write(
-                    [
-                        "nexus",
-                        "governance",
-                        "modules",
-                        "parliament",
-                        "module_type",
-                    ],
-                    "parliament_sortition_jit",
-                )
-                .write(
-                    [
-                        "nexus",
-                        "governance",
-                        "modules",
-                        "parliament",
-                        "params",
-                        "selection",
-                    ],
-                    "multibody_sortition",
-                )
-                .write(["gov", "voting_asset_id"], governance_asset_id.clone())
-                .write(["gov", "citizenship_asset_id"], governance_asset_id.clone())
-                .write(
-                    ["gov", "citizenship_bond_amount"],
-                    i64::try_from(CITIZEN_BOND).expect("bond amount should fit i64"),
-                )
-                .write(["gov", "min_bond_amount"], 0)
-                .write(["gov", "plain_voting_enabled"], true)
-                .write(["gov", "min_enactment_delay"], 0)
-                .write(["gov", "window_span"], 500)
-                .write(["gov", "conviction_step_blocks"], 1)
-                .write(
-                    ["gov", "max_conviction"],
-                    i64::try_from(GOV_MAX_CONVICTION).expect("max conviction should fit i64"),
-                )
-                .write(
-                    ["gov", "citizenship_escrow_account"],
-                    alice_escrow_account.clone(),
-                )
-                .write(["gov", "bond_escrow_account"], alice_escrow_account.clone())
-                .write(
-                    ["gov", "slash_receiver_account"],
-                    alice_escrow_account.clone(),
-                )
-                .write(["gov", "parliament_term_blocks"], 100)
-                .write(
-                    ["gov", "parliament_quorum_bps"],
-                    i64::from(HOSTILE_PARLIAMENT_QUORUM_BPS),
-                )
-                .write(
-                    ["gov", "rules_committee_size"],
-                    i64::try_from(HOSTILE_RULES_SIZE).expect("size should fit i64"),
-                )
-                .write(
-                    ["gov", "agenda_council_size"],
-                    i64::try_from(HOSTILE_RULES_SIZE).expect("size should fit i64"),
-                )
-                .write(
-                    ["gov", "interest_panel_size"],
-                    i64::try_from(HOSTILE_RULES_SIZE).expect("size should fit i64"),
-                )
-                .write(
-                    ["gov", "review_panel_size"],
-                    i64::try_from(HOSTILE_RULES_SIZE).expect("size should fit i64"),
-                )
-                .write(
-                    ["gov", "policy_jury_size"],
-                    i64::try_from(HOSTILE_RULES_SIZE).expect("size should fit i64"),
-                )
-                .write(
-                    ["gov", "oversight_committee_size"],
-                    i64::try_from(HOSTILE_RULES_SIZE).expect("size should fit i64"),
-                )
-                .write(
-                    ["gov", "fma_committee_size"],
-                    i64::try_from(HOSTILE_RULES_SIZE).expect("size should fit i64"),
-                )
-                .write(["gov", "parliament_alternate_size"], 2);
-        })
-}
-fn hostile_required_approvals() -> usize {
-    let required = u128::try_from(HOSTILE_RULES_SIZE)
-        .expect("size should fit u128")
-        .saturating_mul(u128::from(HOSTILE_PARLIAMENT_QUORUM_BPS))
-        .saturating_add(9_999)
-        .saturating_div(10_000);
-    usize::try_from(required.max(1)).expect("required approvals should fit usize")
-}
-struct HostileFixture {
-    network: sandbox::SerializedNetwork,
-    http: reqwest::Client,
-    ready_peer_idx: usize,
-    alice: Client,
-    attackers: Vec<(iroha::data_model::account::AccountId, KeyPair)>,
-    honest: Vec<(iroha::data_model::account::AccountId, KeyPair)>,
-}
-async fn setup_hostile_fixture(
-    test_name: &'static str,
-    attacker_count: usize,
-    honest_count: usize,
-) -> Result<Option<HostileFixture>> {
-    let builder = governance_builder_for_hostile_takeover();
-    let Some(network) = sandbox::start_network_async_or_skip(builder, test_name).await? else {
-        return Ok(None);
-    };
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()?;
-    let ready_peer_idx = wait_for_ready_torii_peer(&network, &http, Duration::from_secs(180))
-        .await
-        .wrap_err("wait for a Torii peer with live /status")?;
-    let ready_peer = &network.peers()[ready_peer_idx];
-    let mut alice = ready_peer.client();
-    tune_client_timeouts(&mut alice);
-    sync::get_status_with_retry_async(&alice)
-        .await
-        .wrap_err("wait for selected Torii peer status readiness")?;
-    let mut all_citizens: Vec<_> = (0..(attacker_count + honest_count))
-        .map(|_| gen_account_in("wonderland"))
-        .collect();
-    let honest = all_citizens.split_off(attacker_count);
-    let attackers = all_citizens;
-    let gov_domain_id = DomainId::parse_fully_qualified(GOV_DOMAIN_ID)?;
-    let asset_def_id = governance_asset_definition_id();
-    ensure_domain_setup_for_network(&network, &gov_domain_id)
-        .wrap_err("ensure governance domain and lease state for hostile fixture")?;
-    wait_for_domain_registration(&alice, &gov_domain_id, Duration::from_secs(180))
-        .await
-        .wrap_err("wait for governance domain registration in hostile fixture")?;
-    alice
-        .submit_blocking(
-            Register::asset_definition(AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "xor".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("register governance asset definition for hostile fixture")?;
-    wait_for_asset_definition_registration(&alice, &asset_def_id, Duration::from_secs(180))
-        .await
-        .wrap_err("wait for governance asset definition registration in hostile fixture")?;
-    let deploy_perm: Permission = CanProposeContractDeployment {
-        contract_address: governance_contract_address(HOSTILE_DEPLOY_CONTRACT_ID),
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanProposeContractDeployment {
+                contract_address: contract_address.clone(),
+            }),
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanManageParliament),
+            ALICE_ID.clone(),
+        ));
+    for citizen in &citizens {
+        builder = builder
+            .with_genesis_instruction(Register::account(Account::new(citizen.clone())))
+            .with_genesis_instruction(RegisterCitizen {
+                owner: citizen.clone(),
+                amount: 0_u64.into(),
+            });
     }
-    .into();
-    let enact_perm: Permission = CanEnactGovernance.into();
-    let manage_parliament_perm: Permission = CanManageParliament.into();
-    submit_permission_grants_and_wait(
-        &alice,
-        vec![
-            (ALICE_ID.clone(), deploy_perm),
-            (ALICE_ID.clone(), enact_perm),
-            (ALICE_ID.clone(), manage_parliament_perm),
-        ],
-        Duration::from_secs(180),
-        "submit hostile-fixture governance permission grants to alice",
-        "wait for hostile-fixture governance permissions on alice",
-    )
-    .await
-    .wrap_err("grant hostile-fixture governance permissions to alice")?;
-    alice
-        .submit_all_blocking(
-            attackers
-                .iter()
-                .chain(honest.iter())
-                .map(|(account_id, _)| Register::account(Account::new(account_id.clone()))),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("register hostile-fixture accounts")?;
-    for (account_id, _) in attackers.iter().chain(honest.iter()) {
-        wait_for_account_registration(&alice, account_id, Duration::from_secs(180))
-            .await
-            .wrap_err_with(|| {
-                format!("wait for hostile-fixture account registration `{account_id}`")
-            })?;
-    }
-    let total_accounts = attacker_count.saturating_add(honest_count);
-    let total_fund = CITIZEN_FUND.saturating_mul(u128::try_from(total_accounts).expect("count"));
-    let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-    let funding_mint_tx_hash = alice
-        .submit(
-            Mint::asset_quantity(
-                u64::try_from(total_fund).expect("mint amount should fit u64"),
-                alice_asset_id.clone(),
-            ),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("mint hostile-fixture governance balances")?;
-    wait_for_tx_applied(
-        &http,
-        &alice.torii_url,
-        &hex::encode(funding_mint_tx_hash.as_ref()),
-        Duration::from_secs(180),
-        "wait for hostile-fixture proposer mint tx to be applied",
-    )
-    .await
-    .wrap_err("wait for hostile-fixture proposer mint tx")?;
-    wait_for_asset_balance(
-        &alice,
-        alice_asset_id.clone(),
-        total_fund,
-        Duration::from_secs(180),
-        "wait for hostile-fixture proposer mint",
-    )
-    .await
-    .wrap_err("wait for hostile-fixture proposer mint balance")?;
-    alice
-        .submit_all_blocking(
-            attackers
-                .iter()
-                .chain(honest.iter())
-                .map(|(account_id, _)| {
-                    Transfer::asset_quantity(
-                        AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
-                        u64::try_from(CITIZEN_FUND).expect("fund amount should fit u64"),
-                        account_id.clone(),
-                    )
-                }),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("transfer hostile-fixture funding allocations")?;
-    for (account_id, _) in attackers.iter().chain(honest.iter()) {
-        wait_for_asset_balance(
-            &alice,
-            AssetId::new(asset_def_id.clone(), account_id.clone()),
-            CITIZEN_FUND,
-            BALANCE_WAIT_TIMEOUT,
-            "wait for hostile-fixture initial funding distribution",
-        )
-        .await
-        .wrap_err_with(|| format!("wait for hostile-fixture account funding `{account_id}`"))?;
-    }
-    for (idx, (account_id, key_pair)) in attackers.iter().chain(honest.iter()).enumerate() {
-        let mut citizen_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
-        tune_client_timeouts(&mut citizen_client);
-        let tx_hash = citizen_client
-            .submit(
-                RegisterCitizen {
-                    owner: account_id.clone(),
-                    amount: CITIZEN_BOND.into(),
-                },
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .wrap_err_with(|| {
-                format!("submit hostile-fixture citizen bond #{idx} ({account_id})")
-            })?;
-        wait_for_tx_applied(
-            &http,
-            &citizen_client.torii_url,
-            &hex::encode(tx_hash.as_ref()),
-            Duration::from_secs(180),
-            "wait for hostile-fixture citizen bond tx to be applied",
-        )
-        .await
-        .wrap_err_with(|| {
-            format!("wait for hostile-fixture bond tx #{idx} ({account_id}) applied")
-        })?;
-    }
-    for (account_id, _) in attackers.iter().chain(honest.iter()) {
-        wait_for_asset_balance(
-            &alice,
-            AssetId::new(asset_def_id.clone(), account_id.clone()),
-            BALLOT_LOCK,
-            BALANCE_WAIT_TIMEOUT,
-            "wait for hostile-fixture post-bond balances",
-        )
-        .await
-        .wrap_err_with(|| format!("wait for hostile-fixture post-bond balance `{account_id}`"))?;
-    }
-    Ok(Some(HostileFixture {
-        network,
-        http,
-        ready_peer_idx,
-        alice,
-        attackers,
-        honest,
-    }))
-}
-fn hostile_parliament_bodies() -> [ParliamentBody; 7] {
-    [
-        ParliamentBody::RulesCommittee,
-        ParliamentBody::AgendaCouncil,
-        ParliamentBody::InterestPanel,
-        ParliamentBody::ReviewPanel,
-        ParliamentBody::PolicyJury,
-        ParliamentBody::OversightCommittee,
-        ParliamentBody::FmaCommittee,
-    ]
-}
-fn deploy_parliament_bodies() -> [ParliamentBody; 6] {
-    [
-        ParliamentBody::RulesCommittee,
-        ParliamentBody::AgendaCouncil,
-        ParliamentBody::InterestPanel,
-        ParliamentBody::ReviewPanel,
-        ParliamentBody::PolicyJury,
-        ParliamentBody::OversightCommittee,
-    ]
-}
-async fn cast_stage_approvals_from_snapshot(
-    http: &reqwest::Client,
-    ready_peer: &NetworkPeer,
-    citizens: &[(iroha::data_model::account::AccountId, KeyPair)],
-    proposal_payload: &norito::json::Value,
-    proposal_id: [u8; 32],
-    bodies: &[ParliamentBody],
-    context: &str,
-) -> Result<()> {
-    for body in bodies {
-        let approvers = proposal_snapshot_body_members(proposal_payload, *body)
-            .wrap_err_with(|| format!("{context}: extract {body:?} roster"))?
-            .ok_or_else(|| eyre!("{context}: proposal is missing parliament snapshot"))?;
-        for (approval_idx, account_id) in approvers.iter().enumerate() {
-            let key_pair = find_account_keypair(citizens, account_id).wrap_err_with(|| {
-                format!("{context}: find key pair for {body:?} approver #{approval_idx}")
-            })?;
-            let mut member_client =
-                ready_peer.client_for(account_id, key_pair.private_key().clone());
-            tune_client_timeouts(&mut member_client);
-            let tx_hash = member_client
-                .submit(CastParliamentBallot {
-                    body: *body,
-                    proposal_id,
-                    decision: ParliamentDecision::Approve,
-                }, iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
-                .wrap_err_with(|| {
-                    format!(
-                        "{context}: submit {body:?} signed approval ballot #{approval_idx} ({account_id})"
-                    )
-                })?;
-            wait_for_tx_applied(
-                http,
-                &member_client.torii_url,
-                &hex::encode(tx_hash.as_ref()),
-                Duration::from_secs(180),
-                "wait for parliament approval ballot transaction to be applied",
-            )
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "{context}: wait for {body:?} signed approval ballot #{approval_idx} ({account_id})"
-                )
-            })?;
-        }
-    }
-    Ok(())
-}
-#[tokio::test]
-async fn sora_parliament_lifecycle_smoke() -> Result<()> {
-    eprintln!("sora smoke: start");
-    let builder = sora_runtime_governance::governance_builder_for_runtime_resilience();
-    let Some(network) =
-        sandbox::start_network_async_or_skip(builder, stringify!(sora_parliament_lifecycle_smoke))
-            .await?
-    else {
+
+    let context = stringify!(four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn);
+    let network = sandbox::start_network_async_or_skip(builder, context).await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
     };
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()?;
-    let ready_peer_idx = wait_for_ready_torii_peer(&network, &http, Duration::from_secs(180))
-        .await
-        .wrap_err("wait for a Torii peer with live /status")?;
-    let ready_peer = &network.peers()[ready_peer_idx];
-    let mut alice = ready_peer.client();
-    tune_client_timeouts(&mut alice);
-    sync::get_status_with_retry_async(&alice)
-        .await
-        .wrap_err("wait for selected Torii peer status readiness")?;
-    eprintln!("sora smoke: ready peer selected");
-    let citizens: Vec<_> = (0..CITIZEN_COUNT)
-        .map(|_| gen_account_in("wonderland"))
-        .collect();
-    if citizens.is_empty() {
-        return Err(eyre!("expected at least one generated citizen"));
-    }
+    assert_eq!(network.peers().len(), VALIDATOR_COUNT);
+    let handshake = signed_consensus_handshake(&network)?;
+    handshake
+        .validate()
+        .map_err(|error| eyre!("signed consensus handshake is invalid: {error}"))?;
+    assert_eq!(handshake.mode, SumeragiConsensusMode::Npos);
     assert_eq!(
-        FIRST_REFERENDUM_VOTERS + SECOND_REFERENDUM_VOTERS,
-        CITIZEN_COUNT,
-        "referendum voter splits must cover all generated citizens"
+        handshake.wire_protocol_version,
+        u32::from(PROTOCOL_VERSION),
+        "the signed genesis handshake must select consensus revision 4",
     );
-    assert!(
-        FIRST_REFERENDUM_APPROVE_VOTERS < FIRST_REFERENDUM_VOTERS,
-        "first referendum should include both approve and reject votes"
-    );
-    assert!(
-        SECOND_REFERENDUM_REJECT_VOTERS < SECOND_REFERENDUM_VOTERS,
-        "second referendum should include both reject and approve votes"
-    );
-    assert!(
-        THIRD_REFERENDUM_APPROVE_VOTERS < THIRD_REFERENDUM_VOTERS,
-        "third referendum should include both approve and reject votes"
-    );
-    let (outsider_id, outsider_key_pair) = gen_account_in("wonderland");
-    let unique_citizens: BTreeSet<_> = citizens.iter().map(|(id, _)| id.clone()).collect();
     assert_eq!(
-        unique_citizens.len(),
-        CITIZEN_COUNT,
-        "generated citizen identities must be unique"
+        handshake.sumeragi_v2.da_layout,
+        SumeragiV2GenesisContextParameters::recommended().da_layout,
+        "the corridor must retain the signed revision-4 RS16 DA layout",
     );
-    let contract_id = FIRST_CONTRACT_ID;
-    let reject_contract_id = SECOND_CONTRACT_ID;
-    let contract_address = governance_contract_address(contract_id);
-    let reject_contract_address = governance_contract_address(reject_contract_id);
-    let code_hash_hex = "dd".repeat(32);
-    let reject_code_hash_hex = "ee".repeat(32);
-    let abi_hash_hex = canonical_abi_hex();
-    let proposal_id = compute_proposal_id(&contract_address, &code_hash_hex, &abi_hash_hex);
-    let reject_proposal_id = compute_proposal_id(
-        &reject_contract_address,
-        &reject_code_hash_hex,
-        &abi_hash_hex,
-    );
-    let proposal_id_hex = hex::encode(proposal_id);
-    let reject_proposal_id_hex = hex::encode(reject_proposal_id);
-    let referendum_id = proposal_id_hex.clone();
-    let reject_referendum_id = reject_proposal_id_hex.clone();
-    let gov_domain_id = DomainId::parse_fully_qualified(GOV_DOMAIN_ID)?;
-    let asset_def_id = governance_asset_definition_id();
-    ensure_domain_setup_for_network(&network, &gov_domain_id)
-        .wrap_err("ensure governance domain and lease state")?;
-    wait_for_domain_registration(&alice, &gov_domain_id, Duration::from_secs(180))
-        .await
-        .wrap_err("wait for governance domain registration")?;
-    alice
-        .submit_blocking(
-            Register::asset_definition(AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "xor".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("register governance numeric asset definition")?;
-    wait_for_asset_definition_registration(&alice, &asset_def_id, Duration::from_secs(180))
-        .await
-        .wrap_err("wait for governance asset definition registration")?;
-    eprintln!("sora smoke: governance domain + asset ready");
-    let propose_perm: Permission = CanProposeContractDeployment {
-        contract_address: contract_address.clone(),
-    }
-    .into();
-    let reject_propose_perm: Permission = CanProposeContractDeployment {
-        contract_address: reject_contract_address.clone(),
-    }
-    .into();
-    let enact_perm: Permission = CanEnactGovernance.into();
-    let manage_parliament_perm: Permission = CanManageParliament.into();
-    submit_permission_grants_and_wait(
-        &alice,
-        vec![
-            (ALICE_ID.clone(), propose_perm),
-            (ALICE_ID.clone(), reject_propose_perm),
-            (ALICE_ID.clone(), enact_perm),
-            (ALICE_ID.clone(), manage_parliament_perm),
+    network.ensure_blocks(1).await?;
+    let client = network.client();
+    let ordered_roster = ordered_validator_roster(&network)?;
+    let beacon_record =
+        deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
+            .wrap_err("derive exact public beacon fixture")?;
+    let beacon_binding = GlobalThresholdBeaconSessionBindingV1 {
+        network_id: beacon_record.session.network_id,
+        session_id: beacon_record.session.session_id,
+        roster_hash: beacon_record.session.roster_hash,
+        transcript_hash: beacon_record.session.transcript_hash,
+    };
+    let validated_beacon_session =
+        validate_global_threshold_beacon_session_v1(beacon_record.session.clone(), &beacon_binding)
+            .wrap_err("replay the exact public beacon transcript")?;
+    let tle_public_state =
+        deterministic_parliament_tle_key_public_state_v1(network.network_id(), &ordered_roster)
+            .wrap_err("derive exact public TLE fixture")?;
+    let install_height =
+        (current_height(&client)? + 1).max(beacon_record.session.adaptive_dkg.finalized_at_height);
+    advance_to_predecessor(&client, install_height, "threshold-key installation")?;
+    client.submit_all_blocking(
+        [
+            InstructionBox::from(lifecycle_certificate(
+                &network,
+                &ordered_roster,
+                ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+                beacon_record.session.session_id,
+                beacon_record.session.transcript_hash,
+                norito::encode_canonical(&beacon_record)?,
+                install_height,
+            )?),
+            InstructionBox::from(lifecycle_certificate(
+                &network,
+                &ordered_roster,
+                ThresholdKeyLifecycleActionV1::InstallParliamentTleKey,
+                *tle_public_state.key_session_id.as_bytes(),
+                tle_public_state.transcript_hash,
+                norito::encode_canonical(&tle_public_state)?,
+                install_height,
+            )?),
         ],
-        Duration::from_secs(180),
-        "submit governance proposal/enact permission grants to alice",
-        "wait for governance proposal/enact permissions on alice",
-    )
-    .await
-    .wrap_err("grant governance proposal/enact permissions to alice")?;
-    alice
-        .submit_all_blocking(
-            citizens
-                .iter()
-                .map(|(account_id, _)| Register::account(Account::new(account_id.clone()))),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        fee(),
+    )?;
+    assert_eq!(current_height(&client)?, install_height);
+    tick(&client, "activate installed global beacon session")?;
+
+    let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
+    let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        contract_address: contract_address.clone(),
+        code_hash,
+        abi_hash,
+        abi_version: AbiVersion::new(1),
+        manifest_provenance: None,
+    });
+    let create = CreateParliamentGovernanceAttemptV1 {
+        proposal,
+        attempt_sequence: 0,
+    };
+    let attempt_id = create.governance_attempt_id();
+    client.submit_all_blocking(
+        [
+            InstructionBox::from(ProposeDeployContract {
+                contract_address: contract_address.clone(),
+                code_hash,
+                abi_hash,
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            InstructionBox::from(create),
+        ],
+        fee(),
+    )?;
+    submit_transition(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::CompleteQualification,
+    )?;
+
+    let expected_bodies = [
+        ParliamentBody::RulesCommittee,
+        ParliamentBody::AgendaCouncil,
+        ParliamentBody::InterestPanel,
+        ParliamentBody::ReviewPanel,
+        ParliamentBody::OversightCommittee,
+        ParliamentBody::PolicyJury,
+    ];
+    let initial = read_attempt(&client, attempt_id)?;
+    assert_eq!(initial.required_bodies().len(), expected_bodies.len());
+    assert_eq!(initial.attempt().stage, GovernanceStageV1::Rules);
+    let request_height = current_height(&client)? + 1;
+    let sortition_pulse_height = request_height + 4;
+    let logical_beacon = BeaconSessionId::for_network_v1(&network.network_id());
+    let mut election_ids = BTreeMap::new();
+    let mut request_ids = Vec::new();
+    let mut request_transitions = Vec::new();
+    for body in expected_bodies {
+        let election_id = BodyElectionAttemptId::derive_v1(attempt_id, body, 0);
+        let request = SortitionRequestV1::try_new_canonical(
+            attempt_id,
+            election_id,
+            body,
+            parliament_candidate_root_v1(attempt_id, body, &citizens),
+            u32::try_from(citizens.len())?,
+            BODY_SEATS,
+            request_height,
+            sortition_pulse_height,
+            logical_beacon,
+            None,
         )
-        .wrap_err("register citizen accounts")?;
-    for (account_id, _) in &citizens {
-        wait_for_account_registration(&alice, account_id, Duration::from_secs(180))
-            .await
-            .wrap_err_with(|| format!("wait for account registration `{account_id}`"))?;
+        .map_err(|error| eyre!("construct canonical sortition request: {error}"))?;
+        election_ids.insert(body, election_id);
+        request_ids.push(request.id);
+        request_transitions.push(ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+            ParliamentRegisterSortitionRequestV1 {
+                sequence: 0,
+                request,
+                candidate_snapshot: citizens.clone(),
+            },
+        ));
     }
-    alice
-        .submit_blocking(
-            Register::account(Account::new(outsider_id.clone())),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("register outsider account for negative authorization tests")?;
-    wait_for_account_registration(&alice, &outsider_id, Duration::from_secs(180))
-        .await
-        .wrap_err("wait for outsider account registration")?;
-    eprintln!("sora smoke: citizen accounts registered");
-    let total_fund = CITIZEN_FUND.saturating_mul(u128::try_from(CITIZEN_COUNT).expect("count"));
-    let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-    let funding_mint_tx_hash = alice
-        .submit(
-            Mint::asset_quantity(
-                u64::try_from(total_fund).expect("total fund should fit u64"),
-                alice_asset_id.clone(),
-            ),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("mint total governance balances for citizen funding")?;
-    wait_for_tx_applied(
-        &http,
-        &alice.torii_url,
-        &hex::encode(funding_mint_tx_hash.as_ref()),
-        Duration::from_secs(180),
-        "wait for proposer funding mint tx to be applied",
+    request_ids.sort_unstable();
+    submit_transitions(&client, attempt_id, request_transitions)?;
+    assert_eq!(current_height(&client)?, request_height);
+    advance_to_predecessor(&client, sortition_pulse_height, "sortition pulse")?;
+    assert_eq!(
+        tick(&client, "finalize the demanded sortition pulse")?,
+        sortition_pulse_height,
+    );
+    network.ensure_blocks(sortition_pulse_height).await?;
+    let sortition_pulses = network
+        .peers()
+        .iter()
+        .map(|peer| pulse_at(&peer.client(), sortition_pulse_height))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(sortition_pulses.windows(2).all(|pair| pair[0] == pair[1]));
+    let sortition_pulse = sortition_pulses[0].clone();
+    assert_eq!(sortition_pulse.height, sortition_pulse_height);
+    assert_eq!(sortition_pulse.network_id, network.network_id());
+    assert_eq!(sortition_pulse.session_id, beacon_record.session.session_id);
+    assert_eq!(
+        sortition_pulse.roster_hash,
+        beacon_record.session.roster_hash
+    );
+    assert_eq!(
+        sortition_pulse.transcript_hash,
+        beacon_record.session.transcript_hash,
+    );
+    assert_eq!(sortition_pulse.round, 0, "V1 pulses are view-independent");
+    assert_eq!(
+        sortition_pulse.finalized_chain_anchor.height.checked_add(1),
+        Some(sortition_pulse_height),
+    );
+    assert_eq!(
+        exact_block(&client, sortition_pulse.finalized_chain_anchor.height,)?
+            .header()
+            .hash(),
+        sortition_pulse.finalized_chain_anchor.block_hash,
+    );
+    verify_finalized_global_threshold_beacon_pulse_v1(
+        &validated_beacon_session,
+        &sortition_pulse,
+        sortition_pulse.finalized_chain_anchor,
     )
-    .await
-    .wrap_err("wait for proposer funding mint tx")?;
-    if let Err(initial_mint_wait_err) = wait_for_asset_balance(
-        &alice,
-        alice_asset_id.clone(),
-        total_fund,
-        Duration::from_secs(180),
-        "wait for proposer funding mint",
-    )
-    .await
-    {
-        let observed = numeric_asset_balance_u128(&alice, alice_asset_id.clone())?.unwrap_or(0);
-        if observed > total_fund {
-            return Err(eyre!(
-                "proposer funding asset exceeded expected amount: observed={observed}, expected={total_fund}"
-            ));
-        }
-        let missing = total_fund.saturating_sub(observed);
-        if missing > 0 {
-            let retry_mint_tx_hash = alice
-                .submit(
-                    Mint::asset_quantity(
-                        u64::try_from(missing).expect("missing fund should fit u64"),
-                        alice_asset_id.clone(),
-                    ),
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                )
-                .wrap_err(
-                    "retry minting missing governance balances for citizen funding after timeout",
-                )?;
-            wait_for_tx_applied(
-                &http,
-                &alice.torii_url,
-                &hex::encode(retry_mint_tx_hash.as_ref()),
-                Duration::from_secs(180),
-                "wait for retry proposer funding mint tx to be applied",
+    .wrap_err("independently verify the sortition pulse threshold signature")?;
+    submit_transition(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(
+            ParliamentConsumeSortitionPulseBatchV1 {
+                request_ids: request_ids.clone(),
+                beacon_session_id: logical_beacon,
+                pulse_height: sortition_pulse_height,
+                pulse_id: BeaconPulseId::new(sortition_pulse.pulse_id),
+            },
+        ),
+    )?;
+    let drawn = read_attempt(&client, attempt_id)?;
+    for body in expected_bodies {
+        let election = drawn
+            .election(election_ids.get(&body).expect("body election id"))
+            .expect("simultaneous body election exists");
+        assert_eq!(
+            election.pulse_id(),
+            Some(BeaconPulseId::new(sortition_pulse.pulse_id))
+        );
+        assert_eq!(election.pulse_output(), Some(sortition_pulse.seed));
+        assert_eq!(election.primary_assignments().len(), BODY_SEATS as usize);
+        assert!(election.alternate_assignments().is_empty());
+    }
+
+    submit_transitions(
+        &client,
+        attempt_id,
+        expected_bodies.into_iter().map(|body| {
+            ParliamentLifecycleTransitionV1::BeginInvitationAcceptance(
+                ParliamentBeginInvitationAcceptanceV1 {
+                    election_attempt_id: election_ids[&body],
+                },
             )
-            .await
-            .wrap_err("wait for retry proposer funding mint tx")?;
+        }),
+    )?;
+    let invitation_state = read_attempt(&client, attempt_id)?;
+    let common_invitation_close = expected_bodies
+        .into_iter()
+        .map(|body| {
+            invitation_state
+                .election(&election_ids[&body])
+                .and_then(|election| election.invitation_close_height())
+                .expect("invitation deadline is frozen")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        common_invitation_close
+            .windows(2)
+            .all(|pair| pair[0] == pair[1])
+    );
+    let mut invitations_by_member =
+        BTreeMap::<AccountId, Vec<(ParliamentBody, BodyElectionAttemptId)>>::new();
+    for body in expected_bodies {
+        let election = invitation_state
+            .election(&election_ids[&body])
+            .expect("drawn election");
+        for assignment in election.primary_assignments() {
+            invitations_by_member
+                .entry(assignment.member.clone())
+                .or_default()
+                .push((body, election_ids[&body]));
         }
-        wait_for_asset_balance(
-            &alice,
-            alice_asset_id.clone(),
-            total_fund,
-            Duration::from_secs(180),
-            "wait for proposer funding mint after retry",
-        )
-        .await
-        .wrap_err_with(|| format!("initial proposer mint wait failed: {initial_mint_wait_err}"))?;
     }
-    eprintln!("sora smoke: proposer funding minted");
-    submit_permission_grants_and_wait(
-        &alice,
-        citizens
-            .iter()
-            .flat_map(|(account_id, _)| {
-                let first_ballot_perm: Permission = CanSubmitGovernanceBallot {
-                    referendum_id: referendum_id.clone(),
-                }
-                .into();
-                let second_ballot_perm: Permission = CanSubmitGovernanceBallot {
-                    referendum_id: reject_referendum_id.clone(),
-                }
-                .into();
-                [
-                    (account_id.clone(), first_ballot_perm),
-                    (account_id.clone(), second_ballot_perm),
-                ]
-            })
-            .collect(),
-        Duration::from_secs(180),
-        "submit ballot permission grants for both referenda",
-        "wait for ballot permissions for both referenda",
-    )
-    .await
-    .wrap_err("grant ballot permissions for both referenda")?;
-    alice
-        .submit_all_blocking(
-            citizens.iter().map(|(account_id, _)| {
-                Transfer::asset_quantity(
-                    AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
-                    u64::try_from(CITIZEN_FUND).expect("fund amount should fit u64"),
-                    account_id.clone(),
+    for (member, invitations) in invitations_by_member {
+        let member_client = client_for(&client, &member, &citizen_keys);
+        submit_transitions(
+            &member_client,
+            attempt_id,
+            invitations.into_iter().map(|(body, election_attempt_id)| {
+                ParliamentLifecycleTransitionV1::RecordInvitationResponse(
+                    ParliamentRecordInvitationResponseV1 {
+                        election_attempt_id,
+                        body,
+                        decision: ParliamentInvitationDecisionV1::Accept,
+                    },
                 )
             }),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("transfer citizen funding allocations")?;
-    wait_for_all_citizen_balances(
-        &alice,
-        &asset_def_id,
-        &citizens,
-        CITIZEN_FUND,
-        BALANCE_WAIT_TIMEOUT,
-        "wait for citizen funding distribution",
-    )
-    .await?;
-    eprintln!("sora smoke: citizen funding distributed");
-    wait_for_asset_balance(
-        &alice,
-        alice_asset_id.clone(),
-        0,
-        BALANCE_WAIT_TIMEOUT,
-        "wait for proposer balance after funding",
-    )
-    .await?;
-    eprintln!("sora smoke: proposer post-funding balance settled");
-    let mut outsider_client =
-        ready_peer.client_for(&outsider_id, outsider_key_pair.private_key().clone());
-    tune_client_timeouts(&mut outsider_client);
-    let outsider_bond_tx_hash = outsider_client
-        .submit(
-            RegisterCitizen {
-                owner: outsider_id.clone(),
-                amount: CITIZEN_BOND.into(),
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("submit outsider underfunded citizenship bond (negative path)")?;
-    wait_for_tx_rejected(
-        &http,
-        &outsider_client.torii_url,
-        &hex::encode(outsider_bond_tx_hash.as_ref()),
-        Duration::from_secs(180),
-        "wait for outsider underfunded citizenship bond to be rejected",
-    )
-    .await
-    .wrap_err("outsider underfunded citizenship bond should be rejected")?;
-    eprintln!("sora smoke: outsider underfunded bond rejected");
-    for (idx, (account_id, key_pair)) in citizens.iter().enumerate() {
-        let mut citizen_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
-        tune_client_timeouts(&mut citizen_client);
-        let tx_hash = citizen_client
-            .submit(
-                RegisterCitizen {
-                    owner: account_id.clone(),
-                    amount: CITIZEN_BOND.into(),
-                },
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .wrap_err_with(|| format!("register citizen bond #{idx} ({account_id})"))?;
-        wait_for_tx_applied(
-            &http,
-            &citizen_client.torii_url,
-            &hex::encode(tx_hash.as_ref()),
-            Duration::from_secs(180),
-            "wait for citizen bond tx to be applied",
-        )
-        .await
-        .wrap_err_with(|| {
-            format!("wait for register citizen bond tx #{idx} ({account_id}) applied")
-        })?;
+        )?;
     }
-    eprintln!("sora smoke: citizen bond txs submitted");
-    wait_for_all_citizen_balances(
-        &alice,
-        &asset_def_id,
-        &citizens,
-        BALLOT_LOCK,
-        BALANCE_WAIT_TIMEOUT,
-        "wait for post-bond citizen balances",
-    )
-    .await?;
-    eprintln!("sora smoke: citizen post-bond balances settled");
-    let expected_escrow_delta =
-        CITIZEN_BOND.saturating_mul(u128::try_from(CITIZEN_COUNT).expect("count"));
-    wait_for_asset_balance(
-        &alice,
-        alice_asset_id.clone(),
-        expected_escrow_delta,
-        BALANCE_WAIT_TIMEOUT,
-        "wait for escrowed citizenship bond total",
-    )
-    .await?;
-    eprintln!("sora smoke: escrow bond total settled");
-    let (council_member_id, _) = &citizens[0];
-    let council_split = CITIZEN_COUNT / 2;
-    let council_members: Vec<_> = citizens
-        .iter()
-        .take(council_split)
-        .map(|(account_id, _)| account_id.clone())
-        .collect();
-    let council_alternates: Vec<_> = citizens
-        .iter()
-        .skip(council_split)
-        .map(|(account_id, _)| account_id.clone())
-        .collect();
-    alice
-        .submit(
-            PersistCouncilForEpoch {
-                epoch: 0,
-                members: council_members.clone(),
-                alternates: council_alternates,
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("persist fallback council for epoch 0")?;
-    wait_for_council_member_present(&alice, council_member_id, 0, Duration::from_secs(180))
-        .await
-        .wrap_err("wait for persisted council epoch 0 member")?;
-    eprintln!("sora smoke: council persisted");
-    alice
-        .submit(
-            ProposeDeployContract {
-                contract_address: contract_address.clone(),
-                code_hash_hex: code_hash_hex.clone(),
-                abi_hash_hex: abi_hash_hex.clone(),
-                abi_version: "1".to_string(),
-                window: None,
-                mode: Some(VotingMode::Plain),
-                manifest_provenance: Some(manifest_provenance(
-                    &code_hash_hex,
-                    &abi_hash_hex,
-                    &ALICE_KEYPAIR,
-                )),
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("propose governance contract deployment referendum")?;
-    wait_for_proposal_found(&alice, &proposal_id_hex, Duration::from_secs(180))
-        .await
-        .wrap_err("wait for governance proposal to be queryable")?;
-    eprintln!("sora smoke: proposal submitted");
-    let mut unauthorized_approver_client =
-        ready_peer.client_for(&outsider_id, outsider_key_pair.private_key().clone());
-    tune_client_timeouts(&mut unauthorized_approver_client);
-    let unauthorized_approval_tx_hash = unauthorized_approver_client
-        .submit(
-            ApproveGovernanceProposal {
-                body: ParliamentBody::RulesCommittee,
-                proposal_id,
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("submit unauthorized proposal approval attempt from outsider account")?;
-    wait_for_tx_rejected(
-        &http,
-        &unauthorized_approver_client.torii_url,
-        &hex::encode(unauthorized_approval_tx_hash.as_ref()),
-        Duration::from_secs(180),
-        "wait for unauthorized proposal approval attempt to be rejected",
-    )
-    .await
-    .wrap_err("unauthorized proposal approval attempt should be rejected")?;
-    let proposal_payload = alice
-        .get_gov_proposal_json(&proposal_id_hex)
-        .wrap_err("query first governance proposal payload for parliament snapshot")?;
-    let rules_approvers =
-        proposal_snapshot_body_members(&proposal_payload, ParliamentBody::RulesCommittee)
-            .wrap_err("extract rules committee roster for first proposal")?
-            .ok_or_else(|| eyre!("first proposal is missing parliament snapshot"))?;
-    let first_rules_approver = rules_approvers
-        .first()
-        .cloned()
-        .expect("rules committee roster should include at least one member");
-    let first_rules_key_pair = find_account_keypair(&citizens, &first_rules_approver)
-        .wrap_err("find key pair for first rules committee approver")?;
-    let mut first_rules_client = ready_peer.client_for(
-        &first_rules_approver,
-        first_rules_key_pair.private_key().clone(),
-    );
-    tune_client_timeouts(&mut first_rules_client);
-    let first_rules_tx_hash = first_rules_client
-        .submit(
-            ApproveGovernanceProposal {
-                body: ParliamentBody::RulesCommittee,
-                proposal_id,
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("submit first rules committee approval")?;
-    wait_for_tx_applied(
-        &http,
-        &first_rules_client.torii_url,
-        &hex::encode(first_rules_tx_hash.as_ref()),
-        Duration::from_secs(180),
-        "wait for first rules committee approval transaction to be applied",
-    )
-    .await
-    .wrap_err("wait for first rules committee approval applied")?;
-    wait_for_referendum_found(&alice, &referendum_id, Duration::from_secs(180))
-        .await
-        .wrap_err("wait for referendum record to appear")?;
-    wait_for_referendum_status(&alice, &referendum_id, "Proposed", Duration::from_secs(60))
-        .await
-        .wrap_err("wait for referendum to remain proposed after one rules ballot")?;
-    cast_stage_approvals_from_snapshot(
-        &http,
-        ready_peer,
-        &citizens,
-        &proposal_payload,
-        proposal_id,
-        &[
-            ParliamentBody::RulesCommittee,
-            ParliamentBody::AgendaCouncil,
-        ],
-        "first proposal rules+agenda gate",
-    )
-    .await?;
-    wait_for_referendum_status(&alice, &referendum_id, "Proposed", Duration::from_secs(60))
-        .await
-        .wrap_err("deploy referendum must remain proposed after only Rules + Agenda")?;
-    eprintln!("sora smoke: deploy referendum stayed proposed after Rules + Agenda only");
-    cast_stage_approvals_from_snapshot(
-        &http,
-        ready_peer,
-        &citizens,
-        &proposal_payload,
-        proposal_id,
-        &[
-            ParliamentBody::InterestPanel,
-            ParliamentBody::ReviewPanel,
-            ParliamentBody::PolicyJury,
-            ParliamentBody::OversightCommittee,
-        ],
-        "first proposal remaining parliament gates",
-    )
-    .await?;
-    wait_for_referendum_status(&alice, &referendum_id, "Open", Duration::from_secs(180))
-        .await
-        .wrap_err("wait for referendum status to open after full parliament gate")?;
-    eprintln!("sora smoke: referendum open");
-    for (idx, (account_id, key_pair)) in citizens.iter().take(FIRST_REFERENDUM_VOTERS).enumerate() {
-        let mut citizen_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
-        tune_client_timeouts(&mut citizen_client);
-        citizen_client
-            .submit(
-                CastPlainBallot {
-                    referendum_id: referendum_id.clone(),
-                    owner: account_id.clone(),
-                    amount: BALLOT_LOCK.into(),
-                    duration_blocks: BALLOT_DURATION_BLOCKS,
-                    direction: if idx < FIRST_REFERENDUM_APPROVE_VOTERS {
-                        0
-                    } else {
-                        1
-                    },
-                },
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .wrap_err_with(|| format!("cast citizen ballot #{idx} ({account_id})"))?;
-    }
-    let expected_total_weight = expected_plain_total_weight(FIRST_REFERENDUM_VOTERS);
-    wait_for_tally_total(
-        &alice,
-        &referendum_id,
-        expected_total_weight,
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("wait for full ballot tally ingestion")?;
-    eprintln!("sora smoke: tally reached expected total");
-    let premature_enact_tx_hash = alice
-        .submit(
-            EnactReferendum {
-                referendum_id: proposal_id,
-                preimage_hash: [0; 32],
-                at_window: AtWindow {
-                    lower: 0,
-                    upper: u64::MAX,
-                },
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("submit premature enact referendum before finalize (negative path)")?;
-    wait_for_tx_rejected(
-        &http,
-        &alice.torii_url,
-        &hex::encode(premature_enact_tx_hash.as_ref()),
-        Duration::from_secs(180),
-        "wait for premature enact referendum tx to be rejected",
-    )
-    .await
-    .wrap_err("premature enact referendum should be rejected before finalize")?;
-    eprintln!("sora smoke: premature enact rejected");
-    let finalize_tx_hash = alice
-        .submit(
-            FinalizeReferendum {
-                referendum_id: referendum_id.clone(),
-                proposal_id,
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("finalize referendum")?;
-    wait_for_tx_applied(
-        &http,
-        &alice.torii_url,
-        &hex::encode(finalize_tx_hash.as_ref()),
-        Duration::from_secs(180),
-        "wait for finalize referendum tx to be applied",
-    )
-    .await
-    .wrap_err("wait for finalize referendum tx applied")?;
-    wait_for_proposal_status(
-        &alice,
-        &proposal_id_hex,
-        "Approved",
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("wait for approved proposal status before enactment")?;
-    let enact_tx_hash = alice
-        .submit(
-            EnactReferendum {
-                referendum_id: proposal_id,
-                preimage_hash: [0; 32],
-                at_window: AtWindow {
-                    lower: 0,
-                    upper: u64::MAX,
-                },
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("enact referendum")?;
-    wait_for_tx_applied(
-        &http,
-        &alice.torii_url,
-        &hex::encode(enact_tx_hash.as_ref()),
-        Duration::from_secs(180),
-        "wait for enact referendum tx to be applied",
-    )
-    .await
-    .wrap_err("wait for enact referendum tx applied")?;
-    wait_for_referendum_status(&alice, &referendum_id, "Closed", Duration::from_secs(180))
-        .await
-        .wrap_err("wait for closed referendum status")?;
-    wait_for_proposal_status(
-        &alice,
-        &proposal_id_hex,
-        "Enacted",
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("wait for enacted proposal status")?;
-    eprintln!("sora smoke: enactment observed for first referendum");
-    let referendum_payload = alice.get_gov_referendum_json(&referendum_id)?;
-    assert_eq!(
-        referendum_payload
-            .get("found")
-            .and_then(norito::json::Value::as_bool),
-        Some(true),
-        "referendum endpoint should report existing record"
-    );
-    let referendum_status = referendum_payload
-        .get("referendum")
-        .and_then(|value| value.get("status"))
-        .and_then(norito::json::Value::as_str)
-        .unwrap_or_default();
-    assert_eq!(referendum_status, "Closed");
-    let proposal_payload = alice.get_gov_proposal_json(&proposal_id_hex)?;
-    assert_eq!(
-        proposal_payload
-            .get("found")
-            .and_then(norito::json::Value::as_bool),
-        Some(true),
-        "proposal endpoint should report existing record"
-    );
-    let proposal_status = proposal_payload
-        .get("proposal")
-        .and_then(|value| value.get("status"))
-        .and_then(norito::json::Value::as_str)
-        .unwrap_or_default();
-    assert_eq!(proposal_status, "Enacted");
-    let tally_payload = alice.get_gov_tally_json(&referendum_id)?;
-    let approve = tally_payload
-        .get("approve")
-        .and_then(json_u128)
-        .unwrap_or_default();
-    let reject = tally_payload
-        .get("reject")
-        .and_then(json_u128)
-        .unwrap_or_default();
-    assert!(
-        approve > reject,
-        "approval votes should exceed rejection votes"
-    );
-    let deployed_instance = alice.get_gov_contract_json(&contract_address)?;
-    assert_eq!(
-        deployed_instance
-            .get("found")
-            .and_then(norito::json::Value::as_bool),
-        Some(true),
-        "expected governed contract binding for `{contract_address}`"
-    );
-    assert_eq!(
-        deployed_instance
-            .get("code_hash_hex")
-            .and_then(norito::json::Value::as_str),
-        Some(code_hash_hex.as_str()),
-        "deployed instance should be bound to the enacted code hash"
-    );
-    let manifest_payload = alice
-        .get_contract_manifest_json(&code_hash_hex)
-        .wrap_err("fetch contract manifest for enacted code hash")?;
-    assert_eq!(
-        manifest_payload
-            .get("manifest")
-            .and_then(|manifest| manifest.get("code_hash"))
-            .and_then(norito::json::Value::as_str),
-        Some(code_hash_hex.as_str()),
-        "manifest code hash should match enacted contract hash"
-    );
-    assert_eq!(
-        manifest_payload
-            .get("manifest")
-            .and_then(|manifest| manifest.get("abi_hash"))
-            .and_then(norito::json::Value::as_str),
-        Some(abi_hash_hex.as_str()),
-        "manifest abi hash should match proposed ABI hash"
-    );
-    eprintln!("sora smoke: deployment side effects verified");
-    alice
-        .submit(
-            ProposeDeployContract {
-                contract_address: reject_contract_address.clone(),
-                code_hash_hex: reject_code_hash_hex.clone(),
-                abi_hash_hex: abi_hash_hex.clone(),
-                abi_version: "1".to_string(),
-                window: None,
-                mode: Some(VotingMode::Plain),
-                manifest_provenance: Some(manifest_provenance(
-                    &reject_code_hash_hex,
-                    &abi_hash_hex,
-                    &ALICE_KEYPAIR,
-                )),
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("propose second governance contract deployment referendum for rejection path")?;
-    wait_for_proposal_found(&alice, &reject_proposal_id_hex, Duration::from_secs(180))
-        .await
-        .wrap_err("wait for second governance proposal to be queryable")?;
-    eprintln!("sora smoke: rejection-path proposal submitted");
-    let reject_proposal_payload = alice
-        .get_gov_proposal_json(&reject_proposal_id_hex)
-        .wrap_err("query second governance proposal payload for parliament snapshot")?;
-    cast_stage_approvals_from_snapshot(
-        &http,
-        ready_peer,
-        &citizens,
-        &reject_proposal_payload,
-        reject_proposal_id,
-        &deploy_parliament_bodies(),
-        "rejection-path deploy parliament gate",
-    )
-    .await?;
-    wait_for_referendum_found(&alice, &reject_referendum_id, Duration::from_secs(180))
-        .await
-        .wrap_err("wait for rejection-path referendum record to appear")?;
-    wait_for_referendum_status(
-        &alice,
-        &reject_referendum_id,
-        "Open",
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("wait for rejection-path referendum status to open")?;
-    for (idx, (account_id, key_pair)) in citizens
-        .iter()
-        .skip(FIRST_REFERENDUM_VOTERS)
-        .take(SECOND_REFERENDUM_VOTERS)
-        .enumerate()
-    {
-        let mut citizen_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
-        tune_client_timeouts(&mut citizen_client);
-        citizen_client
-            .submit(
-                CastPlainBallot {
-                    referendum_id: reject_referendum_id.clone(),
-                    owner: account_id.clone(),
-                    amount: BALLOT_LOCK.into(),
-                    duration_blocks: BALLOT_DURATION_BLOCKS,
-                    direction: if idx < SECOND_REFERENDUM_REJECT_VOTERS {
-                        1
-                    } else {
-                        0
-                    },
-                },
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .wrap_err_with(|| {
-                format!("cast rejection-path citizen ballot #{idx} ({account_id})")
-            })?;
-    }
-    wait_for_tally_total(
-        &alice,
-        &reject_referendum_id,
-        expected_plain_total_weight(SECOND_REFERENDUM_VOTERS),
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("wait for rejection-path ballot tally ingestion")?;
-    let reject_finalize_tx_hash = alice
-        .submit(
-            FinalizeReferendum {
-                referendum_id: reject_referendum_id.clone(),
-                proposal_id: reject_proposal_id,
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("finalize rejection-path referendum")?;
-    wait_for_tx_applied(
-        &http,
-        &alice.torii_url,
-        &hex::encode(reject_finalize_tx_hash.as_ref()),
-        Duration::from_secs(180),
-        "wait for rejection-path finalize tx to be applied",
-    )
-    .await
-    .wrap_err("wait for rejection-path finalize tx applied")?;
-    wait_for_proposal_status(
-        &alice,
-        &reject_proposal_id_hex,
-        "Rejected",
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("wait for rejection-path proposal status")?;
-    let rejected_enact_tx_hash = alice
-        .submit(
-            EnactReferendum {
-                referendum_id: reject_proposal_id,
-                preimage_hash: [0; 32],
-                at_window: AtWindow {
-                    lower: 0,
-                    upper: u64::MAX,
-                },
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("submit enactment for rejected proposal (negative path)")?;
-    wait_for_tx_rejected(
-        &http,
-        &alice.torii_url,
-        &hex::encode(rejected_enact_tx_hash.as_ref()),
-        Duration::from_secs(180),
-        "wait for rejected proposal enactment tx to be rejected",
-    )
-    .await
-    .wrap_err("enactment of rejected proposal should be rejected")?;
-    let reject_tally_payload = alice.get_gov_tally_json(&reject_referendum_id)?;
-    let reject_path_approve = reject_tally_payload
-        .get("approve")
-        .and_then(json_u128)
-        .unwrap_or_default();
-    let reject_path_reject = reject_tally_payload
-        .get("reject")
-        .and_then(json_u128)
-        .unwrap_or_default();
-    assert!(
-        reject_path_reject > reject_path_approve,
-        "rejection-path votes should reject the proposal"
-    );
-    let reject_proposal_payload = alice.get_gov_proposal_json(&reject_proposal_id_hex)?;
-    let reject_proposal_status = reject_proposal_payload
-        .get("proposal")
-        .and_then(|value| value.get("status"))
-        .and_then(norito::json::Value::as_str)
-        .unwrap_or_default();
-    assert_eq!(
-        reject_proposal_status, "Rejected",
-        "second proposal should finish as rejected"
-    );
-    eprintln!("sora smoke: rejection-path referendum verified");
-    let mut runtime_fixture = sora_runtime_governance::RuntimeGovernanceFixture {
-        network,
-        http,
-        ready_peer_idx,
-        alice,
-        citizens,
-        asset_def_id,
-        alice_asset_id,
-    };
-    let runtime_outcome =
-        sora_runtime_governance::enact_runtime_upgrade_round(&mut runtime_fixture, "smoke", None)
-            .await
-            .wrap_err("run shared runtime-upgrade governance round in smoke test")?;
-    assert!(
-        runtime_outcome.activated_height > 0,
-        "runtime-upgrade governance round should produce a positive activation height"
-    );
-    eprintln!("sora smoke: runtime-upgrade governance path verified");
-    Ok(())
-}
-#[tokio::test]
-async fn sora_parliament_hostile_takeover_blocked_without_sortition_capture() -> Result<()> {
-    let Some(fixture) = setup_hostile_fixture(
-        stringify!(sora_parliament_hostile_takeover_blocked_without_sortition_capture),
-        HOSTILE_ATTACKERS_BLOCKED,
-        HOSTILE_HONEST_BLOCKED,
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    let ready_peer = &fixture.network.peers()[fixture.ready_peer_idx];
-    let honest_members: Vec<_> = fixture
-        .honest
-        .iter()
-        .take(HOSTILE_RULES_SIZE)
-        .map(|(account_id, _)| account_id.clone())
-        .collect();
-    assert_eq!(
-        honest_members.len(),
-        HOSTILE_RULES_SIZE,
-        "blocked hostile scenario requires enough honest parliament members"
-    );
-    assert!(
-        honest_members.len() >= hostile_required_approvals(),
-        "blocked hostile scenario must seat enough honest members to satisfy quorum"
-    );
-    let honest_alternates: Vec<_> = fixture
-        .honest
-        .iter()
-        .skip(HOSTILE_RULES_SIZE)
-        .map(|(account_id, _)| account_id.clone())
-        .collect();
-    fixture
-        .alice
-        .submit(
-            PersistCouncilForEpoch {
-                epoch: 0,
-                members: honest_members.clone(),
-                alternates: honest_alternates,
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("persist honest-only parliament selection for blocked hostile scenario")?;
-    wait_for_council_member_present(
-        &fixture.alice,
-        honest_members.first().expect("at least one honest member"),
-        0,
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("wait for honest-only parliament selection")?;
-    let contract_address = governance_contract_address(HOSTILE_DEPLOY_CONTRACT_ID);
-    let code_hash_hex = HOSTILE_DEPLOY_CODE_HASH_HEX.to_owned();
-    let abi_hash_hex = canonical_abi_hex();
-    let proposal_id = compute_proposal_id(&contract_address, &code_hash_hex, &abi_hash_hex);
-    let proposal_id_hex = hex::encode(proposal_id);
-    let referendum_id = proposal_id_hex.clone();
-    fixture
-        .alice
-        .submit(
-            ProposeDeployContract {
-                contract_address: contract_address.clone(),
-                code_hash_hex: code_hash_hex.clone(),
-                abi_hash_hex: abi_hash_hex.clone(),
-                abi_version: "1".to_owned(),
-                window: None,
-                mode: Some(VotingMode::Plain),
-                manifest_provenance: Some(manifest_provenance(
-                    &code_hash_hex,
-                    &abi_hash_hex,
-                    &ALICE_KEYPAIR,
-                )),
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("submit blocked hostile deployment proposal")?;
-    wait_for_proposal_found(&fixture.alice, &proposal_id_hex, Duration::from_secs(180))
-        .await
-        .wrap_err("wait for blocked hostile proposal to be queryable")?;
-    wait_for_referendum_found(&fixture.alice, &referendum_id, Duration::from_secs(180))
-        .await
-        .wrap_err("wait for blocked hostile referendum to be queryable")?;
-    for (idx, (attacker_id, attacker_keypair)) in fixture.attackers.iter().take(3).enumerate() {
-        let mut attacker_client =
-            ready_peer.client_for(attacker_id, attacker_keypair.private_key().clone());
-        tune_client_timeouts(&mut attacker_client);
-        let rules_hash = attacker_client
-            .submit(
-                ApproveGovernanceProposal {
-                    body: ParliamentBody::RulesCommittee,
-                    proposal_id,
-                },
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .wrap_err_with(|| {
-                format!("submit blocked hostile rules approval attempt #{idx} ({attacker_id})")
-            })?;
-        wait_for_tx_rejected(
-            &fixture.http,
-            &attacker_client.torii_url,
-            &hex::encode(rules_hash.as_ref()),
-            Duration::from_secs(180),
-            "wait for blocked hostile rules approval attempt rejection",
-        )
-        .await
-        .wrap_err_with(|| {
-            format!("blocked hostile rules approval attempt should be rejected for `{attacker_id}`")
-        })?;
-        let agenda_hash = attacker_client
-            .submit(
-                ApproveGovernanceProposal {
-                    body: ParliamentBody::AgendaCouncil,
-                    proposal_id,
-                },
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .wrap_err_with(|| {
-                format!("submit blocked hostile agenda approval attempt #{idx} ({attacker_id})")
-            })?;
-        wait_for_tx_rejected(
-            &fixture.http,
-            &attacker_client.torii_url,
-            &hex::encode(agenda_hash.as_ref()),
-            Duration::from_secs(180),
-            "wait for blocked hostile agenda approval attempt rejection",
-        )
-        .await
-        .wrap_err_with(|| {
-            format!(
-                "blocked hostile agenda approval attempt should be rejected for `{attacker_id}`"
-            )
-        })?;
-    }
-    wait_for_referendum_status(
-        &fixture.alice,
-        &referendum_id,
-        "Proposed",
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("blocked hostile referendum should remain Proposed")?;
-    let proposal_payload = fixture
-        .alice
-        .get_gov_proposal_json(&proposal_id_hex)
-        .wrap_err("query blocked hostile proposal")?;
-    let proposal_status = proposal_payload
-        .get("proposal")
-        .and_then(|value| value.get("status"))
-        .and_then(norito::json::Value::as_str)
-        .unwrap_or_default();
-    assert_eq!(
-        proposal_status, "Proposed",
-        "wealthy non-members must not progress proposal without sortition capture"
-    );
-    Ok(())
-}
-#[tokio::test]
-async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_after_economic_capture()
--> Result<()> {
-    let Some(fixture) = setup_hostile_fixture(
-        stringify!(
-            sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_after_economic_capture
-        ),
-        HOSTILE_ATTACKERS_CAPTURED,
-        HOSTILE_HONEST_CAPTURED,
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    let ready_peer = &fixture.network.peers()[fixture.ready_peer_idx];
-    let attacker_members: Vec<_> = fixture.attackers.iter().take(HOSTILE_RULES_SIZE).collect();
-    assert_eq!(
-        attacker_members.len(),
-        HOSTILE_RULES_SIZE,
-        "captured hostile scenario requires full committee capture to satisfy quorum"
-    );
-    assert!(
-        attacker_members.len() >= hostile_required_approvals(),
-        "captured hostile scenario must include enough attacker members to satisfy quorum"
-    );
-    let council_members: Vec<_> = attacker_members
-        .iter()
-        .map(|(account_id, _)| (*account_id).clone())
-        .collect();
-    let council_alternates: Vec<_> = fixture
-        .honest
-        .iter()
-        .map(|(account_id, _)| account_id.clone())
-        .collect();
-    fixture
-        .alice
-        .submit(
-            PersistCouncilForEpoch {
-                epoch: 0,
-                members: council_members.clone(),
-                alternates: council_alternates,
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("persist attacker-captured parliament selection")?;
-    wait_for_council_member_present(
-        &fixture.alice,
-        council_members
-            .first()
-            .expect("captured hostile scenario should have members"),
-        0,
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("wait for attacker-captured parliament selection")?;
-    let contract_address = governance_contract_address(HOSTILE_DEPLOY_CONTRACT_ID);
-    let code_hash_hex = HOSTILE_DEPLOY_CODE_HASH_HEX.to_owned();
-    let abi_hash_hex = canonical_abi_hex();
-    let deploy_proposal_id = compute_proposal_id(&contract_address, &code_hash_hex, &abi_hash_hex);
-    let deploy_proposal_id_hex = hex::encode(deploy_proposal_id);
-    let deploy_referendum_id = deploy_proposal_id_hex.clone();
-    let deploy_voters: Vec<_> = fixture.attackers.iter().take(6).collect();
-    submit_permission_grants_and_wait(
-        &fixture.alice,
-        deploy_voters
-            .iter()
-            .map(|(account_id, _)| {
-                let ballot_perm: Permission = CanSubmitGovernanceBallot {
-                    referendum_id: deploy_referendum_id.clone(),
-                }
-                .into();
-                (account_id.clone(), ballot_perm)
+    assert!(current_height(&client)? <= common_invitation_close[0]);
+    let roster_seal_height = common_invitation_close[0]
+        .checked_add(1)
+        .ok_or_else(|| eyre!("invitation close height overflow"))?;
+    advance_to_predecessor(
+        &client,
+        roster_seal_height,
+        "canonical Parliament roster sealing",
+    )?;
+    submit_transitions(
+        &client,
+        attempt_id,
+        expected_bodies.into_iter().map(|body| {
+            ParliamentLifecycleTransitionV1::SealBodyRoster(ParliamentSealBodyRosterV1 {
+                election_attempt_id: election_ids[&body],
             })
-            .collect(),
-        Duration::from_secs(180),
-        "submit hostile deploy referendum ballot permission grants",
-        "wait for hostile deploy referendum ballot permissions",
-    )
-    .await
-    .wrap_err("grant hostile deploy referendum ballot permissions")?;
-    fixture
-        .alice
-        .submit(
-            ProposeDeployContract {
-                contract_address: contract_address.clone(),
-                code_hash_hex: code_hash_hex.clone(),
-                abi_hash_hex: abi_hash_hex.clone(),
-                abi_version: "1".to_owned(),
-                window: None,
-                mode: Some(VotingMode::Plain),
-                manifest_provenance: Some(manifest_provenance(
-                    &code_hash_hex,
-                    &abi_hash_hex,
-                    &ALICE_KEYPAIR,
-                )),
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("submit captured hostile deployment proposal")?;
-    wait_for_proposal_found(
-        &fixture.alice,
-        &deploy_proposal_id_hex,
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("wait for captured hostile deploy proposal to be queryable")?;
-    for body in deploy_parliament_bodies() {
-        for (member_id, member_keypair) in &attacker_members {
-            let mut member_client =
-                ready_peer.client_for(member_id, member_keypair.private_key().clone());
-            tune_client_timeouts(&mut member_client);
-            member_client
-                .submit(CastParliamentBallot {
-                    body,
-                    proposal_id: deploy_proposal_id,
-                    decision: ParliamentDecision::Approve,
-                }, iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
-                .wrap_err_with(|| {
-                    format!(
-                        "submit attacker-captured deploy approval for body {body:?} from `{member_id}`"
-                    )
-                })?;
-        }
+        }),
+    )?;
+    assert_eq!(current_height(&client)?, roster_seal_height);
+    let sealed = read_attempt(&client, attempt_id)?;
+    let mut body_ids = BTreeMap::<ParliamentBody, BodyInstanceId>::new();
+    for body in expected_bodies {
+        let instance = sealed
+            .sealed_body_for_role(body)
+            .expect("every simultaneous draw seals one body");
+        assert_eq!(
+            instance.instance().status,
+            BodyInstanceStatusV1::RosterSealed
+        );
+        assert_eq!(instance.instance().original_seats, BODY_SEATS);
+        assert_eq!(instance.assignments().len(), BODY_SEATS as usize);
+        assert_eq!(
+            sealed
+                .election(&election_ids[&body])
+                .expect("election")
+                .accepted_assignments()
+                .len(),
+            BODY_SEATS as usize,
+        );
+        body_ids.insert(body, instance.instance().id);
     }
-    wait_for_referendum_status(
-        &fixture.alice,
-        &deploy_referendum_id,
-        "Open",
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("wait for captured hostile deploy referendum to open")?;
-    for (idx, (account_id, key_pair)) in deploy_voters.iter().enumerate() {
-        let mut voter_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
-        tune_client_timeouts(&mut voter_client);
-        voter_client
-            .submit(
-                CastPlainBallot {
-                    referendum_id: deploy_referendum_id.clone(),
-                    owner: account_id.clone(),
-                    amount: BALLOT_LOCK.into(),
-                    duration_blocks: BALLOT_DURATION_BLOCKS,
-                    direction: 0,
-                },
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .wrap_err_with(|| {
-                format!("cast captured hostile deploy ballot #{idx} ({account_id})")
-            })?;
-    }
-    wait_for_tally_total(
-        &fixture.alice,
-        &deploy_referendum_id,
-        expected_plain_total_weight(deploy_voters.len()),
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("wait for captured hostile deploy tally ingestion")?;
-    let deploy_finalize_hash = fixture
-        .alice
-        .submit(
-            FinalizeReferendum {
-                referendum_id: deploy_referendum_id.clone(),
-                proposal_id: deploy_proposal_id,
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("submit captured hostile deploy finalize")?;
-    wait_for_tx_applied(
-        &fixture.http,
-        &fixture.alice.torii_url,
-        &hex::encode(deploy_finalize_hash.as_ref()),
-        Duration::from_secs(180),
-        "wait for captured hostile deploy finalize tx applied",
-    )
-    .await
-    .wrap_err("captured hostile deploy finalize should apply")?;
-    wait_for_proposal_status(
-        &fixture.alice,
-        &deploy_proposal_id_hex,
-        "Approved",
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("captured hostile deploy proposal should become approved")?;
-    let deploy_enact_hash = fixture
-        .alice
-        .submit(
-            EnactReferendum {
-                referendum_id: deploy_proposal_id,
-                preimage_hash: [0; 32],
-                at_window: AtWindow {
-                    lower: 0,
-                    upper: u64::MAX,
-                },
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("submit captured hostile deploy enact")?;
-    wait_for_tx_applied(
-        &fixture.http,
-        &fixture.alice.torii_url,
-        &hex::encode(deploy_enact_hash.as_ref()),
-        Duration::from_secs(180),
-        "wait for captured hostile deploy enact tx applied",
-    )
-    .await
-    .wrap_err("captured hostile deploy enact should apply")?;
-    wait_for_proposal_status(
-        &fixture.alice,
-        &deploy_proposal_id_hex,
-        "Enacted",
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("captured hostile deploy proposal should become enacted")?;
-    let runtime_manifest = RuntimeUpgradeManifest {
-        name: "parliament.hostile.runtime.v1".to_owned(),
-        description: "captured parliament runtime tamper scenario".to_owned(),
-        abi_version: 1,
-        abi_hash: parse_hex32(&canonical_abi_hex()),
-        added_syscalls: vec![],
-        added_pointer_types: vec![],
-        start_height: HOSTILE_RUNTIME_START_HEIGHT,
-        end_height: HOSTILE_RUNTIME_END_HEIGHT,
-        sbom_digests: vec![],
-        slsa_attestation: vec![],
-        provenance: vec![],
-    };
-    let runtime_proposal_id =
-        sora_runtime_governance::compute_runtime_upgrade_proposal_id(&runtime_manifest);
-    let runtime_proposal_id_hex = hex::encode(runtime_proposal_id);
-    let runtime_referendum_id = runtime_proposal_id_hex.clone();
-    let runtime_voters: Vec<_> = fixture.attackers.iter().skip(6).take(6).collect();
-    submit_permission_grants_and_wait(
-        &fixture.alice,
-        runtime_voters
+
+    let public_bodies = [
+        ParliamentBody::RulesCommittee,
+        ParliamentBody::AgendaCouncil,
+        ParliamentBody::InterestPanel,
+        ParliamentBody::ReviewPanel,
+        ParliamentBody::OversightCommittee,
+    ];
+    let deliberation_phases = [
+        DeliberationPhaseV1::Orientation,
+        DeliberationPhaseV1::Evidence,
+        DeliberationPhaseV1::Questions,
+        DeliberationPhaseV1::Responses,
+        DeliberationPhaseV1::Deliberation,
+        DeliberationPhaseV1::Reflection,
+    ];
+    for body in public_bodies {
+        let body_id = body_ids[&body];
+        submit_transitions(
+            &client,
+            attempt_id,
+            deliberation_phases.into_iter().map(|target| {
+                ParliamentLifecycleTransitionV1::AdvanceBodyPhase(ParliamentAdvanceBodyPhaseV1 {
+                    body_instance_id: body_id,
+                    target,
+                })
+            }),
+        )?;
+        let reflecting = read_attempt(&client, attempt_id)?;
+        let body_state = reflecting.body(&body_id).expect("reflecting public body");
+        assert_eq!(
+            body_state.instance().status,
+            BodyInstanceStatusV1::Deliberating(DeliberationPhaseV1::Reflection),
+        );
+        assert_eq!(
+            body_state.public_finding_deadline_height(),
+            Some(
+                body_state
+                    .public_finding_opened_at_height()
+                    .expect("reflection height")
+                    + 20,
+            ),
+        );
+        let members = body_state
+            .assignments()
             .iter()
-            .map(|(account_id, _)| {
-                let ballot_perm: Permission = CanSubmitGovernanceBallot {
-                    referendum_id: runtime_referendum_id.clone(),
-                }
-                .into();
-                (account_id.clone(), ballot_perm)
-            })
-            .collect(),
-        Duration::from_secs(180),
-        "submit hostile runtime referendum ballot permission grants",
-        "wait for hostile runtime referendum ballot permissions",
-    )
-    .await
-    .wrap_err("grant hostile runtime referendum ballot permissions")?;
-    fixture
-        .alice
-        .submit(
-            ProposeRuntimeUpgradeProposal {
-                manifest: runtime_manifest.clone(),
-                window: None,
-                mode: Some(VotingMode::Plain),
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("submit captured hostile runtime upgrade proposal")?;
-    wait_for_proposal_found(
-        &fixture.alice,
-        &runtime_proposal_id_hex,
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("wait for captured hostile runtime proposal to be queryable")?;
-    for body in hostile_parliament_bodies() {
-        for (member_id, member_keypair) in &attacker_members {
-            let mut member_client =
-                ready_peer.client_for(member_id, member_keypair.private_key().clone());
-            tune_client_timeouts(&mut member_client);
-            member_client
-                .submit(CastParliamentBallot {
-                    body,
-                    proposal_id: runtime_proposal_id,
-                    decision: ParliamentDecision::Approve,
-                }, iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
-                .wrap_err_with(|| {
-                    format!(
-                        "submit attacker-captured runtime approval for body {body:?} from `{member_id}`"
-                    )
-                })?;
+            .map(|assignment| assignment.member.clone())
+            .collect::<Vec<_>>();
+        let result_root = public_finding_root(attempt_id, body);
+        for member in &members[..2] {
+            submit_transition(
+                &client_for(&client, member, &citizen_keys),
+                attempt_id,
+                ParliamentLifecycleTransitionV1::EndorsePublicFinding(
+                    ParliamentEndorsePublicFindingV1 {
+                        body_instance_id: body_id,
+                        result_root,
+                    },
+                ),
+            )?;
         }
+        let completed = read_attempt(&client, attempt_id)?;
+        let body_state = completed.body(&body_id).expect("completed public body");
+        assert_eq!(body_state.result_root(), Some(result_root));
+        assert_eq!(body_state.instance().status, BodyInstanceStatusV1::Approved);
+        assert_eq!(body_state.public_finding_endorsements().len(), 2);
     }
-    wait_for_referendum_status(
-        &fixture.alice,
-        &runtime_referendum_id,
-        "Open",
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("wait for captured hostile runtime referendum to open")?;
-    for (idx, (account_id, key_pair)) in runtime_voters.iter().enumerate() {
-        let mut voter_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
-        tune_client_timeouts(&mut voter_client);
-        voter_client
-            .submit(
-                CastPlainBallot {
-                    referendum_id: runtime_referendum_id.clone(),
-                    owner: account_id.clone(),
-                    amount: BALLOT_LOCK.into(),
-                    duration_blocks: BALLOT_DURATION_BLOCKS,
-                    direction: 0,
-                },
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .wrap_err_with(|| {
-                format!("cast captured hostile runtime ballot #{idx} ({account_id})")
-            })?;
-    }
-    wait_for_tally_total(
-        &fixture.alice,
-        &runtime_referendum_id,
-        expected_plain_total_weight(runtime_voters.len()),
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("wait for captured hostile runtime tally ingestion")?;
-    let runtime_finalize_hash = fixture
-        .alice
-        .submit(
-            FinalizeReferendum {
-                referendum_id: runtime_referendum_id.clone(),
-                proposal_id: runtime_proposal_id,
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("submit captured hostile runtime finalize")?;
-    wait_for_tx_applied(
-        &fixture.http,
-        &fixture.alice.torii_url,
-        &hex::encode(runtime_finalize_hash.as_ref()),
-        Duration::from_secs(180),
-        "wait for captured hostile runtime finalize tx applied",
-    )
-    .await
-    .wrap_err("captured hostile runtime finalize should apply")?;
-    wait_for_proposal_status(
-        &fixture.alice,
-        &runtime_proposal_id_hex,
-        "Approved",
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("captured hostile runtime proposal should become approved")?;
-    let runtime_enact_hash = fixture
-        .alice
-        .submit(
-            EnactReferendum {
-                referendum_id: runtime_proposal_id,
-                preimage_hash: [0; 32],
-                at_window: AtWindow {
-                    lower: 0,
-                    upper: u64::MAX,
-                },
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .wrap_err("submit captured hostile runtime enact")?;
-    wait_for_tx_applied(
-        &fixture.http,
-        &fixture.alice.torii_url,
-        &hex::encode(runtime_enact_hash.as_ref()),
-        Duration::from_secs(180),
-        "wait for captured hostile runtime enact tx applied",
-    )
-    .await
-    .wrap_err("captured hostile runtime enact should apply")?;
-    wait_for_proposal_status(
-        &fixture.alice,
-        &runtime_proposal_id_hex,
-        "Enacted",
-        Duration::from_secs(180),
-    )
-    .await
-    .wrap_err("captured hostile runtime proposal should become enacted")?;
-    let upgrades_payload = fixture
-        .alice
-        .get_runtime_upgrades_json()
-        .wrap_err("query runtime upgrades after captured hostile enactment")?;
-    let runtime_manifest_present = upgrades_payload
-        .get("items")
-        .and_then(norito::json::Value::as_array)
+
+    let policy_body_id = body_ids[&ParliamentBody::PolicyJury];
+    submit_transitions(
+        &client,
+        attempt_id,
+        [
+            DeliberationPhaseV1::Orientation,
+            DeliberationPhaseV1::Evidence,
+            DeliberationPhaseV1::Questions,
+            DeliberationPhaseV1::Responses,
+            DeliberationPhaseV1::Deliberation,
+            DeliberationPhaseV1::Reflection,
+            DeliberationPhaseV1::Vote,
+        ]
         .into_iter()
-        .flatten()
-        .any(|entry| {
-            entry
-                .get("record")
-                .and_then(|record| record.get("manifest"))
-                .and_then(|manifest| manifest.get("name"))
-                .and_then(norito::json::Value::as_str)
-                == Some(runtime_manifest.name.as_str())
-        });
-    assert!(
-        runtime_manifest_present,
-        "captured hostile runtime proposal should publish runtime upgrade record"
+        .map(|target| {
+            ParliamentLifecycleTransitionV1::AdvanceBodyPhase(ParliamentAdvanceBodyPhaseV1 {
+                body_instance_id: policy_body_id,
+                target,
+            })
+        }),
+    )?;
+    let ballot_attempt_id = BallotAttemptId::derive_v1(policy_body_id, 0);
+    let registered_at_height = current_height(&client)? + 1;
+    let registration_close_height = registered_at_height + REGISTRATION_PHASE_BLOCKS;
+    let survivor_freeze_height = registration_close_height + SURVIVOR_PHASE_BLOCKS;
+    let commitment_close_height = survivor_freeze_height + COMMITMENT_PHASE_BLOCKS;
+    let release_height = commitment_close_height + RELEASE_DELAY_BLOCKS;
+    let opening_deadline_height = release_height + OPENING_PHASE_BLOCKS;
+    let tle_session_id = TleSessionId::derive_v1(
+        ballot_attempt_id,
+        tle_public_state.key_session_id,
+        logical_beacon,
+        release_height,
     );
+    submit_transition(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::RegisterBallotAttempt(ParliamentRegisterBallotAttemptV1 {
+            body_instance_id: policy_body_id,
+            ballot_attempt_id,
+            sequence: 0,
+            tle_session_id,
+            tle_key_session_id: tle_public_state.key_session_id,
+            release_beacon_session_id: logical_beacon,
+            release_height,
+        }),
+    )?;
+    assert_eq!(current_height(&client)?, registered_at_height);
+    let registered_response = client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)?;
+    let registered_archive = casting_archive(&registered_response, ballot_attempt_id)?;
+    assert_eq!(
+        registered_archive.phase(),
+        ParliamentTimedOvnCastingPhaseV1::Registered
+    );
+    assert!(registered_archive.registration_records().is_empty());
+    assert_eq!(registered_archive.target_finalized_height(), release_height);
+    let registered_validated = registered_archive
+        .validate_v1()
+        .wrap_err("validate initial registration archive")?;
+    let policy_members = read_attempt(&client, attempt_id)?
+        .body(&policy_body_id)
+        .expect("Policy Jury body")
+        .assignments()
+        .iter()
+        .map(|assignment| assignment.member.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(policy_members.len(), BODY_SEATS as usize);
+    let mut registration_secrets = BTreeMap::<[u8; 32], TimedOvnRegistrationSecretV1>::new();
+    for (index, member) in policy_members.iter().enumerate() {
+        let participant_hash = parliament_ballot_participant_hash_v1(ballot_attempt_id, member);
+        let mut rng = StdRng::from_seed(
+            Hash::new_from_chunks(&[
+                b"iroha.integration.parliament.registration-rng.v1\0",
+                attempt_id.as_bytes(),
+                &[u8::try_from(index)?],
+            ])
+            .into(),
+        );
+        let (secret, registration) = TimedOvnRegistrationSecretV1::generate_with_rng(
+            registered_validated.timed_ovn_session(),
+            participant_hash,
+            &mut rng,
+        )
+        .wrap_err("generate proof-valid timed-OVN registration")?;
+        submit_transition(
+            &client_for(&client, member, &citizen_keys),
+            attempt_id,
+            ParliamentLifecycleTransitionV1::RegisterBallotParticipant(
+                ParliamentRegisterBallotParticipantV1 {
+                    ballot_attempt_id,
+                    registration_record: registration.to_bytes(),
+                },
+            ),
+        )?;
+        assert!(
+            registration_secrets
+                .insert(participant_hash, secret)
+                .is_none()
+        );
+    }
+    assert!(current_height(&client)? < registration_close_height);
+    assert_transition_rejected_without_state_change(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::CloseBallotRegistration(
+            ParliamentCloseBallotRegistrationV1 { ballot_attempt_id },
+        ),
+        "registration close before the frozen exact height",
+    )?;
+    advance_to_predecessor(
+        &client,
+        registration_close_height,
+        "timed-OVN registration close",
+    )?;
+    assert_eq!(
+        submit_transition(
+            &client,
+            attempt_id,
+            ParliamentLifecycleTransitionV1::CloseBallotRegistration(
+                ParliamentCloseBallotRegistrationV1 { ballot_attempt_id },
+            ),
+        )?,
+        registration_close_height,
+    );
+    let registration_closed = client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)?;
+    let registration_closed_archive = casting_archive(&registration_closed, ballot_attempt_id)?;
+    assert_eq!(
+        registration_closed_archive.phase(),
+        ParliamentTimedOvnCastingPhaseV1::RegistrationClosed,
+    );
+    assert_eq!(
+        registration_closed_archive.registration_records().len(),
+        BODY_SEATS as usize,
+    );
+    assert_eq!(
+        read_attempt(&client, attempt_id)?
+            .ballot(&ballot_attempt_id)
+            .expect("registered ballot")
+            .registered_voters(),
+        Some(BODY_SEATS),
+    );
+    assert_transition_rejected_without_state_change(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::CloseBallotRegistration(
+            ParliamentCloseBallotRegistrationV1 { ballot_attempt_id },
+        ),
+        "replayed registration close",
+    )?;
+    assert!(current_height(&client)? < survivor_freeze_height);
+    assert_transition_rejected_without_state_change(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::FreezeBallotSurvivors(ParliamentFreezeBallotSurvivorsV1 {
+            ballot_attempt_id,
+        }),
+        "survivor freeze before the frozen exact height",
+    )?;
+    advance_to_predecessor(&client, survivor_freeze_height, "timed-OVN survivor freeze")?;
+    assert_eq!(
+        submit_transition(
+            &client,
+            attempt_id,
+            ParliamentLifecycleTransitionV1::FreezeBallotSurvivors(
+                ParliamentFreezeBallotSurvivorsV1 { ballot_attempt_id },
+            ),
+        )?,
+        survivor_freeze_height,
+    );
+    assert_transition_rejected_without_state_change(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::FreezeBallotSurvivors(ParliamentFreezeBallotSurvivorsV1 {
+            ballot_attempt_id,
+        }),
+        "replayed survivor freeze",
+    )?;
+    let survivors_response = client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)?;
+    let survivors_archive = casting_archive(&survivors_response, ballot_attempt_id)?;
+    assert_eq!(
+        survivors_archive.phase(),
+        ParliamentTimedOvnCastingPhaseV1::SurvivorsFrozen,
+    );
+    let survivor_ids = survivors_archive
+        .survivor_participant_hashes()
+        .expect("survivor freeze exposes exact public identifiers");
+    assert_eq!(survivor_ids.len(), BODY_SEATS as usize);
+    let survivors_validated = survivors_archive
+        .validate_v1()
+        .wrap_err("replay survivor-frozen casting archive")?;
+    let prepared = survivors_validated
+        .prepared_attempt()
+        .expect("survivor-frozen archive prepares the exact ballot roster");
+    let mut ballot_records = Vec::with_capacity(survivor_ids.len());
+    for (index, participant_hash) in survivor_ids.iter().enumerate() {
+        let choice = if index < 2 {
+            TimedOvnChoiceV1::Aye
+        } else {
+            TimedOvnChoiceV1::Nay
+        };
+        let mut rng = StdRng::from_seed(
+            Hash::new_from_chunks(&[
+                b"iroha.integration.parliament.ballot-rng.v1\0",
+                attempt_id.as_bytes(),
+                &[u8::try_from(index)?],
+            ])
+            .into(),
+        );
+        let record = registration_secrets
+            .get(participant_hash)
+            .ok_or_else(|| eyre!("frozen survivor has no locally retained secret"))?
+            .cast_ballot_with_rng(prepared.survivor_roster(), choice, &mut rng)
+            .wrap_err("generate proof-valid masked timed-OVN ballot")?
+            .to_bytes();
+        assert_eq!(record.len(), TIMED_OVN_BALLOT_RECORD_BYTES_V1);
+        ballot_records.push(record);
+    }
+    assert!(current_height(&client)? < commitment_close_height);
+    assert_transition_rejected_without_state_change(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(ParliamentFreezeTimedOvnCorpusV1 {
+            ballot_attempt_id,
+            ballot_records: ballot_records.clone(),
+        }),
+        "timed-OVN corpus freeze before the frozen exact height",
+    )?;
+    advance_to_predecessor(
+        &client,
+        commitment_close_height,
+        "timed-OVN commitment close",
+    )?;
+    assert_eq!(
+        submit_transition(
+            &client,
+            attempt_id,
+            ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(
+                ParliamentFreezeTimedOvnCorpusV1 {
+                    ballot_attempt_id,
+                    ballot_records: ballot_records.clone(),
+                },
+            ),
+        )?,
+        commitment_close_height,
+    );
+    let committed_attempt = read_attempt(&client, attempt_id)?;
+    let committed_ballot = committed_attempt
+        .ballot(&ballot_attempt_id)
+        .expect("committed hidden ballot");
+    assert_eq!(committed_ballot.accepted_ballots(), Some(BODY_SEATS));
+    assert!(committed_ballot.corpus_root().is_some());
+    assert_eq!(
+        committed_ballot.attempt().status,
+        BallotAttemptStatusV1::AwaitingRelease,
+    );
+    assert!(
+        client
+            .get_parliament_timed_ovn_casting_context(ballot_attempt_id)
+            .is_err(),
+        "a sealed corpus is no longer a cast-capable context",
+    );
+    assert_transition_rejected_without_state_change(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(ParliamentFreezeTimedOvnCorpusV1 {
+            ballot_attempt_id,
+            ballot_records,
+        }),
+        "replayed timed-OVN corpus freeze",
+    )?;
+    assert_transition_rejected_without_state_change(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::BeginBallotOpeningBatch(
+            ParliamentBeginBallotOpeningBatchV1 {
+                ballot_attempt_ids: vec![ballot_attempt_id],
+                release_beacon_session_id: logical_beacon,
+                release_height,
+                pulse_id: BeaconPulseId::new([0xE1; 32]),
+            },
+        ),
+        "ballot opening before the frozen release height and authoritative pulse",
+    )?;
+
+    advance_to_predecessor(&client, release_height, "timed-OVN release pulse")?;
+    assert_eq!(
+        tick(&client, "finalize the demanded ballot-release pulse")?,
+        release_height,
+    );
+    network.ensure_blocks(release_height).await?;
+    let release_pulses = network
+        .peers()
+        .iter()
+        .map(|peer| pulse_at(&peer.client(), release_height))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(release_pulses.windows(2).all(|pair| pair[0] == pair[1]));
+    let release_pulse = release_pulses[0].clone();
+    assert_eq!(release_pulse.height, release_height);
+    assert_eq!(release_pulse.session_id, beacon_record.session.session_id);
+    assert_eq!(release_pulse.roster_hash, beacon_record.session.roster_hash);
+    assert_eq!(
+        release_pulse.transcript_hash,
+        beacon_record.session.transcript_hash,
+    );
+    assert_eq!(release_pulse.round, 0, "V1 pulses are view-independent");
+    assert_eq!(
+        release_pulse.finalized_chain_anchor.height.checked_add(1),
+        Some(release_height),
+    );
+    assert_eq!(
+        exact_block(&client, release_pulse.finalized_chain_anchor.height)?
+            .header()
+            .hash(),
+        release_pulse.finalized_chain_anchor.block_hash,
+    );
+    verify_finalized_global_threshold_beacon_pulse_v1(
+        &validated_beacon_session,
+        &release_pulse,
+        release_pulse.finalized_chain_anchor,
+    )
+    .wrap_err("independently verify the ballot-release pulse threshold signature")?;
+    assert_ne!(release_pulse.pulse_id, sortition_pulse.pulse_id);
+    submit_transition(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::BeginBallotOpeningBatch(
+            ParliamentBeginBallotOpeningBatchV1 {
+                ballot_attempt_ids: vec![ballot_attempt_id],
+                release_beacon_session_id: logical_beacon,
+                release_height,
+                pulse_id: BeaconPulseId::new(release_pulse.pulse_id),
+            },
+        ),
+    )?;
+    let opening_height = current_height(&client)?;
+    assert!(opening_height <= opening_deadline_height);
+    assert_transition_rejected_without_state_change(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::BeginBallotOpeningBatch(
+            ParliamentBeginBallotOpeningBatchV1 {
+                ballot_attempt_ids: vec![ballot_attempt_id],
+                release_beacon_session_id: logical_beacon,
+                release_height,
+                pulse_id: BeaconPulseId::new(release_pulse.pulse_id),
+            },
+        ),
+        "replayed ballot opening",
+    )?;
+    network.ensure_blocks(opening_height).await?;
+    let release_context = client.get_parliament_tle_release_context(ballot_attempt_id)?;
+    let validated_release = release_projection(&release_context)?
+        .validate()
+        .wrap_err("replay full public TLE transcript and release identity")?;
+    assert_eq!(release_context.release_height, release_height);
+    assert_eq!(
+        release_context.opening_deadline_height,
+        opening_deadline_height
+    );
+    assert_eq!(release_context.status, BallotAttemptStatusV1::Opening);
+    assert_eq!(
+        release_context.tle_key_session.threshold, 2,
+        "the four-validator test fixture uses an independently verified 2-of-4 release threshold",
+    );
+    let mut verified_partials = BTreeMap::<u16, TlePartialReleaseShareV1>::new();
+    for peer in network.peers() {
+        let peer_client = peer.client();
+        let peer_context = peer_client.get_parliament_tle_release_context(ballot_attempt_id)?;
+        assert_eq!(peer_context, release_context);
+        let partial =
+            release_partial(peer_client.post_parliament_tle_partial_release(&peer_context)?);
+        validated_release
+            .session()
+            .verify_partial_release(
+                validated_release.identity(),
+                validated_release.finalized_height(),
+                &partial,
+            )
+            .wrap_err("independently verify one proof-carrying validator release share")?;
+        let participant_index = partial.participant_index;
+        if let Some(previous) = verified_partials.insert(participant_index, partial.clone()) {
+            assert_eq!(previous, partial, "a validator seat may not equivocate");
+        }
+    }
+    assert_eq!(verified_partials.len(), VALIDATOR_COUNT);
+    let canonical_threshold = verified_partials
+        .into_values()
+        .take(usize::from(release_context.tle_key_session.threshold))
+        .collect::<Vec<_>>();
+    let final_release = validated_release
+        .session()
+        .combine_partial_releases(
+            validated_release.identity(),
+            validated_release.finalized_height(),
+            &canonical_threshold,
+        )
+        .wrap_err("combine canonical threshold of verified release shares")?;
+    validated_release
+        .session()
+        .verify_final_release(
+            validated_release.identity(),
+            validated_release.finalized_height(),
+            &final_release,
+        )
+        .wrap_err("independently verify combined final release")?;
+    let parliament_final_release = ParliamentTleFinalReleaseSignatureV1 {
+        key_session_id: final_release.key_session_id,
+        identity_digest: final_release.identity_digest,
+        signature: final_release.signature,
+    };
+    submit_transition(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::FinalizeOpenedBallot(ParliamentFinalizeOpenedBallotV1 {
+            ballot_attempt_id,
+            final_release: parliament_final_release,
+        }),
+    )?;
+    let certified = read_attempt(&client, attempt_id)?;
+    let certificate = certified
+        .certificate()
+        .cloned()
+        .expect("Core constructs a certificate atomically with the approved final aggregate");
+    certificate
+        .validate()
+        .wrap_err("revalidate the complete Core-constructed Parliament certificate")?;
+    assert_eq!(
+        certified.attempt().status,
+        GovernanceAttemptStatusV1::Certified
+    );
+    assert_eq!(certified.attempt().stage, GovernanceStageV1::Enactment);
+    assert_eq!(certificate.certified_at_height, current_height(&client)?);
+    assert_eq!(
+        certificate.enact_at_height,
+        certificate.certified_at_height + MIN_ENACTMENT_DELAY,
+    );
+    assert_eq!(certificate.body_bindings.len(), expected_bodies.len());
+    let policy_binding = certificate
+        .body_bindings
+        .iter()
+        .find(|binding| binding.body == ParliamentBody::PolicyJury)
+        .expect("certificate carries exactly one Policy Jury binding");
+    let ballot_binding = policy_binding
+        .ballot
+        .expect("Policy Jury certificate binding is mandatory and private");
+    assert_eq!(ballot_binding.ballot_attempt_id, ballot_attempt_id);
+    assert_eq!(ballot_binding.registered_at_height, registered_at_height);
+    assert_eq!(
+        ballot_binding.registration_close_height,
+        registration_close_height
+    );
+    assert_eq!(
+        ballot_binding.survivor_freeze_height,
+        survivor_freeze_height
+    );
+    assert_eq!(
+        ballot_binding.commitment_close_height,
+        commitment_close_height
+    );
+    assert_eq!(
+        ballot_binding.registration_closed_at_height,
+        registration_close_height,
+    );
+    assert_eq!(
+        ballot_binding.survivors_frozen_at_height,
+        survivor_freeze_height,
+    );
+    assert_eq!(
+        ballot_binding.commitment_closed_at_height,
+        commitment_close_height,
+    );
+    assert_eq!(ballot_binding.release_height, release_height);
+    assert_eq!(
+        ballot_binding.opening_deadline_height,
+        opening_deadline_height,
+    );
+    assert_eq!(ballot_binding.max_ballot_retries, 0);
+    assert_eq!(ballot_binding.max_corpus_entries, 8);
+    assert_eq!(ballot_binding.tally.accepted_ballots, BODY_SEATS);
+    assert_eq!(ballot_binding.tally.aye, 2);
+    assert_eq!(ballot_binding.tally.nay, 1);
+    assert_eq!(ballot_binding.tally.abstain, 0);
+    assert_eq!(
+        ballot_binding.outcome,
+        ParliamentAggregateOutcomeV1::Approved
+    );
+    assert_eq!(ballot_binding.opening_height, opening_height);
+    assert_eq!(
+        ballot_binding.release_pulse_id,
+        BeaconPulseId::new(release_pulse.pulse_id),
+    );
+    assert!(
+        certificate
+            .body_bindings
+            .iter()
+            .filter(|binding| binding.body != ParliamentBody::PolicyJury)
+            .all(|binding| {
+                binding.public_finding.as_ref().is_some_and(|finding| {
+                    finding.endorsements == 2
+                        && finding.quorum == 2
+                        && finding.endorsing_assignments.len() == 2
+                }) && binding.ballot.is_none()
+            }),
+    );
+    assert_transition_rejected_without_state_change(
+        &client,
+        attempt_id,
+        ParliamentLifecycleTransitionV1::FinalizeOpenedBallot(ParliamentFinalizeOpenedBallotV1 {
+            ballot_attempt_id,
+            final_release: parliament_final_release,
+        }),
+        "replayed aggregate ballot finalization",
+    )?;
+
+    advance_to_predecessor(
+        &client,
+        certificate.enact_at_height,
+        "automatic exact-height Parliament enactment",
+    )?;
+    assert_eq!(
+        tick(&client, "drive automatic due-certificate execution")?,
+        certificate.enact_at_height,
+    );
+    let enacted_height = certificate.enact_at_height;
+    network.ensure_blocks(enacted_height).await?;
+    let enacted_response = client.get_parliament_attempt(attempt_id)?;
+    let enacted = read_attempt(&client, attempt_id)?;
+    assert_eq!(enacted.attempt().status, GovernanceAttemptStatusV1::Enacted);
+    assert_eq!(enacted.attempt().stage, GovernanceStageV1::Enactment);
+    assert_eq!(enacted.terminal_height(), Some(enacted_height));
+    assert_eq!(enacted.certificate(), Some(&certificate));
+    client
+        .get_gov_contract_json(&contract_address)
+        .wrap_err("consensus-owned certificate enactment must bind the staged contract")?;
+
+    let peer_blocks = network
+        .peers()
+        .iter()
+        .map(|peer| exact_block(&peer.client(), enacted_height))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(
+        peer_blocks
+            .windows(2)
+            .all(|pair| pair[0].hash() == pair[1].hash()),
+        "all four validators must finalize the same exact enactment block",
+    );
+    let enacted_height_nonzero =
+        NonZeroU64::new(enacted_height).expect("a Parliament enactment cannot be genesis");
+    for (peer, block) in network.peers().iter().zip(&peer_blocks) {
+        let (proof, verified_hash) = peer
+            .client()
+            .get_bridge_finality_anchor(enacted_height_nonzero, network.network_id())
+            .wrap_err("independently verify the enactment block's revision-4 finality")?;
+        let artifact = &proof.finality_artifact;
+        assert_eq!(verified_hash, block.hash());
+        assert_eq!(artifact.height, enacted_height);
+        assert_eq!(artifact.height_context.roster.len(), VALIDATOR_COUNT);
+        assert_eq!(artifact.height_context.quorum.min_signers, 3);
+        assert_eq!(artifact.height_context.quorum.total_power, 4);
+        assert_eq!(artifact.commit_qc.signers.len(), 3);
+        assert!(
+            artifact
+                .height_context
+                .roster
+                .iter()
+                .all(|entry| entry.power == 1),
+            "each signed-genesis validator must retain exactly one vote",
+        );
+        let mut proof_roster = artifact
+            .height_context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        proof_roster.sort_unstable();
+        let mut signed_genesis_roster = ordered_roster.clone();
+        signed_genesis_roster.sort_unstable();
+        assert_eq!(
+            proof_roster, signed_genesis_roster,
+            "the revision-4 proof roster must equal the signed-genesis voting authority",
+        );
+        assert_eq!(
+            artifact.height_context.da_layout,
+            SumeragiV2GenesisContextParameters::recommended().da_layout,
+            "every enactment proof must retain the signed revision-4 RS16 DA layout",
+        );
+    }
+    for peer in network.peers() {
+        let peer_client = peer.client();
+        let response = peer_client.get_parliament_attempt(attempt_id)?;
+        assert_eq!(response.current_height, enacted_height);
+        assert_eq!(response.attempt.status, GovernanceAttemptStatusV1::Enacted);
+        assert_eq!(
+            response.state_payload_hex,
+            enacted_response.state_payload_hex
+        );
+        peer_client
+            .get_gov_contract_json(&contract_address)
+            .wrap_err("every validator must expose the consensus-enacted contract")?;
+    }
+
+    let restart_index = network.peers().len() - 1;
+    let restart_peer = network.peers()[restart_index].clone();
+    let config_layers = network.config_layers().collect::<Vec<_>>();
+    assert!(
+        restart_peer.shutdown_if_started().await,
+        "selected validator must be running before the persistence restart",
+    );
+    tokio::time::timeout(
+        network.peer_startup_timeout(),
+        restart_peer.start_checked(config_layers.iter(), None),
+    )
+    .await
+    .map_err(|_| eyre!("Parliament validator restart exceeded {OPERATION_TIMEOUT:?}"))??;
+    tokio::time::timeout(
+        network.sync_timeout(),
+        restart_peer.once_block(enacted_height),
+    )
+    .await
+    .map_err(|_| eyre!("restarted Parliament validator did not recover finalized state"))?;
+    let restarted_response = restart_peer.client().get_parliament_attempt(attempt_id)?;
+    assert_eq!(
+        restarted_response.attempt.status,
+        GovernanceAttemptStatusV1::Enacted
+    );
+    assert_eq!(
+        restarted_response.state_payload_hex, enacted_response.state_payload_hex,
+        "normal restart must restore the complete reducer/certificate state",
+    );
+    let restarted_block = exact_block(&restart_peer.client(), enacted_height)?;
+    assert_eq!(restarted_block.hash(), peer_blocks[0].hash());
+    restart_peer
+        .client()
+        .get_gov_contract_json(&contract_address)
+        .wrap_err("normal restart must restore the consensus-enacted contract")?;
     Ok(())
+}
+
+#[test]
+fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
+    let source = include_str!("sora_parliament_lifecycle_smoke.rs");
+    let forbidden = [
+        concat!("Cast", "PlainBallot"),
+        concat!("Cast", "ParliamentBallot"),
+        concat!("Finalize", "Referendum"),
+        concat!("Enact", "Referendum"),
+        concat!("Construct", "Certificate"),
+        concat!("Parliament", "CertificateV1"),
+        concat!("ParliamentAutomatic", "ExecutionOutcomeV1"),
+        concat!("Mark", "Enacted"),
+        concat!("Mark", "Superseded"),
+        concat!("Mark", "ExecutionFailed"),
+        concat!("Commit", "ContractDeployment"),
+        concat!("without_npos_", "genesis_bootstrap"),
+        concat!("with_consensus_", "message_control"),
+        concat!("sumeragi.debug", ".rbc"),
+        concat!("legacy", "_rbc"),
+        concat!("rbc_", "bypass"),
+    ];
+    for name in forbidden {
+        assert!(
+            !source.contains(name),
+            "modern Parliament corridor must not contain retired or bypass operation `{name}`",
+        );
+    }
+    assert!(source.contains(concat!("with_peers(", "VALIDATOR_COUNT)")));
+    assert!(source.contains(concat!("with_npos_", "consensus()")));
+    assert!(source.contains(concat!("with_parliament_", "test_signers()")));
+    assert!(source.contains(concat!(
+        "SumeragiV2GenesisContextParameters::recommended()",
+        ".da_layout"
+    )));
+    let boundary_helper = concat!("assert_transition_rejected_without_state_", "change(");
+    assert_eq!(
+        source.matches(boundary_helper).count(),
+        10,
+        "the helper definition plus nine exact checkpoint/replay calls must remain",
+    );
+    for required in [
+        concat!("ConsumeSortition", "PulseBatch"),
+        concat!("RegisterBallot", "Participant"),
+        concat!("CloseBallot", "Registration"),
+        concat!("FreezeBallot", "Survivors"),
+        concat!("FreezeTimedOvn", "Corpus"),
+        concat!("combine_partial_", "releases"),
+        concat!("FinalizeOpened", "Ballot"),
+        concat!("GovernanceAttemptStatusV1::", "Enacted"),
+        concat!("shutdown_if_", "started"),
+        concat!("start_", "checked"),
+    ] {
+        assert!(
+            source.contains(required),
+            "modern Parliament corridor lost required operation `{required}`",
+        );
+    }
 }

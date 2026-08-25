@@ -4,7 +4,7 @@
 //! out-of-process risk engines. They are minimal yet feature-complete enough
 //! to cover synchronous scoring, signed assessments, and governance exports.
 #[cfg(feature = "governance")]
-use crate::governance::types::{GovernanceEnactment, GovernanceParameters};
+use crate::governance::types::GovernanceParameters;
 use crate::{account::AccountId, asset::AssetId};
 use norito::codec::{Decode, Encode};
 use std::{string::String, vec::Vec};
@@ -139,8 +139,6 @@ pub struct GovernanceExport {
     pub generated_at_ms: u64,
     /// Parameters active at the time of export.
     pub parameters: GovernanceParameters,
-    /// Most recent enactment affecting fraud policy.
-    pub latest_enactment: Option<GovernanceEnactment>,
     /// Risk scoring model version promoted through the pipeline.
     pub model_version: String,
     /// Blake2b-32 digest of the policy bundle handed to auditors.
@@ -160,11 +158,7 @@ pub struct DecisionAggregate {
 #[cfg(all(test, feature = "governance"))]
 mod tests {
     use super::*;
-    use crate::{
-        asset::id::AssetDefinitionId,
-        domain::DomainId,
-        governance::types::{AtWindow, ProposalId},
-    };
+    use crate::{asset::id::AssetDefinitionId, domain::DomainId};
     use iroha_crypto::KeyPair;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked fraud fixture keypair")
@@ -255,14 +249,6 @@ mod tests {
         let export = GovernanceExport {
             generated_at_ms: 1_700_000_200_000,
             parameters: params,
-            latest_enactment: Some(GovernanceEnactment {
-                referendum_id: ProposalId([0xCC; 32]),
-                preimage_hash: [0xDD; 32],
-                at_window: AtWindow {
-                    lower: 1_000,
-                    upper: 2_000,
-                },
-            }),
             model_version: "risk-model-v1".to_string(),
             policy_digest: [0xEE; 32],
             aggregates: vec![DecisionAggregate {

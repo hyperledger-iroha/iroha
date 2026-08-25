@@ -19,6 +19,10 @@ use base64::Engine as _;
 use blake3::Hasher as Blake3Hasher;
 use iroha_crypto::PublicKey;
 use iroha_data_model::account::AccountAddress;
+use iroha_torii_shared::parliament_api::{
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_NAME_V1,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentTimedOvnCastingProofRequestV1,
+};
 use iroha_torii_shared::route_catalog::{
     self, AdmissionPolicy, ApiSurface, AuthenticationPolicy, CatalogProjection, EnabledFeatures,
     HttpMethod as CatalogHttpMethod, RouteCatalog, RouteDescriptor, RouteEffect,
@@ -582,6 +586,13 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_proofs_query_tool());
     tools.push(iroha_gov_contract_get_tool());
     tools.push(iroha_gov_proposals_deploy_contract_tool());
+    tools.push(iroha_gov_parliament_attempt_draft_tool());
+    tools.push(iroha_gov_parliament_attempt_get_tool());
+    tools.push(iroha_gov_parliament_timed_ovn_casting_context_get_tool());
+    tools.push(iroha_gov_parliament_timed_ovn_casting_proof_get_tool());
+    tools.push(iroha_gov_parliament_tle_release_context_get_tool());
+    tools.push(iroha_gov_parliament_tle_partial_release_create_tool());
+    tools.push(iroha_gov_parliament_transition_draft_tool());
     tools.push(iroha_gov_proposals_get_tool());
     tools.push(iroha_gov_locks_get_tool());
     tools.push(iroha_gov_referenda_get_tool());
@@ -594,8 +605,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_gov_unlocks_stats_tool());
     tools.push(iroha_gov_council_current_tool());
     tools.push(iroha_gov_citizens_count_tool());
-    tools.push(iroha_gov_enact_tool());
-    tools.push(iroha_gov_finalize_tool());
     tools.push(iroha_aliases_resolve_tool());
     tools.push(iroha_aliases_resolve_index_tool());
     tools.push(iroha_aliases_by_account_tool());
@@ -1556,6 +1565,77 @@ async fn handle_named_tool_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
+        "iroha.gov.parliament.attempts.draft" => {
+            match dispatch_iroha_gov_parliament_attempt_draft(&app, inbound_headers, arguments)
+                .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.parliament.attempts.get" => {
+            match dispatch_iroha_gov_parliament_attempt_get(&app, inbound_headers, arguments).await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.parliament.ballots.timed_ovn_casting_context.get" => {
+            match dispatch_iroha_gov_parliament_timed_ovn_casting_context_get(
+                &app,
+                inbound_headers,
+                arguments,
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.parliament.ballots.timed_ovn_casting_proof.get" => {
+            match dispatch_iroha_gov_parliament_timed_ovn_casting_proof_get(
+                &app,
+                inbound_headers,
+                arguments,
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.parliament.ballots.tle_release_context.get" => {
+            match dispatch_iroha_gov_parliament_tle_release_context_get(
+                &app,
+                inbound_headers,
+                arguments,
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.parliament.ballots.tle_partial_release.create" => {
+            match dispatch_iroha_gov_parliament_tle_partial_release_create(
+                &app,
+                inbound_headers,
+                arguments,
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.parliament.transitions.draft" => {
+            match dispatch_iroha_gov_parliament_transition_draft(&app, inbound_headers, arguments)
+                .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
         "iroha.gov.proposals.get" => {
             match dispatch_iroha_gov_proposals_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
@@ -1630,18 +1710,6 @@ async fn handle_named_tool_call(
         }
         "iroha.gov.citizens.count" => {
             match dispatch_iroha_gov_citizens_count(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.gov.enact" => {
-            match dispatch_iroha_gov_enact(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.gov.finalize" => {
-            match dispatch_iroha_gov_finalize(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -2720,17 +2788,10 @@ enum GovernanceOpenapiValidation {
     SelectorBody {
         field: &'static str,
     },
-    ProposalBody {
-        field: &'static str,
-    },
-    FinalizeBody,
 }
 impl GovernanceOpenapiValidation {
     const fn requires_body(self) -> bool {
-        matches!(
-            self,
-            Self::SelectorBody { .. } | Self::ProposalBody { .. } | Self::FinalizeBody
-        )
+        matches!(self, Self::SelectorBody { .. })
     }
 }
 fn governance_openapi_validation(
@@ -2763,10 +2824,6 @@ fn governance_openapi_validation(
         ("POST", "/v1/gov/ballots/plain") => Some(GovernanceOpenapiValidation::SelectorBody {
             field: "referendum_id",
         }),
-        ("POST", "/v1/gov/enact") => Some(GovernanceOpenapiValidation::ProposalBody {
-            field: "proposal_id",
-        }),
-        ("POST", "/v1/gov/finalize") => Some(GovernanceOpenapiValidation::FinalizeBody),
         _ => None,
     }
 }
@@ -4522,6 +4579,249 @@ async fn dispatch_iroha_gov_contract_get(
     )
     .await
 }
+fn parliament_json_body(arguments: &Map, context: &str) -> Result<Vec<u8>, String> {
+    reject_unknown_arguments(arguments, &["body", "headers", "accept"], context)?;
+    let body = arguments
+        .get("body")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("`body` must be an object for {context}"))?;
+    encode_mcp_json_body(
+        &Value::Object(body.clone()),
+        "encode Parliament request body",
+    )
+}
+async fn dispatch_iroha_gov_parliament_attempt_draft(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = parliament_json_body(arguments, "Parliament attempt draft")?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        iroha_torii_shared::uri::GOV_PARLIAMENT_ATTEMPT_DRAFT,
+        arguments.get("headers"),
+        body,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+fn extract_parliament_attempt_id_argument(arguments: &Map) -> Result<String, String> {
+    reject_unknown_arguments(
+        arguments,
+        &["path", "headers", "accept"],
+        "Parliament attempt read",
+    )?;
+    let path = arguments
+        .get("path")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "`path` must be an object for Parliament attempt read".to_owned())?;
+    reject_unknown_arguments(
+        path,
+        &["governance_attempt_id"],
+        "Parliament attempt read path",
+    )?;
+    let attempt_id = path
+        .get("governance_attempt_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "string `path.governance_attempt_id` is required".to_owned())?;
+    require_governance_proposal_id_v1("governance attempt id", attempt_id)?;
+    if attempt_id.bytes().all(|byte| byte == b'0') {
+        return Err("`governance attempt id` must not be the zero identifier".to_owned());
+    }
+    Ok(attempt_id.to_owned())
+}
+async fn dispatch_iroha_gov_parliament_attempt_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let attempt_id = extract_parliament_attempt_id_argument(arguments)?;
+    let mut path = String::from("/v1/gov/parliament/attempts/");
+    path.push_str(&attempt_id);
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        &path,
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+fn extract_parliament_ballot_attempt_id_argument(
+    arguments: &Map,
+    context: &str,
+) -> Result<String, String> {
+    reject_unknown_arguments(arguments, &["path", "headers", "accept"], context)?;
+    extract_parliament_ballot_attempt_id_path(arguments, context)
+}
+fn extract_parliament_ballot_attempt_id_path(
+    arguments: &Map,
+    context: &str,
+) -> Result<String, String> {
+    let path = arguments
+        .get("path")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("`path` must be an object for {context}"))?;
+    reject_unknown_arguments(path, &["ballot_attempt_id"], &format!("{context} path"))?;
+    let ballot_attempt_id = path
+        .get("ballot_attempt_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "string `path.ballot_attempt_id` is required".to_owned())?;
+    require_governance_proposal_id_v1("ballot attempt id", ballot_attempt_id)?;
+    if ballot_attempt_id.bytes().all(|byte| byte == b'0') {
+        return Err("`ballot attempt id` must not be the zero identifier".to_owned());
+    }
+    Ok(ballot_attempt_id.to_owned())
+}
+async fn dispatch_iroha_gov_parliament_tle_release_context_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let ballot_attempt_id = extract_parliament_ballot_attempt_id_argument(
+        arguments,
+        "Parliament TLE release-context read",
+    )?;
+    let path = format!("/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context");
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        &path,
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+async fn dispatch_iroha_gov_parliament_timed_ovn_casting_context_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let ballot_attempt_id = extract_parliament_ballot_attempt_id_argument(
+        arguments,
+        "Parliament timed-OVN casting-context read",
+    )?;
+    let path = format!("/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context");
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        &path,
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+fn parliament_timed_ovn_casting_proof_request(
+    arguments: &Map,
+) -> Result<ParliamentTimedOvnCastingProofRequestV1, String> {
+    reject_unknown_arguments(
+        arguments,
+        &["path", "trusted_checkpoint_height", "headers"],
+        "Parliament timed-OVN casting-proof read",
+    )?;
+    let trusted_checkpoint_height = arguments
+        .get("trusted_checkpoint_height")
+        .and_then(Value::as_u64)
+        .filter(|height| *height != 0)
+        .ok_or_else(|| "non-zero integer `trusted_checkpoint_height` is required".to_owned())?;
+    Ok(ParliamentTimedOvnCastingProofRequestV1 {
+        version: PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1,
+        trusted_checkpoint_height,
+    })
+}
+async fn dispatch_iroha_gov_parliament_timed_ovn_casting_proof_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let ballot_attempt_id = extract_parliament_ballot_attempt_id_path(
+        arguments,
+        "Parliament timed-OVN casting-proof read",
+    )?;
+    let request = parliament_timed_ovn_casting_proof_request(arguments)?;
+    let path = format!("/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof");
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        &path,
+        arguments.get("headers"),
+        norito::codec::Encode::encode(&request),
+        Some(crate::utils::NORITO_MIME_TYPE.to_owned()),
+        Some(crate::utils::NORITO_MIME_TYPE.to_owned()),
+    )
+    .await
+}
+async fn dispatch_iroha_gov_parliament_tle_partial_release_create(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let ballot_attempt_id = extract_parliament_ballot_attempt_id_argument(
+        arguments,
+        "Parliament TLE partial-release request",
+    )?;
+    let path = format!("/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release");
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        &path,
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+async fn dispatch_iroha_gov_parliament_transition_draft(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = parliament_json_body(arguments, "Parliament transition draft")?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        iroha_torii_shared::uri::GOV_PARLIAMENT_TRANSITION_DRAFT,
+        arguments.get("headers"),
+        body,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
 async fn dispatch_iroha_gov_proposals_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4681,58 +4981,6 @@ async fn dispatch_iroha_gov_ballots_plain(
         inbound_headers,
         Method::POST,
         "/v1/gov/ballots/plain",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_gov_enact(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    require_borrowed_governance_proposal_id_body(&body, "proposal_id")?;
-    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/gov/enact",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_gov_finalize(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let referendum_id = require_borrowed_governance_proposal_id_body(&body, "referendum_id")?;
-    let proposal_id = require_borrowed_governance_proposal_id_body(&body, "proposal_id")?;
-    if referendum_id != proposal_id {
-        return Err(
-            "`referendum_id` must equal `proposal_id` for governance finalization".to_owned(),
-        );
-    }
-    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/gov/finalize",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -6639,14 +6887,6 @@ fn require_governance_selector_body<'a>(body: &'a Value, field: &str) -> Result<
     require_governance_selector_v1(field, value)?;
     Ok(value)
 }
-fn require_governance_proposal_id_body<'a>(
-    body: &'a Value,
-    field: &str,
-) -> Result<&'a str, String> {
-    let value = require_governance_body_string(body, field)?;
-    require_governance_proposal_id_v1(field, value)?;
-    Ok(value)
-}
 fn require_governance_openapi_path_string<'a>(
     arguments: &'a Map,
     field: &str,
@@ -6695,22 +6935,6 @@ fn validate_governance_openapi_dispatch(tool: &ToolSpec, arguments: &Map) -> Res
         GovernanceOpenapiValidation::SelectorBody { field } => {
             let body = require_governance_openapi_json_body(arguments)?;
             require_governance_selector_body(body, field).map(|_| ())
-        }
-        GovernanceOpenapiValidation::ProposalBody { field } => {
-            let body = require_governance_openapi_json_body(arguments)?;
-            require_governance_proposal_id_body(body, field).map(|_| ())
-        }
-        GovernanceOpenapiValidation::FinalizeBody => {
-            let body = require_governance_openapi_json_body(arguments)?;
-            let referendum_id = require_governance_proposal_id_body(body, "referendum_id")?;
-            let proposal_id = require_governance_proposal_id_body(body, "proposal_id")?;
-            if referendum_id != proposal_id {
-                return Err(
-                    "`referendum_id` must equal `proposal_id` for governance finalization"
-                        .to_owned(),
-                );
-            }
-            Ok(())
         }
     }
 }
@@ -8482,6 +8706,265 @@ fn iroha_gov_proposals_deploy_contract_tool() -> ToolSpec {
         "/v1/gov/proposals/deploy-contract",
     )
 }
+fn iroha_gov_parliament_attempt_draft_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.parliament.attempts.draft".to_owned(),
+        effect: ToolEffect::BuildInstruction,
+        description: "Draft one canonical attempt-based Parliament proposal for local signing. The canonical account proof must bind the exact V1 JSON body.".to_owned(),
+        method: Method::POST,
+        path_template: "/v1/gov/parliament/attempts/draft".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["body"],
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["version", "proposal", "attempt_sequence"],
+                    "properties": {
+                        "version": { "type": "integer", "const": 1 },
+                        "proposal": { "type": "object" },
+                        "attempt_sequence": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 4_294_967_295_u64
+                        }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string", "const": "application/json" }
+            }
+        }),
+    }
+}
+fn iroha_gov_parliament_attempt_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.parliament.attempts.get".to_owned(),
+        effect: ToolEffect::Read,
+        description:
+            "Read one complete committed Parliament attempt by its exact canonical identifier."
+                .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/gov/parliament/attempts/{governance_attempt_id}".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["governance_attempt_id"],
+                    "properties": {
+                        "governance_attempt_id": {
+                            "type": "string",
+                            "minLength": 64,
+                            "maxLength": 64,
+                            "pattern": "^[0-9a-f]{64}$"
+                        }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string", "const": "application/json" }
+            }
+        }),
+    }
+}
+fn iroha_gov_parliament_tle_release_context_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.parliament.ballots.tle_release_context.get".to_owned(),
+        effect: ToolEffect::Read,
+        description: "Read one Core-authorized bounded public TLE release context for a Parliament ballot already in Opening. No ballot corpora, shares, secrets, or individual openings are returned."
+            .to_owned(),
+        method: Method::GET,
+        path_template:
+            "/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["ballot_attempt_id"],
+                    "properties": {
+                        "ballot_attempt_id": {
+                            "type": "string",
+                            "minLength": 64,
+                            "maxLength": 64,
+                            "pattern": "^[0-9a-f]{64}$"
+                        }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string", "const": "application/json" }
+            }
+        }),
+    }
+}
+fn iroha_gov_parliament_timed_ovn_casting_context_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.parliament.ballots.timed_ovn_casting_context.get".to_owned(),
+        effect: ToolEffect::Read,
+        description: "Inspect one node-local Core-replay-validated public timed-OVN casting context. This unauthenticated-by-consensus view is for diagnostics only and MUST NOT be used as native-wallet or seed-unsealing input."
+            .to_owned(),
+        method: Method::GET,
+        path_template:
+            "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["ballot_attempt_id"],
+                    "properties": {
+                        "ballot_attempt_id": {
+                            "type": "string",
+                            "minLength": 64,
+                            "maxLength": 64,
+                            "pattern": "^[0-9a-f]{64}$"
+                        }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string", "const": "application/json" }
+            }
+        }),
+    }
+}
+fn iroha_gov_parliament_timed_ovn_casting_proof_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.parliament.ballots.timed_ovn_casting_proof.get".to_owned(),
+        effect: manual_tool_effect_from_name(
+            "iroha.gov.parliament.ballots.timed_ovn_casting_proof.get",
+        ),
+        description: format!(
+            "Transport one bounded consensus-authenticated Parliament casting-proof page as canonical Norito (`{PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_NAME_V1}`). The MCP response body is base64 canonical Norito, not a verified wallet context: native code MUST independently pin the network id and exact checkpoint context, verify every finality proof and membership witness, and replay the archive before accessing seed material."
+        ),
+        method: Method::POST,
+        path_template: "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "trusted_checkpoint_height"],
+            "properties": {
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["ballot_attempt_id"],
+                    "properties": {
+                        "ballot_attempt_id": {
+                            "type": "string",
+                            "minLength": 64,
+                            "maxLength": 64,
+                            "pattern": "^[0-9a-f]{64}$"
+                        }
+                    }
+                },
+                "trusted_checkpoint_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "Height of the caller's externally pinned finality checkpoint; the exact trusted context id stays local to the native verifier."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "description": "Canonical account authentication for the exact POST target and canonical Norito request bytes."
+                }
+            }
+        }),
+    }
+}
+fn iroha_gov_parliament_tle_partial_release_create_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.parliament.ballots.tle_partial_release.create".to_owned(),
+        effect: ToolEffect::Write,
+        description: "Request this node's Core-authorized proof-carrying TLE partial release for one Parliament ballot in Opening. The request has no body and returns no secret-share material."
+            .to_owned(),
+        method: Method::POST,
+        path_template:
+            "/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["ballot_attempt_id"],
+                    "properties": {
+                        "ballot_attempt_id": {
+                            "type": "string",
+                            "minLength": 64,
+                            "maxLength": 64,
+                            "pattern": "^[0-9a-f]{64}$"
+                        }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string", "const": "application/json" }
+            }
+        }),
+    }
+}
+fn iroha_gov_parliament_transition_draft_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.parliament.transitions.draft".to_owned(),
+        effect: ToolEffect::BuildInstruction,
+        description: "Draft one exact closed Parliament lifecycle transition for local signing. Consensus rechecks authority, state, phase, proof, and roster bindings.".to_owned(),
+        method: Method::POST,
+        path_template: "/v1/gov/parliament/transitions/draft".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["body"],
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["version", "governance_attempt_id", "transition"],
+                    "properties": {
+                        "version": { "type": "integer", "const": 1 },
+                        "governance_attempt_id": {
+                            "type": "string",
+                            "minLength": 64,
+                            "maxLength": 64,
+                            "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "transition": { "type": "object" }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string", "const": "application/json" }
+            }
+        }),
+    }
+}
 fn iroha_gov_proposals_get_tool() -> ToolSpec {
     let proposal_id_schema = governance_proposal_id_v1_schema(
         "Exact 64-character lowercase hexadecimal governance proposal id.",
@@ -8647,40 +9130,6 @@ fn iroha_gov_citizens_count_tool() -> ToolSpec {
         "iroha.gov.citizens.count",
         "Fetch exact governance citizenship registry count (`/v1/gov/citizens`).",
         "/v1/gov/citizens",
-    )
-}
-fn iroha_gov_enact_tool() -> ToolSpec {
-    iroha_gov_post_tool_with_fields(
-        "iroha.gov.enact",
-        "Enact governance proposal effects (`/v1/gov/enact`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/enact",
-        &[(
-            "proposal_id",
-            governance_proposal_id_v1_schema(
-                "Exact 64-character lowercase hexadecimal governance proposal id.",
-            ),
-        )],
-    )
-}
-fn iroha_gov_finalize_tool() -> ToolSpec {
-    iroha_gov_post_tool_with_fields(
-        "iroha.gov.finalize",
-        "Finalize governance tally (`/v1/gov/finalize`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/finalize",
-        &[
-            (
-                "referendum_id",
-                governance_proposal_id_v1_schema(
-                    "Exact 64-character lowercase hexadecimal referendum id; it must equal proposal_id for proposal-backed finalization.",
-                ),
-            ),
-            (
-                "proposal_id",
-                governance_proposal_id_v1_schema(
-                    "Exact 64-character lowercase hexadecimal governance proposal id.",
-                ),
-            ),
-        ],
     )
 }
 fn iroha_contracts_post_tool(name: &str, description: &str, path_template: &str) -> ToolSpec {
@@ -9321,5 +9770,63 @@ mod tests {
             vpn_canonical_auth_headers(arguments.as_object().expect("arguments"))
                 .expect_err("noncanonical typed authentication must fail before dispatch");
         }
+    }
+
+    #[test]
+    fn parliament_casting_proof_tool_builds_one_canonical_checkpoint_request() {
+        let arguments = norito::json!({
+            "path": {
+                "ballot_attempt_id": "0101010101010101010101010101010101010101010101010101010101010101"
+            },
+            "trusted_checkpoint_height": 41_u64,
+            "headers": {}
+        });
+        let arguments = arguments.as_object().expect("arguments");
+        let request = parliament_timed_ovn_casting_proof_request(arguments)
+            .expect("bounded casting-proof request");
+        assert_eq!(
+            request.version,
+            PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1
+        );
+        assert_eq!(request.trusted_checkpoint_height, 41);
+        let encoded = norito::codec::Encode::encode(&request);
+        assert_eq!(
+            norito::decode_from_bytes::<ParliamentTimedOvnCastingProofRequestV1>(&encoded)
+                .expect("canonical casting-proof request"),
+            request
+        );
+    }
+
+    #[test]
+    fn parliament_casting_proof_tool_rejects_unpinned_or_ambiguous_requests() {
+        for arguments in [
+            norito::json!({
+                "path": {
+                    "ballot_attempt_id": "0101010101010101010101010101010101010101010101010101010101010101"
+                },
+                "trusted_checkpoint_height": 0_u64
+            }),
+            norito::json!({
+                "path": {
+                    "ballot_attempt_id": "0101010101010101010101010101010101010101010101010101010101010101"
+                },
+                "trusted_checkpoint_height": 41_u64,
+                "network_id": "node-selected-network"
+            }),
+        ] {
+            parliament_timed_ovn_casting_proof_request(arguments.as_object().expect("arguments"))
+                .expect_err("untrusted or ambiguous checkpoint request must fail closed");
+        }
+        let tool = iroha_gov_parliament_timed_ovn_casting_proof_get_tool();
+        assert_eq!(tool.method, Method::POST);
+        assert!(
+            tool.description
+                .contains("MUST independently pin the network id")
+        );
+        assert!(
+            iroha_gov_parliament_timed_ovn_casting_context_get_tool()
+                .description
+                .contains("MUST NOT be used")
+        );
     }
 }

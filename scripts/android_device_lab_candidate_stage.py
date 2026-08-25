@@ -383,7 +383,7 @@ def validate_candidate_stage_manifest_v2(
         "qualified_candidate_sha256": qualified_candidate_sha256,
         "source_commit": source_commit,
         "source_tree_sha256": source_tree_sha256,
-        "bridge_abi_version": 22,
+        "bridge_abi_version": 23,
         "artifact_count": len(contract.artifact_file_names),
         "topup_finality_roster_file_name": "topup-finality-roster-v4.norito",
     }

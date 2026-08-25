@@ -245,7 +245,7 @@ fn raw_domain_registration_is_genesis_only() {
     assert!(genesis.verdict().is_ok());
 }
 #[test]
-fn genesis_cannot_bypass_typed_sccp_referendum_governance() {
+fn genesis_cannot_bypass_typed_sccp_certificate_governance() {
     let mut executor = MockExecutor::new(true);
     bridge::visit_apply_sccp_route_governance(&mut executor, &remove_sccp_route());
     assert!(executor.verdict().is_err());

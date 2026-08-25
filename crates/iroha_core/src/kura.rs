@@ -132,6 +132,13 @@ use iroha_data_model::{
         KagemushaTopUpAnchorMerkleProofV2, KagemushaTopUpFinalityCompactQcV2,
         KagemushaTopUpFinalityHeightContextV2, KagemushaTopUpFinalityProofV2,
     },
+    parliament_casting::{
+        ParliamentTimedOvnCastingContextBindingV1,
+        ParliamentTimedOvnCastingContextMembershipProofV1,
+        ParliamentTimedOvnCastingSnapshotCommitmentV1, ParliamentTimedOvnCastingWitnessProofV1,
+        ParliamentTimedOvnFinalizedCastingProofV1,
+    },
+    parliament_types::BallotAttemptId,
     peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
     validation_fee::ValidationFeePolicyWitnessProofV1,
@@ -213,7 +220,29 @@ const KAGEMUSHA_ACTIVE_RECEIVER_STAGING_DIR_NAME: &str =
     "kagemusha_active_receiver_finality_staging";
 const KAGEMUSHA_ACTIVE_RECEIVER_SIDECARS_DIR_NAME: &str = "kagemusha_active_receiver_finality";
 const MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES: usize = 64 * 1024;
-const MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES: usize = 32 * 1024;
+const MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES: usize = 2 * 1024 * 1024;
+const MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_TOTAL_ELEMENTS: usize = 1_000_000;
+const MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_ALLOCATED_BYTES: usize = 4 * 1024 * 1024;
+const MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_DEPTH: usize = 32;
+
+/// Bound corrupt local sidecars before any attacker-advertised collection allocation.
+fn kagemusha_active_receiver_decode_limits(wire_bytes: usize) -> norito::DecodeLimits {
+    let max_sequence_elements = usize::try_from(
+        iroha_data_model::parliament_casting::MAX_PARLIAMENT_CONCURRENT_CASTING_CONTEXTS_V1,
+    )
+    .expect("u32 casting-context bound fits usize");
+    let max_allocated_bytes = wire_bytes
+        .saturating_mul(4)
+        .saturating_add(64 * 1024)
+        .min(MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_ALLOCATED_BYTES);
+    norito::DecodeLimits::new(
+        max_sequence_elements,
+        wire_bytes,
+        MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_TOTAL_ELEMENTS,
+        max_allocated_bytes,
+        MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_DEPTH,
+    )
+}
 include!("kura/startup_finality_support.rs");
 /// Finality artifact returned by Kura's authenticated, cryptographically verified reader.
 ///
@@ -2895,6 +2924,11 @@ impl Kura {
             &LaneConfig::default(),
             BLOCKS_IN_MEMORY,
         )
+    }
+    /// Return the number of FASTPQ proof snapshots awaiting persistence in tests.
+    #[cfg(test)]
+    pub(crate) fn fastpq_proof_queue_len_for_testing(&self) -> usize {
+        self.fastpq_proof_queue.lock().len()
     }
     /// Override the shared pending-control byte bound before a test Kura is shared.
     ///
@@ -15534,6 +15568,20 @@ impl Kura {
             .validation_fee_policy_witness
             .commitment()
             .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
+        let casting_snapshot = staged
+            .parliament_timed_ovn_casting_witness
+            .commitment()
+            .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
+        let rebuilt_casting_snapshot =
+            ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(
+                staged.height,
+                &staged.parliament_timed_ovn_casting_bindings,
+            )
+            .map_err(|error| {
+                Error::KagemushaActiveReceiverFinalitySidecar(format!(
+                    "invalid retained Parliament timed-OVN casting bindings: {error}"
+                ))
+            })?;
         if staged.version != KagemushaActiveReceiverFinalitySidecarV1::VERSION
             || staged.height != artifact.height
             || staged.block_hash != artifact.block_hash
@@ -15544,6 +15592,11 @@ impl Kura {
             || validation_fee_snapshot.evaluated_height != staged.height
             || !staged
                 .validation_fee_policy_witness
+                .verify(commitment.ordinary_writes_root)
+            || casting_snapshot.evaluated_height != staged.height
+            || casting_snapshot != rebuilt_casting_snapshot
+            || !staged
+                .parliament_timed_ovn_casting_witness
                 .verify(commitment.ordinary_writes_root)
         {
             return Err(Error::KagemushaActiveReceiverFinalitySidecar(
@@ -15570,6 +15623,12 @@ impl Kura {
                 post_state_root: sidecar.post_state_root,
                 witness_proof: sidecar.witness_proof.clone(),
                 validation_fee_policy_witness: sidecar.validation_fee_policy_witness.clone(),
+                parliament_timed_ovn_casting_witness: sidecar
+                    .parliament_timed_ovn_casting_witness
+                    .clone(),
+                parliament_timed_ovn_casting_bindings: sidecar
+                    .parliament_timed_ovn_casting_bindings
+                    .clone(),
             },
             artifact,
         )?;
@@ -15599,8 +15658,11 @@ impl Kura {
             return Ok(None);
         };
         let mut cursor = snapshot.bytes.as_slice();
-        let sidecar = StagedKagemushaActiveReceiverFinalitySidecarV1::decode_all(&mut cursor)
-            .map_err(Error::NoritoFrame)?;
+        let sidecar = norito::with_decode_limits(
+            kagemusha_active_receiver_decode_limits(snapshot.bytes.len()),
+            || StagedKagemushaActiveReceiverFinalitySidecarV1::decode_all(&mut cursor),
+        )
+        .map_err(Error::NoritoFrame)?;
         if sidecar.encode() != snapshot.bytes {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -15626,8 +15688,11 @@ impl Kura {
             return Ok(None);
         };
         let mut cursor = snapshot.bytes.as_slice();
-        let sidecar = KagemushaActiveReceiverFinalitySidecarV1::decode_all(&mut cursor)
-            .map_err(Error::NoritoFrame)?;
+        let sidecar = norito::with_decode_limits(
+            kagemusha_active_receiver_decode_limits(snapshot.bytes.len()),
+            || KagemushaActiveReceiverFinalitySidecarV1::decode_all(&mut cursor),
+        )
+        .map_err(Error::NoritoFrame)?;
         if sidecar.encode() != snapshot.bytes {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -15645,6 +15710,7 @@ impl Kura {
         block_hash: HashOf<BlockHeader>,
         witness: &ExecWitness,
         expected: ExecutionCommitment,
+        parliament_timed_ovn_casting_bindings: &[ParliamentTimedOvnCastingContextBindingV1],
     ) -> Result<()> {
         self.durable_mutation_authorized()?;
         let (witness_proof, ordinary_writes_root) =
@@ -15653,10 +15719,15 @@ impl Kura {
         let (validation_fee_policy_witness, validation_fee_root) =
             crate::receiver_snapshot::validation_fee_policy_witness_proof_v1(witness)
                 .map_err(Error::KagemushaActiveReceiverFinalitySidecar)?;
+        let (parliament_timed_ovn_casting_witness, casting_root) =
+            crate::receiver_snapshot::parliament_timed_ovn_casting_witness_proof_v1(witness)
+                .map_err(Error::KagemushaActiveReceiverFinalitySidecar)?;
         if ordinary_writes_root != expected.ordinary_writes_root
             || validation_fee_root != ordinary_writes_root
+            || casting_root != ordinary_writes_root
             || !witness_proof.verify(expected.ordinary_writes_root)
             || !validation_fee_policy_witness.verify(expected.ordinary_writes_root)
+            || !parliament_timed_ovn_casting_witness.verify(expected.ordinary_writes_root)
         {
             return Err(Error::KagemushaActiveReceiverFinalitySidecar(
                 "witness-derived active-receiver proof differs from the signed ordinary-write root"
@@ -15679,6 +15750,24 @@ impl Kura {
                 "validation-fee snapshot height differs from its block".to_owned(),
             ));
         }
+        let casting_snapshot = parliament_timed_ovn_casting_witness
+            .commitment()
+            .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
+        let rebuilt_casting_snapshot =
+            ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(
+                height,
+                parliament_timed_ovn_casting_bindings,
+            )
+            .map_err(|error| {
+                Error::KagemushaActiveReceiverFinalitySidecar(format!(
+                    "invalid Parliament timed-OVN casting bindings: {error}"
+                ))
+            })?;
+        if casting_snapshot != rebuilt_casting_snapshot {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "Parliament timed-OVN casting leaves differ from the synthetic snapshot".to_owned(),
+            ));
+        }
         let staged = StagedKagemushaActiveReceiverFinalitySidecarV1 {
             version: KagemushaActiveReceiverFinalitySidecarV1::VERSION,
             height,
@@ -15687,6 +15776,8 @@ impl Kura {
             post_state_root: expected.post_state_root,
             witness_proof,
             validation_fee_policy_witness,
+            parliament_timed_ovn_casting_witness,
+            parliament_timed_ovn_casting_bindings: parliament_timed_ovn_casting_bindings.to_vec(),
         };
         let bytes = staged.encode();
         if bytes.len() > MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES {
@@ -15826,6 +15917,8 @@ impl Kura {
             finality_artifact_hash: receipt.artifact_hash,
             witness_proof: staged.witness_proof,
             validation_fee_policy_witness: staged.validation_fee_policy_witness,
+            parliament_timed_ovn_casting_witness: staged.parliament_timed_ovn_casting_witness,
+            parliament_timed_ovn_casting_bindings: staged.parliament_timed_ovn_casting_bindings,
         };
         Self::validate_kagemusha_active_receiver_finality_sidecar(&final_sidecar, artifact)?;
         let bytes = final_sidecar.encode();
@@ -15913,6 +16006,92 @@ impl Kura {
         Self::validate_kagemusha_active_receiver_finality_sidecar(&sidecar, &artifact)?;
         Ok(Some(sidecar.validation_fee_policy_witness))
     }
+    /// Return the finalized fixed-write Parliament timed-OVN casting snapshot proof.
+    pub fn parliament_timed_ovn_casting_witness_proof_v1(
+        &self,
+        height: u64,
+    ) -> Result<Option<ParliamentTimedOvnCastingWitnessProofV1>> {
+        let Some(artifact) = self.v2_finality_artifact(height)? else {
+            return Ok(None);
+        };
+        let _guard = self.sidecar_lock.lock();
+        let path = self.kagemusha_active_receiver_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_active_receiver_finality_sidecar(&path)?
+        else {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "finality artifact has no Parliament timed-OVN casting witness sidecar".to_owned(),
+            ));
+        };
+        Self::validate_kagemusha_active_receiver_finality_sidecar(&sidecar, &artifact)?;
+        Ok(Some(sidecar.parliament_timed_ovn_casting_witness))
+    }
+    /// Return the stable finalized Parliament timed-OVN root-and-count commitment.
+    pub fn parliament_timed_ovn_casting_snapshot_commitment_v1(
+        &self,
+        height: u64,
+    ) -> Result<Option<ParliamentTimedOvnCastingSnapshotCommitmentV1>> {
+        self.parliament_timed_ovn_casting_witness_proof_v1(height)?
+            .map(|proof| {
+                proof.commitment().map_err(|error| {
+                    Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned())
+                })
+            })
+            .transpose()
+    }
+    /// Return finalized fixed-write and requested compact membership proof material.
+    pub fn parliament_timed_ovn_finalized_casting_proof_v1(
+        &self,
+        height: u64,
+        ballot_attempt_id: BallotAttemptId,
+    ) -> Result<Option<ParliamentTimedOvnFinalizedCastingProofV1>> {
+        let Some(artifact) = self.v2_finality_artifact(height)? else {
+            return Ok(None);
+        };
+        let _guard = self.sidecar_lock.lock();
+        let path = self.kagemusha_active_receiver_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_active_receiver_finality_sidecar(&path)?
+        else {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "finality artifact has no Parliament timed-OVN casting witness sidecar".to_owned(),
+            ));
+        };
+        Self::validate_kagemusha_active_receiver_finality_sidecar(&sidecar, &artifact)?;
+        let Ok(index) = sidecar
+            .parliament_timed_ovn_casting_bindings
+            .binary_search_by_key(&ballot_attempt_id, |binding| binding.ballot_attempt_id)
+        else {
+            return Ok(None);
+        };
+        let tree = MerkleTree::<ParliamentTimedOvnCastingContextBindingV1>::from_iter(
+            sidecar
+                .parliament_timed_ovn_casting_bindings
+                .iter()
+                .map(HashOf::new),
+        );
+        let leaf_index = u32::try_from(index).map_err(|_| {
+            Error::KagemushaActiveReceiverFinalitySidecar(
+                "Parliament timed-OVN casting leaf index exceeds u32".to_owned(),
+            )
+        })?;
+        let membership_proof = ParliamentTimedOvnCastingContextMembershipProofV1::new(
+            tree.get_proof(leaf_index).ok_or_else(|| {
+                Error::KagemushaActiveReceiverFinalitySidecar(
+                    "Parliament timed-OVN casting membership proof is unavailable".to_owned(),
+                )
+            })?,
+        );
+        let proof = ParliamentTimedOvnFinalizedCastingProofV1 {
+            snapshot_witness: sidecar.parliament_timed_ovn_casting_witness,
+            binding: sidecar.parliament_timed_ovn_casting_bindings[index].clone(),
+            membership_proof,
+        };
+        if !proof.verify(artifact.commit_qc.execution_commitment.ordinary_writes_root) {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "constructed Parliament timed-OVN casting proof failed verification".to_owned(),
+            ));
+        }
+        Ok(Some(proof))
+    }
     /// Durably stage the bounded top-up leaf/path projection before WSV commit.
     ///
     /// A block without top-ups creates no file. An existing exact stage is an
@@ -15923,9 +16102,14 @@ impl Kura {
         block_hash: HashOf<BlockHeader>,
         witness: &ExecWitness,
         expected: ExecutionCommitment,
+        parliament_timed_ovn_casting_bindings: &[ParliamentTimedOvnCastingContextBindingV1],
     ) -> Result<()> {
         self.stage_kagemusha_active_receiver_finality_sidecar(
-            height, block_hash, witness, expected,
+            height,
+            block_hash,
+            witness,
+            expected,
+            parliament_timed_ovn_casting_bindings,
         )?;
         self.durable_mutation_authorized()?;
         let Some(staged) = Self::staged_kagemusha_topup_finality_from_witness(

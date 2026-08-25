@@ -371,7 +371,7 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
         m,
         MODEL,
         e,
-        "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 22",
+        "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 23",
         '"kagemusha.offline.recursive_spend.artifact_manifest.v4"',
         '"iroha.reviewed-source-closure.v1"',
         "reviewed_source_closure_descriptor_sha256",
@@ -479,7 +479,7 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
         t[PRIVACY_PROTOCOL],
         PRIVACY_PROTOCOL,
         e,
-        "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 22;",
+        "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 23;",
     )
     rq(
         t[BRIDGE],
@@ -520,7 +520,7 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
         t[HEADER],
         HEADER,
         e,
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION 22",
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION 23",
         "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
         "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
         "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",

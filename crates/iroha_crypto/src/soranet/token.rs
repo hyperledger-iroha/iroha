@@ -1516,7 +1516,7 @@ mod tests {
         TokenCase("token_store_rejects_expired_and_ttl_overflow"),
         TokenCase("verifier_rejects_replay_with_store"),
         TokenCase("verifier_rejects_invalid_public_key_length_before_backend"),
-        TokenCase("verifier_new_with_invalid_public_key_fails_closed_during_verify"),
+        TokenCase("verifier_try_new_rejects_all_zero_public_key_before_fingerprint"),
         TokenCase("verifier_rejects_signature_length_before_replay_store"),
         TokenCase("verifier_rejects_short_all_zero_signature_as_bad_encoding"),
         TokenCase("verifier_rejects_all_zero_signature_before_backend_and_replay_store"),
@@ -1902,6 +1902,23 @@ mod tests {
                 assert!(err.to_string().contains("public key"), "{id}");
             }
             other => panic!("{id}: expected ML-DSA public-key config error, got {other:?}"),
+        }
+        let id = TOKEN_CASES[12].0;
+        let err = AdmissionTokenVerifier::try_new(
+            suite,
+            vec![0; suite.public_key_len()],
+            Duration::from_secs(900),
+            Duration::from_secs(5),
+        )
+        .expect_err("all-zero verifier public key must fail during construction");
+        match err {
+            VerifierConfigError::PublicKey(MlDsaError::InertKeyMaterial {
+                suite: MlDsaSuite::MlDsa44,
+                kind,
+            }) => {
+                assert!(kind.contains("public key"), "{id}");
+            }
+            other => panic!("{id}: expected inert ML-DSA public-key error, got {other:?}"),
         }
     }
 

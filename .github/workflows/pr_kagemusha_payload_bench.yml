@@ -1075,7 +1075,7 @@ jobs:
         env:
           KAGEMUSHA_CANDIDATE_COMPILE_WARM_GRADLE_CACHE: "1"
         run: ci/check_kagemusha_candidate_android_lab_compile.sh
-      - name: Require fresh ABI-22 JNI bridge in complete Kotlin and Java suites
+      - name: Require fresh ABI-23 JNI bridge in complete Kotlin and Java suites
         run: >-
           NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"
           NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"

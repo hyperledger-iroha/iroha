@@ -28,6 +28,27 @@ inline void bit_reverse_in_place(device ulong *data, ulong len, uint log_len) {
     }
 }
 
+inline void bit_reverse_in_place_parallel(
+    device ulong *data,
+    ulong len,
+    uint log_len,
+    uint lane,
+    uint lanes
+) {
+    if (len <= 1UL) {
+        return;
+    }
+    ulong lane_stride = (ulong)max(lanes, 1U);
+    for (ulong i = (ulong)lane; i < len; i += lane_stride) {
+        ulong j = bit_reverse_index(i, log_len);
+        if (i < j) {
+            ulong tmp = data[i];
+            data[i] = data[j];
+            data[j] = tmp;
+        }
+    }
+}
+
 inline void fft_apply_stage_range(
     device ulong *data,
     ulong len,
@@ -156,7 +177,8 @@ inline void lde_eval(
 }
 
 constant uint FFT_THREADGROUP_CAPACITY = 256U;
-constant uint FFT_TILE_STAGE_CAP = 32U;
+// Radix-2 stage 8 has a 512-word butterfly and cannot execute inside this tile.
+constant uint FFT_TILE_STAGE_CAP = 8U;
 
 inline void apply_stage_tile(
     threadgroup ulong *tile,
@@ -352,8 +374,8 @@ kernel void fastpq_fft_columns(
     uint3 threadgroup_pos [[ threadgroup_position_in_grid ]],
     uint3 thread_pos [[ thread_position_in_threadgroup ]]
 ) {
-    uint column_idx = threadgroup_pos.x + args.column_offset;
-    if (column_idx >= args.column_count) {
+    ulong column_idx = (ulong)threadgroup_pos.x + (ulong)args.column_offset;
+    if (column_idx >= (ulong)args.column_count) {
         return;
     }
     uint lane = thread_pos.x;
@@ -362,9 +384,7 @@ kernel void fastpq_fft_columns(
     device ulong *column = columns + (ulong)column_idx * len;
     threadgroup ulong tile[FFT_THREADGROUP_CAPACITY];
 
-    if (lane == 0U) {
-        bit_reverse_in_place(column, len, args.log_len);
-    }
+    bit_reverse_in_place_parallel(column, len, args.log_len, lane, lanes);
     threadgroup_barrier(mem_flags::mem_device);
 
     uint capped_limit = min(args.local_stage_limit, FFT_TILE_STAGE_CAP);
@@ -419,8 +439,8 @@ kernel void fastpq_lde_columns(
     uint3 threadgroup_pos [[ threadgroup_position_in_grid ]],
     uint3 thread_pos [[ thread_position_in_threadgroup ]]
 ) {
-    uint column_idx = threadgroup_pos.x + args.column_offset;
-    if (column_idx >= args.column_count) {
+    ulong column_idx = (ulong)threadgroup_pos.x + (ulong)args.column_offset;
+    if (column_idx >= (ulong)args.column_count) {
         return;
     }
 
@@ -442,9 +462,7 @@ kernel void fastpq_lde_columns(
     }
     threadgroup_barrier(mem_flags::mem_device);
 
-    if (lane == 0U) {
-        bit_reverse_in_place(column, eval_len, eval_log);
-    }
+    bit_reverse_in_place_parallel(column, eval_len, eval_log, lane, lanes);
     threadgroup_barrier(mem_flags::mem_device);
 
     uint capped_limit = min(args.local_stage_limit, FFT_TILE_STAGE_CAP);
@@ -494,8 +512,8 @@ kernel void fastpq_fft_post_tiling(
     if (args.stage_start >= args.log_len) {
         return;
     }
-    uint column_idx = threadgroup_pos.x + args.column_offset;
-    if (column_idx >= args.column_count) {
+    ulong column_idx = (ulong)threadgroup_pos.x + (ulong)args.column_offset;
+    if (column_idx >= (ulong)args.column_count) {
         return;
     }
     uint lane = thread_pos.x;

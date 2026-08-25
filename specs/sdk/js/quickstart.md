@@ -716,9 +716,15 @@ for await (const event of torii.streamEvents({
 ## Governance & ISO Bridge
 
 `ToriiClient` exposes the governance surfaces needed to inspect contract
-instances, draft deployment proposals, submit ballots (plain or ZK), rotate the
-council, and call `governanceFinalizeReferendumTyped` /
-`governanceEnactProposalTyped` without rolling your own DTOs. The ISO bridge uses the same
+instances, draft deployment proposals, run standalone plain or ZK referenda,
+inspect the council roster, and use the authenticated Parliament attempt-draft,
+attempt-read, and transition-draft APIs without rolling your own DTOs. Proposal
+finalization and enactment are automatic certificate-consensus outcomes and have
+no public client mutation helpers. Typed proposal reads are a closed discriminated
+union over the seven V1 `ProposalKind` tags and never expose an arbitrary raw
+fallback; use the separate raw GET deliberately when untyped JSON is required.
+The deployment branch exposes only lowercase `code_hash` and `abi_hash` digests,
+numeric `abi_version: 1`, and an explicit nullable `manifest_provenance`. The ISO bridge uses the same
 patterns: build XML with `buildPacs008Message`/`buildPacs009Message`, submit it via
 `submitIsoPacs008AndWait` or `submitIsoPacs009AndWait`, or call
 `waitForIsoMessageStatus` when you already have a message identifier. A dedicated guide

@@ -2123,7 +2123,7 @@ where
     host.set_amx_limits(amx_limits);
     host.hydrate_axt_state(state_ro)?;
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
-    host.set_vrf_epoch_seeds_from_world(state_ro.world());
+    host.set_vrf_epoch_seeds_from_state(state_ro);
     host.set_query_state(state_ro);
     host.set_bound_contract_records_by_subject_snapshot(
         code::snapshot_bound_contract_records_by_subject(state_ro),
@@ -2310,7 +2310,7 @@ where
             host.set_amx_limits(amx_limits);
             host.hydrate_axt_state(state_ro)?;
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
-            host.set_vrf_epoch_seeds_from_world(state_ro.world());
+            host.set_vrf_epoch_seeds_from_state(state_ro);
             host.set_query_state(state_ro);
             host.set_contract_runtime_context(contract_runtime_context.clone());
             host.set_contract_entrypoint_authorization(Some(entrypoint_authorization.clone()));
@@ -2480,7 +2480,7 @@ where
             host.set_amx_limits(amx_limits);
             host.hydrate_axt_state(state_ro)?;
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
-            host.set_vrf_epoch_seeds_from_world(state_ro.world());
+            host.set_vrf_epoch_seeds_from_state(state_ro);
             host.set_query_state(state_ro);
             host.set_contract_runtime_context(contract_runtime_context.clone());
             host.set_contract_entrypoint_authorization(Some(entrypoint_authorization.clone()));
@@ -2844,7 +2844,7 @@ where
             host.set_amx_limits(amx_limits);
             host.hydrate_axt_state(state_ro)?;
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
-            host.set_vrf_epoch_seeds_from_world(state_ro.world());
+            host.set_vrf_epoch_seeds_from_state(state_ro);
             host.set_query_state(state_ro);
             host.set_contract_runtime_context(contract_runtime_context.clone());
             host.set_contract_entrypoint_authorization(Some(entrypoint_authorization.clone()));
@@ -3039,7 +3039,7 @@ where
             host.set_amx_limits(amx_limits);
             host.hydrate_axt_state(state_ro)?;
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
-            host.set_vrf_epoch_seeds_from_world(state_ro.world());
+            host.set_vrf_epoch_seeds_from_state(state_ro);
             host.set_query_state(state_ro);
             host.set_contract_runtime_context(contract_runtime_context.clone());
             host.set_contract_entrypoint_authorization(Some(entrypoint_authorization.clone()));
@@ -3331,7 +3331,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             host.set_amx_limits(amx_limits);
             host.hydrate_axt_state(state_ro)?;
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
-            host.set_vrf_epoch_seeds_from_world(state_ro.world());
+            host.set_vrf_epoch_seeds_from_state(state_ro);
             host.set_query_state(state_ro);
             host.set_contract_runtime_context(contract_runtime_context.clone());
             host.set_contract_entrypoint_authorization(Some(entrypoint_authorization.clone()));
@@ -3487,7 +3487,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             host.set_amx_limits(amx_limits);
             host.hydrate_axt_state(state_ro)?;
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
-            host.set_vrf_epoch_seeds_from_world(state_ro.world());
+            host.set_vrf_epoch_seeds_from_state(state_ro);
             host.set_query_state(state_ro);
             host.set_contract_runtime_context(contract_runtime_context.clone());
             host.set_contract_entrypoint_authorization(Some(entrypoint_authorization.clone()));
@@ -10144,7 +10144,7 @@ where
     host.set_amx_limits(amx_limits);
     host.hydrate_axt_state(state_ro)?;
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
-    host.set_vrf_epoch_seeds_from_world(state_ro.world());
+    host.set_vrf_epoch_seeds_from_state(state_ro);
     host.set_query_state(state_ro);
     host.set_contract_runtime_context(Some(contract_runtime_context.clone()));
     host.set_contract_entrypoint_authorization(Some(entrypoint_authorization.clone()));
@@ -10775,7 +10775,7 @@ where
     host.set_amx_limits(amx_limits);
     host.hydrate_axt_state(state_ro)?;
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
-    host.set_vrf_epoch_seeds_from_world(state_ro.world());
+    host.set_vrf_epoch_seeds_from_state(state_ro);
     host.set_query_state(state_ro);
     host.set_contract_runtime_context(Some(contract_runtime_context.clone()));
     host.set_contract_entrypoint_authorization(Some(entrypoint_authorization.clone()));

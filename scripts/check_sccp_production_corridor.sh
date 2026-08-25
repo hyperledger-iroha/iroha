@@ -1857,7 +1857,7 @@ phase_core_admission() {
     cargo test --locked -p iroha_core --test iroha_core_group_01 bridge_proofs:: -- --nocapture
   run_cmd \
     env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
-    cargo test --locked -p iroha_core --test sccp_route_governance_isi -- --nocapture
+    cargo test --locked -p iroha_core --lib parliament_due_certificate_ -- --nocapture
   run_cmd \
     env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
     cargo test --locked -p integration_tests --test network_functional \

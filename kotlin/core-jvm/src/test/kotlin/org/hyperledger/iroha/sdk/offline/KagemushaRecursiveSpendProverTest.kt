@@ -61,13 +61,13 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     @Test
-    fun exactBridgeAbi22IsRequired() {
-        assertTrue(KagemushaRecursiveSpendProver.isExactBridgeAbi(22))
-        assertFalse(KagemushaRecursiveSpendProver.isExactBridgeAbi(20))
+    fun exactBridgeAbi23IsRequired() {
+        assertTrue(KagemushaRecursiveSpendProver.isExactBridgeAbi(23))
+        assertFalse(KagemushaRecursiveSpendProver.isExactBridgeAbi(22))
         assertTrue(
             KagemushaRecursiveSpendProver.detectExactNativeAvailability(
                 loadLibrary = {},
-                abiVersion = { 22 },
+                abiVersion = { 23 },
                 symbolProbe = { true },
             ),
         )
@@ -577,7 +577,7 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun artifactContractAndInventoryAreCurrentOnly() {
-        assertEquals(22, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
+        assertEquals(23, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(8, KagemushaRecursiveSpendProver.ARTIFACT_COUNT)
         assertEquals(1024 * 1024, KagemushaRecursiveSpendProver.MAX_ARTIFACT_CHUNK_BYTES)
         assertFailsWith<IllegalArgumentException> {
@@ -710,9 +710,10 @@ class KagemushaRecursiveSpendProverTest {
             ByteArray::class.java,
             ByteArray::class.java,
             ByteArray::class.java,
+            ByteArray::class.java,
             LongArray::class.java,
         )
-        assertEquals(8, nativeInstall.parameterCount)
+        assertEquals(9, nativeInstall.parameterCount)
         val nativeAuthorizationPrepare = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
             "nativePrepareAuthorizationV2",
             ByteArray::class.java,
@@ -992,13 +993,13 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun releaseAuthenticationIsMandatoryAndBounded() {
         val one = byteArrayOf(1)
-        KagemushaRecursiveSpendProver.ReleaseAuthentication(one, one, one, one, one)
-        repeat(5) { emptyIndex ->
-            val values = Array(5) { one }
+        KagemushaRecursiveSpendProver.ReleaseAuthentication(one, one, one, one, one, one)
+        repeat(6) { emptyIndex ->
+            val values = Array(6) { one }
             values[emptyIndex] = byteArrayOf()
             assertFailsWith<IllegalArgumentException> {
                 KagemushaRecursiveSpendProver.ReleaseAuthentication(
-                    values[0], values[1], values[2], values[3], values[4],
+                    values[0], values[1], values[2], values[3], values[4], values[5],
                 )
             }
         }
@@ -1009,10 +1010,34 @@ class KagemushaRecursiveSpendProverTest {
                 one,
                 one,
                 one,
+                one,
             )
         }
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.ReleaseAuthentication(
+                one,
+                one,
+                ByteArray(
+                    KagemushaRecursiveSpendProver.MAX_INTERNAL_VALIDATION_RECEIPT_BYTES + 1,
+                ),
+                one,
+                one,
+                one,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.ReleaseAuthentication(
+                one,
+                one,
+                one,
+                one,
+                ByteArray(KagemushaRecursiveSpendProver.MAX_CRYPTOGRAPHIC_REVIEW_BYTES + 1),
+                one,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.ReleaseAuthentication(
+                one,
                 one,
                 one,
                 one,
@@ -1506,7 +1531,7 @@ class KagemushaRecursiveSpendProverTest {
     private fun requireNativeArtifactStreaming() {
         assertTrue(
             KagemushaRecursiveSpendProver.isArtifactStreamingAvailable(),
-            "A freshly built connect_norito_bridge ABI 22 artifact-streaming library is required",
+            "A freshly built connect_norito_bridge ABI 23 artifact-streaming library is required",
         )
     }
 
@@ -1654,7 +1679,7 @@ class KagemushaRecursiveSpendProverTest {
                             )
                             .setBody(
                                 if (capability) {
-                                    """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true}"""
+                                    """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true}"""
                                         .toByteArray(StandardCharsets.UTF_8)
                                 } else {
                                     archive(
@@ -1685,7 +1710,7 @@ class KagemushaRecursiveSpendProverTest {
             "selector-taking offline readiness alias must remain absent",
         )
         assertEquals("cash_handoff_v1", status.cashHandoffCapability)
-        assertEquals(22, status.requiredBridgeAbiVersion)
+        assertEquals(23, status.requiredBridgeAbiVersion)
         assertEquals(8, status.maximumHops)
         assertTrue(status.ready)
         assertEquals(
@@ -1770,14 +1795,14 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun offlineCapabilityRejectsRetiredReadinessClaims() {
         val invalidPayloads = listOf(
-            """{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
-            """{"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":22,"max_hops":8,"ready":true}""",
-            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true}""",
-            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":9,"ready":true}""",
-            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false}""",
-            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}""",
-            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}""",
-            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"future":true}""",
+            """{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
+            """{"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":23,"max_hops":8,"ready":true}""",
+            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true}""",
+            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":9,"ready":true}""",
+            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":false}""",
+            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}""",
+            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}""",
+            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"future":true}""",
         )
         invalidPayloads.forEach { payload ->
             assertFailsWith<RuntimeException> {

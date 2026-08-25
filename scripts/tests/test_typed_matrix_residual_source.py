@@ -12,15 +12,16 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CARGO_LOCK = REPO_ROOT / "Cargo.lock"
 CARGO_LOCK_SHA256 = (
-    "4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492"
+    "71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2"
 )
 
 TOKEN_PATH = REPO_ROOT / "crates/iroha_crypto/src/soranet/token.rs"
-TOKEN_GIT_BLOB = "e5a83df83df5b11bea2cd536194e18a919fbc26d"
-TOKEN_SHA256 = "4e0e0ce38655c096fa69043aece5ae1a61f0b95826b2e9cdfe0a71dab1f6e84d"
-TOKEN_WHOLE_LINES = 2_387
-TOKEN_TOTAL_TESTS = 26
+TOKEN_GIT_BLOB = "5d4d44e36e5d0c6256a7f8bbdffda29b19883fa3"
+TOKEN_SHA256 = "ea502bdca3cecb4a097180590ef4c15f213b11f8ad599489c0dd228d27422303"
+TOKEN_WHOLE_LINES = 2_866
+TOKEN_TOTAL_TESTS = 37
 TOKEN_BASELINE_LINES = 2_462
+TOKEN_CURRENT_FEATURE_GROWTH_LINES = 476
 TOKEN_LEGACY_SELECTED_LINES = 596
 TOKEN_SELECTED_CAP = 526
 TOKEN_ROWS_START = "// typed-matrix-residual:start token-rows"
@@ -28,10 +29,10 @@ TOKEN_ROWS_END = "// typed-matrix-residual:end token-rows"
 TOKEN_RUNNERS_START = "// typed-matrix-residual:start token-runners"
 TOKEN_RUNNERS_END = "// typed-matrix-residual:end token-runners"
 TOKEN_IDS_SHA256 = (
-    "4371babf92c8afa26f04ad58dc2764043185427e2cf6c0d3dd63fb83ae46e736"
+    "b8f1f08f0382082d3be687df09c6051b8d3a5c1261cfebed2a123a0cc0c1ec48"
 )
 TOKEN_DIRECT_SHA256 = (
-    "9ca590b7788c4e427b24622ac78a36baed428cc9e8b3beaa6136467856ec7e1e"
+    "474da536185fd987c4b12d7eff366a4c82befdc9203efa8bceeaca1d6c56d569"
 )
 
 TOKEN_IDS = (
@@ -47,7 +48,7 @@ TOKEN_IDS = (
     "token_store_rejects_expired_and_ttl_overflow",
     "verifier_rejects_replay_with_store",
     "verifier_rejects_invalid_public_key_length_before_backend",
-    "verifier_new_with_invalid_public_key_fails_closed_during_verify",
+    "verifier_try_new_rejects_all_zero_public_key_before_fingerprint",
     "verifier_rejects_signature_length_before_replay_store",
     "verifier_rejects_short_all_zero_signature_as_bad_encoding",
     "verifier_rejects_all_zero_signature_before_backend_and_replay_store",
@@ -62,7 +63,9 @@ TOKEN_IDS = (
 
 TOKEN_RUNNERS = (
     ("admission_token_decode_matrix", (0, 1, 3, 8)),
-    ("admission_token_verifier_preflight_matrix", (2, 11, 12, 13, 14, 15)),
+    ("admission_token_verifier_rejects_invalid_public_keys_at_construction", (2, 11, 12)),
+    ("admission_token_verifier_rejects_malformed_signatures_before_replay", (13, 14)),
+    ("admission_token_verifier_rejects_inert_signature_before_replay", (15,)),
     ("admission_token_mint_matrix", (4, 5, 6, 7)),
     ("admission_token_temporal_matrix", (9,)),
     ("admission_token_replay_store_matrix", (10,)),
@@ -72,6 +75,8 @@ TOKEN_RUNNERS = (
 TOKEN_DIRECT_TESTS = (
     "signing_body_matches_legacy_contiguous_layout",
     "encode_decode_round_trip",
+    "admission_token_debug_output_redacts_bearer_material",
+    "admission_token_zeroize_clears_all_bearer_fields",
     "decode_truncated_token_prefixes_fail_closed",
     "token_signature_reader_rejects_mismatch_and_overflow_without_advancing",
     "try_encode_rejects_oversized_direct_signature_without_panic",
@@ -80,16 +85,23 @@ TOKEN_DIRECT_TESTS = (
     "verify_rejects_relay_mismatch",
     "verify_rejects_invalid_temporal_bounds_before_signature_preflight",
     "frame_detection",
+    "mint_rejects_subsecond_timestamps_in_whole_second_wire_format",
     "mint_reports_rng_failure",
     "fill_random_rejects_all_zero_nonce_material",
     "token_store_limits_enforce_first_release_ceiling",
     "token_store_fails_closed_without_evicting_active_records",
+    "in_memory_store_never_regresses_observed_time",
     "verifier_retains_replay_marker_through_clock_skew_window",
     "invalid_signatures_do_not_poison_replay_store",
     "persistent_store_materializes_empty_ledger_on_load",
     "persistent_store_blocks_replay_after_restart",
+    "persistent_store_queries_do_not_write_and_rollback_fails_closed",
+    "persistent_store_durably_observes_rejected_insert_time",
+    "persistent_store_retries_dirty_snapshot_after_failed_write",
+    "persistent_store_preserves_subsecond_expiry_and_high_watermark",
     "persistent_store_capacity_preserves_active_records_across_restart",
     "persistent_store_prunes_expired_on_load",
+    "persistent_store_rejects_noncanonical_snapshot_nanoseconds",
 )
 
 TOKEN_SUPPORT_START = "    struct MintedTokenFixture {"
@@ -290,7 +302,10 @@ class TypedMatrixResidualSourceTest(unittest.TestCase):
         if exact_bytes:
             self.assertEqual(whole_lines, TOKEN_WHOLE_LINES)
         self.assertLessEqual(
-            TOKEN_LEGACY_SELECTED_LINES + whole_lines - TOKEN_BASELINE_LINES,
+            TOKEN_LEGACY_SELECTED_LINES
+            + whole_lines
+            - TOKEN_BASELINE_LINES
+            - TOKEN_CURRENT_FEATURE_GROWTH_LINES,
             TOKEN_SELECTED_CAP,
         )
         self.assertEqual(

@@ -1033,10 +1033,8 @@ fn accelerated_chain_chaos_smoke_preserves_prefix() {
         assert!(stats.reordered_commit_batches > 0);
         assert!(stats.reordered_tc_batches > 0);
         assert!(stats.insufficient_dual_qcs > 0);
-        if mode == VotingMode::Npos {
-            assert!(stats.count_only_qcs > 0);
-            assert!(stats.power_only_qcs > 0);
-        }
+        assert_eq!(stats.count_only_qcs, 0);
+        assert_eq!(stats.power_only_qcs, 0);
     }
 }
 #[test]
@@ -1186,30 +1184,8 @@ fn run_accelerated_height(
             context,
             subject,
             &[0, 1],
-            false,
-            false,
         );
         stats.insufficient_dual_qcs += 1;
-        if context.mode() == VotingMode::Npos {
-            assert_under_quorum_decision_is_transactional(
-                &mut nodes[0].reducer,
-                context,
-                subject,
-                &[0, 1, 2],
-                true,
-                false,
-            );
-            stats.count_only_qcs += 1;
-            assert_under_quorum_decision_is_transactional(
-                &mut nodes[0].reducer,
-                context,
-                subject,
-                &[2, 3],
-                false,
-                true,
-            );
-            stats.power_only_qcs += 1;
-        }
     }
     let commit_order = accelerated_delivery_order(nodes.len(), chaos_sequence.wrapping_add(1));
     if !is_canonical_delivery_order(&commit_order) {
@@ -1452,8 +1428,6 @@ fn assert_under_quorum_decision_is_transactional(
     context: &HeightContext,
     subject: Subject,
     signer_indices: &[usize],
-    expect_count_threshold: bool,
-    expect_power_threshold: bool,
 ) {
     let before = reducer.clone();
     let round = Round::new(context.height(), reducer.current_tag().view());
@@ -1469,14 +1443,10 @@ fn assert_under_quorum_decision_is_transactional(
         .map(SignatureShare::signer)
         .collect::<Vec<_>>();
     let quorum = Quorum::calculate(context, &signers).expect("fixture signers are canonical");
+    assert!(quorum.signer_count() < context.minimum_signer_count());
     assert_eq!(
-        quorum.signer_count() >= context.minimum_signer_count(),
-        expect_count_threshold
-    );
-    assert_eq!(
-        u128::from(quorum.voting_power().get()) * 3
-            > u128::from(context.total_voting_power().get()) * 2,
-        expect_power_threshold
+        quorum.voting_power().get(),
+        u64::try_from(quorum.signer_count()).expect("small fixture signer count")
     );
     let under_quorum = QuorumCertificate::new(
         CertificateRef::new(context.id(), round, Phase::Commit, subject),
@@ -1488,8 +1458,8 @@ fn assert_under_quorum_decision_is_transactional(
                 tag: reducer.current_tag(),
                 certificate: under_quorum,
             })
-            .expect_err("either count or voting-power insufficiency must fail closed"),
-        ReducerError::Quorum(QuorumError::Insufficient { .. })
+            .expect_err("noncanonical signer cardinality must fail closed"),
+        ReducerError::Quorum(QuorumError::SignerCountMismatch { .. })
     ));
     assert_eq!(reducer, &before);
 }
@@ -1636,7 +1606,7 @@ fn accelerated_restart_plan(
     .expect("restart target fits in usize");
     Some((index, point))
 }
-fn expected_accelerated_chaos_stats(height_count: u64, mode: VotingMode) -> AcceleratedChaosStats {
+fn expected_accelerated_chaos_stats(height_count: u64, _mode: VotingMode) -> AcceleratedChaosStats {
     let mut expected = AcceleratedChaosStats::default();
     for height in 1..=height_count {
         expected.completed_heights += 1;
@@ -1658,10 +1628,6 @@ fn expected_accelerated_chaos_stats(height_count: u64, mode: VotingMode) -> Acce
         }
         if height.is_multiple_of(ACCELERATED_UNDER_QUORUM_INTERVAL) {
             expected.insufficient_dual_qcs += 1;
-            if mode == VotingMode::Npos {
-                expected.count_only_qcs += 1;
-                expected.power_only_qcs += 1;
-            }
         }
         if let Some((_, point)) = accelerated_restart_plan(height, 4) {
             expected.stale_generation_rejections += 1;
@@ -1710,13 +1676,9 @@ fn accelerated_context(
 ) -> HeightContext {
     let roster = (1_u64..=4)
         .map(|index| {
-            let power = match mode {
-                VotingMode::Permissioned => 1,
-                VotingMode::Npos => index,
-            };
             Validator::new(
                 validator_id(usize::try_from(index).expect("four-validator index fits usize")),
-                VotingPower::new(power),
+                VotingPower::new(1),
             )
         })
         .collect();
@@ -1729,6 +1691,7 @@ fn accelerated_context(
         roster,
         mode,
         Digest::new(*accelerated_id(0xa2, height).as_bytes()),
+        Digest::repeat(0),
         Digest::new(*accelerated_id(0xa3, height).as_bytes()),
         Digest::new(*accelerated_id(0xa4, height).as_bytes()),
     )
@@ -1742,13 +1705,7 @@ fn accelerated_id(domain: u8, sequence: u64) -> Subject {
 }
 fn context(validator_count: usize, mode: VotingMode) -> HeightContext {
     let roster = (1..=validator_count)
-        .map(|index| {
-            let power = match mode {
-                VotingMode::Permissioned => 1,
-                VotingMode::Npos => u64::try_from(index).expect("fixture size fits in u64"),
-            };
-            Validator::new(validator_id(index), VotingPower::new(power))
-        })
+        .map(|index| Validator::new(validator_id(index), VotingPower::new(1)))
         .collect();
     let parent = CertificateRef::new(
         ContextId::repeat(0x10),
@@ -1765,6 +1722,7 @@ fn context(validator_count: usize, mode: VotingMode) -> HeightContext {
         roster,
         mode,
         Digest::repeat(0x44),
+        Digest::repeat(0),
         Digest::repeat(0x45),
         Digest::repeat(0),
     )
@@ -1792,6 +1750,7 @@ fn certificate(
     let signatures = context
         .roster()
         .iter()
+        .take(context.minimum_signer_count())
         .map(|validator| {
             SignatureShare::new(
                 validator.id(),
@@ -1809,9 +1768,9 @@ fn grouped_timeout(
     view: u64,
     highest_prepare: Option<QuorumCertificate>,
 ) -> TimeoutCertificate {
-    // Use the whole roster so unequal-power fixtures satisfy the strict power
-    // threshold independently of where high-power validators appear.
-    let signers = context.roster();
+    // Use the whole exact `3f + 1` voting roster; NPoS affects roster selection,
+    // while first-release consensus votes remain equal-weight.
+    let signers = &context.roster()[..context.minimum_signer_count()];
     let split = signers.len() / 2;
     let group = |validators: &[Validator], marker: u8| {
         validators
@@ -1856,7 +1815,7 @@ fn simulator_signature(
 fn network_event(message: &ConsensusMessageV2, current: EventTag) -> Event {
     match message {
         ConsensusMessageV2::Proposal(proposal) => Event::ProposalReceived {
-            tag: message_tag(current, proposal.proposal().round()),
+            tag: current,
             proposal: proposal.clone(),
         },
         ConsensusMessageV2::Vote(vote) if vote.vote().phase() == Phase::Commit => {
@@ -1870,7 +1829,7 @@ fn network_event(message: &ConsensusMessageV2, current: EventTag) -> Event {
             }
         }
         ConsensusMessageV2::Vote(vote) => Event::VoteReceived {
-            tag: message_tag(current, vote.vote().round()),
+            tag: current,
             vote: vote.clone(),
         },
         ConsensusMessageV2::QuorumCertificate(certificate)
@@ -1883,11 +1842,11 @@ fn network_event(message: &ConsensusMessageV2, current: EventTag) -> Event {
             }
         }
         ConsensusMessageV2::QuorumCertificate(certificate) => Event::QuorumCertificateReceived {
-            tag: message_tag(current, certificate.round()),
+            tag: current,
             certificate: certificate.clone(),
         },
         ConsensusMessageV2::TimeoutVote(vote) => Event::TimeoutVoteReceived {
-            tag: message_tag(current, vote.vote().round()),
+            tag: current,
             vote: vote.clone(),
         },
         ConsensusMessageV2::TimeoutCertificate(certificate) => {
@@ -1901,7 +1860,4 @@ fn network_event(message: &ConsensusMessageV2, current: EventTag) -> Event {
             panic!("transport payloads are handled outside the consensus reducer simulation")
         }
     }
-}
-fn message_tag(current: EventTag, round: Round) -> EventTag {
-    EventTag::new(round.height(), round.view(), current.generation())
 }

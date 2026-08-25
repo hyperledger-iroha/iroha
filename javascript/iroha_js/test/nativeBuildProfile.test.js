@@ -321,6 +321,46 @@ test("native build uses the live root, root lock, pinned Cargo, and shared targe
   );
 });
 
+test("native build accepts an authenticated external Cargo lock", (t) => {
+  const fixture = createFixture(t);
+  const releaseLockDirectory = path.join(fixture.targetRoot, "release-lock");
+  const releaseLock = path.join(releaseLockDirectory, "Cargo.lock");
+  mkdirSync(releaseLockDirectory);
+  writeFileSync(releaseLock, "version = 4\n# external release lock\n");
+  const env = {
+    ...fixture.env,
+    IROHA_JS_CARGO_LOCKFILE_PATH: releaseLock,
+  };
+  let cargoArgs;
+  let cargoEnv;
+
+  assert.equal(
+    runNativeBuild({
+      repoRoot: fixture.repoRoot,
+      env,
+      platform: "linux",
+      readSourceState: () => sourceState(),
+      invalidateProvenance() {},
+      runCargo(_cargoPath, args, options) {
+        cargoArgs = args;
+        cargoEnv = options.cargoEnv;
+        writeNativeOutput(fixture, "external-lock-output");
+        return {
+          status: 0,
+          stdout: successfulCargoJson(fixture),
+        };
+      },
+      writeProvenance() {},
+    }),
+    0,
+  );
+  assert.equal(
+    cargoArgs[cargoArgs.indexOf("--lockfile-path") + 1],
+    releaseLock,
+  );
+  assert.equal(cargoEnv.IROHA_JS_CARGO_LOCKFILE_PATH, releaseLock);
+});
+
 test("a fresh Cargo artifact is authenticated without forcing a rebuild", (t) => {
   const fixture = createFixture(t);
   writeNativeOutput(fixture, "already-current-output");
@@ -535,12 +575,9 @@ test("the live build rejects incomplete or redirected build envelopes", async (t
       },
     },
     {
-      label: /to name the root Cargo.lock/u,
+      label: /absolute canonical path/u,
       mutate(env) {
-        env.IROHA_JS_CARGO_LOCKFILE_PATH = path.join(
-          fixture.repoRoot,
-          "alternate.lock",
-        );
+        env.IROHA_JS_CARGO_LOCKFILE_PATH = "Cargo.lock";
       },
     },
     {

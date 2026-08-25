@@ -135,10 +135,16 @@ OPENING_CORE_MANIFEST_SHA256 = (
 )
 OPENING_CORE_MANIFEST_BYTES = 13_937
 OPENING_CORE_MANIFEST_LINES = 375
-CORE_MANIFEST_BLOB = "ded9b8d998f2d23294dd6a852bd9ac0ba79cb7d7"
-CORE_MANIFEST_SHA256 = "442489e3927220a2960d7cce218b3aa3729211c8d1502d0afdee842ab2dd0ab7"
-CORE_MANIFEST_BYTES = 13_738
-CORE_MANIFEST_LINES = 366
+WAVE_FOUR_CORE_MANIFEST_BLOB = "ded9b8d998f2d23294dd6a852bd9ac0ba79cb7d7"
+WAVE_FOUR_CORE_MANIFEST_SHA256 = (
+    "442489e3927220a2960d7cce218b3aa3729211c8d1502d0afdee842ab2dd0ab7"
+)
+WAVE_FOUR_CORE_MANIFEST_BYTES = 13_738
+WAVE_FOUR_CORE_MANIFEST_LINES = 366
+CORE_MANIFEST_BLOB = "b71d2ccc5cd82920d5d862aecada6460a057dc4d"
+CORE_MANIFEST_SHA256 = "e2caeeb1446bf78896bdddaefa161c3f333160b793d508c56c77bc3475c7d525"
+CORE_MANIFEST_BYTES = 13_608
+CORE_MANIFEST_LINES = 363
 
 WAVE_FOUR_CONSOLIDATED_TEST_TABLES = (
     """[[test]]
@@ -158,10 +164,10 @@ OPENING_LOCK_BLOB = "bf7633694c3f2fdca07de4d99743a09bad2daa12"
 OPENING_LOCK_SHA256 = "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
 OPENING_LOCK_BYTES = 315_333
 OPENING_LOCK_LINES = 13_758
-LOCK_BLOB = "dff7dc4b22caba0c70c0e29e6ea87e07db4b15bc"
-LOCK_SHA256 = "4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492"
-LOCK_BYTES = 311_163
-LOCK_LINES = 13_612
+LOCK_BLOB = "e320ffaa8af21674f079573a1aaa1a8d73185ae8"
+LOCK_SHA256 = "71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2"
+LOCK_BYTES = 311_205
+LOCK_LINES = 13_616
 
 RETIRED_TABLES = (
     """[[bin]]
@@ -401,13 +407,22 @@ def _expected_core_manifest(opening: bytes) -> bytes:
         _require(text.count(table) == 1, "wave-four core target opening count changed")
         text = text.replace(table, "", 1)
     postimage = text.encode("utf-8")
-    _require(len(postimage) == CORE_MANIFEST_BYTES, "derived core manifest byte ledger changed")
     _require(
-        postimage.count(b"\n") == CORE_MANIFEST_LINES,
+        len(postimage) == WAVE_FOUR_CORE_MANIFEST_BYTES,
+        "derived core manifest byte ledger changed",
+    )
+    _require(
+        postimage.count(b"\n") == WAVE_FOUR_CORE_MANIFEST_LINES,
         "derived core manifest line ledger changed",
     )
-    _require(_sha256(postimage) == CORE_MANIFEST_SHA256, "derived core manifest hash changed")
-    _require(_git_blob_id(postimage) == CORE_MANIFEST_BLOB, "derived core manifest blob changed")
+    _require(
+        _sha256(postimage) == WAVE_FOUR_CORE_MANIFEST_SHA256,
+        "derived core manifest hash changed",
+    )
+    _require(
+        _git_blob_id(postimage) == WAVE_FOUR_CORE_MANIFEST_BLOB,
+        "derived core manifest blob changed",
+    )
     return postimage
 
 
@@ -477,10 +492,10 @@ def _validate(snapshot: Snapshot, opening_manifest: bytes) -> None:
 
     core_manifest = snapshot.files[CORE_MANIFEST]
     _require(core_manifest is not None, "iroha_core manifest is missing")
-    expected_core_manifest = _expected_core_manifest(_git_blob(OPENING_CORE_MANIFEST_BLOB))
+    _expected_core_manifest(_git_blob(OPENING_CORE_MANIFEST_BLOB))
     _require(
-        core_manifest == expected_core_manifest,
-        "iroha_core manifest differs from authenticated wave-four postimage",
+        core_manifest == _git_blob(CORE_MANIFEST_BLOB),
+        "iroha_core manifest differs from current authority",
     )
     _require(len(core_manifest) == CORE_MANIFEST_BYTES, "iroha_core manifest byte count changed")
     _require(

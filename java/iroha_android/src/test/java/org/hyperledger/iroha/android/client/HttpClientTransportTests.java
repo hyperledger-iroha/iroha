@@ -158,6 +158,7 @@ public final class HttpClientTransportTests {
     proposeMultisigRequestParsesResponse();
     proposeMultisigRejectsAdversarialRequestShapes();
     multisigResponseParserRejectsMalformedFields();
+    multisigResponseParserBindsAbi22DraftFields();
     callContractRejectsAmbiguousTarget();
     governanceContractRequestParsesResponse();
     resolveAccountAliasRequestParsesResponse();
@@ -3106,7 +3107,8 @@ public final class HttpClientTransportTests {
   private static void callContractRequestParsesResponse() {
     final String contractAddress =
         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
-    final byte[] transactionPayload = transactionWithPayload((byte) 0x07).encodedPayload();
+    final byte[] transactionPayload =
+        transactionWithPayload((byte) 0x07, 1_712_345_678_901L, 5_000L).encodedPayload();
     final String transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload);
     final String signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
     final StubResponseExecutor executor =
@@ -3271,7 +3273,9 @@ public final class HttpClientTransportTests {
     final byte[] instructionBytes = new byte[] {1, 2, 3, 4};
     final String proposalId = "aa".repeat(32);
     final String multisigAccountId = TestAccountIds.ed25519Authority(0x37);
-    final byte[] transactionPayload = transactionWithPayload((byte) 0x08).encodedPayload();
+    final long creationTimeMs = 1_700_000_000_008L;
+    final byte[] transactionPayload =
+        transactionWithPayload((byte) 0x08, creationTimeMs, 1L).encodedPayload();
     final String transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload);
     final String signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
     final StubResponseExecutor executor =
@@ -3291,7 +3295,9 @@ public final class HttpClientTransportTests {
                     + "\","
                     + "\"tx_hash_hex\":null,"
                     + "\"executed_tx_hash_hex\":null,"
-                    + "\"creation_time_ms\":123,"
+                    + "\"creation_time_ms\":" + creationTimeMs + ","
+                    + "\"fee_payment\":{\"payer\":\"authority\","
+                    + "\"value\":{\"charge_limits\":[],\"gas_limit\":1}},"
                     + "\"transaction_payload_b64\":\"" + transactionPayloadB64 + "\","
                     + "\"signing_message_b64\":\""
                     + signingMessageB64
@@ -3306,13 +3312,13 @@ public final class HttpClientTransportTests {
     final MultisigResponse response =
         transport
             .proposeMultisig(
-                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instructionBytes)
                     .setPublicKeyHex(
                         "0X" + VALID_ED25519_PUBLIC_KEY_HEX.toUpperCase(Locale.ROOT))
-                    .setCreationTimeMs(123L)
+                    .setCreationTimeMs(creationTimeMs)
                     .setMemo("QR invoice 42")
                     .setValidationFeePolicyVersion(7L)
                     .setValidationFeePolicyHash("AB".repeat(32))
@@ -3326,6 +3332,11 @@ public final class HttpClientTransportTests {
         : "resolved multisig account mismatch";
     assert Boolean.FALSE.equals(response.submitted()) : "submitted mismatch";
     assert proposalId.equals(response.instructionsHash()) : "instructions_hash mismatch";
+    assert response.feePayment().equals(
+        org.hyperledger.iroha.android.model.FeePaymentIntent.authority(
+            java.util.Collections.emptyList(), 1L)) : "fee_payment mismatch";
+    assert Long.valueOf(creationTimeMs).equals(response.creationTimeMs())
+        : "creation_time_ms mismatch";
     assert transactionPayloadB64.equals(response.transactionPayloadB64()) : "transaction_payload_b64 mismatch";
     assert signingMessageB64.equals(response.signingMessageB64())
         : "signing_message_b64 mismatch";
@@ -3355,7 +3366,7 @@ public final class HttpClientTransportTests {
         : "validation_fee_instruction_index mismatch";
     assert "2".equals(payload.get("validation_fee_transfer_entry_index"))
         : "validation_fee_transfer_entry_index mismatch";
-    assert Long.valueOf(123L).equals(((Number) payload.get("creation_time_ms")).longValue())
+    assert Long.valueOf(creationTimeMs).equals(((Number) payload.get("creation_time_ms")).longValue())
         : "creation_time_ms mismatch";
     @SuppressWarnings("unchecked")
     final List<String> instructions = (List<String>) payload.get("instructions");
@@ -3630,6 +3641,52 @@ public final class HttpClientTransportTests {
                         + "\"creation_time_ms\":-1}")
                     .getBytes(StandardCharsets.UTF_8)),
         "negative creation time must be rejected");
+  }
+
+  private static void multisigResponseParserBindsAbi22DraftFields() {
+    final String multisigAccountId = TestAccountIds.ed25519Authority(0x37);
+    final long creationTimeMs = 1_700_000_000_009L;
+    final byte[] transactionPayload =
+        transactionWithPayload((byte) 0x09, creationTimeMs, 1L).encodedPayload();
+    final String transactionPayloadB64 =
+        Base64.getEncoder().encodeToString(transactionPayload);
+    final String signingMessageB64 =
+        Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
+    final String valid =
+        "{"
+            + "\"ok\":true,"
+            + "\"resolved_multisig_account_id\":\"" + multisigAccountId + "\","
+            + "\"submitted\":false,"
+            + "\"tx_hash_hex\":null,"
+            + "\"executed_tx_hash_hex\":null,"
+            + "\"creation_time_ms\":" + creationTimeMs + ","
+            + "\"fee_payment\":{\"payer\":\"authority\","
+            + "\"value\":{\"charge_limits\":[],\"gas_limit\":1}},"
+            + "\"transaction_payload_b64\":\"" + transactionPayloadB64 + "\","
+            + "\"signing_message_b64\":\"" + signingMessageB64 + "\"}";
+
+    final MultisigResponse parsed =
+        ContractJsonParser.parseMultisigResponse(valid.getBytes(StandardCharsets.UTF_8));
+    assert parsed.feePayment().equals(FeePaymentIntent.authority(Collections.emptyList(), 1L))
+        : "fee_payment must be returned";
+    assert Long.valueOf(creationTimeMs).equals(parsed.creationTimeMs())
+        : "creation_time_ms must be returned";
+
+    for (final String tampered :
+        List.of(
+            valid.replace("\"gas_limit\":1", "\"gas_limit\":2"),
+            valid.replace(
+                "\"creation_time_ms\":" + creationTimeMs,
+                "\"creation_time_ms\":" + (creationTimeMs + 1L)),
+            valid.replace(
+                "\"executed_tx_hash_hex\":null",
+                "\"executed_tx_hash_hex\":\"" + "ab".repeat(32) + "\""),
+            valid.replace("\"fee_payment\"", "\"retired_fee_payment\""))) {
+      expectRuntimeException(
+          () -> ContractJsonParser.parseMultisigResponse(
+              tampered.getBytes(StandardCharsets.UTF_8)),
+          "ABI-22 multisig draft field tampering must be rejected");
+    }
   }
 
   private static void callContractRejectsAmbiguousTarget() {
@@ -6301,19 +6358,25 @@ public final class HttpClientTransportTests {
   private static int aliasCounter = 0;
 
   private static SignedTransaction transactionWithPayload(final byte fillValue) {
+    return transactionWithPayload(
+        fillValue, 1_700_000_000_000L + (fillValue & 0xFF), 1L);
+  }
+
+  private static SignedTransaction transactionWithPayload(
+      final byte fillValue, final long creationTimeMs, final Long gasLimit) {
     final byte[] signature = new byte[64];
     final byte[] publicKey = new byte[32];
     java.util.Arrays.fill(signature, (byte) (fillValue + 1));
     java.util.Arrays.fill(publicKey, (byte) (fillValue + 2));
     final TransactionPayload payload =
-        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), gasLimit))
             .setNetworkId(TestNetworkIds.fromSeed(fillValue & 0xffL))
             .setAuthority(TestAccountIds.ed25519Authority(0x26))
-            .setCreationTimeMs(1_700_000_000_000L + (fillValue & 0xFF))
+            .setCreationTimeMs(creationTimeMs)
             .setInstructionBytes(new byte[] {fillValue, (byte) (fillValue + 1)})
             .setTimeToLiveMs(5_000L)
             .setNonce(fillValue & 0xFF)
-            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
+            .setAdmissionIntent(TransactionAdmissionIntent.ORDINARY)
             .setMetadata(Map.of("note", "txn-" + fillValue))
             .build();
     final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);

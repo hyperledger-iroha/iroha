@@ -5,12 +5,14 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import org.junit.Test;
 
 /** Regression tests for strict JSON string wire types. */
 public final class JsonParserStringTypeTests {
   private static final String VALID_PUBLIC_KEY =
       "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29";
+  private static final String RECEIPT_CURSOR = repeated('A', 114);
 
   @Test
   public void identifierParserRejectsNonStringRequiredAndOptionalFields() {
@@ -140,9 +142,9 @@ public final class JsonParserStringTypeTests {
   public void soracloudParserRejectsNonStringRequiredAndOptionalFields() {
     final SoracloudPrivateUploadedModelReceiptListResponse canonical =
         SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-            bytes(soracloudReceiptListJson("\"exact\"", "\"next\"")));
+            bytes(soracloudReceiptListJson("\"exact\"", "\"" + RECEIPT_CURSOR + "\"")));
     assertEquals("exact", canonical.countMode());
-    assertEquals("next", canonical.continueCursor());
+    assertEquals(RECEIPT_CURSOR, canonical.continueCursor());
 
     assertRejects(
         "soracloud private receipt list.count_mode",
@@ -225,18 +227,32 @@ public final class JsonParserStringTypeTests {
 
   private static String soracloudReceiptListJson(
       final String countMode, final String continueCursor) {
+    final boolean hasMore = !"null".equals(continueCursor);
     return "{"
         + "\"schema_version\":1,"
         + "\"receipts\":[],"
+        + "\"total\":"
+        + (hasMore ? 1 : 0)
+        + ","
         + "\"returned_items\":0,"
-        + "\"remaining_items\":0,"
-        + "\"has_more\":false,"
+        + "\"remaining_items\":"
+        + (hasMore ? 1 : 0)
+        + ","
+        + "\"has_more\":"
+        + hasMore
+        + ","
         + "\"count_mode\":"
         + countMode
         + ","
         + "\"continue_cursor\":"
         + continueCursor
         + "}";
+  }
+
+  private static String repeated(final char value, final int count) {
+    final char[] chars = new char[count];
+    Arrays.fill(chars, value);
+    return new String(chars);
   }
 
   private static byte[] bytes(final String json) {

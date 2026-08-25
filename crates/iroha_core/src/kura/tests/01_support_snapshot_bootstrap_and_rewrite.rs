@@ -1159,6 +1159,10 @@ fn kagemusha_topup_witness(
         iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_registry(
             1, None,
         );
+    let casting_snapshot =
+        iroha_data_model::parliament_casting::ParliamentTimedOvnCastingSnapshotCommitmentV1::empty(
+            1,
+        );
     let witness = ExecWitness {
         reads: Vec::new(),
         writes: vec![
@@ -1177,6 +1181,11 @@ fn kagemusha_topup_witness(
                 value: norito::to_bytes(&validation_fee_snapshot)
                     .expect("encode validation-fee snapshot commitment"),
             },
+            ExecKv {
+                key: iroha_data_model::parliament_casting::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1.to_vec(),
+                value: norito::to_bytes(&casting_snapshot)
+                    .expect("encode Parliament timed-OVN casting snapshot commitment"),
+            },
         ],
         fastpq_transcripts: Vec::new(),
         fastpq_batches: Vec::new(),
@@ -1194,6 +1203,13 @@ fn kagemusha_receiver_only_witness(
     height: u64,
     evaluated_at_ms: u64,
 ) -> (ExecWitness, ExecutionCommitment) {
+    kagemusha_receiver_only_witness_with_casting(height, evaluated_at_ms, &[])
+}
+fn kagemusha_receiver_only_witness_with_casting(
+    height: u64,
+    evaluated_at_ms: u64,
+    casting_bindings: &[iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1],
+) -> (ExecWitness, ExecutionCommitment) {
     let receiver_snapshot =
         iroha_data_model::offline::KagemushaActiveReceiverSnapshotV1::unavailable(
             height,
@@ -1205,6 +1221,11 @@ fn kagemusha_receiver_only_witness(
         iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_registry(
             height, None,
         );
+    let casting_snapshot = iroha_data_model::parliament_casting::ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(
+        height,
+        casting_bindings,
+    )
+    .expect("derive Parliament timed-OVN casting snapshot commitment");
     let witness = ExecWitness {
         reads: Vec::new(),
         writes: vec![
@@ -1219,6 +1240,11 @@ fn kagemusha_receiver_only_witness(
                 value: norito::to_bytes(&validation_fee_snapshot)
                     .expect("encode validation-fee snapshot commitment"),
             },
+            ExecKv {
+                key: iroha_data_model::parliament_casting::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1.to_vec(),
+                value: norito::to_bytes(&casting_snapshot)
+                    .expect("encode Parliament timed-OVN casting snapshot commitment"),
+            },
         ],
         fastpq_transcripts: Vec::new(),
         fastpq_batches: Vec::new(),
@@ -1231,6 +1257,136 @@ fn kagemusha_receiver_only_witness(
         crate::sumeragi::exec::execution_commitment_from_witness_for_tests(&witness, &manifest)
             .expect("derive receiver-only execution commitment");
     (witness, commitment)
+}
+fn parliament_casting_binding(
+    height: u64,
+    ballot_index: u32,
+) -> iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1 {
+    use iroha_data_model::{
+        parliament_casting::{
+            PARLIAMENT_TIMED_OVN_CASTING_COMMITMENT_VERSION_V1,
+            ParliamentTimedOvnCastingContextBindingV1, ParliamentTimedOvnCastingPhaseV1,
+            ParliamentTimedOvnRegistrationCorpusCommitmentV1,
+        },
+        parliament_types::{
+            BallotAttemptId, BodyInstanceId, GovernanceAttemptId, ProposalContentId,
+            TleKeySessionId,
+        },
+    };
+
+    let mut ballot_id = [0_u8; 32];
+    ballot_id[28..].copy_from_slice(&ballot_index.to_be_bytes());
+    ParliamentTimedOvnCastingContextBindingV1 {
+        version: PARLIAMENT_TIMED_OVN_CASTING_COMMITMENT_VERSION_V1,
+        evaluated_height: height,
+        phase: ParliamentTimedOvnCastingPhaseV1::Registered,
+        network_id: [1; 32],
+        proposal_content_id: ProposalContentId::new([2; 32]),
+        governance_attempt_id: GovernanceAttemptId::new([3; 32]),
+        body_instance_id: BodyInstanceId::new([4; 32]),
+        ballot_attempt_id: BallotAttemptId::new(ballot_id),
+        parameter_hash: [5; 32],
+        tle_key_session_id: TleKeySessionId::new([6; 32]),
+        tle_key_transcript_hash: [7; 32],
+        tle_master_public_key: [8; 96],
+        registration_opened_at_finalized_height: height,
+        registration_close_height: height + 1,
+        survivor_freeze_height: height + 2,
+        commitment_close_height: height + 3,
+        target_finalized_height: height + 4,
+        registration_corpus: ParliamentTimedOvnRegistrationCorpusCommitmentV1::from_records(&[])
+            .expect("empty casting registration corpus"),
+        survivor_count: None,
+        dropout_root: None,
+        release_identity: None,
+    }
+}
+fn parliament_frozen_casting_binding(
+    height: u64,
+    ballot_index: u32,
+) -> iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1 {
+    use iroha_data_model::parliament_casting::{
+        ParliamentTimedOvnCastingPhaseV1, ParliamentTimedOvnRegistrationCorpusCommitmentV1,
+        ParliamentTimedOvnReleaseBindingV1,
+    };
+
+    assert!(height >= 3, "frozen fixture needs three schedule heights");
+    let mut binding = parliament_casting_binding(height, ballot_index);
+    binding.phase = ParliamentTimedOvnCastingPhaseV1::SurvivorsFrozen;
+    binding.registration_opened_at_finalized_height = height - 2;
+    binding.registration_close_height = height - 1;
+    binding.survivor_freeze_height = height;
+    binding.commitment_close_height = height + 1;
+    binding.target_finalized_height = height + 2;
+    binding.registration_corpus =
+        ParliamentTimedOvnRegistrationCorpusCommitmentV1::from_records(&[vec![0xA5]])
+            .expect("single-record casting corpus commitment");
+    binding.survivor_count = Some(1);
+    binding.dropout_root = Some([9; 32]);
+    binding.release_identity = Some(ParliamentTimedOvnReleaseBindingV1 {
+        tle_key_session_id: binding.tle_key_session_id,
+        governance_attempt_id: binding.governance_attempt_id,
+        body_instance_id: binding.body_instance_id,
+        ballot_attempt_id: binding.ballot_attempt_id,
+        survivor_corpus_root: [10; 32],
+        no_recovery_root: [11; 32],
+        target_finalized_height: binding.target_finalized_height,
+        parameter_hash: binding.parameter_hash,
+    });
+    binding
+}
+#[test]
+fn active_receiver_sidecar_decode_budget_is_protocol_bounded() {
+    let limits =
+        kagemusha_active_receiver_decode_limits(MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES);
+    assert_eq!(
+        limits.max_sequence_elements(),
+        usize::try_from(
+            iroha_data_model::parliament_casting::MAX_PARLIAMENT_CONCURRENT_CASTING_CONTEXTS_V1
+        )
+        .expect("u32 casting bound fits usize")
+    );
+    assert_eq!(
+        limits.max_field_bytes(),
+        MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES
+    );
+    assert_eq!(
+        limits.max_total_allocated_bytes(),
+        MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_ALLOCATED_BYTES
+    );
+    assert_eq!(
+        limits.max_nesting_depth(),
+        MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_DEPTH
+    );
+}
+#[test]
+fn maximum_frozen_casting_set_fits_the_durable_sidecar_bound() {
+    let height = 3;
+    let bindings = (1
+        ..=iroha_data_model::parliament_casting::MAX_PARLIAMENT_CONCURRENT_CASTING_CONTEXTS_V1)
+        .map(|index| parliament_frozen_casting_binding(height, index))
+        .collect::<Vec<_>>();
+    assert!(bindings.iter().all(|binding| binding.is_valid()));
+    let (witness, execution_commitment) =
+        kagemusha_receiver_only_witness_with_casting(height, 1, &bindings);
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.stage_kagemusha_topup_finality_sidecar(
+        height,
+        block.hash(),
+        &witness,
+        execution_commitment,
+        &bindings,
+    )
+    .expect("maximum casting set fits the staged sidecar");
+    let encoded_len = std::fs::metadata(kura.kagemusha_active_receiver_staging_path(height))
+        .expect("maximum casting sidecar metadata")
+        .len();
+    assert!(
+        encoded_len
+            <= u64::try_from(MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES)
+                .expect("sidecar byte bound fits u64")
+    );
 }
 #[test]
 fn checked_keypair_helpers_preserve_requested_algorithm() {
@@ -1666,6 +1822,7 @@ fn kagemusha_topup_witness_stage_promotes_only_after_exact_finality_persistence(
         artifact.block_hash,
         &witness,
         execution_commitment,
+        &[],
     )
     .expect("durably stage top-up witness projection");
     assert!(
@@ -1689,6 +1846,10 @@ fn kagemusha_topup_witness_stage_promotes_only_after_exact_finality_persistence(
             .exists(),
         "persisting finality alone must not silently publish witness bytes"
     );
+    assert!(matches!(
+        kura.parliament_timed_ovn_casting_snapshot_commitment_v1(artifact.height),
+        Err(Error::KagemushaActiveReceiverFinalitySidecar(_))
+    ));
     kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
         .expect("promote exact staged sidecar");
     assert!(
@@ -1740,6 +1901,7 @@ fn active_receiver_witness_survives_finality_promotion_restart_and_retry() {
         artifact.block_hash,
         &witness,
         execution_commitment,
+        &[],
     )
     .expect("stage receiver witness before finality");
     kura.store_block(Arc::clone(&block))
@@ -1767,6 +1929,93 @@ fn active_receiver_witness_survives_finality_promotion_restart_and_retry() {
     assert!(recovered.verify(execution_commitment.ordinary_writes_root));
 }
 #[test]
+fn parliament_casting_membership_survives_restart_and_tampering_fails_closed() {
+    let temp_dir = TempDir::new().expect("create persistent Kura root");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("open persistent Kura");
+    let block = DummyBlocks::new().next();
+    let height = block.header().height().get();
+    let bindings = vec![
+        parliament_casting_binding(height, 1),
+        parliament_casting_binding(height, 2),
+    ];
+    let requested_ballot = bindings[1].ballot_attempt_id;
+    let (witness, mut execution_commitment) =
+        kagemusha_receiver_only_witness_with_casting(height, 1, &bindings);
+    execution_commitment.executed_block_wire_len = u64::try_from(
+        block
+            .encode_wire()
+            .expect("canonical casting fixture wire")
+            .len(),
+    )
+    .expect("canonical casting fixture wire length fits u64");
+    execution_commitment.executed_block_wire_hash = block
+        .executed_block_wire_hash()
+        .expect("canonical casting fixture executed wire");
+    let artifact = v2_finality_artifact_for_block_with_execution(&block, execution_commitment);
+    kura.stage_kagemusha_topup_finality_sidecar(
+        artifact.height,
+        artifact.block_hash,
+        &witness,
+        execution_commitment,
+        &bindings,
+    )
+    .expect("stage bounded casting proof material");
+    kura.store_block(Arc::clone(&block))
+        .expect("persist casting fixture block");
+    let receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("persist casting fixture finality");
+    kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
+        .expect("promote casting proof material");
+
+    let expected = kura
+        .parliament_timed_ovn_finalized_casting_proof_v1(height, requested_ballot)
+        .expect("read finalized casting proof")
+        .expect("requested casting binding exists");
+    assert_eq!(expected.binding, bindings[1]);
+    assert!(expected.verify(execution_commitment.ordinary_writes_root));
+    assert_eq!(
+        kura.parliament_timed_ovn_casting_snapshot_commitment_v1(height)
+            .expect("read finalized casting snapshot")
+            .expect("casting snapshot exists")
+            .count,
+        2
+    );
+    assert!(
+        kura.parliament_timed_ovn_finalized_casting_proof_v1(
+            height,
+            iroha_data_model::parliament_types::BallotAttemptId::new([0xFF; 32]),
+        )
+        .expect("unknown ballot lookup is valid")
+        .is_none()
+    );
+    drop(kura);
+
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen persistent Kura");
+    let recovered = reopened
+        .parliament_timed_ovn_finalized_casting_proof_v1(height, requested_ballot)
+        .expect("read casting proof after restart")
+        .expect("casting proof survives restart");
+    assert_eq!(recovered, expected);
+    assert!(recovered.verify(execution_commitment.ordinary_writes_root));
+
+    let sidecar_path = reopened.kagemusha_active_receiver_sidecar_path(height);
+    let (mut corrupted, _) = reopened
+        .decode_kagemusha_active_receiver_finality_sidecar(&sidecar_path)
+        .expect("decode durable casting sidecar")
+        .expect("durable casting sidecar exists");
+    corrupted.parliament_timed_ovn_casting_bindings[0].tle_key_transcript_hash[0] ^= 1;
+    std::fs::write(&sidecar_path, corrupted.encode()).expect("corrupt retained casting binding");
+    assert!(matches!(
+        reopened.parliament_timed_ovn_finalized_casting_proof_v1(height, requested_ballot),
+        Err(Error::KagemushaActiveReceiverFinalitySidecar(_))
+    ));
+}
+#[test]
 fn kagemusha_topup_stage_rejects_commitment_and_path_substitution() {
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();
@@ -1785,15 +2034,21 @@ fn kagemusha_topup_stage_rejects_commitment_and_path_substitution() {
     let mut mismatched = execution_commitment;
     mismatched.ordinary_writes_root = Hash::new(b"substituted ordinary root");
     assert!(matches!(
-        kura.stage_kagemusha_topup_finality_sidecar(1, block.hash(), &witness, mismatched,),
+        kura.stage_kagemusha_topup_finality_sidecar(1, block.hash(), &witness, mismatched, &[]),
         Err(Error::KagemushaActiveReceiverFinalitySidecar(_))
     ));
     assert!(
         !kura.kagemusha_topup_finality_staging_path(1).exists(),
         "a commitment mismatch must not leave a stage"
     );
-    kura.stage_kagemusha_topup_finality_sidecar(1, block.hash(), &witness, execution_commitment)
-        .expect("stage canonical witness");
+    kura.stage_kagemusha_topup_finality_sidecar(
+        1,
+        block.hash(),
+        &witness,
+        execution_commitment,
+        &[],
+    )
+    .expect("stage canonical witness");
     let stage_path = kura.kagemusha_topup_finality_staging_path(1);
     let (mut staged, _) = kura
         .decode_staged_kagemusha_topup_finality(&stage_path)
@@ -1856,6 +2111,7 @@ fn non_topup_finality_rejects_orphan_staged_and_final_sidecars() {
         artifact.block_hash,
         &receiver_witness,
         execution_commitment,
+        &[],
     )
     .expect("stage mandatory receiver witness for non-top-up block");
     kura.store_block(Arc::clone(&block))

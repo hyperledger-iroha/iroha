@@ -105,6 +105,8 @@ run_python312_clean() {
 #   executable when the fixed Homebrew/system locators are unavailable.
 # - MOBILE_SDK_RUSTUP_BINARY may select an absolute canonical regular rustup
 #   executable when the default user-home rustup entry is a symlink.
+# - IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH may select the authenticated
+#   external privacy-release Cargo.lock; other builds use the tracked root lock.
 #
 # Usage:
 #   scripts/build_norito_xcframework.sh
@@ -339,7 +341,15 @@ BRIDGE_VERSION=""
 ARCHIVE_OUTPUT=""
 PRIVACY_PRODUCTION_ENABLED=0
 ALLOW_DIRTY_SOURCE=0
-CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
+if [[ -n "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH+x}" ]]; then
+  if [[ -z "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH}" ]]; then
+    echo "[-] IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH must not be empty" >&2
+    exit 1
+  fi
+  CARGO_LOCKFILE="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH}"
+else
+  CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
+fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bridge-version)
@@ -1266,8 +1276,8 @@ protocol_abis = re.findall(
     protocol.read_text(encoding="utf-8"),
     re.MULTILINE,
 )
-if header_abis != ["22"]:
-    raise SystemExit("authoritative NoritoBridge public header ABI is not exact 22")
+if header_abis != ["23"]:
+    raise SystemExit("authoritative NoritoBridge public header ABI is not exact 23")
 if bridge_aliases != ["PRIVACY_BRIDGE_ABI_VERSION_V1"]:
     raise SystemExit("NoritoBridge Rust ABI alias is not exact")
 if protocol_abis != header_abis:
@@ -1712,8 +1722,8 @@ for root, directories, files in os.walk(xcframework, followlinks=False):
 
 with manifest_path.open("r", encoding="utf-8") as handle:
     manifest = json.load(handle, object_pairs_hook=object_without_duplicates)
-if manifest.get("native_bridge_abi_version") != 22:
-    raise SystemExit("staged NoritoBridge manifest does not bind exact ABI 22")
+if manifest.get("native_bridge_abi_version") != 23:
+    raise SystemExit("staged NoritoBridge manifest does not bind exact ABI 23")
 hashes = manifest.get("hashes")
 if not isinstance(hashes, dict) or set(hashes) != set(expected_slices):
     raise SystemExit("staged NoritoBridge manifest has a non-canonical slice inventory")

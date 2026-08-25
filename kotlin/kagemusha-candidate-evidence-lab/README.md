@@ -1,9 +1,9 @@
 # Kagemusha candidate evidence lab (never ship)
 
 This module is a marker-bearing Android application used only to gather real
-native-bridge ABI-22 evidence from a physical ARM64 device before a candidate
+native-bridge ABI-23 evidence from a physical ARM64 device before a candidate
 is promoted.
-Here, ABI-22 names the native bridge; the Kagemusha protocol envelope remains
+Here, ABI-23 names the native bridge; the Kagemusha protocol envelope remains
 ABI-21/V4.
 It is not in the normal Gradle project graph, has no publication, has no
 `INTERNET` permission, disables its release variant, and stores every build

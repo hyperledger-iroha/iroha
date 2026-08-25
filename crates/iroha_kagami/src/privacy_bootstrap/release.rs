@@ -4,8 +4,6 @@ use super::{
     remove_created_file_if_unchanged_v1, resolved_new_output_path_v1,
     validate_taira_privacy_bootstrap_v1,
 };
-#[cfg(test)]
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
 use iroha_core::privacy_engines::bootle_lantern::issuer::{
@@ -70,6 +68,16 @@ const GOLDEN_NEVO_ONBOARDING_V2: &str = "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7
 const GOLDEN_NEVO_API_SIGNER_V2: &str = "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP";
 const GOLDEN_NEVO_INORI_V2: &str = "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9";
 const GOLDEN_NEVO_EPR_GUARD_V2: &str = "testuﾛ1Q1ヰﾁﾏ3ﾕmヰGmdLbﾜｦｦﾜF3qﾗﾇ2heEQ6vYｽ9tbEQLuCMJYJT";
+/// Inputs for native validation of one reviewed Taira NEVO unsigned genesis.
+#[derive(Debug, ClapArgs)]
+pub(super) struct ValidateTairaNevoReviewV1Args {
+    /// Exact unsigned NEVO genesis bound by the review manifest.
+    #[arg(long)]
+    unsigned_genesis: PathBuf,
+    /// Deterministic public NEVO review manifest binding the unsigned genesis.
+    #[arg(long)]
+    review: PathBuf,
+}
 /// Inputs and fresh output paths for one complete Taira privacy release set.
 #[derive(Debug, ClapArgs)]
 pub(super) struct RenderTairaReleaseV1Args {
@@ -124,6 +132,33 @@ struct ReleaseArtifactsV1 {
     genesis: Vec<u8>,
     broker_public: Vec<u8>,
     native_recomposition_passed: bool,
+}
+pub(super) fn validate_taira_nevo_review_v1<T: Write>(
+    args: &ValidateTairaNevoReviewV1Args,
+    writer: &mut std::io::BufWriter<T>,
+) -> color_eyre::Result<()> {
+    let unsigned_genesis = read_bounded(
+        &args.unsigned_genesis,
+        MAX_TEMPLATE_BYTES_V1,
+        "Taira NEVO unsigned genesis",
+    )?;
+    let review = read_bounded(
+        &args.review,
+        MAX_TEMPLATE_BYTES_V1,
+        "Taira NEVO reset review",
+    )?;
+    let recomposed = render_release_genesis_v1(&unsigned_genesis, Some(&review))?;
+    if recomposed != unsigned_genesis {
+        bail!("Taira NEVO native recomposition changed the reviewed unsigned genesis");
+    }
+    let status = norito::json!({
+        "status": "validated",
+        "unsigned_genesis_sha256": (hex::encode(sha256(&unsigned_genesis))),
+        "review_sha256": (hex::encode(sha256(&review))),
+        "native_recomposition_passed": true,
+    });
+    writeln!(writer, "{}", norito::json::to_json(&status)?)?;
+    Ok(())
 }
 pub(super) fn render_taira_release_v1<T: Write>(
     args: &RenderTairaReleaseV1Args,
@@ -234,48 +269,6 @@ fn compose_release_artifacts_v1(
         broker_public: broker_export.to_vec(),
         native_recomposition_passed: nevo_review.is_some(),
     })
-}
-#[cfg(test)]
-fn activation_material_v1(
-    report_json: &[u8],
-) -> color_eyre::Result<(Vec<String>, Vec<String>, Vec<InstructionBox>)> {
-    let report: JsonValue = norito::json::from_slice(report_json)
-        .wrap_err("failed to decode validated Taira activation report")?;
-    let registration = object_field_v1(
-        object_v1(&report, "activation report")?,
-        "governance_activation_templates",
-        "activation report",
-    )?;
-    let hashes = string_array_field_v1(
-        registration,
-        "instruction_norito_sha256",
-        "activation report",
-    )?;
-    let encoded = string_array_field_v1(
-        registration,
-        "instruction_norito_base64",
-        "activation report",
-    )?;
-    if hashes.len() != PrivacyProtocolIdV1::COUNT || encoded.len() != PrivacyProtocolIdV1::COUNT {
-        bail!("validated activation report did not retain the exact-12 inventory");
-    }
-    let mut boxes = Vec::with_capacity(encoded.len());
-    for (index, value) in encoded.iter().enumerate() {
-        let bytes = BASE64_STANDARD
-            .decode(value)
-            .wrap_err_with(|| format!("activation instruction {index} is not base64"))?;
-        let instruction =
-            norito::decode_from_bytes::<InstructionBox>(&bytes).wrap_err_with(|| {
-                format!("activation instruction {index} is not an instruction box")
-            })?;
-        if norito::to_bytes(&instruction).wrap_err("failed to re-encode activation instruction")?
-            != bytes
-        {
-            bail!("activation instruction {index} is not canonical Norito");
-        }
-        boxes.push(instruction);
-    }
-    Ok((hashes, encoded, boxes))
 }
 #[expect(
     clippy::too_many_lines,
@@ -1445,28 +1438,108 @@ fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::
         "Taira Kagemusha command private-key handle",
     )?;
     let onboarding = toml_table_field_v1(torii, "account_onboarding", "Taira torii config")?;
+    let onboarding_keys = onboarding
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let expected_onboarding_keys = [
+        "additional_permissions",
+        "authority",
+        "credentials",
+        "fee_sponsor_program_id",
+        "lease_term_years",
+        "private_key_file",
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    if onboarding_keys != expected_onboarding_keys {
+        bail!("Taira onboarding config must have the exact first-release field set");
+    }
+    expect_toml_string_v1(
+        onboarding,
+        "authority",
+        "REPLACE_WITH_TAIRA_ONBOARDING_AUTHORITY",
+        "Taira onboarding authority",
+    )?;
     expect_toml_string_v1(
         onboarding,
         "private_key_file",
         "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE",
         "Taira onboarding private-key path",
     )?;
+    let expected_fee_sponsor_program_id =
+        format!("{GENESIS_AUTHORITY_V1}/{NEVO_FEE_SPONSOR_PROGRAM_NAME_V1}");
+    if onboarding
+        .get("lease_term_years")
+        .and_then(toml::Value::as_integer)
+        != Some(1)
+        || !onboarding
+            .get("additional_permissions")
+            .and_then(toml::Value::as_array)
+            .is_some_and(Vec::is_empty)
+        || onboarding
+            .get("fee_sponsor_program_id")
+            .and_then(toml::Value::as_str)
+            != Some(expected_fee_sponsor_program_id.as_str())
+    {
+        bail!("Taira onboarding policy differs from the exact first-release contract");
+    }
     let credentials = onboarding
         .get("credentials")
         .and_then(toml::Value::as_array)
         .ok_or_else(|| eyre!("Taira onboarding credentials must be an array"))?;
-    if credentials.len() != 1 {
-        bail!("Taira config template must contain exactly one placeholder onboarding credential");
+    let expected_credentials = [
+        (
+            "REPLACE_WITH_TAIRA_BOI_ONBOARDING_CREDENTIAL_ID",
+            "is2",
+            "REPLACE_WITH_TAIRA_BOI_ONBOARDING_TOKEN_HASH",
+        ),
+        (
+            "REPLACE_WITH_TAIRA_DPN_ONBOARDING_CREDENTIAL_ID",
+            "dpn",
+            "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH",
+        ),
+    ];
+    if credentials.len() != expected_credentials.len() {
+        bail!("Taira config template must contain exactly two placeholder onboarding credentials");
     }
-    let credential = credentials[0]
-        .as_table()
-        .ok_or_else(|| eyre!("Taira onboarding credential must be a table"))?;
-    expect_toml_string_v1(
-        credential,
-        "token_hash",
-        "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH",
-        "Taira onboarding token digest",
-    )?;
+    for (credential, (expected_id, expected_dataspace, expected_token_hash)) in
+        credentials.iter().zip(expected_credentials)
+    {
+        let credential = credential
+            .as_table()
+            .ok_or_else(|| eyre!("Taira onboarding credential must be a table"))?;
+        if credential
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>()
+            != ["id", "scope", "token_hash"]
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        {
+            bail!("Taira onboarding credential must have the exact first-release field set");
+        }
+        expect_toml_string_v1(
+            credential,
+            "id",
+            expected_id,
+            "Taira onboarding credential identifier",
+        )?;
+        expect_toml_string_v1(
+            credential,
+            "token_hash",
+            expected_token_hash,
+            "Taira onboarding token digest",
+        )?;
+        let scope = toml_table_field_v1(credential, "scope", "Taira onboarding credential")?;
+        if scope.len() != 1
+            || scope.get("dataspace").and_then(toml::Value::as_str) != Some(expected_dataspace)
+        {
+            bail!(
+                "Taira onboarding credential scope differs from the exact first-release dataspace"
+            );
+        }
+    }
     expect_toml_string_v1(
         toml_table_field_v1(torii, "faucet", "Taira torii config")?,
         "private_key_file",
@@ -1828,10 +1901,7 @@ fn write_new_artifact_set_v1<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::privacy_bootstrap::{
-        TairaPrivacyBootstrapArtifactsV1, build_artifacts_from_profiles_v1,
-        exact12_non_authorizing_test_profile_v1,
-    };
+    use crate::privacy_bootstrap::build_taira_privacy_bootstrap_v1;
     use iroha_core::{
         privacy_engines::bootle_lantern::issuer::{
             BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
@@ -1843,10 +1913,11 @@ mod tests {
         block::BlockHeader,
         privacy::{
             BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
-            PrivacyIssuerIdV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
+            PrivacyIssuerIdV1, PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyProposedLifecycleV1,
+            PrivacyProtocolLifecycleV1,
         },
     };
-    use std::{fs, sync::OnceLock};
+    use std::fs;
     const PLAN_TEMPLATE_V1: &[u8] =
         include_bytes!("../../../../configs/soranexus/taira/privacy_bootstrap_plan.json");
     const CONFIG_TEMPLATE_V1: &[u8] =
@@ -1950,20 +2021,6 @@ mod tests {
         mutation(value.as_object_mut().expect("NEVO fixture review object"));
         json_pretty_bytes_v1(&value, "mutated NEVO fixture review")
             .expect("render mutated NEVO fixture review")
-    }
-    fn activation_fixture_v1() -> TairaPrivacyBootstrapArtifactsV1 {
-        static FIXTURE: OnceLock<TairaPrivacyBootstrapArtifactsV1> = OnceLock::new();
-        FIXTURE
-            .get_or_init(|| {
-                let profiles = PrivacyProtocolIdV1::ALL
-                    .into_iter()
-                    .map(exact12_non_authorizing_test_profile_v1)
-                    .collect::<Result<Vec<_>, _>>()
-                    .expect("derive exact-12 non-authorizing release-composer fixtures");
-                build_artifacts_from_profiles_v1(&profiles)
-                    .expect("build exact-12 release-composer artifacts")
-            })
-            .clone()
     }
     fn policy_registration_fixture_v1() -> RegisterPrivacyBootleLanternIssuerPolicyV1 {
         let issuer = BootleLanternIssuerKeyPairV1::generate_from_secret_seed_v1(
@@ -2107,30 +2164,33 @@ mod tests {
         .into_bytes()
     }
     #[test]
-    fn complete_release_composition_is_native_deterministic_and_secret_free() {
-        let activations = activation_fixture_v1();
+    fn complete_release_composition_is_native_deterministic_or_fails_closed_at_source() {
         let export = broker_export_fixture_v1();
-        let unavailable = PrivacyProtocolIdV1::ALL
-            .into_iter()
-            .filter(|protocol_id| compiled_privacy_profile_v1(*protocol_id).is_err())
-            .collect::<Vec<_>>();
-        if !unavailable.is_empty() {
-            let error = compose_release_artifacts_v1(
-                &activations.instructions_json,
-                &activations.report_json,
-                &export,
-                PLAN_TEMPLATE_V1,
-                CONFIG_TEMPLATE_V1,
-                GENESIS_TEMPLATE_V1,
-                None,
-            )
-            .expect_err("closed compiled-profile gates must prevent release composition");
+        if let Some((protocol_id, source)) =
+            PrivacyProtocolIdV1::ALL
+                .into_iter()
+                .find_map(|protocol_id| {
+                    compiled_privacy_profile_v1(protocol_id)
+                        .err()
+                        .map(|source| (protocol_id, source))
+                })
+        {
+            let error = build_taira_privacy_bootstrap_v1()
+                .expect_err("an unavailable compiled profile must prevent partial emission");
+            let error = error.to_string();
             assert!(
-                error.to_string().contains("not governance-available"),
-                "unexpected closed-gate error for {unavailable:?}: {error}"
+                error.contains(protocol_id.canonical_label()),
+                "closed source gate did not identify `{}`: {error}",
+                protocol_id.canonical_label()
+            );
+            assert!(
+                error.contains(&source.to_string()),
+                "closed source gate did not retain the native error `{source}`: {error}"
             );
             return;
         }
+        let activations = build_taira_privacy_bootstrap_v1()
+            .expect("derive the complete exact-12 release-composer source set");
         let first = compose_release_artifacts_v1(
             &activations.instructions_json,
             &activations.report_json,
@@ -2360,6 +2420,74 @@ mod tests {
         }
     }
     #[test]
+    fn validate_only_nevo_review_rejects_digest_unbound_identity_mutation() {
+        let directory = tempfile::tempdir().expect("create NEVO validation directory");
+        let unsigned_genesis_path = directory.path().join("unsigned-genesis.json");
+        let review_path = directory.path().join("review.json");
+        let (genesis, review) = nevo_fixture_v1();
+        fs::write(&unsigned_genesis_path, &genesis).expect("write NEVO unsigned genesis");
+        fs::write(&review_path, &review).expect("write NEVO review");
+        let args = ValidateTairaNevoReviewV1Args {
+            unsigned_genesis: unsigned_genesis_path,
+            review: review_path.clone(),
+        };
+        let mut output = std::io::BufWriter::new(Vec::new());
+        validate_taira_nevo_review_v1(&args, &mut output)
+            .expect("validate exact reviewed NEVO genesis");
+        let output = String::from_utf8(output.into_inner().expect("flush NEVO validation receipt"))
+            .expect("NEVO validation receipt is UTF-8");
+        let receipt: JsonValue =
+            norito::json::from_str(&output).expect("decode NEVO validation receipt");
+        let receipt = receipt.as_object().expect("NEVO validation receipt object");
+        assert_eq!(
+            receipt.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            [
+                "native_recomposition_passed",
+                "review_sha256",
+                "status",
+                "unsigned_genesis_sha256",
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert_eq!(
+            receipt.get("status").and_then(JsonValue::as_str),
+            Some("validated")
+        );
+        assert_eq!(
+            receipt
+                .get("native_recomposition_passed")
+                .and_then(JsonValue::as_bool),
+            Some(true)
+        );
+        let expected_genesis_sha256 = hex::encode(sha256(&genesis));
+        let expected_review_sha256 = hex::encode(sha256(&review));
+        assert_eq!(
+            receipt
+                .get("unsigned_genesis_sha256")
+                .and_then(JsonValue::as_str),
+            Some(expected_genesis_sha256.as_str())
+        );
+        assert_eq!(
+            receipt.get("review_sha256").and_then(JsonValue::as_str),
+            Some(expected_review_sha256.as_str())
+        );
+
+        let digest_unbound_identity = mutate_nevo_review_v1(&review, |root| {
+            root.get_mut("public_identities")
+                .and_then(JsonValue::as_object_mut)
+                .expect("NEVO public identities")
+                .insert(
+                    "onboarding_authority_account_id".to_owned(),
+                    JsonValue::String(GENESIS_AUTHORITY_V1.to_owned()),
+                );
+        });
+        fs::write(&review_path, digest_unbound_identity).expect("write mutated NEVO review");
+        let error = validate_taira_nevo_review_v1(&args, &mut std::io::BufWriter::new(Vec::new()))
+            .expect_err("digest-unbound public identity mutation must fail native validation");
+        assert!(error.to_string().contains("public_inputs_sha256"));
+    }
+    #[test]
     fn reviewed_nevo_genesis_is_natively_recomposed_and_splices_are_rejected() {
         let (genesis, review) = nevo_fixture_v1();
         assert_eq!(
@@ -2503,6 +2631,38 @@ mod tests {
         );
     }
     #[test]
+    fn config_template_onboarding_credentials_are_exact_and_secret_free() {
+        let broker = parse_broker_public_export_v1(&broker_export_fixture_v1())
+            .expect("parse broker fixture");
+        for (placeholder, materialized, expected_error) in [
+            (
+                "REPLACE_WITH_TAIRA_BOI_ONBOARDING_TOKEN_HASH",
+                "blake3:1111111111111111111111111111111111111111111111111111111111111111",
+                "secret-free staging placeholder",
+            ),
+            (
+                "REPLACE_WITH_TAIRA_DPN_ONBOARDING_CREDENTIAL_ID",
+                "materialized-dpn-credential",
+                "secret-free staging placeholder",
+            ),
+            (
+                "scope = { dataspace = \"dpn\" }",
+                "scope = { dataspace = \"is2\" }",
+                "scope differs from the exact first-release dataspace",
+            ),
+        ] {
+            let text = std::str::from_utf8(CONFIG_TEMPLATE_V1)
+                .expect("config fixture UTF-8")
+                .replacen(placeholder, materialized, 1);
+            let error = render_release_config_v1(text.as_bytes(), &broker)
+                .expect_err("reject materialized or retargeted onboarding credential");
+            assert!(
+                error.to_string().contains(expected_error),
+                "materializing or retargeting onboarding placeholder {placeholder} returned {error:?}"
+            );
+        }
+    }
+    #[test]
     fn config_template_with_materialized_soranet_transport_identity_is_rejected() {
         let broker = parse_broker_public_export_v1(&broker_export_fixture_v1())
             .expect("parse broker fixture");
@@ -2542,11 +2702,11 @@ mod tests {
         );
         let mut config = CONFIG_TEMPLATE_V1.to_vec();
         config.extend_from_slice(b"\n# unreviewed but semantically inert\n");
+        let error = render_release_config_v1(&config, &broker)
+            .expect_err("reject comment-drifted config template");
         assert!(
-            render_release_config_v1(&config, &broker)
-                .expect_err("reject comment-drifted config template")
-                .to_string()
-                .contains("differs byte-for-byte")
+            error.to_string().contains("differs byte-for-byte"),
+            "unexpected config-template rejection: {error:?}"
         );
         let mut genesis = b"\n".to_vec();
         genesis.extend_from_slice(GENESIS_TEMPLATE_V1);
@@ -2559,13 +2719,22 @@ mod tests {
     }
     #[test]
     fn decoded_privacy_bootstrap_in_genesis_template_is_rejected() {
-        let activations = activation_fixture_v1();
-        let (_, _, boxes) =
-            activation_material_v1(&activations.report_json).expect("activation material");
+        let profile = PrivacyProtocolIdV1::ALL
+            .into_iter()
+            .find_map(|protocol_id| compiled_privacy_profile_v1(protocol_id).ok())
+            .expect("at least one native privacy profile must be governance-available");
+        let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Proposed(
+            PrivacyProposedLifecycleV1 {
+                proposed_at_height: 1,
+                activate_at_height: 301,
+            },
+        ));
+        let instruction =
+            InstructionBox::from(RegisterPrivacyProtocolActivationV1::new(activation));
         let mut genesis: JsonValue =
             norito::json::from_slice(GENESIS_TEMPLATE_V1).expect("parse genesis template");
         let mut one = String::new();
-        iroha_genesis::genesis_instructions_json::serialize(&boxes[..1], &mut one);
+        iroha_genesis::genesis_instructions_json::serialize(&[instruction], &mut one);
         let mut decoded: JsonValue =
             norito::json::from_str(&one).expect("parse decoded activation JSON");
         let injected = decoded

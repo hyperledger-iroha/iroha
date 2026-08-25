@@ -287,12 +287,12 @@ mod tests {
             for (word, constant) in state.iter_mut().zip(constants) {
                 *word = add(*word, *constant);
             }
-            if round < FULL_ROUNDS_HALF || round >= FULL_ROUNDS_HALF + PARTIAL_ROUNDS {
+            if (FULL_ROUNDS_HALF..FULL_ROUNDS_HALF + PARTIAL_ROUNDS).contains(&round) {
+                state[0] = legacy_pow5(state[0]);
+            } else {
                 for word in state.iter_mut() {
                     *word = legacy_pow5(*word);
                 }
-            } else {
-                state[0] = legacy_pow5(state[0]);
             }
             apply_mds(state);
         }

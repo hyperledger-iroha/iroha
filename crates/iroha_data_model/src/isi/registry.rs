@@ -171,6 +171,38 @@ mod tests {
             "pair payload should decode back into the canonical boxed family"
         );
     }
+    #[cfg(feature = "governance")]
+    #[test]
+    fn parliament_registry_contains_only_current_lifecycle_and_standalone_ballots() {
+        let registry = default();
+        for active in [
+            crate::isi::governance::CreateParliamentGovernanceAttemptV1::WIRE_ID,
+            crate::isi::governance::SubmitParliamentLifecycleTransitionV1::WIRE_ID,
+            "iroha_data_model::isi::governance::CastZkBallot",
+            "iroha_data_model::isi::governance::CastPlainBallot",
+        ] {
+            assert!(
+                registry.contains(active),
+                "active Parliament or standalone referendum wire id is missing: {active}"
+            );
+        }
+        for retired in [
+            "iroha_data_model::isi::governance::ApproveGovernanceProposal",
+            "iroha_data_model::isi::governance::CastParliamentBallot",
+            "iroha_data_model::isi::governance::FinalizeReferendum",
+            "iroha_data_model::isi::governance::EnactReferendum",
+            "iroha_data_model::isi::governance::EnactSccpRouteGovernance",
+        ] {
+            assert!(
+                !registry.contains(retired),
+                "retired proposal-backed governance wire id remains registered: {retired}"
+            );
+            assert!(
+                !is_instruction_wire_id_registered(retired),
+                "retired proposal-backed governance wire id remains publicly accepted: {retired}"
+            );
+        }
+    }
     #[test]
     fn default_registry_registers_public_lane_validator() {
         let registry = default();
@@ -289,11 +321,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 352;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 348;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 352;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 348;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 333;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 332;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -330,7 +362,7 @@ mod tests {
             ("register::<", 1),
             ("register_slice::<", 2),
             ("register_with_id::<", 1),
-            ("register_with_id_slice::<", 1),
+            ("register_with_id_slice::<", 0),
         ] {
             assert!(
                 provider.matches(forbidden).count() == expected_provider_owners
@@ -346,9 +378,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "9461dcea427d7d1bdaa5ec05a35ced9a2a0de71364e91b83560a78c953c0ba00";
+            "47c62a1853521dddeaac11ea403dd26bd5966f61c4d8880396b4dcd26a41839d";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "70727bc24c7c1ae9b21cce072cc09136bcb042086f400ea96efa4b986facc219";
+            "b7df8811dbc67975f5b0c29bbe2b5cecdee9e6c473ef6be7a86360cc55ad65a2";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -375,7 +407,7 @@ mod tests {
                     .iter()
                     .filter(|entry| entry.governance_only)
                     .count(),
-                19,
+                16,
                 "governance-only V1 inventory changed without updating its explicit scope"
             );
             assert_eq!(

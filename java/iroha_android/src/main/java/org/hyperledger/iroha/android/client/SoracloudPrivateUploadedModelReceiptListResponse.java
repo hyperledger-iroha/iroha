@@ -11,7 +11,7 @@ public final class SoracloudPrivateUploadedModelReceiptListResponse {
   private final List<SoracloudPrivateUploadedModelExecutionReceipt> receipts;
   private final Long total;
   private final long returnedItems;
-  private final long remainingItems;
+  private final Long remainingItems;
   private final boolean hasMore;
   private final String countMode;
   private final String continueCursor;
@@ -21,18 +21,34 @@ public final class SoracloudPrivateUploadedModelReceiptListResponse {
       final List<SoracloudPrivateUploadedModelExecutionReceipt> receipts,
       final Long total,
       final long returnedItems,
-      final long remainingItems,
+      final Long remainingItems,
       final boolean hasMore,
       final String countMode,
       final String continueCursor) {
+    SoracloudPrivateModelValidation.requireSchemaVersion(schemaVersion, "schemaVersion");
+    final List<SoracloudPrivateUploadedModelExecutionReceipt> receiptSnapshot =
+        new ArrayList<>(Objects.requireNonNull(receipts, "receipts"));
+    final String canonicalCursor =
+        continueCursor == null
+            ? null
+            : SoracloudPrivateModelValidation.requirePrivateReceiptCursor(
+                continueCursor, "continueCursor");
+    SoracloudPrivateModelValidation.requireReceiptListMetadata(
+        receiptSnapshot,
+        total,
+        returnedItems,
+        remainingItems,
+        hasMore,
+        countMode,
+        canonicalCursor);
     this.schemaVersion = schemaVersion;
-    this.receipts = Collections.unmodifiableList(new ArrayList<>(Objects.requireNonNull(receipts, "receipts")));
+    this.receipts = Collections.unmodifiableList(receiptSnapshot);
     this.total = total;
     this.returnedItems = returnedItems;
     this.remainingItems = remainingItems;
     this.hasMore = hasMore;
-    this.countMode = Objects.requireNonNull(countMode, "countMode");
-    this.continueCursor = continueCursor;
+    this.countMode = countMode;
+    this.continueCursor = canonicalCursor;
   }
 
   public long schemaVersion() { return schemaVersion; }
@@ -43,7 +59,7 @@ public final class SoracloudPrivateUploadedModelReceiptListResponse {
 
   public long returnedItems() { return returnedItems; }
 
-  public long remainingItems() { return remainingItems; }
+  public Long remainingItems() { return remainingItems; }
 
   public boolean hasMore() { return hasMore; }
 
@@ -51,4 +67,3 @@ public final class SoracloudPrivateUploadedModelReceiptListResponse {
 
   public String continueCursor() { return continueCursor; }
 }
-

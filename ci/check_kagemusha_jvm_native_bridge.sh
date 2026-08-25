@@ -11,7 +11,7 @@ ABI22_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi22_artifact.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
 LOCALNET_DEPLOYER="$ROOT_DIR/scripts/deploy_localnet.sh"
 PINNED_TOOLCHAIN="1.93.1"
-REQUIRED_NATIVE_ASSERTION="A freshly built connect_norito_bridge ABI 22 artifact-streaming library is required"
+REQUIRED_NATIVE_ASSERTION="A freshly built connect_norito_bridge ABI 23 artifact-streaming library is required"
 LOCALNET_TEST_CLASS="org.hyperledger.iroha.sdk.client.ZkAssetShieldLocalnetTest"
 
 fail() {
@@ -624,7 +624,7 @@ run_expected_missing_native_failure \
 HOST_TRIPLE="$("$RUSTC_BINARY" --version --verbose | sed -n 's/^host: //p')"
 [[ "$HOST_TRIPLE" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "rustc returned a non-canonical host triple"
 CARGO_PATH="${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:/usr/bin:/bin"
-printf '[kagemusha-jvm-native] building fresh host ABI-22 bridge for %s\n' "$HOST_TRIPLE" >&2
+printf '[kagemusha-jvm-native] building fresh host ABI-23 bridge for %s\n' "$HOST_TRIPLE" >&2
 "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
   --profile host-cargo \
   --set "CARGO=$CARGO_BINARY" \
@@ -946,19 +946,19 @@ if aggregate["skipped"] != 0:
 if aggregate["failures"] != 0 or aggregate["errors"] != 0:
     raise SystemExit(f"complete Kotlin release suite contains failed outcomes: {aggregate}")
 
-native_bytes = regular_bytes(native_manifest_path, "native ABI-22 evidence", 64 * 1024)
+native_bytes = regular_bytes(native_manifest_path, "native ABI-23 evidence", 64 * 1024)
 try:
     native = json.loads(native_bytes)
 except (UnicodeDecodeError, json.JSONDecodeError) as error:
-    raise SystemExit(f"native ABI-22 evidence is invalid: {error}") from error
+    raise SystemExit(f"native ABI-23 evidence is invalid: {error}") from error
 if (
     type(native) is not dict
     or native.get("sdk") != "c-jni"
     or native.get("target") != host_target
-    or native.get("bridge_abi_version") != 22
+    or native.get("bridge_abi_version") != 23
     or native.get("source_tree_clean") is not True
 ):
-    raise SystemExit("native ABI-22 evidence does not match the exercised JNI artifact")
+    raise SystemExit("native ABI-23 evidence does not match the exercised JNI artifact")
 
 if evidence_dir is not None:
     metadata = evidence_dir.lstat()

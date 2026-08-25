@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { ed25519 } from "@noble/curves/ed25519";
 
+import { AccountAddress } from "../src/address.js";
 import {
   encodeValidationFeeCurrentPolicyProofRequestV1,
   normalizeValidationFeeLedgerBindingV1,
@@ -18,60 +20,104 @@ const binding = Object.freeze({
     contextId: "57".repeat(32),
   }),
 });
+const proposalOperator = AccountAddress.fromAccount({
+  publicKey: Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 0x31))),
+}).toI105();
 
-function completePlainElectorateRules() {
-  return {
-    voting_asset_id: "xor#sora",
-    bond_escrow_account: "bond-escrow-account",
-    slash_receiver_account: "slash-receiver-account",
-    ballot_amount: "150",
-    ballot_duration_blocks: "3600",
-    citizenship_amount: "10000",
-    max_members: "256",
-    conviction_step_blocks: "100",
-    max_conviction: "6",
-    min_turnout: "1",
-    approval_threshold_numerator: "1",
-    approval_threshold_denominator: "2",
-    eligibility_rule: {
-      rule: "proposal_operator_at_or_before_gate_others_after_gate",
-      value: null,
-    },
-  };
+function id(byte) {
+  return byte.toString(16).padStart(2, "0").repeat(32);
 }
 
-function completeParliamentProposal(kind, proposalOctet, rosterOctet, snapshotOctet) {
+function completeParliamentProposal(kind, proposalOctet, offset) {
   const proposalId = proposalOctet.repeat(32);
+  const governanceAttemptId = id(offset);
+  const bodyInstanceId = id(offset + 1);
+  const electionAttemptId = id(offset + 2);
+  const sortitionRequestId = id(offset + 3);
+  const beaconSessionId = id(offset + 4);
+  const beaconPulseId = id(offset + 5);
+  const root = (delta) => Array(32).fill(offset + delta);
   return {
     proposal_kind: kind,
+    proposal_operator: proposalOperator,
     proposal_id: proposalId,
     payload_hash: proposalId,
-    parliament_roster_root: rosterOctet.repeat(32),
-    plainElectorateRules: completePlainElectorateRules(),
-    plainElectorateSnapshot: {
-      rosterRoot: snapshotOctet.repeat(32),
-      memberCount: "2",
-      capturedAtHeight: "1000",
-      approvalGateHeight: "999",
+    governance_certificate_id: id(offset + 6),
+    governance_certificate: {
+      proposal_content_id: proposalId,
+      governance_attempt_id: governanceAttemptId,
+      governance_attempt_sequence: 0,
+      risk_tier: { tier: "Standard" },
+      body_bindings: [{
+        body_instance_id: bodyInstanceId,
+        election_attempt_id: electionAttemptId,
+        election_attempt_sequence: 0,
+        sortition_request_id: sortitionRequestId,
+        sortition_request: {
+          id: sortitionRequestId,
+          governance_attempt_id: governanceAttemptId,
+          body_election_attempt_id: electionAttemptId,
+          body: "policy-jury",
+          candidate_root: root(7),
+          candidate_count: 3,
+          target_seats: 3,
+          request_height: 1000,
+          pulse_height: 1001,
+          beacon_session_id: beaconSessionId,
+        },
+        body: "policy-jury",
+        original_seats: 3,
+        beacon_session_id: beaconSessionId,
+        beacon_pulse_id: beaconPulseId,
+        roster_root: root(8),
+        assignment_root: root(9),
+        result_root: root(10),
+        result_height: 4599,
+        public_finding: null,
+        ballot: {
+          ballot_attempt_id: id(offset + 11),
+          ballot_attempt_sequence: 0,
+          tle_session_id: id(offset + 12),
+          tle_key_session_id: id(offset + 13),
+          registration_root: root(14),
+          dropout_root: root(15),
+          survivor_root: root(16),
+          corpus_root: root(17),
+          no_recovery_root: root(18),
+          timed_commitment_root: root(19),
+          release_beacon_session_id: id(offset + 20),
+          registered_at_height: 1100,
+          registration_close_height: 1200,
+          survivor_freeze_height: 1300,
+          commitment_close_height: 1400,
+          registration_closed_at_height: 1200,
+          survivors_frozen_at_height: 1300,
+          commitment_closed_at_height: 1400,
+          max_ballot_retries: 3,
+          max_corpus_entries: 1000,
+          release_height: 1500,
+          opening_deadline_height: 4599,
+          release_pulse_id: id(offset + 21),
+          opening_height: 1500,
+          opening_root: root(22),
+          tally: {
+            original_seats: 3,
+            accepted_ballots: 3,
+            aye: 2,
+            nay: 1,
+            abstain: 0,
+          },
+          outcome: { outcome: "Approved" },
+        },
+      }],
+      policy_version: 1,
+      effect_preimage_hash: root(23),
+      expected_head: { state: "Absent", head: { subject_id: root(24) } },
+      certified_at_height: 4599,
+      enact_at_height: 4600,
     },
-    enactment_window: {
-      opens_at_height: "1000",
-      closes_at_height: "4599",
-      enacted_at_height: "4600",
-    },
-    finalization: {
-      proposal_id: proposalId,
-      referendum_id: proposalId,
-      finalized_at_height: "4599",
-      mode: "PLAIN",
-      approve: "2",
-      reject: "0",
-      abstain: "0",
-      min_turnout: "1",
-      approval_threshold_numerator: "1",
-      approval_threshold_denominator: "2",
-      approved: true,
-    },
+    certified_at_height: "4599",
+    enacted_at_height: "4600",
   };
 }
 
@@ -89,14 +135,12 @@ function completeCurrentPolicy() {
       validationFeePolicy: completeParliamentProposal(
         "ValidationFeePolicyV1",
         "02",
-        "04",
-        "06",
+        0x20,
       ),
       payoutLifecycle: completeParliamentProposal(
         "ValidationFeePayoutLifecycleV1",
         "08",
-        "0a",
-        "0c",
+        0x50,
       ),
       payoutLifecycleSealHash: "cd".repeat(32),
     },
@@ -315,13 +359,17 @@ test("verified current policy enforces and freezes the complete nested projectio
   assert.equal(verified.current_policy.activePolicyVersion, "1");
   assert.equal(
     verified.current_policy.parliament.validationFeePolicy
-      .plainElectorateRules.bond_escrow_account,
-    "bond-escrow-account",
+      .governance_certificate.proposal_content_id,
+    "02".repeat(32),
+  );
+  assert.equal(
+    verified.current_policy.parliament.validationFeePolicy.proposal_operator,
+    proposalOperator,
   );
   assert.equal(
     verified.current_policy.parliament.payoutLifecycle
-      .plainElectorateSnapshot.rosterRoot,
-    "0c".repeat(32),
+      .governance_certificate.body_bindings[0].body,
+    "policy-jury",
   );
   assert.equal(
     verified.current_policy.payout.recipients[3].share_basis_points,
@@ -338,7 +386,7 @@ test("verified current policy enforces and freezes the complete nested projectio
   assert.equal(
     Object.isFrozen(
       verified.current_policy.parliament.validationFeePolicy
-        .plainElectorateRules.eligibility_rule,
+        .governance_certificate.body_bindings[0].ballot.tally,
     ),
     true,
   );
@@ -352,20 +400,86 @@ test("verified current policy enforces and freezes the complete nested projectio
 test("verified current policy rejects missing, extra, and mistyped nested fields", () => {
   const malformedFixtures = [
     {
-      label: "missing proposal-bound escrow",
+      label: "missing proposal operator",
       mutate(projection) {
         delete projection.current_policy.parliament.validationFeePolicy
-          .plainElectorateRules.bond_escrow_account;
+          .proposal_operator;
       },
-      error: /plainElectorateRules must contain exactly/u,
+      error: /validationFeePolicy must contain exactly/u,
     },
     {
-      label: "extra frozen-snapshot field",
+      label: "empty proposal operator",
+      mutate(projection) {
+        projection.current_policy.parliament.validationFeePolicy.proposal_operator =
+          "";
+      },
+      error: /proposal_operator must be a non-empty string/u,
+    },
+    {
+      label: "retired PLAIN electorate projection",
+      mutate(projection) {
+        projection.current_policy.parliament.validationFeePolicy
+          .plainElectorateRules = {};
+      },
+      error: /validationFeePolicy must contain exactly/u,
+    },
+    {
+      label: "extra certificate field",
       mutate(projection) {
         projection.current_policy.parliament.payoutLifecycle
-          .plainElectorateSnapshot.members = [];
+          .governance_certificate.legacy = null;
       },
-      error: /plainElectorateSnapshot must contain exactly/u,
+      error: /certificate contains unknown, aliased, or missing fields/u,
+    },
+    {
+      label: "missing sortition binding",
+      mutate(projection) {
+        delete projection.current_policy.parliament.validationFeePolicy
+          .governance_certificate.body_bindings[0].sortition_request.candidate_root;
+      },
+      error: /sortition_request contains unknown, aliased, or missing fields/u,
+    },
+    {
+      label: "extra ballot field",
+      mutate(projection) {
+        projection.current_policy.parliament.validationFeePolicy
+          .governance_certificate.body_bindings[0].ballot.raw = {};
+      },
+      error: /ballot contains unknown, aliased, or missing fields/u,
+    },
+    {
+      label: "legacy flattened ballot outcome",
+      mutate(projection) {
+        projection.current_policy.parliament.validationFeePolicy
+          .governance_certificate.body_bindings[0].ballot.outcome = "Approved";
+      },
+      error: /ballot\.outcome must be a plain object/u,
+    },
+    {
+      label: "ballot retry ceiling exceeds the Rust contract",
+      mutate(projection) {
+        projection.current_policy.parliament.validationFeePolicy
+          .governance_certificate.body_bindings[0].ballot.max_ballot_retries = 17;
+      },
+      error: /max_ballot_retries must be an integer from 0 through 16/u,
+    },
+    {
+      label: "sortition target exceeds the Rust contract",
+      mutate(projection) {
+        projection.current_policy.parliament.validationFeePolicy
+          .governance_certificate.body_bindings[0].sortition_request.target_seats =
+          1001;
+      },
+      error: /target_seats must be an integer from 1 through 1000/u,
+    },
+    {
+      label: "release pulse reuses a sortition pulse",
+      mutate(projection) {
+        const body = projection.current_policy.parliament.validationFeePolicy
+          .governance_certificate.body_bindings[0];
+        body.ballot.release_pulse_id = body.beacon_pulse_id;
+      },
+      error: /sortition and release pulse identifiers disjoint/u,
     },
     {
       label: "retired SBD payout field",
@@ -384,20 +498,38 @@ test("verified current policy rejects missing, extra, and mistyped nested fields
       error: /share_basis_points must be an unsigned integer/u,
     },
     {
-      label: "wrong finalization anchor",
+      label: "certificate targets another proposal",
       mutate(projection) {
         projection.current_policy.parliament.validationFeePolicy
-          .finalization.finalized_at_height = "4598";
+          .governance_certificate.proposal_content_id = "04".repeat(32);
       },
-      error: /violates its frozen electorate or enactment anchors/u,
+      error: /differs from its retained governance certificate/u,
     },
     {
-      label: "wrong CBSI ballot amount",
+      label: "outer certification height differs",
       mutate(projection) {
         projection.current_policy.parliament.validationFeePolicy
-          .plainElectorateRules.ballot_amount = "151";
+          .certified_at_height = "4598";
       },
-      error: /violates the bounded PLAIN electorate invariants/u,
+      error: /differs from its retained governance certificate/u,
+    },
+    {
+      label: "outer certification height is not a decimal string",
+      mutate(projection) {
+        projection.current_policy.parliament.validationFeePolicy
+          .certified_at_height = 4599;
+      },
+      error: /certified_at_height must be a canonical unsigned decimal string/u,
+    },
+    {
+      label: "non-approving certificate ballot",
+      mutate(projection) {
+        projection.current_policy.parliament.validationFeePolicy
+          .governance_certificate.body_bindings[0].ballot.outcome = {
+            outcome: "Rejected",
+          };
+      },
+      error: /approving aggregate outcome/u,
     },
   ];
   for (const fixture of malformedFixtures) {
@@ -425,7 +557,7 @@ test("validation-fee proof path rejects a stale native bridge ABI", () => {
     () => {
       assert.throws(
         () => encodeValidationFeeCurrentPolicyProofRequestV1(binding.checkpoint),
-        /ABI 22/u,
+        /ABI 23/u,
       );
     },
   );

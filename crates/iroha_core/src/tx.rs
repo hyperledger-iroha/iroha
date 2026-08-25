@@ -733,9 +733,8 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         || any.is::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>()
         || any.is::<iroha_data_model::isi::governance::CastZkBallot>()
         || any.is::<iroha_data_model::isi::governance::CastPlainBallot>()
-        || any.is::<iroha_data_model::isi::governance::ApproveGovernanceProposal>()
-        || any.is::<iroha_data_model::isi::governance::EnactReferendum>()
-        || any.is::<iroha_data_model::isi::governance::FinalizeReferendum>()
+        || any.is::<iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1>()
+        || any.is::<iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1>()
         || any.is::<iroha_data_model::isi::ministry::SubmitAgendaProposal>()
 }
 fn is_time_sensitive_executable(executable: &Executable) -> bool {
@@ -3348,8 +3347,8 @@ impl StateBlock<'_> {
                         continue;
                     };
                     if payload.contract_address == contract_address
-                        && payload.code_hash_hex.to_hex() == want_code
-                        && payload.abi_hash_hex.to_hex() == want_abi
+                        && payload.code_hash.to_hex() == want_code
+                        && payload.abi_hash.to_hex() == want_abi
                         && matches!(rec.status, crate::state::GovernanceProposalStatus::Enacted)
                     {
                         ok = true;
@@ -4992,10 +4991,7 @@ pub mod tests {
             },
             trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
         },
-        isi::{
-            InstructionBox, Log,
-            governance::{ProposeRuntimeUpgradeProposal, VotingMode},
-        },
+        isi::{InstructionBox, Log, governance::ProposeRuntimeUpgradeProposal},
         metadata::Metadata,
         name::Name,
         nexus::{
@@ -7045,11 +7041,7 @@ pub mod tests {
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([ProposeRuntimeUpgradeProposal {
-            manifest,
-            window: None,
-            mode: Some(VotingMode::Plain),
-        }])
+        .with_instructions([ProposeRuntimeUpgradeProposal { manifest }])
         .sign(keypair.private_key());
         let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
         assert_eq!(prepared.entrypoint_hash, signed.hash_as_entrypoint());
@@ -7644,15 +7636,43 @@ pub mod tests {
     fn time_sensitive_instruction_detects_governance_and_non_sensitive() {
         let (authority, _keypair) = gen_account_in("wonderland");
         let (counterparty, _keypair) = gen_account_in("wonderland");
-        let ballot = iroha_data_model::isi::governance::CastPlainBallot {
-            referendum_id: "ref-1".into(),
+        let parliament_attempt =
+            iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1 {
+                proposal: iroha_data_model::governance::types::ProposalKind::DeployContract(
+                    iroha_data_model::governance::types::DeployContractProposal {
+                        contract_address: ContractAddress::derive(
+                            &test_network_id(),
+                            &authority,
+                            1,
+                            DataSpaceId::UNIVERSAL,
+                        )
+                        .expect("contract address"),
+                        code_hash: iroha_data_model::governance::types::ContractCodeHash::new(
+                            [1; 32],
+                        ),
+                        abi_hash: iroha_data_model::governance::types::ContractAbiHash::new(
+                            [2; 32],
+                        ),
+                        abi_version: 1.into(),
+                        manifest_provenance: None,
+                    },
+                ),
+                attempt_sequence: 0,
+            };
+        let parliament_attempt_box = InstructionBox::from(parliament_attempt);
+        assert!(super::is_time_sensitive_instruction(
+            &parliament_attempt_box
+        ));
+        let standalone_ballot = iroha_data_model::isi::governance::CastPlainBallot {
+            referendum_id: "standalone-ref-1".into(),
             owner: authority.clone(),
             amount: 1_u64.into(),
             duration_blocks: 1,
             direction: 0,
         };
-        let ballot_box = InstructionBox::from(ballot);
-        assert!(super::is_time_sensitive_instruction(&ballot_box));
+        assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
+            standalone_ballot
+        )));
         let agreement_id: iroha_data_model::repo::RepoAgreementId =
             "repo-1".parse().expect("repo id");
         let cash_leg = iroha_data_model::repo::RepoCashLeg {
@@ -7814,14 +7834,25 @@ pub mod tests {
     #[test]
     fn time_sensitive_executable_detects_sensitive_and_safe() {
         let (authority, _keypair) = gen_account_in("wonderland");
-        let ballot = iroha_data_model::isi::governance::CastPlainBallot {
-            referendum_id: "ref-2".into(),
-            owner: authority,
-            amount: 1_u64.into(),
-            duration_blocks: 1,
-            direction: 0,
+        let attempt = iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1 {
+            proposal: iroha_data_model::governance::types::ProposalKind::DeployContract(
+                iroha_data_model::governance::types::DeployContractProposal {
+                    contract_address: ContractAddress::derive(
+                        &test_network_id(),
+                        &authority,
+                        2,
+                        DataSpaceId::UNIVERSAL,
+                    )
+                    .expect("contract address"),
+                    code_hash: iroha_data_model::governance::types::ContractCodeHash::new([3; 32]),
+                    abi_hash: iroha_data_model::governance::types::ContractAbiHash::new([4; 32]),
+                    abi_version: 1.into(),
+                    manifest_provenance: None,
+                },
+            ),
+            attempt_sequence: 0,
         };
-        let sensitive = Executable::from(vec![InstructionBox::from(ballot)]);
+        let sensitive = Executable::from(vec![InstructionBox::from(attempt)]);
         assert!(super::is_time_sensitive_executable(&sensitive));
         let safe = Executable::from(vec![InstructionBox::from(Log::new(
             Level::INFO,
@@ -7836,19 +7867,30 @@ pub mod tests {
     #[test]
     fn nts_enforcement_rejects_time_sensitive_when_unhealthy() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let ballot = iroha_data_model::isi::governance::CastPlainBallot {
-            referendum_id: "ref-3".into(),
-            owner: authority.clone(),
-            amount: 1_u64.into(),
-            duration_blocks: 1,
-            direction: 0,
+        let attempt = iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1 {
+            proposal: iroha_data_model::governance::types::ProposalKind::DeployContract(
+                iroha_data_model::governance::types::DeployContractProposal {
+                    contract_address: ContractAddress::derive(
+                        &test_network_id(),
+                        &authority,
+                        3,
+                        DataSpaceId::UNIVERSAL,
+                    )
+                    .expect("contract address"),
+                    code_hash: iroha_data_model::governance::types::ContractCodeHash::new([5; 32]),
+                    abi_hash: iroha_data_model::governance::types::ContractAbiHash::new([6; 32]),
+                    abi_version: 1.into(),
+                    manifest_provenance: None,
+                },
+            ),
+            attempt_sequence: 0,
         };
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([ballot])
+        .with_instructions([attempt])
         .sign(keypair.private_key());
         let status = crate::time::NetworkTimeStatus {
             now: std::time::SystemTime::UNIX_EPOCH,

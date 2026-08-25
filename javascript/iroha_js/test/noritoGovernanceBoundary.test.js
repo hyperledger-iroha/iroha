@@ -19,7 +19,6 @@ test("governance boundary factory exposes every Norito call-path helper", () => 
     decodeExactStandardBase64: () => Buffer.of(1),
     decodeManifestProvenanceValue: (value) => value,
     encodeManifestProvenanceValue: (value) => value,
-    encodeVotingModeValue: (value) => value,
     isPlainObject,
   });
 
@@ -35,15 +34,12 @@ test("governance boundary factory exposes every Norito call-path helper", () => 
   assert.equal(Object.isFrozen(boundary), true);
 });
 
-test("strict governance JSON retains canonical integer tokens losslessly", () => {
+test("strict governance JSON retains the numeric ABI version", () => {
   const parsed = parseStrictGovernanceInstructionJson(
-    '{"ProposeDeployContract":{"window":{"lower":0,"upper":18446744073709551615}}}',
+    '{"ProposeDeployContract":{"abi_version":1}}',
     "governance instruction",
   );
-  assert.deepEqual(parsed.ProposeDeployContract.window, {
-    lower: "0",
-    upper: "18446744073709551615",
-  });
+  assert.equal(parsed.ProposeDeployContract.abi_version, 1);
 });
 
 test("strict governance JSON rejects duplicate keys and malformed scalars", () => {
@@ -75,7 +71,7 @@ test("strict governance JSON rejects duplicate keys and malformed scalars", () =
     assert.throws(
       () =>
         parseStrictGovernanceInstructionJson(
-          `{"ProposeDeployContract":{"window":{"lower":${token},"upper":2}}}`,
+          `{"ProposeDeployContract":{"abi_version":${token}}}`,
           "governance instruction",
         ),
       /invalid JSON|canonical integers|Unexpected|Expected/u,

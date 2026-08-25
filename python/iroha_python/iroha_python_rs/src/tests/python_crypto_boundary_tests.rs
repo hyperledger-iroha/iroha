@@ -478,7 +478,7 @@ fn decode_transaction_receipt_json_roundtrip() {
 }
 #[test]
 fn privacy_bridge_abi_version_python_function_matches_first_release() {
-    assert_eq!(privacy_bridge_abi_version_py(), 22);
+    assert_eq!(privacy_bridge_abi_version_py(), 23);
 }
 #[test]
 fn privacy_compiled_profile_catalog_python_validator_calls_the_exact_local_boundary() {

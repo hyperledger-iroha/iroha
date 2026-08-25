@@ -16,7 +16,7 @@ MACRO_START = "/// Define the private diagnostic-emitter convenience trait"
 MACRO_END = "/// Helper macro to expand FFI functions"
 EXPECTED_MACRO_SHA256 = "19702ddcf0792954266cc58405074e1cb09c5f4cf710257c49d6903d51ec7b5e"
 MAX_MACRO_LINES = 85
-EXPECTED_LOCK_SHA256 = "4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492"
+EXPECTED_LOCK_SHA256 = "71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2"
 OPENING_BLOBS = (
     "9b2f6cfe74efa0aa8f96563195766a8a16b17739",
     "4060669431f999b95419e86da9ce82f9fa2b8cf9",

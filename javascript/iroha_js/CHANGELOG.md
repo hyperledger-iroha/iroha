@@ -21,13 +21,16 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   now strict summaries with consensus-maintained charged count/byte totals.
 - Closed every governance mutation request shape before network I/O and reject
   all retired private-key aliases, including inside ZK public inputs and the
-  nested V1 ballot proof. Deploy proposals now expose exact typed public
-  manifest provenance and reject the ignored `limits` field; legacy ZK public
+  nested V1 ballot proof. Deploy proposals now encode `ContractCodeHash` and
+  `ContractAbiHash` with their versioned 32-byte Norito layout, encode
+  `AbiVersion` as numeric V1, expose exact typed public manifest provenance,
+  and reject the ignored `limits`, `window`, and `mode` fields. SCCP proposal
+  instructions bind the complete action to the exact `NetworkId` anchor. ZK public
   inputs are closed to their six wire fields. Plain-ballot durations use
-  canonical u64 decimal strings and accept zero. Added typed Parliament ballot
-  parity for `/v1/gov/parliament/ballots`; governance drafts remain locally
-  signed. Finalize uses the shared governance hash grammar, enact accepts only
-  the exact lowercase committed proposal id, protected namespaces are exact
+  canonical u64 decimal strings and accept zero. Retired the proposal-backed
+  equal-Parliament-ballot, finalize, and enact client methods; binding proposal
+  transitions now use certificate-driven Parliament attempts, while standalone
+  plain/ZK referendum ballots remain available. Protected namespaces are exact
   printable-ASCII tokens, and Ministry agenda drafts now validate a closed,
   recursively secret-free typed V1 proposal while preserving full-u64
   timestamps losslessly.
@@ -52,10 +55,12 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   `getOfflineCapability()`/`OfflineStatus` contract. The first-release hard cut
   removes selector-taking readiness methods, normalizers, types, and exports.
 - Bound validation-fee policy and payout-lifecycle proposal fingerprints to
-  the complete first-release PLAIN electorate rules. Both native exports now
-  validate exact JSON and compute canonical `ProposalKind` fingerprints, and
-  the JavaScript/TypeScript package exposes both required-argument helpers
-  without a fallback hashing path.
+  the canonical proposal operator and exact typed proposal payload. Both native
+  exports validate exact JSON and compute canonical `ProposalKind`
+  fingerprints, and the JavaScript/TypeScript package exposes their current
+  signatures without a fallback hashing path. Verified policy projections now
+  retain the complete, recursively validated Parliament certificate and its
+  proposal and enactment bindings.
 - Bound the `CancelAssetLock` lock-ID preimage to the public V1 limit of 4,096
   UTF-8 bytes while preserving the fixed 32-byte `EscrowId` wire field.
 - Added strict JavaScript/TypeScript `CancelAssetLock` parity. The new builder
@@ -514,10 +519,10 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 ## [0.0.2] - 2026-01-27
 
 - Added governance instruction support to native Norito helpers so
-  `buildCastZkBallotInstruction`, `buildCastPlainBallotInstruction`,
-  `buildEnactReferendumInstruction`, `buildFinalizeReferendumInstruction`, and
-  `buildPersistCouncilForEpochInstruction` now round-trip through
-  `noritoEncodeInstruction`.
+  `buildCastZkBallotInstruction`, `buildCastPlainBallotInstruction`, and
+  `buildPersistCouncilForEpochInstruction` round-trip through
+  `noritoEncodeInstruction`. Proposal-backed certification and execution are
+  consensus-owned and have no client-side finalize or enact builders.
 - Updated the native build script to try an offline cargo build first and
   automatically retry online when dependencies are missing.
 - Added release documentation automation script covering changelog/status/roadmap updates.

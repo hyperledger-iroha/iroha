@@ -1,9 +1,12 @@
-//! Governance data model (feature-gated)
+//! Canonical governance and SORA Parliament data model.
 //!
-//! Minimal type shells to anchor implementation against gov.md and roadmap.md.
-//! These types are intentionally lightweight and may evolve.
+//! The module exposes closed V1 identifiers, lifecycle states, aggregate
+//! decision arithmetic, certificate bindings, and governance-domain events.
 pub mod events;
-pub mod types;
+/// Canonical governance and Parliament wire types.
+pub mod types {
+    pub use crate::parliament_types::*;
+}
 /// Maximum encoded length of a canonical V1 governance selector.
 pub const GOVERNANCE_SELECTOR_V1_MAX_BYTES: usize = 128;
 /// OpenAPI/SDK grammar for canonical V1 governance selectors.

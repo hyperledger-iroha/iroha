@@ -55,6 +55,10 @@ dev-tools = []
 # `iroha_test_network` daemon. The default/node feature graph never enables
 # these hooks.
 test-network-native-amx-fault-injection = ["json"]
+# Non-shipping Parliament integration-test provider. The isolated test daemon
+# uses this to derive proof-valid beacon and TLE shares for its exact validator seat;
+# default/node/release feature sets never include it.
+test-network-parliament-signers = []
 runtime = ["json", "bls", "proofs-halo2"]
 node = ["runtime", "proofs-stark"]
 proofs-halo2 = ["zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params"]

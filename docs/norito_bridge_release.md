@@ -67,7 +67,7 @@ that workflow for local release verification.
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.xcframework/NoritoBridge.artifacts.json`; the companion
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.artifacts.json` path is a stable relative symlink to that file, so
    one atomic XCFramework exchange publishes the binaries and manifest together. The
-   manifest binds exact native bridge ABI 22, the privacy-production feature state,
+   manifest binds exact native bridge ABI 23, the privacy-production feature state,
    source commit and fingerprint, header digest, required-symbol inventory, and
    per-slice SHA-256 hashes. Before publication the helper invokes
    `scripts/check_mobile_sdk_artifacts.sh --apple-only` against the staged generation; a
@@ -99,7 +99,7 @@ that workflow for local release verification.
 
    Before releasing its authenticated artifact-publication lock, the builder invokes
    the sole archive owner on the generation it just published. The owner retains a
-   unique source snapshot and re-authenticates the exact ABI-22 inventory,
+   unique source snapshot and re-authenticates the exact ABI-23 inventory,
    recomputes source and tool provenance, verifies each Mach-O architecture and the
    required/forbidden export policy with the sealed Xcode toolchain, sorts entries,
    stores them without host-zlib variance, normalizes modes and ZIP timestamps from

@@ -25,7 +25,9 @@ SPEC.loader.exec_module(seal)
 class NoritoBridgeSourceSealTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
+        self.external_temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name).resolve()
+        self.external_root = Path(self.external_temporary.name).resolve()
         self.source_seal_target = self.root / "source-seal-cargo-target"
         self.source_seal_target.mkdir()
         self.environment_patch = mock.patch.dict(
@@ -82,6 +84,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.environment_patch.stop()
         self.temporary.cleanup()
+        self.external_temporary.cleanup()
 
     def git(self, *arguments: str) -> bytes:
         environment = os.environ.copy()
@@ -183,18 +186,24 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             str(root_lock),
         )
 
-    def test_selected_lock_must_be_exact_root_regular_and_non_symbolic(self) -> None:
+    def test_selected_lock_must_be_canonical_regular_and_non_symbolic(self) -> None:
         root_lock = self.root / "Cargo.lock"
         self.assertEqual(seal.selected_lockfile_path(self.root), root_lock)
         self.assertEqual(seal.selected_lockfile_path(self.root, root_lock), root_lock)
 
-        with self.assertRaisesRegex(RuntimeError, "explicit root Cargo lock"):
+        with self.assertRaisesRegex(RuntimeError, "must be absolute"):
             seal.selected_lockfile_path(self.root, Path("Cargo.lock"))
 
-        alternate = self.root / "alternate-Cargo.lock"
+        alternate = self.external_root / "Cargo.lock"
         alternate.write_text("# alternate lock\n", encoding="utf-8")
-        with self.assertRaisesRegex(RuntimeError, "explicit root Cargo lock"):
-            seal.selected_lockfile_path(self.root, alternate)
+        self.assertEqual(
+            seal.selected_lockfile_path(self.root, alternate), alternate
+        )
+
+        wrong_name = self.external_root / "alternate.lock"
+        wrong_name.write_text("# alternate lock\n", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "must end in Cargo.lock"):
+            seal.selected_lockfile_path(self.root, wrong_name)
 
         root_lock.unlink()
         with self.assertRaisesRegex(RuntimeError, "non-symbolic regular file"):

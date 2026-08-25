@@ -542,7 +542,7 @@ verifier_report = {'status': 'verified', 'envelope_sha256': '1' * 64, 'manifest_
     'reviewed_rustc_binary_sha256': 'd' * 64, 'promotion_record_sha256': '6' * 64, 'release_policy_sha256': '5' * 64,
     'generator_binary_sha256': 'e' * 64, 'sealed_candidate_build_report_sha256': 'f' * 64,
     'generation': 'self-test', 'generation_memory_limit_bytes': 1, 'generation_memory_enforcement_profile': 'self-test-profile',
-    'network_id': 'self-test-network', 'asset_definition_id': 'self-test-asset', 'asset_scale': 2, 'bridge_abi_version': 22,
+    'network_id': 'self-test-network', 'asset_definition_id': 'self-test-asset', 'asset_scale': 2, 'bridge_abi_version': 23,
     'recursive_step_verifier_commitment': '9' * 64, 'artifacts': report_artifacts}
 try:
     validate_kagami_verification_report(verifier_report, directory=Path('/release') / ('1' * 64), manifest=report_manifest,
@@ -1315,8 +1315,8 @@ static_mutations = (
         '        require_current_freshness_receipt=False,\n',
         'reject stale receipts in ordinary production evidence validation',
         ('separate current and historical freshness validator wrappers',)),
-    (MODEL, 'KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 22',
-        'KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 21', 'reject ABI-21 substitution'),
+    (MODEL, 'KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 23',
+        'KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 22', 'reject ABI-22 substitution'),
     (MODEL_COMPONENT, 'pub enum KagemushaPastaCycleArtifactKindV4', 'pub enum DetachedKagemushaPastaCycleArtifactKindV4', 'authenticate the split model component'),
     (MODEL_VERIFIER_COMPONENT, 'const VERIFIER_IDENTITY_SCHEMA_V4', 'const DETACHED_VERIFIER_IDENTITY_SCHEMA_V4', 'authenticate the release-verifier component'),
     (MODEL_PROMOTION_RECEIPT_COMPONENT, '        check_artifact_input_size(\n            bytes,\n            KAGEMUSHA_V4_PROMOTION_RESERVATION_MAX_BYTES,',
@@ -2442,7 +2442,7 @@ static_mutations = (
     (READINESS, '    ("promotion-record-v4.norito", MAX_PROMOTION_RECORD_BYTES),\n)',
         '    ("promotion-record-v4.norito", MAX_PROMOTION_RECORD_BYTES),\n    ("recursive-step-two-qualification-v4.norito", MAX_QUALIFICATION_RECEIPT_BYTES),\n)',
         'reject textual scanning of an opaque receipt', ('opaque qualification receipt is routed through textual evidence scanning',)),
-    (PRIVACY_PROTOCOL, 'pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 22;', 'pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;', 'reject shared bridge ABI-21 substitution'),
+    (PRIVACY_PROTOCOL, 'pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 23;', 'pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 22;', 'reject shared bridge ABI-22 substitution'),
     (PRIVACY, 'include!("privacy/protocol.rs");', '// protocol include removed', 'reject detached privacy protocol surface'),
     (MODEL, 'cfg!(feature = "kagemusha-production-enabled")', 'true', 'reject an invalid availability state'),
     (CATALOG, 'KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len();', '7;', 'reject a seven-artifact manifest check',

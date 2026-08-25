@@ -34,7 +34,7 @@ fn validation_fee_activation_delay_enforces_exact_boundary_and_overflow() {
     );
 }
 #[test]
-fn sorafs_provider_owner_transition_requires_full_parliament_gate() {
+fn sorafs_provider_owner_transition_uses_canonical_constitutional_parliament_pipeline() {
     let kind = ProposalKind::SorafsProviderGovernance(
         iroha_data_model::governance::types::SorafsProviderGovernanceProposal {
             action: Box::new(
@@ -49,16 +49,42 @@ fn sorafs_provider_owner_transition_requires_full_parliament_gate() {
             ),
         },
     );
+    let (risk_tier, requirements) = super::parliament_attempt_policy_v1(&kind);
     assert_eq!(
-        super::required_parliament_bodies(&kind),
-        &[
-            ParliamentBody::RulesCommittee,
-            ParliamentBody::AgendaCouncil,
-            ParliamentBody::InterestPanel,
-            ParliamentBody::ReviewPanel,
-            ParliamentBody::PolicyJury,
-            ParliamentBody::OversightCommittee,
-            ParliamentBody::FmaCommittee,
+        risk_tier,
+        iroha_data_model::governance::types::RiskTierV1::Constitutional,
+    );
+    assert_eq!(
+        requirements,
+        vec![
+            RequiredParliamentBodyV1 {
+                body: ParliamentBody::RulesCommittee,
+                decision_mode: ParliamentDecisionModeV1::PublicFinding,
+            },
+            RequiredParliamentBodyV1 {
+                body: ParliamentBody::AgendaCouncil,
+                decision_mode: ParliamentDecisionModeV1::PublicFinding,
+            },
+            RequiredParliamentBodyV1 {
+                body: ParliamentBody::InterestPanel,
+                decision_mode: ParliamentDecisionModeV1::PublicFinding,
+            },
+            RequiredParliamentBodyV1 {
+                body: ParliamentBody::ReviewPanel,
+                decision_mode: ParliamentDecisionModeV1::PublicFinding,
+            },
+            RequiredParliamentBodyV1 {
+                body: ParliamentBody::CoordinationCouncil,
+                decision_mode: ParliamentDecisionModeV1::PublicFinding,
+            },
+            RequiredParliamentBodyV1 {
+                body: ParliamentBody::OversightCommittee,
+                decision_mode: ParliamentDecisionModeV1::PublicFinding,
+            },
+            RequiredParliamentBodyV1 {
+                body: ParliamentBody::PolicyJury,
+                decision_mode: ParliamentDecisionModeV1::HiddenBindingBallot,
+            },
         ]
     );
 }
@@ -612,6 +638,26 @@ fn verified_fee_sponsor_registration_accepts_exact_proof_policy_context() {
         .expect("exact frozen policy and proof metadata must register");
 }
 #[test]
+fn verified_fee_sponsor_registration_rejects_oversized_proof_before_decode() {
+    let manifest_root = [0x63; 32];
+    let (state, mut instruction) = verified_fee_sponsor_registration_fixture(
+        Some(manifest_root),
+        manifest_root,
+        manifest_root,
+        None,
+        20,
+    );
+    instruction.proof_blob.payload =
+        vec![0xA5; iroha_data_model::nexus::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1];
+
+    let error = execute_verified_fee_sponsor_registration(&state, instruction)
+        .expect_err("oversized proof payload must fail before canonical decode");
+    assert!(
+        error.to_string().contains("decode limit"),
+        "unexpected oversized proof rejection: {error:?}"
+    );
+}
+#[test]
 fn verified_fee_sponsor_registration_rejects_missing_or_rotated_frozen_policy() {
     let proof_manifest_root = [0x63; 32];
     let (state, instruction) = verified_fee_sponsor_registration_fixture(
@@ -681,12 +727,10 @@ fn initial_genesis_authority_can_bootstrap_fee_sponsor_lifecycle() {
     use iroha_data_model::{
         isi::nexus::{
             ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
-            EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram,
-            StageFeeSponsorProgramRevision,
+            EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram, StageFeeSponsorProgramRevision,
         },
         nexus::{
-            FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
-            FeeSponsorVaultKey,
+            FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle, FeeSponsorVaultKey,
         },
     };
     let state = State::new_for_testing(
@@ -740,11 +784,7 @@ fn initial_genesis_authority_can_bootstrap_fee_sponsor_lifecycle() {
     .execute(&BOB_ID, &mut stx)
     .expect("initial genesis authority creates sponsor-owned program");
     StageFeeSponsorProgramRevision {
-        revision: fee_sponsor_revision_fixture(
-            program_id.clone(),
-            asset_definition_id.clone(),
-            1,
-        ),
+        revision: fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 1),
     }
     .execute(&BOB_ID, &mut stx)
     .expect("initial genesis authority stages sponsor revision");
@@ -837,7 +877,11 @@ fn post_genesis_authority_cannot_bootstrap_another_sponsors_program() {
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("height-two authority must not manage another sponsor's program");
-    assert!(error.to_string().contains("cannot manage fee sponsor program"));
+    assert!(
+        error
+            .to_string()
+            .contains("cannot manage fee sponsor program")
+    );
 }
 #[test]
 fn replayed_genesis_header_cannot_regain_fee_sponsor_bootstrap_authority() {
@@ -852,11 +896,11 @@ fn replayed_genesis_header_cannot_regain_fee_sponsor_bootstrap_authority() {
     );
     {
         let mut hashes = state.block_hashes.block();
-        hashes.push_for_tests(iroha_crypto::HashOf::<
-            iroha_data_model::block::BlockHeader,
-        >::from_untyped_unchecked(Hash::new(
-            b"fee-sponsor-genesis-replay-guard",
-        )));
+        hashes.push_for_tests(
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::new(b"fee-sponsor-genesis-replay-guard"),
+            ),
+        );
         hashes.commit_for_tests();
     }
     let header = iroha_data_model::block::BlockHeader::new(
@@ -880,7 +924,11 @@ fn replayed_genesis_header_cannot_regain_fee_sponsor_bootstrap_authority() {
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("committed history must disable the height-one owner exception");
-    assert!(error.to_string().contains("cannot manage fee sponsor program"));
+    assert!(
+        error
+            .to_string()
+            .contains("cannot manage fee sponsor program")
+    );
     assert!(stx.world.fee_sponsor_programs.get(&program_id).is_none());
 }
 #[test]
@@ -959,7 +1007,11 @@ fn post_genesis_fund_mismatch_preserves_balances_vault_and_transcripts() {
     .execute(&BOB_ID, &mut stx)
     .expect_err("height-two non-owner funding must fail before moving assets");
 
-    assert!(error.to_string().contains("cannot manage fee sponsor program"));
+    assert!(
+        error
+            .to_string()
+            .contains("cannot manage fee sponsor program")
+    );
     assert_eq!(
         stx.world
             .assets
@@ -968,7 +1020,10 @@ fn post_genesis_fund_mismatch_preserves_balances_vault_and_transcripts() {
             .as_ref(),
         &sponsor_before,
     );
-    assert_eq!(stx.world.assets.get(&custody_asset).cloned(), custody_before);
+    assert_eq!(
+        stx.world.assets.get(&custody_asset).cloned(),
+        custody_before
+    );
     assert!(stx.world.fee_sponsor_vaults.get(&vault_key).is_none());
     assert_eq!(stx.pending_transfer_transcript_count_for_testing(), 0);
 }

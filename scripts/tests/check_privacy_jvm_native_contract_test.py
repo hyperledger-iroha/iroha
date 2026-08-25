@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze the fail-closed ABI-22 Kotlin/JVM and Java privacy contract."""
+"""Freeze the fail-closed ABI-23 Kotlin/JVM and Java privacy contract."""
 
 from __future__ import annotations
 
@@ -74,12 +74,12 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
         )
         for method, native_call, message in (
             (
-                "compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22()",
+                "compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23()",
                 "PrivacyNativeBridge.compiledProfileCatalogV1()",
                 "compiled-profile catalog JNI exports is required",
             ),
             (
-                "exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22()",
+                "exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23()",
                 "PrivacyNativeBridge.exact12FixtureBundleV1()",
                 "exact-12 fixture JNI exports is required",
             ),
@@ -109,12 +109,12 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
         )
         for method, native_call, message in (
             (
-                "compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22()",
+                "compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23()",
                 "PrivacyNativeBridge.compiledProfileCatalogV1()",
                 "compiled-profile catalog JNI exports is required",
             ),
             (
-                "exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22()",
+                "exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23()",
                 "PrivacyNativeBridge.exact12FixtureBundleV1()",
                 "exact-12 fixture JNI exports is required",
             ),
@@ -179,7 +179,7 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
             "PRIVACY_JVM_SDK_PYTHON_BIN: ${{ steps.privacy-jvm-python.outputs.python-path }}",
             "PRIVACY_JVM_NATIVE_EXPORT_DIR: ${{ runner.temp }}/privacy-jvm-native-abi22",
             "run: ci/check_privacy_jvm_sdk.sh",
-            "Upload source-bound privacy JVM native ABI22 input",
+            "Upload source-bound privacy JVM native ABI23 input",
             "privacy-jvm-native-abi22-${{ github.sha }}",
         ):
             self.assertIn(marker, job)

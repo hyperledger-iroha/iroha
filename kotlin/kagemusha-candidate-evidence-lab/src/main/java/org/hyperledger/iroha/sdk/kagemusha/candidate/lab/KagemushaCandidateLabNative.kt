@@ -7,13 +7,13 @@ package org.hyperledger.iroha.sdk.kagemusha.candidate.lab
  * native symbols exist only in a marker-bearing, feature-gated lab library.
  */
 object KagemushaCandidateLabNative {
-    const val REQUIRED_BRIDGE_ABI: Int = 22
+    const val REQUIRED_BRIDGE_ABI: Int = 23
     const val LIBRARY_NAME: String = "connect_norito_bridge_candidate_lab"
 
     init {
         System.loadLibrary(LIBRARY_NAME)
         check(nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI) {
-            "candidate lab requires exact native bridge ABI 22"
+            "candidate lab requires exact native bridge ABI 23"
         }
     }
 
