@@ -1041,10 +1041,11 @@ fn private_uploaded_model_execution_receipt_requires_canonical_commitments_and_i
     let canonical_id = canonical.receipt_id;
     let mut submission = canonical;
     submission.emitted_sequence = 0;
+    submission.emitted_block_height = 0;
     assert_eq!(
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&submission),
         canonical_id,
-        "ledger assignment must not change private receipt identity"
+        "ledger sequence and block-height assignment must not change private receipt identity"
     );
     submission
         .validate_submission()

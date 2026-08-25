@@ -897,6 +897,10 @@ mod tests {
             operation_response_schema_ref(execute, "200", "private uploaded-model execute",),
             "#/components/schemas/PrivateUploadedModelExecuteResponse"
         );
+        assert_eq!(
+            operation_response_schema_ref(execute, "202", "private uploaded-model execute",),
+            "#/components/schemas/PrivateUploadedModelExecuteResponse"
+        );
         assert_strict_object_schema(
             schemas,
             "PrivateUploadedModelExecuteRequest",
@@ -905,9 +909,11 @@ mod tests {
                 "model_name",
                 "bundle_root",
                 "service_name",
+                "service_version",
                 "weight_version",
                 "decryption_request_id",
                 "input_artifact",
+                "output_recipient",
             ],
             &[],
         );
@@ -917,9 +923,10 @@ mod tests {
             &[
                 "schema_version",
                 "status",
+                "submission_status",
+                "transaction_hash",
                 "receipt",
                 "output_artifact",
-                "tx_instructions",
             ],
             &[],
         );
@@ -944,6 +951,7 @@ mod tests {
                 "schema_version",
                 "receipt_id",
                 "service_name",
+                "service_version",
                 "model_id",
                 "weight_version",
                 "runtime_version",
@@ -956,9 +964,11 @@ mod tests {
                 "output_artifact",
                 "input_commitment",
                 "output_commitment",
+                "output_recipient",
                 "request_commitment",
                 "result_commitment",
                 "emitted_sequence",
+                "emitted_block_height",
             ],
             &[],
         );

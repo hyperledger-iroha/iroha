@@ -23697,18 +23697,26 @@
           "service_name": {
             "type": "string"
           },
+          "service_version": {
+            "type": "string"
+          },
+          "output_recipient": {
+            "$ref": "#/components/schemas/SoraUploadedModelEncryptionRecipientV1"
+          },
           "weight_version": {
             "type": "string"
           }
         },
         "required": [
           "service_name",
+          "service_version",
           "weight_version",
           "model_id",
           "model_name",
           "bundle_root",
           "decryption_request_id",
-          "input_artifact"
+          "input_artifact",
+          "output_recipient"
         ],
         "type": "object"
       },
@@ -23728,19 +23736,31 @@
           "status": {
             "$ref": "#/components/schemas/UploadedModelStatusResponse"
           },
-          "tx_instructions": {
-            "items": {
-              "$ref": "#/components/schemas/SoracloudTxInstruction"
-            },
-            "type": "array"
+          "submission_status": {
+            "enum": [
+              "submitted",
+              "committed"
+            ],
+            "type": "string"
+          },
+          "transaction_hash": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "schema_version",
           "status",
+          "submission_status",
+          "transaction_hash",
           "receipt",
-          "output_artifact",
-          "tx_instructions"
+          "output_artifact"
         ],
         "type": "object"
       },
@@ -32230,10 +32250,15 @@
           "attesting_validator": {
             "$ref": "#/components/schemas/SoraRuntimeDeterministicValidatorHostV1"
           },
-          "decryption_request_id": {
-            "type": "string"
-          },
-          "emitted_sequence": {
+        "decryption_request_id": {
+          "type": "string"
+        },
+        "emitted_block_height": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "emitted_sequence": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -32259,6 +32284,9 @@
           "output_commitment": {
             "$ref": "#/components/schemas/Hash"
           },
+          "output_recipient": {
+            "$ref": "#/components/schemas/SoraUploadedModelEncryptionRecipientV1"
+          },
           "policy_id": {
             "type": "string"
           },
@@ -32281,6 +32309,9 @@
           "service_name": {
             "type": "string"
           },
+          "service_version": {
+            "type": "string"
+          },
           "weight_version": {
             "type": "string"
           }
@@ -32289,6 +32320,7 @@
           "schema_version",
           "receipt_id",
           "service_name",
+          "service_version",
           "model_id",
           "weight_version",
           "runtime_version",
@@ -32301,10 +32333,12 @@
           "output_artifact",
           "input_commitment",
           "output_commitment",
+          "output_recipient",
           "request_commitment",
-          "result_commitment",
-          "emitted_sequence"
-        ],
+        "result_commitment",
+        "emitted_sequence",
+        "emitted_block_height"
+      ],
         "type": "object"
       },
       "SoraPublishedInrouGuestImageArtifactV1": {
@@ -72589,7 +72623,17 @@
                 }
               }
             },
-            "description": "Successful response"
+            "description": "Exact replay of an already committed private execution receipt"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateUploadedModelExecuteResponse"
+                }
+              }
+            },
+            "description": "Encrypted output durably ingested and atomic pin-plus-receipt transaction submitted"
           }
         },
         "summary": "Execute a private uploaded model.",

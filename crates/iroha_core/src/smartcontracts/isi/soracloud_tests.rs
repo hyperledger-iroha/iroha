@@ -15365,6 +15365,35 @@ fn insert_uploaded_model_pin_with_content_length(
 ) {
     insert_uploaded_model_pin_record(state_transaction, digest, digest, content_length, status);
 }
+fn private_output_manifest_fixture(seed: u8, content_length: u64) -> (Vec<u8>, ManifestDigest) {
+    let commitment = seed.max(1);
+    let manifest = sorafs_manifest::ManifestBuilder::new()
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
+            [commitment; 32],
+        ))
+        .dag_codec(sorafs_manifest::DagCodecId(
+            sorafs_manifest::chunker_registry::MANIFEST_DAG_CODEC,
+        ))
+        .chunking_from_registry(sorafs_manifest::chunker_registry::default_descriptor().id)
+        .chunk_digest_sha3_256([commitment.wrapping_add(1).max(1); 32])
+        .por_root([commitment.wrapping_add(2).max(1); 32])
+        .content_length(content_length)
+        .car_digest([commitment.wrapping_add(3).max(1); 32])
+        .car_size(content_length.checked_add(4096).expect("fixture CAR size"))
+        .pin_policy(sorafs_manifest::PinPolicy {
+            min_replicas: 1,
+            storage_class: sorafs_manifest::StorageClass::Warm,
+            retention_epoch: u64::MAX,
+        })
+        .governance(sorafs_manifest::GovernanceProofs::default())
+        .build()
+        .expect("valid private output manifest fixture");
+    let digest = ManifestDigest::from_manifest(&manifest).expect("private output manifest digest");
+    let payload = manifest
+        .encode()
+        .expect("encode private output manifest fixture");
+    (payload, digest)
+}
 fn insert_uploaded_model_pin_record(
     state_transaction: &mut StateTransaction<'_, '_>,
     storage_key_digest: ManifestDigest,
@@ -20116,10 +20145,9 @@ fn set_inrou_replica_runtime_state_rejects_zero_version_and_timestamp() -> Resul
     capability
         .supported_guest_isas
         .insert(SoraInrouGuestIsaV1::Aarch64);
-    stx.world.soracloud_inrou_host_capabilities.insert(
-        ALICE_ID.clone(),
-        capability,
-    );
+    stx.world
+        .soracloud_inrou_host_capabilities
+        .insert(ALICE_ID.clone(), capability);
     let mut zero_version = canonical.clone();
     zero_version.schema_version = 0;
     let mut zero_timestamp = canonical.clone();
@@ -21986,18 +22014,14 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     );
     let now_ms = stx.block_unix_timestamp_ms().max(1);
     for validator in [&*ALICE_ID, &*BOB_ID] {
-        let mut capability = sample_inrou_host_capability(
-            validator.clone(),
-            now_ms,
-            now_ms.saturating_add(10_000),
-        );
+        let mut capability =
+            sample_inrou_host_capability(validator.clone(), now_ms, now_ms.saturating_add(10_000));
         capability
             .supported_guest_isas
             .insert(SoraInrouGuestIsaV1::Aarch64);
-        stx.world.soracloud_inrou_host_capabilities.insert(
-            validator.clone(),
-            capability,
-        );
+        stx.world
+            .soracloud_inrou_host_capabilities
+            .insert(validator.clone(), capability);
     }
     let reporting_epoch = stx
         .world
@@ -22436,8 +22460,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
                 .map(|placement| (placement.clone(), record.reconciled_at_ms))
         })
         .expect("active Bob assignment");
-    actively_placed_checkpoint.assignment.service_version =
-        bundle.service.service_version.clone();
+    actively_placed_checkpoint.assignment.service_version = bundle.service.service_version.clone();
     actively_placed_checkpoint.assignment.placement = active_bob_assignment.0;
     actively_placed_checkpoint
         .assignment
@@ -22559,10 +22582,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     let rollover = rollover_event
         .lease_reporting_epoch_rollover
         .expect("typed rollover payload");
-    assert_eq!(
-        rollover.lease_started_height,
-        capped_lease_started_height
-    );
+    assert_eq!(rollover.lease_started_height, capped_lease_started_height);
     assert_eq!(rollover.previous_reporting_epoch, reporting_epoch);
     assert_eq!(rollover.new_reporting_epoch, reporting_epoch + 1);
     assert_eq!(rollover.reporter_account_id, *BOB_ID);
@@ -25627,16 +25647,26 @@ fn soracloud_uploaded_model_register_rejects_missing_pending_or_retired_sorafs_p
     Ok(())
 }
 #[test]
-fn private_uploaded_model_execution_receipt_persistence_fails_closed_without_artifact_execution()
+fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_artifacts()
 -> Result<(), eyre::Report> {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new(World::default(), kura, query_handle);
-    soracloud_transaction!(state, block_header, state_block, stx);
+    permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    let mut service_bundle = sample_training_bundle("portal", "1.0.0");
+    service_bundle.container.capabilities.allow_model_inference = true;
+    service_bundle.service.container.manifest_hash = service_bundle.container_manifest_hash();
+    isi::DeploySoracloudService {
+        bundle: service_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&service_bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
     let model_digest = ManifestDigest::new([0xD1; 32]);
     let mut bundle = sample_uploaded_model_bundle("portal", model_digest);
     bundle.runtime_format =
         iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1;
+    bundle.decryption_policy_ref = "private_release".to_owned();
+    insert_uploaded_model_pin(&mut stx, model_digest, PinStatus::Approved(1));
     stx.world.soracloud_uploaded_model_bundles.insert(
         (
             bundle.service_name.as_ref().to_owned(),
@@ -25648,15 +25678,95 @@ fn private_uploaded_model_execution_receipt_persistence_fails_closed_without_art
     let artifact = |role: &str, byte: u8| SoraPrivateModelArtifactRefV1 {
         schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
         sorafs_manifest_digest: ManifestDigest::new([byte; 32]),
+        sorafs_root_cid:
+            iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest([
+                byte; 32
+            ])
+            .expect("fixture root CID"),
         artifact_hash: Hash::new([byte; 32]),
         ciphertext_bytes: 64,
         artifact_role: role.to_string(),
     };
+    let input_artifact = artifact("input", 0xD2);
+    let (output_manifest_payload, output_manifest_digest) =
+        private_output_manifest_fixture(0xD3, 64);
+    let mut output_artifact = artifact("output", 0xD3);
+    output_artifact.sorafs_manifest_digest = output_manifest_digest;
+    let mut input_artifact = input_artifact;
+    input_artifact.sorafs_root_cid =
+        iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest([0xA8; 32])
+            .expect("input pin root CID");
+    insert_uploaded_model_pin_with_content_length(
+        &mut stx,
+        input_artifact.sorafs_manifest_digest,
+        input_artifact.ciphertext_bytes,
+        PinStatus::Approved(1),
+    );
+    let mut policy = sample_decryption_policy();
+    policy.policy_name = bundle
+        .decryption_policy_ref
+        .parse()
+        .expect("canonical private release policy name");
+    policy.jurisdiction_tag = "private_execution".to_owned();
+    let mut release_request = sample_decryption_request();
+    release_request.request_id = "decrypt-upload-1".to_owned();
+    release_request.policy_name = policy.policy_name.clone();
+    release_request.ciphertext_commitment = input_artifact.artifact_hash;
+    release_request.jurisdiction_tag = policy.jurisdiction_tag.clone();
+    let release = iroha_data_model::soracloud::SoraDecryptionRequestRecordV1 {
+        schema_version: iroha_data_model::soracloud::SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
+        service_name: bundle.service_name.clone(),
+        service_version: service_bundle.service.service_version.clone(),
+        policy,
+        request: release_request,
+        sequence: 2,
+        signer: ALICE_KEYPAIR.public_key().clone(),
+    };
+    release.validate().expect("valid private execution release");
+    let mut release_event = stx
+        .world
+        .soracloud_service_audit_events
+        .get(&1)
+        .cloned()
+        .expect("service deployment audit event");
+    release_event.sequence = release.sequence;
+    release_event.action = SoraServiceLifecycleActionV1::DecryptionRequest;
+    release_event.governance_tx_hash = Some(release.request.governance_tx_hash);
+    release_event.binding_name = Some(release.request.binding_name.clone());
+    release_event.state_key = Some(release.request.state_key.clone());
+    release_event.config_mutations.clear();
+    release_event.secret_mutations.clear();
+    release_event.rollout_state = None;
+    release_event.policy_name = Some(release.request.policy_name.clone());
+    release_event.policy_snapshot_hash = Some(release.policy_snapshot_hash());
+    release_event.jurisdiction_tag = Some(release.request.jurisdiction_tag.clone());
+    release_event.consent_evidence_hash = release.request.consent_evidence_hash;
+    release_event.break_glass = Some(release.request.break_glass);
+    release_event.break_glass_reason = release.request.break_glass_reason.clone();
+    release_event.lease_usage = None;
+    release_event.service_lease_commitment = None;
+    release_event.lease_reporting_epoch_rollover = None;
+    release_event
+        .validate()
+        .expect("valid private execution release audit event");
+    stx.world
+        .soracloud_service_audit_events
+        .insert(release_event.sequence, release_event);
+    stx.world.soracloud_decryption_request_records.insert(
+        (
+            release.service_name.as_ref().to_owned(),
+            release.request.request_id.clone(),
+        ),
+        release,
+    );
+    *stx.world.soracloud_sequence_watermark.get_mut() = 2;
     let mut receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
         schema_version:
             iroha_data_model::soracloud::SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+        network_id: *stx.network_id(),
         receipt_id: Hash::prehashed([0; 32]),
         service_name: bundle.service_name.clone(),
+        service_version: service_bundle.service.service_version.clone(),
         model_id: bundle.model_id.clone(),
         weight_version: bundle.weight_version.clone(),
         runtime_version: iroha_data_model::soracloud::SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1
@@ -25665,6 +25775,7 @@ fn private_uploaded_model_execution_receipt_persistence_fails_closed_without_art
         model_bundle_root: bundle.bundle_root,
         policy_id: bundle.decryption_policy_ref.clone(),
         decryption_request_id: "decrypt-upload-1".to_string(),
+        output_recipient: bundle.upload_recipient.clone(),
         attesting_validator: SoraRuntimeDeterministicValidatorHostV1 {
             lane_id: LaneId::SINGLE,
             validator_account_id: ALICE_ID.clone(),
@@ -25673,31 +25784,144 @@ fn private_uploaded_model_execution_receipt_persistence_fails_closed_without_art
             )
             .to_string(),
         },
-        input_artifact: artifact("input", 0xD2),
-        output_artifact: artifact("output", 0xD3),
+        input_artifact,
+        output_artifact,
         input_commitment: Hash::new(b"input-commitment"),
         output_commitment: Hash::new(b"output-commitment"),
         request_commitment: Hash::prehashed([0; 32]),
         result_commitment: Hash::prehashed([0; 32]),
         emitted_sequence: 0,
+        emitted_block_height: 0,
     };
     receipt.request_commitment = derive_soracloud_private_model_request_commitment_v1(&receipt);
     receipt.result_commitment = derive_soracloud_private_model_result_commitment_v1(&receipt);
     receipt.receipt_id = derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&receipt);
 
-    let err = write_soracloud_private_uploaded_model_execution_receipt(&mut stx, receipt.clone())
-        .expect_err("private receipt persistence must fail closed without exact artifact execution");
+    let original_release_event = stx
+        .world
+        .soracloud_service_audit_events
+        .get(&2)
+        .cloned()
+        .expect("private release audit event");
+    let mut mismatched_sequence_event = original_release_event.clone();
+    mismatched_sequence_event.sequence = 3;
+    stx.world
+        .soracloud_service_audit_events
+        .insert(2, mismatched_sequence_event);
+    let sequence_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        output_manifest_payload: output_manifest_payload.clone(),
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("release audit sequence mismatch must fail closed");
     assert!(matches!(
-        err,
+        sequence_error,
         InstructionExecutionError::InvariantViolation(ref message)
-            if message.contains("exact finalized-bundle loading")
+            if message.contains("does not match its authoritative audit event")
+    ));
+    let mut overflowing_ttl_event = original_release_event.clone();
+    overflowing_ttl_event.block_height = u64::MAX;
+    stx.world
+        .soracloud_service_audit_events
+        .insert(2, overflowing_ttl_event);
+    let ttl_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        output_manifest_payload: output_manifest_payload.clone(),
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("release TTL height overflow must fail closed");
+    assert!(matches!(
+        ttl_error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("expiry height overflowed")
+    ));
+    stx.world
+        .soracloud_service_audit_events
+        .insert(2, original_release_event);
+
+    isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        output_manifest_payload: output_manifest_payload.clone(),
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let persisted = stx
+        .world
+        .soracloud_private_uploaded_model_execution_receipts
+        .get(&receipt.receipt_id)
+        .expect("private receipt persisted");
+    assert_eq!(persisted.emitted_sequence, 3);
+    assert_eq!(persisted.emitted_block_height, stx.block_height());
+    assert_eq!(*stx.world.soracloud_sequence_watermark.get(), 3);
+    let output_pin_before_replay = stx
+        .world
+        .pin_manifests
+        .get(&receipt.output_artifact.sorafs_manifest_digest)
+        .cloned()
+        .expect("atomic private commit registered the output pin");
+    assert_eq!(
+        output_pin_before_replay.root_cid,
+        receipt.output_artifact.sorafs_root_cid
+    );
+    assert_eq!(
+        output_pin_before_replay.content_length,
+        receipt.output_artifact.ciphertext_bytes
+    );
+    assert_eq!(output_pin_before_replay.submitted_by, ALICE_ID.clone());
+
+    isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        output_manifest_payload: output_manifest_payload.clone(),
+        receipt: receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    assert_eq!(
+        *stx.world.soracloud_sequence_watermark.get(),
+        3,
+        "exact retries must not consume another ledger sequence"
+    );
+    assert_eq!(
+        stx.world
+            .pin_manifests
+            .get(&receipt.output_artifact.sorafs_manifest_digest),
+        Some(&output_pin_before_replay),
+        "exact retries must not mutate output pin state"
+    );
+
+    let mut conflicting = receipt;
+    let (conflicting_output_manifest_payload, conflicting_output_manifest_digest) =
+        private_output_manifest_fixture(0xD4, 64);
+    conflicting.output_artifact = artifact("output", 0xD4);
+    conflicting.output_artifact.sorafs_manifest_digest = conflicting_output_manifest_digest;
+    conflicting.output_commitment = Hash::new(b"conflicting-output");
+    conflicting.request_commitment =
+        derive_soracloud_private_model_request_commitment_v1(&conflicting);
+    conflicting.result_commitment =
+        derive_soracloud_private_model_result_commitment_v1(&conflicting);
+    conflicting.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&conflicting);
+    assert!(
+        stx.world
+            .pin_manifests
+            .get(&conflicting.output_artifact.sorafs_manifest_digest)
+            .is_none(),
+        "conflicting output starts without a pin"
+    );
+    let error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        output_manifest_payload: conflicting_output_manifest_payload,
+        receipt: conflicting.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("one committed decryption request must not acquire two receipts");
+    assert!(matches!(
+        error,
+        InstructionExecutionError::InvariantViolation(ref message)
+            if message.contains("already has an authoritative private execution receipt")
     ));
     assert!(
         stx.world
-            .soracloud_private_uploaded_model_execution_receipts
-            .get(&receipt.receipt_id)
+            .pin_manifests
+            .get(&conflicting.output_artifact.sorafs_manifest_digest)
             .is_none(),
-        "fail-closed admission must not mutate private receipt state"
+        "conflicting receipt must not register its output pin"
     );
     Ok(())
 }

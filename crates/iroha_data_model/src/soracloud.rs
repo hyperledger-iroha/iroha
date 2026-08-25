@@ -9,6 +9,7 @@
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
+    NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
     name::Name,
@@ -229,6 +230,28 @@ pub const SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1: u16 = 1;
 const SORA_UPLOADED_MODEL_X25519_PUBLIC_KEY_BYTES: usize = 32;
 /// Schema version for [`SoraPrivateModelArtifactRefV1`].
 pub const SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateModelEncryptedArtifactV1`].
+pub const SORA_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateQuantizedCpuModelV1`].
+pub const SORA_PRIVATE_QUANTIZED_CPU_MODEL_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateQuantizedCpuInputV1`].
+pub const SORA_PRIVATE_QUANTIZED_CPU_INPUT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateQuantizedCpuOutputV1`].
+pub const SORA_PRIVATE_QUANTIZED_CPU_OUTPUT_VERSION_V1: u16 = 1;
+/// AES-256-GCM key length used by private-model artifact envelopes.
+pub const SORA_PRIVATE_MODEL_AEAD_KEY_BYTES_V1: usize = 32;
+/// AES-256-GCM nonce length used by private-model artifact envelopes.
+pub const SORA_PRIVATE_MODEL_AEAD_NONCE_BYTES_V1: usize = 12;
+/// AES-256-GCM authentication-tag length carried in ciphertext fields.
+pub const SORA_PRIVATE_MODEL_AEAD_TAG_BYTES_V1: usize = 16;
+/// Maximum encoded encrypted artifact accepted at the private runtime boundary.
+pub const SORA_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_MAX_BYTES_V1: usize = 72 * 1024 * 1024;
+/// Maximum quantized inputs admitted by the deterministic private CPU runtime.
+pub const SORA_PRIVATE_QUANTIZED_CPU_MAX_INPUTS_V1: usize = 16_384;
+/// Maximum quantized outputs admitted by the deterministic private CPU runtime.
+pub const SORA_PRIVATE_QUANTIZED_CPU_MAX_OUTPUTS_V1: usize = 4_096;
+/// Maximum signed 8-bit weights admitted by one deterministic private CPU model.
+pub const SORA_PRIVATE_QUANTIZED_CPU_MAX_WEIGHTS_V1: usize = 64 * 1024 * 1024;
 /// Schema version for [`SoraPrivateUploadedModelExecutionReceiptV1`].
 pub const SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHfSourceRecordV1`].

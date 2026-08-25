@@ -2028,6 +2028,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         vpn_receipts: Arc::new(DashMap::new()),
         vpn_state_lock: Arc::new(std::sync::Mutex::new(vpn::VpnRuntimeState::default())),
         soracloud_runtime: None,
+        soracloud_private_execution_submissions: Arc::new(
+            soracloud::PrivateExecutionSubmissionTracker::default(),
+        ),
+        soracloud_private_execution_inflight: Arc::new(tokio::sync::Semaphore::new(1)),
         #[cfg(feature = "app_api")]
         soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
         #[cfg(feature = "app_api")]

@@ -2521,6 +2521,8 @@ struct AppState {
     vpn_receipts: Arc<DashMap<AccountId, Vec<vpn::VpnReceiptRecord>>>,
     vpn_state_lock: Arc<std::sync::Mutex<vpn::VpnRuntimeState>>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
+    soracloud_private_execution_submissions: Arc<soracloud::PrivateExecutionSubmissionTracker>,
+    soracloud_private_execution_inflight: Arc<tokio::sync::Semaphore>,
     soracloud_hf_config: iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
     #[cfg(feature = "app_api")]
     soracloud_proxy_pending: Arc<tokio::sync::Mutex<BTreeMap<Hash, PendingSoracloudProxyRequest>>>,
@@ -49935,6 +49937,13 @@ impl Torii {
             vpn_receipts: Arc::new(DashMap::new()),
             vpn_state_lock: Arc::new(std::sync::Mutex::new(vpn::VpnRuntimeState::default())),
             soracloud_runtime: self.soracloud_runtime.clone(),
+            soracloud_private_execution_submissions: Arc::new(
+                soracloud::PrivateExecutionSubmissionTracker::default(),
+            ),
+            // V1 AES-GCM envelopes and quantized weights are deliberately bounded but can still
+            // occupy hundreds of MiB across ciphertext, plaintext, and SoraFS buffers. Keep the
+            // ingress memory envelope singular until a streaming AEAD runtime is admitted.
+            soracloud_private_execution_inflight: Arc::new(tokio::sync::Semaphore::new(1)),
             soracloud_hf_config: self.soracloud_hf_config.clone(),
             #[cfg(feature = "app_api")]
             soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),

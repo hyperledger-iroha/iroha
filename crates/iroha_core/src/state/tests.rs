@@ -99,7 +99,10 @@ use iroha_data_model::{
         escrow::prelude::FindAssetEscrowsByStatus,
         proof::prelude::{FindProofRecords, FindProofRecordsByStatus},
     },
-    sorafs::pin_registry::{ManifestDigest, ReplicationOrderId},
+    sorafs::pin_registry::{
+        ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinManifestRecord, PinPolicy,
+        ReplicationOrderId, StorageClass,
+    },
     transaction::ExecutionStep,
 };
 use iroha_primitives::{
@@ -33228,28 +33231,71 @@ fn sample_snapshot_private_uploaded_model_bundle(
         pricing_policy: iroha_data_model::soracloud::SoraUploadedModelPricingPolicyV1 {
             storage_price: Quantity::zero(),
         },
-        decryption_policy_ref: "policy/snapshot-private-release".to_owned(),
+        decryption_policy_ref: "snapshot_private_release".to_owned(),
     }
 }
 fn sample_snapshot_private_model_artifact(
     role: &str,
     digest_byte: u8,
 ) -> SoraPrivateModelArtifactRefV1 {
+    let manifest: sorafs_manifest::ManifestV1 = norito::decode_from_bytes(include_bytes!(
+        "../../../../fixtures/sorafs_gateway/1.0.0/manifest_v1.to"
+    ))
+    .expect("decode canonical SoraFS manifest fixture");
     SoraPrivateModelArtifactRefV1 {
         schema_version: SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
         sorafs_manifest_digest: ManifestDigest::new([digest_byte; 32]),
+        sorafs_root_cid: ManifestRootCid::try_from_slice(&manifest.root_cid)
+            .expect("fixture root CID"),
         artifact_hash: Hash::new([digest_byte; 32]),
         ciphertext_bytes: 128,
         artifact_role: role.to_owned(),
     }
 }
+fn sample_snapshot_private_pin(digest: ManifestDigest, content_length: u64) -> PinManifestRecord {
+    let manifest: sorafs_manifest::ManifestV1 = norito::decode_from_bytes(include_bytes!(
+        "../../../../fixtures/sorafs_gateway/1.0.0/manifest_v1.to"
+    ))
+    .expect("decode canonical SoraFS manifest fixture");
+    let root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid)
+        .expect("fixture manifest root CID remains canonical");
+    let mut record = PinManifestRecord::new(
+        digest,
+        root_cid,
+        ChunkerProfileHandle {
+            profile_id: 1,
+            namespace: "sorafs".to_owned(),
+            name: "sf1".to_owned(),
+            semver: "1.0.0".to_owned(),
+            multihash_code: 0x1e,
+        },
+        manifest.chunk_digest_sha3_256,
+        manifest.por_root,
+        content_length,
+        PinPolicy {
+            min_replicas: 1,
+            storage_class: StorageClass::Warm,
+            retention_epoch: u64::MAX,
+        },
+        ALICE_ID.clone(),
+        1,
+        None,
+        None,
+        Metadata::default(),
+    );
+    record.approve(1, None);
+    record
+}
 fn sample_snapshot_private_uploaded_model_receipt(
+    service_bundle: &SoraDeploymentBundleV1,
     bundle: &SoraUploadedModelBundleV1,
 ) -> SoraPrivateUploadedModelExecutionReceiptV1 {
     let mut receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
         schema_version: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+        network_id: *DEFAULT_TEST_NETWORK_ID,
         receipt_id: Hash::prehashed([0; 32]),
         service_name: bundle.service_name.clone(),
+        service_version: service_bundle.service.service_version.clone(),
         model_id: bundle.model_id.clone(),
         weight_version: bundle.weight_version.clone(),
         runtime_version: SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1.to_owned(),
@@ -33257,6 +33303,7 @@ fn sample_snapshot_private_uploaded_model_receipt(
         model_bundle_root: bundle.bundle_root,
         policy_id: bundle.decryption_policy_ref.clone(),
         decryption_request_id: "decrypt-upload-1".to_owned(),
+        output_recipient: bundle.upload_recipient.clone(),
         attesting_validator: SoraRuntimeDeterministicValidatorHostV1 {
             lane_id: LaneId::SINGLE,
             validator_account_id: ALICE_ID.clone(),
@@ -33268,12 +33315,84 @@ fn sample_snapshot_private_uploaded_model_receipt(
         output_commitment: Hash::new(b"snapshot-private-output"),
         request_commitment: Hash::prehashed([0; 32]),
         result_commitment: Hash::prehashed([0; 32]),
-        emitted_sequence: 2,
+        emitted_sequence: 3,
+        emitted_block_height: 3,
     };
     receipt.request_commitment = derive_soracloud_private_model_request_commitment_v1(&receipt);
     receipt.result_commitment = derive_soracloud_private_model_result_commitment_v1(&receipt);
     receipt.receipt_id = derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&receipt);
     receipt
+}
+fn sample_snapshot_private_decryption_release(
+    service_bundle: &SoraDeploymentBundleV1,
+    uploaded_model_bundle: &SoraUploadedModelBundleV1,
+    receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
+) -> (
+    iroha_data_model::soracloud::SoraDecryptionRequestRecordV1,
+    iroha_data_model::soracloud::SoraServiceAuditEventV1,
+) {
+    let policy = iroha_data_model::soracloud::DecryptionAuthorityPolicyV1 {
+        schema_version: iroha_data_model::soracloud::DECRYPTION_AUTHORITY_POLICY_VERSION_V1,
+        policy_name: uploaded_model_bundle
+            .decryption_policy_ref
+            .parse()
+            .expect("private release policy is a canonical name"),
+        mode: iroha_data_model::soracloud::DecryptionAuthorityModeV1::ThresholdService,
+        approver_quorum: std::num::NonZeroU16::new(1).expect("one is non-zero"),
+        approver_ids: vec![
+            "snapshot_private_approver"
+                .parse()
+                .expect("canonical approver name"),
+        ],
+        allow_break_glass: false,
+        jurisdiction_tag: "snapshot-private-jurisdiction".to_owned(),
+        require_consent_evidence: false,
+        max_ttl_blocks: NonZeroU32::new(64).expect("non-zero policy TTL"),
+        audit_tag: "snapshot.private.execute".to_owned(),
+    };
+    let request = iroha_data_model::soracloud::DecryptionRequestV1 {
+        schema_version: iroha_data_model::soracloud::DECRYPTION_REQUEST_VERSION_V1,
+        request_id: receipt.decryption_request_id.clone(),
+        policy_name: policy.policy_name.clone(),
+        binding_name: "session_store".parse().expect("canonical binding name"),
+        state_key: "/state/session/private-model-input".to_owned(),
+        ciphertext_commitment: receipt.input_artifact.artifact_hash,
+        justification: "execute committed private uploaded model".to_owned(),
+        jurisdiction_tag: policy.jurisdiction_tag.clone(),
+        consent_evidence_hash: None,
+        requested_ttl_blocks: NonZeroU32::new(8).expect("non-zero request TTL"),
+        break_glass: false,
+        break_glass_reason: None,
+        governance_tx_hash: Hash::new(b"snapshot-private-execution-governance"),
+    };
+    let record = iroha_data_model::soracloud::SoraDecryptionRequestRecordV1 {
+        schema_version: iroha_data_model::soracloud::SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
+        service_name: service_bundle.service.service_name.clone(),
+        service_version: service_bundle.service.service_version.clone(),
+        policy,
+        request,
+        sequence: 2,
+        signer: ALICE_KEYPAIR.public_key().clone(),
+    };
+    record
+        .validate()
+        .expect("canonical private decryption release fixture");
+    let mut event = sample_snapshot_service_audit_event(service_bundle, record.sequence);
+    event.action = iroha_data_model::soracloud::SoraServiceLifecycleActionV1::DecryptionRequest;
+    event.governance_tx_hash = Some(record.request.governance_tx_hash);
+    event.binding_name = Some(record.request.binding_name.clone());
+    event.state_key = Some(record.request.state_key.clone());
+    event.policy_name = Some(record.request.policy_name.clone());
+    event.policy_snapshot_hash = Some(record.policy_snapshot_hash());
+    event.jurisdiction_tag = Some(record.request.jurisdiction_tag.clone());
+    event.consent_evidence_hash = record.request.consent_evidence_hash;
+    event.break_glass = Some(record.request.break_glass);
+    event.break_glass_reason = record.request.break_glass_reason.clone();
+    event.service_lease_commitment = None;
+    event
+        .validate()
+        .expect("canonical private decryption release audit fixture");
+    (record, event)
 }
 fn sample_snapshot_private_uploaded_model_world(
     service_bundle: &SoraDeploymentBundleV1,
@@ -33281,6 +33400,7 @@ fn sample_snapshot_private_uploaded_model_world(
     receipt: SoraPrivateUploadedModelExecutionReceiptV1,
 ) -> World {
     let mut world = World::default();
+    world.soracloud_sequence_watermark = Cell::new(receipt.emitted_sequence);
     world.soracloud_service_revisions.insert(
         (
             service_bundle.service.service_name.as_ref().to_owned(),
@@ -33301,7 +33421,35 @@ fn sample_snapshot_private_uploaded_model_world(
             uploaded_model_bundle.model_id.clone(),
             uploaded_model_bundle.weight_version.clone(),
         ),
-        uploaded_model_bundle,
+        uploaded_model_bundle.clone(),
+    );
+    world.pin_manifests.insert(
+        uploaded_model_bundle.sorafs_manifest_digest,
+        sample_snapshot_private_pin(
+            uploaded_model_bundle.sorafs_manifest_digest,
+            uploaded_model_bundle.ciphertext_bytes,
+        ),
+    );
+    for artifact in [&receipt.input_artifact, &receipt.output_artifact] {
+        world.pin_manifests.insert(
+            artifact.sorafs_manifest_digest,
+            sample_snapshot_private_pin(artifact.sorafs_manifest_digest, artifact.ciphertext_bytes),
+        );
+    }
+    let (release, release_event) = sample_snapshot_private_decryption_release(
+        service_bundle,
+        &uploaded_model_bundle,
+        &receipt,
+    );
+    world
+        .soracloud_service_audit_events
+        .insert(2, release_event);
+    world.soracloud_decryption_request_records.insert(
+        (
+            release.service_name.as_ref().to_owned(),
+            release.request.request_id.clone(),
+        ),
+        release,
     );
     world
         .soracloud_private_uploaded_model_execution_receipts
@@ -34215,11 +34363,12 @@ state_test! { sync service_state_restore_requires_exact_revision_audit_and_bindi
         "unexpected service-state aggregate error: {error}"
     );
 }
-state_test! { sync private_uploaded_model_receipt_restore_fails_closed_until_artifact_execution_exists
+state_test! { sync private_uploaded_model_receipt_restore_validates_durable_execution_evidence
     let service_bundle = sample_snapshot_service_bundle();
     let uploaded_model_bundle =
         sample_snapshot_private_uploaded_model_bundle(&service_bundle);
-    let receipt = sample_snapshot_private_uploaded_model_receipt(&uploaded_model_bundle);
+    let receipt =
+        sample_snapshot_private_uploaded_model_receipt(&service_bundle, &uploaded_model_bundle);
     let canonical_receipt_id = receipt.receipt_id;
 
     let canonical = norito::json::to_value(&snapshot_state_from_world(
@@ -34230,13 +34379,8 @@ state_test! { sync private_uploaded_model_receipt_restore_fails_closed_until_art
         ),
     ))
     .expect("serialize canonical private uploaded-model receipt snapshot");
-    let error = deserialize_state_snapshot_value(canonical)
-        .err()
-        .expect("private uploaded-model receipts must not restore before artifact execution exists");
-    assert!(
-        error.to_string().contains("not restorable until exact finalized-bundle loading"),
-        "unexpected private receipt fail-closed restore error: {error}"
-    );
+    deserialize_state_snapshot_value(canonical)
+        .expect("canonical private uploaded-model execution evidence must restore");
 
     let restore_error =
         |bundle: SoraUploadedModelBundleV1,
@@ -34264,7 +34408,7 @@ state_test! { sync private_uploaded_model_receipt_restore_fails_closed_until_art
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&substituted_runtime);
     let error = restore_error(uploaded_model_bundle.clone(), substituted_runtime);
     assert!(
-        error.to_string().contains("not restorable until exact finalized-bundle loading"),
+        error.to_string().contains("runtime_version"),
         "unexpected private receipt runtime-version restore error: {error}"
     );
 
@@ -34274,25 +34418,19 @@ state_test! { sync private_uploaded_model_receipt_restore_fails_closed_until_art
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&substituted_request);
     let error = restore_error(uploaded_model_bundle.clone(), substituted_request);
     assert!(
-        error.to_string().contains("not restorable until exact finalized-bundle loading"),
+        error.to_string().contains("request_commitment"),
         "unexpected private receipt request-commitment restore error: {error}"
     );
 
     let mut substituted_output_destination = receipt.clone();
     substituted_output_destination.output_artifact.artifact_hash =
         Hash::new(b"substituted-snapshot-output-destination");
-    substituted_output_destination.result_commitment =
-        derive_soracloud_private_model_result_commitment_v1(&substituted_output_destination);
-    substituted_output_destination.receipt_id =
-        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(
-            &substituted_output_destination,
-        );
     let error = restore_error(
         uploaded_model_bundle.clone(),
         substituted_output_destination,
     );
     assert!(
-        error.to_string().contains("not restorable until exact finalized-bundle loading"),
+        error.to_string().contains("request_commitment"),
         "unexpected private receipt output-destination restore error: {error}"
     );
 
@@ -34302,7 +34440,7 @@ state_test! { sync private_uploaded_model_receipt_restore_fails_closed_until_art
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&substituted_result);
     let error = restore_error(uploaded_model_bundle.clone(), substituted_result);
     assert!(
-        error.to_string().contains("not restorable until exact finalized-bundle loading"),
+        error.to_string().contains("result_commitment"),
         "unexpected private receipt result-commitment restore error: {error}"
     );
 
@@ -34310,12 +34448,12 @@ state_test! { sync private_uploaded_model_receipt_restore_fails_closed_until_art
     substituted_id.receipt_id = Hash::new(b"substituted-snapshot-private-receipt-id");
     let error = restore_error(uploaded_model_bundle.clone(), substituted_id);
     assert!(
-        error.to_string().contains("not restorable until exact finalized-bundle loading"),
+        error.to_string().contains("receipt_id"),
         "unexpected private receipt identifier restore error: {error}"
     );
 
     let mut later_sequence = receipt.clone();
-    later_sequence.emitted_sequence = 3;
+    later_sequence.emitted_sequence = 4;
     assert_eq!(
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&later_sequence),
         canonical_receipt_id,
@@ -34329,12 +34467,93 @@ state_test! { sync private_uploaded_model_receipt_restore_fails_closed_until_art
         ),
     ))
     .expect("serialize private receipt with a later ledger sequence");
-    let error = deserialize_state_snapshot_value(later_sequence_snapshot)
-        .err()
-        .expect("restore must reject a gap in the retained global Soracloud sequence");
+    deserialize_state_snapshot_value(later_sequence_snapshot)
+        .expect("ledger-assigned sequence is not part of private receipt identity");
+
+    let mut later_block_height = receipt.clone();
+    later_block_height.emitted_block_height = 4;
+    assert_eq!(
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&later_block_height),
+        canonical_receipt_id,
+        "ledger block height must not alter canonical private receipt identity"
+    );
+    let later_height_snapshot = norito::json::to_value(&snapshot_state_from_world(
+        sample_snapshot_private_uploaded_model_world(
+            &service_bundle,
+            uploaded_model_bundle.clone(),
+            later_block_height,
+        ),
+    ))
+    .expect("serialize private receipt with a later authorized block height");
+    deserialize_state_snapshot_value(later_height_snapshot)
+        .expect("an in-window ledger-assigned block height must restore");
+
+    let mut expired_block_height = receipt.clone();
+    expired_block_height.emitted_block_height = 10;
+    let error = restore_error(uploaded_model_bundle.clone(), expired_block_height);
     assert!(
-        error.to_string().contains("not restorable until exact finalized-bundle loading"),
-        "unexpected Soracloud sequence-gap restore error: {error}"
+        error
+            .to_string()
+            .contains("block height must fall inside its decryption-authorization window"),
+        "unexpected private receipt authorization-window restore error: {error}"
+    );
+
+    let mut missing_output_pin_world = sample_snapshot_private_uploaded_model_world(
+        &service_bundle,
+        uploaded_model_bundle.clone(),
+        receipt.clone(),
+    );
+    missing_output_pin_world
+        .pin_manifests
+        .remove(receipt.output_artifact.sorafs_manifest_digest);
+    let missing_output_pin_snapshot = norito::json::to_value(&snapshot_state_from_world(
+        missing_output_pin_world,
+    ))
+    .expect("serialize private receipt with missing output pin");
+    let error = deserialize_state_snapshot_value(missing_output_pin_snapshot)
+        .err()
+        .expect("private receipt output pin must remain represented in restored state");
+    assert!(
+        error.to_string().contains("output` artifact must reference a retained SoraFS pin"),
+        "unexpected missing private output pin restore error: {error}"
+    );
+
+    let mut duplicate_release = receipt.clone();
+    duplicate_release.output_artifact = sample_snapshot_private_model_artifact("output", 0xB3);
+    duplicate_release.output_commitment = Hash::new(b"second-private-output");
+    duplicate_release.emitted_sequence = 4;
+    duplicate_release.request_commitment =
+        derive_soracloud_private_model_request_commitment_v1(&duplicate_release);
+    duplicate_release.result_commitment =
+        derive_soracloud_private_model_result_commitment_v1(&duplicate_release);
+    duplicate_release.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&duplicate_release);
+    let mut duplicate_release_world = sample_snapshot_private_uploaded_model_world(
+        &service_bundle,
+        uploaded_model_bundle.clone(),
+        receipt.clone(),
+    );
+    duplicate_release_world.soracloud_sequence_watermark = Cell::new(4);
+    duplicate_release_world.pin_manifests.insert(
+        duplicate_release.output_artifact.sorafs_manifest_digest,
+        sample_snapshot_private_pin(
+            duplicate_release.output_artifact.sorafs_manifest_digest,
+            duplicate_release.output_artifact.ciphertext_bytes,
+        ),
+    );
+    duplicate_release_world
+        .soracloud_private_uploaded_model_execution_receipts
+        .insert(duplicate_release.receipt_id, duplicate_release);
+    let duplicate_release_snapshot = norito::json::to_value(&snapshot_state_from_world(
+        duplicate_release_world,
+    ))
+    .expect("serialize duplicate private decryption-release consumption");
+    let error = deserialize_state_snapshot_value(duplicate_release_snapshot)
+        .err()
+        .expect("one private release must not restore with multiple receipts");
+    assert!(
+        error.to_string().contains("must not authorize multiple private receipts"),
+        "unexpected duplicate private release restore error: {error}"
     );
 
     let mut nondeterministic_bundle = uploaded_model_bundle;
@@ -34344,7 +34563,7 @@ state_test! { sync private_uploaded_model_receipt_restore_fails_closed_until_art
     assert!(
         error
             .to_string()
-            .contains("not restorable until exact finalized-bundle loading"),
+            .contains("deterministic uploaded-model bundle"),
         "unexpected private receipt deterministic-bundle restore error: {error}"
     );
 }
