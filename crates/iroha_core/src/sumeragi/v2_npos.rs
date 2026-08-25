@@ -21,6 +21,8 @@ use iroha_data_model::{
     peer::PeerId,
 };
 #[cfg(test)]
+use mv::storage::StorageReadOnly;
+#[cfg(test)]
 use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use std::collections::{BTreeMap, BTreeSet};
@@ -1642,6 +1644,7 @@ mod tests {
         }
 
         let forbidden = ["feature = ", "\"iroha-core-tests\""].concat();
+        let source = include_str!("v2_npos.rs");
         let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/sumeragi");
         assert_source_tree_is_feature_invariant(&source_root, &forbidden);
         let daemon_manifest = include_str!("../../../irohad/Cargo.toml");

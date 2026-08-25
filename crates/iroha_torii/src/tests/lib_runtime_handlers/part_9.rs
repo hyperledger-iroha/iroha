@@ -1017,18 +1017,50 @@ async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
     );
 }
 #[test]
-fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
+fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
     let mut world = seed_public_soracloud_world();
     let validator_two = checked_torii_test_account_id(
         0x7d,
         "derive hosted HTTP topology second validator fixture key",
     );
     let alice_peer_id =
-        iroha_data_model::peer::PeerId::from(ALICE_ID.expect_single_signatory().clone())
+        checked_torii_test_peer_id(0x7e, "derive hosted HTTP topology validator peer fixture key")
             .to_string();
     let validator_two_peer_id =
-        iroha_data_model::peer::PeerId::from(validator_two.expect_single_signatory().clone())
+        checked_torii_test_peer_id(0x7f, "derive hosted HTTP topology validator peer fixture key")
             .to_string();
+    for (validator_account_id, status, peer_id) in [
+        (
+            ALICE_ID.clone(),
+            iroha_data_model::nexus::staking::PublicLaneValidatorStatus::Active,
+            alice_peer_id.clone(),
+        ),
+        (
+            validator_two.clone(),
+            iroha_data_model::nexus::staking::PublicLaneValidatorStatus::Exited,
+            validator_two_peer_id.clone(),
+        ),
+    ] {
+        world.public_lane_validators_mut_for_testing().insert(
+            (
+                iroha_data_model::nexus::LaneId::SINGLE,
+                validator_account_id.clone(),
+            ),
+            iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
+                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                validator: validator_account_id.clone(),
+                peer_id: peer_id.parse().expect("validator peer id"),
+                stake_account: validator_account_id,
+                total_stake: Quantity::from(1_u64),
+                self_stake: Quantity::from(1_u64),
+                metadata: iroha_data_model::metadata::Metadata::default(),
+                status,
+                activation_epoch: Some(0),
+                activation_height: Some(0),
+                last_reward_epoch: None,
+            },
+        );
+    }
     world
         .soracloud_inrou_host_capabilities_mut_for_testing()
         .insert(
@@ -1114,19 +1146,22 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
         topology
             .get("active_capability_adverts")
             .and_then(norito::json::Value::as_u64),
-        Some(2)
+        Some(1),
+        "inactive validators must not contribute live topology adverts"
     );
     assert_eq!(
         topology
             .get("placed_host_count")
             .and_then(norito::json::Value::as_u64),
-        Some(2)
+        Some(1),
+        "inactive validators must not contribute placed hosts"
     );
     assert_eq!(
         topology
             .get("hosted_replica_count")
             .and_then(norito::json::Value::as_u64),
-        Some(2)
+        Some(1),
+        "inactive validators must not contribute hosted replicas"
     );
     assert!(topology.get("backend_mix").is_none());
 }

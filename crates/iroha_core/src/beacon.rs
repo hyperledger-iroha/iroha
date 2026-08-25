@@ -2444,10 +2444,12 @@ pub fn aggregate_outputs_with_meta(
 pub(crate) mod tests {
     use super::*;
     use crate::{
-        governance::parliament::ParliamentAttemptStateV1,
+        governance::parliament::{
+            ParliamentAttemptStateV1, ParliamentDecisionModeV1, RequiredParliamentBodyV1,
+        },
         kura::Kura,
         query::store::LiveQueryStore,
-        state::{GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, State, World},
+        state::{GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, State, World, WorldReadOnly as _},
         sumeragi::v2_beacon::{
             V2GlobalBeaconError, V2GlobalBeaconIngressOutcome, V2GlobalBeaconLifecycle,
         },
@@ -2455,7 +2457,7 @@ pub(crate) mod tests {
             V2ContextBuildError, finalized_global_beacon_npos_successor_seed_from_sources,
         },
     };
-    use iroha_config::parameters::actual::Governance;
+    use iroha_config::parameters::actual::{Governance, LaneConfig as RuntimeLaneConfig};
     use iroha_crypto::{
         Algorithm, HashOf, KeyPair,
         threshold_bls::{AdaptiveThresholdBlsSecretShare, DasRenDealerSecret, TleReleasePurpose},
@@ -2471,9 +2473,8 @@ pub(crate) mod tests {
         governance::types::{
             BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, GovernanceAttemptId,
             GovernanceAttemptStatusV1, GovernanceAttemptV1, GovernanceExpectedHeadAbsentV1,
-            GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentBody, ParliamentDecisionModeV1,
-            ProposalContentId, RequiredParliamentBodyV1, RiskTierV1, SortitionRequestId,
-            SortitionRequestV1, parliament_candidate_root_v1,
+            GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentBody, ProposalContentId,
+            RiskTierV1, SortitionRequestId, SortitionRequestV1, parliament_candidate_root_v1,
         },
         peer::PeerId,
     };
@@ -3242,7 +3243,7 @@ pub(crate) mod tests {
                 data_shards: 3,
                 parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x91; 32],
         };
@@ -3477,9 +3478,18 @@ pub(crate) mod tests {
         };
         {
             let mut block = state.world.block();
-            block
-                .verify_and_advance_global_beacon_pulse(&fixture_b.session, pulse, expected_anchor)
-                .expect("persist replacement-key pulse");
+            {
+                let mut transaction =
+                    block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+                transaction
+                    .verify_and_advance_global_beacon_pulse(
+                        &fixture_b.session,
+                        pulse,
+                        expected_anchor,
+                    )
+                    .expect("persist replacement-key pulse");
+                transaction.apply();
+            }
             block.commit();
         }
         let mut attempt = state
@@ -3956,9 +3966,18 @@ pub(crate) mod tests {
         };
         {
             let mut block = state.world.block();
-            block
-                .verify_and_advance_global_beacon_pulse(&fixture.session, pulse, expected_anchor)
-                .expect("persist finalized pulse through authoritative World corridor");
+            {
+                let mut transaction =
+                    block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+                transaction
+                    .verify_and_advance_global_beacon_pulse(
+                        &fixture.session,
+                        pulse,
+                        expected_anchor,
+                    )
+                    .expect("persist finalized pulse through authoritative World corridor");
+                transaction.apply();
+            }
             block.commit();
         }
         assert_eq!(
@@ -4116,21 +4135,30 @@ pub(crate) mod tests {
         let world = World::new();
         {
             let mut block = world.block();
-            block
-                .global_beacon_key_sessions
-                .insert(pulse.session_id, key_record);
-            block
-                .global_beacon_active_session
-                .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, pulse.session_id);
-            assert_eq!(
-                block.verify_and_advance_global_beacon_pulse(&fixture.session, pulse, anchor),
-                Ok(GlobalThresholdBeaconPulseLinkV1 {
-                    pulse_id: pulse.pulse_id,
-                    seed: pulse.seed,
-                    height: pulse.height,
-                    round: pulse.round,
-                })
-            );
+            {
+                let mut transaction =
+                    block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+                transaction
+                    .global_beacon_key_sessions
+                    .insert(pulse.session_id, key_record);
+                transaction
+                    .global_beacon_active_session
+                    .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, pulse.session_id);
+                assert_eq!(
+                    transaction.verify_and_advance_global_beacon_pulse(
+                        &fixture.session,
+                        pulse,
+                        anchor,
+                    ),
+                    Ok(GlobalThresholdBeaconPulseLinkV1 {
+                        pulse_id: pulse.pulse_id,
+                        seed: pulse.seed,
+                        height: pulse.height,
+                        round: pulse.round,
+                    })
+                );
+                transaction.apply();
+            }
             block.commit();
         }
         assert_eq!(
@@ -4185,18 +4213,23 @@ pub(crate) mod tests {
         let world = World::new();
         {
             let mut block = world.block();
-            block
-                .global_beacon_key_sessions
-                .insert(prior.session_id, key_record);
-            block
-                .global_beacon_active_session
-                .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, prior.session_id);
-            block
-                .global_beacon_latest_pulse
-                .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, origin);
-            block
-                .verify_and_advance_global_beacon_pulse(&fixture.session, prior, prior_anchor)
-                .expect("persist prior optional pulse");
+            {
+                let mut transaction =
+                    block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+                transaction
+                    .global_beacon_key_sessions
+                    .insert(prior.session_id, key_record);
+                transaction
+                    .global_beacon_active_session
+                    .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, prior.session_id);
+                transaction
+                    .global_beacon_latest_pulse
+                    .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, origin);
+                transaction
+                    .verify_and_advance_global_beacon_pulse(&fixture.session, prior, prior_anchor)
+                    .expect("persist prior optional pulse");
+                transaction.apply();
+            }
             block.commit();
         }
         assert_eq!(

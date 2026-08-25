@@ -2024,10 +2024,10 @@
               }
             ]
           },
-          "placement_id": {
+          "execution_host": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/Hash"
+                "$ref": "#/components/schemas/SoraRuntimeExecutionHostV1"
               },
               {
                 "type": "null"
@@ -2043,20 +2043,10 @@
           "result_commitment": {
             "$ref": "#/components/schemas/Hash"
           },
-          "selected_peer_id": {
+          "mailbox_message_id": {
             "anyOf": [
               {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "selected_validator_account_id": {
-            "anyOf": [
-              {
-                "type": "string"
+                "$ref": "#/components/schemas/Hash"
               },
               {
                 "type": "null"
@@ -2080,9 +2070,8 @@
           "result_commitment",
           "certified_by",
           "emitted_sequence",
-          "placement_id",
-          "selected_validator_account_id",
-          "selected_peer_id",
+          "execution_host",
+          "mailbox_message_id",
           "journal_artifact_hash",
           "checkpoint_artifact_hash"
         ],
@@ -25651,14 +25640,7 @@
         "additionalProperties": false,
         "properties": {
           "baseline_version": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "type": "string"
           },
           "canary_percent": {
             "format": "uint8",
@@ -31583,7 +31565,7 @@
           "base_fee": {
             "$ref": "#/components/schemas/Quantity"
           },
-          "compute_reservation_fee": {
+          "compute_reservation_cap": {
             "$ref": "#/components/schemas/Quantity"
           },
           "lease_asset_definition_id": {
@@ -31592,8 +31574,8 @@
           "model_name": {
             "type": "string"
           },
-          "planned_placement": {
-            "$ref": "#/components/schemas/SoraHfPlacementRecordV1"
+          "resource_profile": {
+            "$ref": "#/components/schemas/SoraHfResourceProfileV1"
           },
           "service_name": {
             "type": "string"
@@ -31622,8 +31604,8 @@
           "model_name",
           "lease_asset_definition_id",
           "base_fee",
-          "compute_reservation_fee",
-          "planned_placement",
+          "compute_reservation_cap",
+          "resource_profile",
           "sponsored_at_ms",
           "window_started_at_ms",
           "window_expires_at_ms",
@@ -32177,7 +32159,7 @@
           "queue_name": {
             "type": "string"
           },
-          "retention_blocks": {
+          "retention_sequences": {
             "format": "uint32",
             "maximum": 4294967295,
             "minimum": 1,
@@ -32188,7 +32170,7 @@
           "queue_name",
           "max_pending_messages",
           "max_message_bytes",
-          "retention_blocks"
+          "retention_sequences"
         ],
         "type": "object"
       },
@@ -32571,6 +32553,87 @@
           "max_unavailable_replicas",
           "health_window_secs",
           "automatic_rollback_failures"
+        ],
+        "type": "object"
+      },
+      "SoraRuntimeExecutionHostV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "host_kind": {
+                "const": "InrouReplica",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/SoraRuntimeInrouReplicaHostV1"
+              }
+            },
+            "required": [
+              "host_kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "host_kind": {
+                "const": "HfModelHost",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/SoraRuntimeHfModelHostV1"
+              }
+            },
+            "required": [
+              "host_kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SoraRuntimeHfModelHostV1": {
+        "additionalProperties": false,
+        "properties": {
+          "peer_id": {
+            "type": "string"
+          },
+          "placement_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "validator_account_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "placement_id",
+          "validator_account_id",
+          "peer_id"
+        ],
+        "type": "object"
+      },
+      "SoraRuntimeInrouReplicaHostV1": {
+        "additionalProperties": false,
+        "properties": {
+          "peer_id": {
+            "type": "string"
+          },
+          "replica_slot": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "validator_account_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "replica_slot",
+          "validator_account_id",
+          "peer_id"
         ],
         "type": "object"
       },
@@ -34660,7 +34723,7 @@
           "queue_name": {
             "type": "string"
           },
-          "retention_blocks": {
+          "retention_sequences": {
             "format": "uint32",
             "maximum": 4294967295,
             "minimum": 0,
@@ -34672,7 +34735,7 @@
           "queue_name",
           "max_pending_messages",
           "max_message_bytes",
-          "retention_blocks"
+          "retention_sequences"
         ],
         "type": "object"
       },

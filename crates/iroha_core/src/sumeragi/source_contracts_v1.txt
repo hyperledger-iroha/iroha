@@ -1250,6 +1250,10 @@ region|output_join|registry|after|pub(super) enum LifecycleOutputRegistryJoinV1 
 region|output_settlement|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|output_pending|registry|after|pub(in crate::sumeragi) struct PendingLifecycleOutputAdmissionV1 {|before|impl PreparedLifecycleOutputExecutionV1 {
 region|runtime_occurrence|runtime|after|pub(crate) fn exactly_binds_adapter_effect(&self, effect: &AdapterEffect) -> bool {|before|/// Mint the ordinal-free lifecycle-admission binding for this exact effect.
+region|periodic_output_pending|registry|at|fn is_periodic_retransmit_broadcast(&self) -> bool {|before|/// Restore the exact bounded handoff when lifecycle ordering defers I/O.
+region|periodic_runtime_occurrence|runtime|at|fn exactly_binds_periodic_retransmit_broadcast(|before|fn validate_exact(&self) -> bool {
+region|periodic_runtime_identity|runtime|at|const PERIODIC_RETRANSMIT_ROOT_IDENTITY: &[u8] =|before|/// Maximum base intervals assigned to one certified view.
+region|periodic_runtime_timer|runtime|at|fn freeze_due_clock_owners(&mut self, now: Instant)|before|fn minimum_active_lifecycle_ordinal(&self)
 region|cold_service|effects|after|pub(in crate::sumeragi) fn execute_recovered_lifecycle_output_service|before|/// Exhaustive source inventory of effects which may create pending work.
 region|cold_settlement|lifecycle_open|at|pub(in crate::sumeragi) fn settle_next_recovered_lifecycle_output<E>(|before|fn recovered_output_matches_ready_coordinator(
 region|cold_census|lifecycle_open|at|pub(super) fn exact_ready_ordinals_for_registry_census(|before|/// Result of attempting the oldest authenticated cold output.
@@ -1277,7 +1281,15 @@ required|output_join|metadata.continuation == super::schema::DurableContinuation
 required|output_join|metadata.replay_authority == authority|terminal direct output retry stopped comparing the byte-exact signed payload authority
 required|output_join|authority.structurally_matches_record(|terminal direct output retry stopped authenticating exact context, key, class, stage, and payload
 required|output_settlement|LifecycleOutputRegistryJoinV1::TerminalDirectOutputDuplicate|generic output settlement stopped recognizing exact terminal direct-output retries
-required|output_settlement|ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted|exact terminal direct-output retry no longer stutters before service I/O
+required|output_settlement|if !execution.is_periodic_retransmit_broadcast()|non-periodic terminal direct-output retry no longer stutters before service I/O
+required|output_settlement|execution.execute_with(execute)|periodic terminal control retry stopped reaching exact output service
+required|output_settlement|LifecycleOutputServiceDispositionV1::SourceRetained|periodic terminal control retry stopped preserving exact backpressure ownership
+required|periodic_output_pending|fn is_periodic_retransmit_broadcast(&self)|output settlement lost its sealed periodic-reservice classifier
+required|periodic_runtime_occurrence|fn exactly_binds_periodic_retransmit_broadcast(|runtime omitted the authenticated periodic Broadcast occurrence classifier
+required|periodic_runtime_occurrence|RuntimeFreshRootKind::Retransmit|periodic Broadcast classifier stopped requiring the retransmit root family
+required|periodic_runtime_occurrence|PERIODIC_RETRANSMIT_ROOT_IDENTITY|periodic Broadcast classifier stopped sharing the timer root identity
+required|periodic_runtime_identity|b"periodic-retransmit"|periodic Broadcast classifier changed the serialized timer root identity
+count|periodic_runtime_timer|PERIODIC_RETRANSMIT_ROOT_IDENTITY|2|periodic timer classification and owner mint must share the one serialized root identity
 required|output_settlement|LifecycleOutputServiceDispositionV1::SourceRetained|generic output settlement stopped distinguishing transport backpressure from acceptance
 required|output_settlement|ProductionLifecycleOutputAdmissionSettlementV1::Deferred(\n                    execution.into_pending(),\n                )|transport backpressure no longer returns the exact Ready output owner
 order|output_settlement|3|execution.execute_with(execute)|LifecycleOutputServiceDispositionV1::SourceRetained|let mut staged = self.coordinator.stage_durable_transaction()|source-retained output must defer before terminal LedgerV1 staging
@@ -1362,7 +1374,7 @@ required|sealed_projection|ConcreteWorkAddress::new(lease.owner(), lease.ordinal
 required|sealed_projection|work.validates_at(address)|sealed body successor projection omitted {required}
 required|sealed_projection|work.digest != digest|sealed body successor projection omitted {required}
 required|sealed_projection|completion.address != self.completion_address|sealed body successor projection omitted {required}
-required|sealed_projection|store.address != self.store_address|sealed body successor projection omitted {required}
+required|sealed_projection|store.address == self.store_address|sealed body successor projection omitted {required}
 required|sealed_projection|self.durable_body.manifest_hash() != self.expected_manifest_hash|sealed body successor projection omitted {required}
 required|sealed_projection|self.adapter.store_effect() != &self.store_effect|sealed body successor projection omitted {required}
 required|sealed_projection|self.adapter.validate_effect() != &self.validate_effect|sealed body successor projection omitted {required}
@@ -1404,7 +1416,7 @@ region|carrier|registry|after|struct DurableStoreBody {|before|impl DurableStore
 region|validation|registry|after|impl DurableStoreBody {|before|struct DurableValidateBody
 region|preparation|registry_recovery_impl|after|pub(super) fn prepare_durable_store_execution(|before|pub(super) fn prepare_durable_validate_execution(
 region|execution|registry|after|impl<'a> PreparedDurableStoreExecution<'a>|before|fn sealed_successor_parent<'a>(
-region|validate_token|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {|before|/// Move-only Store projection sealed under its closed Fetch parent
+region|validate_token|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {|before|#[derive(Clone, Copy)]\nenum DurableStoreValidateParentV1
 region|fetch_execution|registry|after|impl<'a> PreparedCertifiedFetchExecution<'a>|before|impl<'a> PreparedDurableStoreExecution<'a>
 region|callers|selector|begin|-|end|-
 region|callers|effects|begin|-|end|-
@@ -1424,7 +1436,7 @@ required|validation|durable_receipt.context_id()|durable Store validation omitte
 required|validation|durable_receipt.round()|durable Store validation omitted {required}
 required|validation|durable_receipt.subject()|durable Store validation omitted {required}
 required|validation|durable_receipt.manifest_hash() == self.expected_manifest_hash|durable Store validation omitted {required}
-required|preparation|store\n            .project_candidate(verified)|durable Store preparation omitted {required}
+required|preparation|store\n                    .project_candidate(verified)|durable Store preparation omitted {required}
 required|preparation|durable_validate_body_payload(&store.durable_receipt)|durable Store preparation omitted {required}
 required|preparation|candidate.key != lease.key()|durable Store preparation omitted {required}
 required|preparation|candidate.causal_root != lease.owner().causal_root()|durable Store preparation omitted {required}
@@ -1473,7 +1485,7 @@ region|live_sign_carrier|registry|after|struct DurableLiveWalSignWork {|before|i
 region|live_sign_install|registry|after|impl LiveValidateSignRegistryReservation<'_> {|before|#[cfg_attr(not(test), allow(dead_code))]
 region|preparation|registry_recovery_impl|after|pub(super) fn prepare_durable_validate_execution(|before|pub(super) fn classify_ready_validate_carrier(
 region|execution_impl|registry_recovery|after|impl PreparedDurableValidateExecution<'_>|end|-
-region|validate_successor|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {|before|/// Move-only Store projection sealed under its closed Fetch parent
+region|validate_successor|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {|before|#[derive(Clone, Copy)]\nenum DurableStoreValidateParentV1
 region|scheduler|scheduler_inputs|begin|-|end|-
 region|worker_path|worker|begin|-|end|-
 region|turn_driver|turn_driver|begin|-|end|-
@@ -2346,6 +2358,19 @@ region|completion_dispatch|turn_driver|at|match self.services.take_next_lifecycl
 region|deferred_retry|launch|after|impl RetainedLifecycleDecisionApplyDeferredV1|before|/// Fail-stop class while durably terminalizing
 region|drive|launch|after|pub(in crate::sumeragi) fn drive_lifecycle_decision_apply_deferred(|before|/// Settle one already-classified lifecycle Decision Apply completion.
 region|sidecar|lane_work|begin|-|end|-
+region|pending_owner_join|coordinator_support|begin|-|before|\n#[cfg(test)]
+region|pending_registry_ordinal|registry_recovery_impl|at|pub(super) fn exact_recovered_decision_apply_ready_ordinal(|before|/// Verify WAL-authority startup coverage beside authenticated cold outputs.
+region|pending_replay|pending_kura_recovery|begin|-|end|-
+region|pending_verify|effects|at|pub(in crate::sumeragi) fn verify_pending_kura_recovered_apply_replay(|before|/// Authenticate and enqueue one reducer-directed v2 network message
+region|pending_dispatch|effects|at|pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_executor_dispatch|before|/// Install the distinct preliminary retransmit exclusion
+region|pending_completion_exact|adapter|at|pub(in crate::sumeragi) fn exactly_matches_pending_kura_recovery(|before|impl SumeragiV2Adapter {
+region|pending_driver|pending_lifecycle|at|pub(in crate::sumeragi) fn drive_apply_recovery_turn(|before|/// Construct and authenticate lane recovery after the local Apply completes.
+region|pending_settlement|launch|at|pub(in crate::sumeragi) fn settle_pending_kura_applied_decision_apply_completion(|before|/// Fail-stop failure while consuming the recovered lifecycle owner into I/O.
+region|attempt_settlement|effects|at|pub(crate) fn begin_pending_tip_recovery_attempt(|before|/// Begin the asynchronous durable-store
+region|generic_apply|effects|at|fn begin_apply<S: V2EffectServices>(|before|fn reconcile_runtime_decision<S: V2EffectServices>(
+region|generic_completion|effects|at|pub(crate) fn complete_application<S: V2EffectServices>(|before|/// Current bounded operational status.
+region|effects_production|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|runtime_all|runtime|begin|-|end|-
 required|recovered_projection|self.exact_body_binding()|recovered completion projection lost transitive body validation
 required|recovered_projection|LifecycleDecisionApplyLineageV1::Recovered|recovered completion projection lost its explicit lineage
 required|live_projection|LifecycleDecisionApplyLineageV1::Live|live completion projection lost its explicit lineage
@@ -3759,7 +3784,7 @@ required|validate|&self.effect,\n                &self.durable_receipt,\n       
 required|completion|incumbent: DurableValidateBody|Validate completion omitted its incumbent
 required|fetch_successor|replay_evidence: CertifiedStoreReplayEvidenceV1|Fetch-to-Store successor omitted replay evidence
 required|fetch_successor|PreparedCertifiedFetchStoreAdapterV1<'adapter>|Fetch-to-Store successor omitted adapter owner
-required|validate_successor|replay_evidence: CertifiedValidateReplayEvidenceV1|Store-to-Validate successor omitted replay evidence
+required|validate_successor|replay_evidence: DurableValidateReplayEvidenceV1|Store-to-Validate successor omitted replay evidence
 required|validate_successor|PreparedDurableStoreValidateAdapterV1<'adapter>|Store-to-Validate successor omitted adapter owner
 required|fetch_projection|completion.replay_evidence.project_store(|Fetch-to-Store projection omitted replay projection
 required|fetch_projection|replay_evidence,|Fetch-to-Store projection omitted replay evidence transfer

@@ -1447,8 +1447,8 @@ pub(crate) mod tests {
     #[test]
     fn authenticated_broker_projection_roundtrips_and_signs_after_revalidation() {
         let fixture = fixture();
-        let identity = identity(fixture.session);
-        let context = authorized_context(fixture.validated.clone(), identity, 100);
+        let release_identity = identity(fixture.session);
+        let context = authorized_context(fixture.validated.clone(), release_identity, 100);
         let projection = context
             .broker_projection_v1()
             .expect("opaque Core context projects to bounded public wire data");
@@ -1640,7 +1640,7 @@ pub(crate) mod tests {
 
     #[test]
     fn runtime_custody_rejects_retirement_through_max_committed_retry_deadline() {
-        use crate::state::{StateReadOnly as _, WorldReadOnly as _};
+        use crate::state::WorldReadOnly as _;
 
         let retiring = fixture_for_key(32);
         let successor = fixture_for_key(42);

@@ -936,6 +936,10 @@ reducer work may enter the existing bounded sidecar-fetch and validation retry
 path. A later snapshot is written only after complete commit evidence exists
 and is not accepted as a recovery root for that pre-finality window.
 
+This retires only the quarantined outcome-marker authority; an fsynced
+lifecycle Validate sidecar registration, when present, reopens the same Waiting
+row and ordinal for authenticated wake after launch.
+
 Before replay mutates WSV, startup preflights the entire requested height range. Every executable
 height must have a locally retrievable canonical body; ordinary finalized body eviction remains
 valid when the signed snapshot already covers that height, but a state behind an unavailable body

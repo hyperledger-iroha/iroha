@@ -1,16 +1,4 @@
-/// Read-only worker/corridor snapshot for pending-Kura Apply diagnostics.
-#[cfg(test)]
-#[derive(Debug)]
-#[allow(dead_code)]
-pub(in crate::sumeragi) struct PendingKuraApplyIoSnapshotV1 {
-    queued_commands: usize,
-    tracked_queued: usize,
-    tracked_active: usize,
-    tracked_completion_pending: usize,
-    completion_owners: usize,
-    local_completions: usize,
-    held_completion: bool,
-}
+include!("v2_worker/pending_kura_apply_io_snapshot.rs");
 
 impl ProductionV2Services {
     /// Whether Phase B reparked a certified-Fetch result behind the service boundary.
@@ -5000,21 +4988,5 @@ impl ProductionV2Services {
     }
 }
 include!("v2_worker/current_lane_output_rollover_claim.rs");
-impl Drop for ProductionV2Services {
-    fn drop(&mut self) {
-        let restart_required = !self.clean_teardown;
-        if restart_required {
-            self.output_guard.close_admission_for_restart();
-        }
-        self.retire_held_io_completion();
-        if let Some(io) = self.io.take()
-            && let Err(error) = io.shutdown()
-        {
-            iroha_logger::error!(%error, "failed to stop Sumeragi v2 I/O worker");
-        }
-        if restart_required && !thread::panicking() {
-            self.output_guard.activate_restart_required();
-        }
-    }
-}
+include!("v2_worker/production_services_drop_impl.rs");
 include!("v2_worker/effect_services_impl.rs");

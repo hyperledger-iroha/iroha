@@ -1712,7 +1712,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`a7364ee89cfab31a3a48d13e7f74b6e353bc34871619da907200b84cdf482a07`.
+`331123d12b08027a9ac0ed0157ed84007eac5a8659b1995bf4c77c3eedb231c2`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal

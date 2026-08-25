@@ -1803,6 +1803,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
             .unwrap_or(usize::MAX),
         state: state.clone(),
         #[cfg(feature = "app_api")]
+        parliament_tle_release_coordinator: Arc::new(
+            iroha_core::tle_release::TleReleaseCoordinatorV1::without_signer(),
+        ),
+        #[cfg(feature = "app_api")]
         musubi_search: Arc::new(RwLock::new(
             iroha_core::musubi_search::MusubiSearchIndexV1::default(),
         )),

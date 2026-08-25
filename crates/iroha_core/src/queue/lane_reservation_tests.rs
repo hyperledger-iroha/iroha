@@ -1773,6 +1773,26 @@ fn canonical_cleanup_atomically_consumes_committed_revalidated_ordinary_replica_
             .expect("publish the committed carrier transaction identities");
     }
     replica.reconfigure_nexus_with_state(&state.nexus_snapshot(), &state, None);
+    assert!(
+        replica.gossip_batch_with_state(2, &state).is_empty(),
+        "a committed globally bound replica must leave the gossip backlog"
+    );
+    assert_eq!(
+        replica.active_len(),
+        2,
+        "gossip must retain globally bound Queue ownership for canonical cleanup"
+    );
+    assert_eq!(
+        replica.queued_len(),
+        2,
+        "gossip must retain the exact ordinary FIFO replica"
+    );
+    for hash in [first_hash, second_hash] {
+        assert!(replica.txs.contains_key(&hash));
+        assert!(replica.durable_plan_claims.contains_key(&hash));
+        assert!(replica.fifo_order_by_hash.contains_key(&hash));
+        assert!(!replica.removed_hashes.contains_key(&hash));
+    }
     #[cfg(feature = "telemetry")]
     for hash in [first_hash, second_hash] {
         assert!(

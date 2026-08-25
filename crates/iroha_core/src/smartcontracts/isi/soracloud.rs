@@ -136,26 +136,29 @@ use iroha_data_model::{
         SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1,
         SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1, SoraAgentPersistentStateV1,
         SoraAgentRuntimeStatusV1, SoraAgentWalletDailySpendEntryV1, SoraAgentWalletSpendRequestV1,
-        SoraAppInfraActionV1, SoraAppInfraAuditEventV1, SoraAppInfraManifestV1,
-        SoraAppInfraStateV1, SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1,
-        SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1,
-        SoraHfPlacementRecordV1, SoraHfPlacementStatusV1, SoraHfResourceProfileV1,
-        SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1,
-        SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseQueuedWindowV1,
-        SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraInrouGuestIsaV1,
-        SoraInrouHostCapabilityRecordV1, SoraInrouReplicaPlacementV1,
-        SoraInrouReplicaRuntimeStateV1, SoraInrouServicePlacementRecordV1,
-        SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1,
-        SoraModelHostCapabilityRecordV1, SoraModelHostViolationEvidenceRecordV1,
-        SoraModelHostViolationKindV1, SoraModelProvenanceKindV1, SoraModelProvenanceRefV1,
-        SoraModelRegistryV1, SoraModelWeightActionV1, SoraModelWeightAuditEventV1,
-        SoraModelWeightVersionRecordV1, SoraPrivateUploadedModelExecutionReceiptV1,
-        SoraRolloutStageV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
-        SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1,
-        SoraServiceHealthStatusV1, SoraServiceLeaseEgressCheckpointV1,
-        SoraServiceLeaseReportingEpochRolloverV1, SoraServiceLeaseStateV1,
-        SoraServiceLeaseStatusV1, SoraServiceLeaseVolumeStateV1, SoraServiceLifecycleActionV1,
-        SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1,
+        SoraAppInfraActionV1, SoraAppInfraAuditEventV1,
+        SoraAppInfraExactCurrentRevisionPreconditionV1, SoraAppInfraManifestV1,
+        SoraAppInfraMutationPreconditionV1, SoraAppInfraStateV1, SoraDecryptionRequestRecordV1,
+        SoraDeploymentBundleV1, SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1,
+        SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1, SoraHfPlacementStatusV1,
+        SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
+        SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
+        SoraHfSharedLeaseQueuedWindowV1, SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1,
+        SoraHfSourceStatusV1, SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1,
+        SoraInrouReplicaPlacementV1, SoraInrouReplicaRuntimeStateV1,
+        SoraInrouServicePlacementRecordV1, SoraModelArtifactActionV1,
+        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
+        SoraModelHostViolationEvidenceRecordV1, SoraModelHostViolationKindV1,
+        SoraModelProvenanceKindV1, SoraModelProvenanceRefV1, SoraModelRegistryV1,
+        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
+        SoraPrivateUploadedModelExecutionReceiptV1, SoraRolloutStageV1, SoraRuntimeExecutionHostV1,
+        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceConfigEntryV1,
+        SoraServiceDeploymentStateV1, SoraServiceExactCurrentRevisionPreconditionV1,
+        SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
+        SoraServiceLeaseEgressCheckpointV1, SoraServiceLeaseReportingEpochRolloverV1,
+        SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1, SoraServiceLeaseVolumeStateV1,
+        SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
+        SoraServiceMutationPreconditionV1, SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1,
         SoraServiceSecretEntryV1, SoraServiceStateEntryV1, SoraStateEncryptionV1,
         SoraStateMutationOperationV1, SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1,
         SoraTrainingJobRecordV1, SoraTrainingJobStatusV1, SoraUploadedModelBundleV1,
@@ -458,7 +461,7 @@ fn active_hf_assigned_placements_for_validator(
             ) {
                 return None;
             }
-            if pool.window_expires_at_ms <= now_ms && pool.queued_next_window.is_none() {
+            if pool.window_expires_at_ms <= now_ms {
                 return None;
             }
             placement
@@ -704,52 +707,15 @@ fn require_soracloud_service_runtime_authority(
         return Ok(SoracloudServiceRuntimeAuthority::Manager);
     }
     require_active_public_lane_validator(authority, state_transaction)?;
-    let deployment = state_transaction
-        .world
-        .soracloud_service_deployments
-        .get(service_name)
-        .ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                format!("service `{service_name}` is not deployed").into(),
-            )
-        })?;
-    if !active_inrou_service_versions(deployment)?
-        .iter()
-        .any(|active_version| active_version == service_version)
-    {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "service `{service_name}` revision `{service_version}` is not an active deployment revision"
-            )
-            .into(),
-        ));
-    }
-    let key = (service_name.as_ref().to_owned(), service_version.to_owned());
-    let placement = state_transaction
-        .world
-        .soracloud_inrou_service_placements
-        .get(&key)
-        .ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                format!(
-                    "service `{service_name}` revision `{service_version}` has no active runtime placement"
-                )
-                .into(),
-            )
-        })?;
-    if placement.service_name != *service_name
-        || placement.service_version != service_version
-        || placement.schema_version != SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1
-    {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "service `{service_name}` revision `{service_version}` has a malformed runtime placement record"
-            )
-            .into(),
-        ));
-    }
-    if placement
-        .placements
+    let assignments = crate::soracloud_runtime::resolve_active_inrou_replica_assignments(
+        &state_transaction.world,
+        service_name.as_ref(),
+        service_version,
+        state_transaction.block_unix_timestamp_ms().max(1),
+        |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
+    )
+    .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
+    if assignments
         .iter()
         .any(|assignment| assignment.validator_account_id == *authority)
     {
@@ -768,6 +734,7 @@ fn verify_bundle_provenance(
     bundle: &SoraDeploymentBundleV1,
     initial_service_configs: &BTreeMap<String, Json>,
     initial_service_secrets: &BTreeMap<String, SecretEnvelopeV1>,
+    precondition: &SoraServiceMutationPreconditionV1,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
     if single_signatory_authority(authority)? != &provenance.signer {
@@ -779,6 +746,7 @@ fn verify_bundle_provenance(
         bundle,
         initial_service_configs,
         initial_service_secrets,
+        precondition,
     )
     .map_err(|err| invalid_parameter(format!("failed to encode bundle provenance: {err}")))?;
     verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload)
@@ -788,6 +756,7 @@ fn verify_bundle_provenance(
 fn verify_app_infra_provenance(
     authority: &AccountId,
     manifest: &SoraAppInfraManifestV1,
+    precondition: &SoraAppInfraMutationPreconditionV1,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
     if single_signatory_authority(authority)? != &provenance.signer {
@@ -795,7 +764,7 @@ fn verify_app_infra_provenance(
             "app infra provenance signer must match the transaction authority",
         ));
     }
-    let payload = encode_app_infra_provenance_payload(manifest).map_err(|err| {
+    let payload = encode_app_infra_provenance_payload(manifest, precondition).map_err(|err| {
         invalid_parameter(format!("failed to encode app infra provenance: {err}"))
     })?;
     verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload)
@@ -4758,89 +4727,53 @@ fn verify_uploaded_model_finalize_provenance(
     )?;
     Ok(())
 }
-fn latest_soracloud_audit_sequence(state_transaction: &StateTransaction<'_, '_>) -> u64 {
-    [
-        state_transaction
-            .world
-            .soracloud_service_audit_events
-            .iter()
-            .map(|(sequence, _event)| *sequence)
-            .max()
-            .unwrap_or(0),
-        state_transaction
-            .world
-            .soracloud_app_infra_audit_events
-            .iter()
-            .map(|(sequence, _event)| *sequence)
-            .max()
-            .unwrap_or(0),
-        state_transaction
-            .world
-            .soracloud_training_job_audit_events
-            .iter()
-            .map(|(sequence, _event)| *sequence)
-            .max()
-            .unwrap_or(0),
-        state_transaction
-            .world
-            .soracloud_model_weight_audit_events
-            .iter()
-            .map(|(sequence, _event)| *sequence)
-            .max()
-            .unwrap_or(0),
-        state_transaction
-            .world
-            .soracloud_model_artifact_audit_events
-            .iter()
-            .map(|(sequence, _event)| *sequence)
-            .max()
-            .unwrap_or(0),
-        state_transaction
-            .world
-            .soracloud_hf_shared_lease_audit_events
-            .iter()
-            .map(|(sequence, _event)| *sequence)
-            .max()
-            .unwrap_or(0),
-        state_transaction
-            .world
-            .soracloud_model_host_violation_evidence
-            .iter()
-            .map(|(_evidence_id, record)| record.sequence)
-            .max()
-            .unwrap_or(0),
-        state_transaction
-            .world
-            .soracloud_agent_apartment_audit_events
-            .iter()
-            .map(|(sequence, _event)| *sequence)
-            .max()
-            .unwrap_or(0),
-        state_transaction
-            .world
-            .soracloud_runtime_receipts
-            .iter()
-            .map(|(_receipt_id, receipt)| receipt.emitted_sequence)
-            .max()
-            .unwrap_or(0),
-    ]
-    .into_iter()
-    .max()
-    .unwrap_or(0)
-}
-pub(crate) fn next_soracloud_audit_sequence(state_transaction: &StateTransaction<'_, '_>) -> u64 {
-    latest_soracloud_audit_sequence(state_transaction).saturating_add(1)
-}
-fn next_unique_soracloud_audit_sequence(
+pub(crate) fn next_soracloud_audit_sequence(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<u64, InstructionExecutionError> {
-    latest_soracloud_audit_sequence(state_transaction)
+    crate::soracloud_runtime::latest_soracloud_sequence(&state_transaction.world)
         .checked_add(1)
         .ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
-                "Soracloud audit sequence space is exhausted".into(),
+                "Soracloud audit sequence is exhausted".into(),
             )
         })
+}
+fn ensure_soracloud_sequence_is_next(
+    state_transaction: &StateTransaction<'_, '_>,
+    sequence: u64,
+) -> Result<(), InstructionExecutionError> {
+    let expected = next_soracloud_audit_sequence(state_transaction)?;
+    if sequence != expected {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "Soracloud sequence `{sequence}` is stale or non-canonical; next authoritative sequence is `{expected}`"
+            )
+            .into(),
+        ));
+    }
+    Ok(())
+}
+fn ensure_soracloud_audit_sequence_capacity(
+    state_transaction: &StateTransaction<'_, '_>,
+    additional_event_count: usize,
+) -> Result<(), InstructionExecutionError> {
+    if additional_event_count == 0 {
+        return Ok(());
+    }
+    let first_sequence = next_soracloud_audit_sequence(state_transaction)?;
+    let additional_offset = u64::try_from(additional_event_count - 1).map_err(|_| {
+        InstructionExecutionError::InvariantViolation(
+            "Soracloud audit event batch exceeds the supported u64 domain".into(),
+        )
+    })?;
+    first_sequence
+        .checked_add(additional_offset)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "Soracloud audit sequence is exhausted".into(),
+            )
+        })?;
+    Ok(())
 }
 fn parse_training_model_name(model_name: &str) -> Result<String, InstructionExecutionError> {
     let normalized = model_name.trim();
@@ -5315,20 +5248,6 @@ fn autonomy_checkpoint_value_size(
     }
     value_size.saturating_add(32)
 }
-fn count_revisions_for_service(
-    state_transaction: &StateTransaction<'_, '_>,
-    service_name: &iroha_data_model::name::Name,
-) -> u32 {
-    u32::try_from(
-        state_transaction
-            .world
-            .soracloud_service_revisions
-            .iter()
-            .filter(|((stored_service, _version), _bundle)| stored_service == service_name.as_ref())
-            .count(),
-    )
-    .unwrap_or(u32::MAX)
-}
 fn rollout_handle(service_name: &str, sequence: u64) -> String {
     format!("{service_name}:rollout:{sequence}")
 }
@@ -5509,7 +5428,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
         ));
     }
     let accounted_storage_bytes = deployment.accounted_storage_bytes();
-    let current_sequence = next_soracloud_audit_sequence(state_transaction);
+    let current_sequence = next_soracloud_audit_sequence(state_transaction)?;
     let mut reporting_epoch_rollover = None;
     let lease = deployment.service_lease.as_mut().ok_or_else(|| {
         InstructionExecutionError::InvariantViolation(
@@ -5618,20 +5537,21 @@ pub(crate) fn write_soracloud_service_lease_usage(
                 "every prior-epoch reporter checkpoint must be finalized before rollover",
             ));
         }
-        if lease.egress_reporter_checkpoints.iter().any(|checkpoint| {
-            find_inrou_replica_assignment(
+        for checkpoint in &lease.egress_reporter_checkpoints {
+            let assignment = resolve_active_inrou_replica_assignment(
                 state_transaction,
                 &service_name,
                 &checkpoint.active_service_version,
                 checkpoint.replica_slot,
-            )
-            .is_some_and(|assignment| {
+                state_transaction.block_unix_timestamp_ms().max(1),
+            )?;
+            if assignment.is_some_and(|assignment| {
                 assignment.validator_account_id == checkpoint.validator_account_id
-            })
-        }) {
-            return Err(invalid_parameter(
-                "a prior-epoch reporter checkpoint remains actively placed",
-            ));
+            }) {
+                return Err(invalid_parameter(
+                    "a prior-epoch reporter checkpoint remains actively placed",
+                ));
+            }
         }
         let settled_egress_bytes_delta = lease
             .egress_reporter_checkpoints
@@ -5727,7 +5647,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
         SoraServiceLeaseStatusV1::Suspended => {}
     }
     let audit_event = if let Some(rollover) = reporting_epoch_rollover {
-        let sequence = next_unique_soracloud_audit_sequence(state_transaction)?;
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         Some(SoraServiceAuditEventV1 {
             schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
             sequence,
@@ -5763,10 +5683,10 @@ pub(crate) fn write_soracloud_service_lease_usage(
 }
 pub(crate) fn write_soracloud_mailbox_message(
     state_transaction: &mut StateTransaction<'_, '_>,
-    message: SoraServiceMailboxMessageV1,
+    mut message: SoraServiceMailboxMessageV1,
 ) -> Result<(), InstructionExecutionError> {
     message
-        .validate()
+        .validate_submission()
         .map_err(|err| invalid_parameter(err.to_string()))?;
     if state_transaction
         .world
@@ -5782,30 +5702,181 @@ pub(crate) fn write_soracloud_mailbox_message(
             .into(),
         ));
     }
-    if state_transaction
+    let source_deployment = state_transaction
         .world
         .soracloud_service_deployments
         .get(&message.from_service)
-        .is_none()
-    {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!("source service `{}` is not deployed", message.from_service).into(),
-        ));
-    }
-    if state_transaction
-        .world
-        .soracloud_service_deployments
-        .get(&message.to_service)
-        .is_none()
+        .cloned()
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!("source service `{}` is not deployed", message.from_service).into(),
+            )
+        })?;
+    let source_bundle = load_admitted_bundle(
+        state_transaction,
+        &message.from_service,
+        &source_deployment.current_service_version,
+    )?;
+    let source_handler = source_bundle
+        .service
+        .handlers
+        .iter()
+        .find(|handler| handler.handler_name == message.from_handler)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "source handler `{}` is not declared by active service `{}` revision `{}`",
+                    message.from_handler,
+                    message.from_service,
+                    source_deployment.current_service_version
+                )
+                .into(),
+            )
+        })?;
+    if !matches!(
+        source_handler.class,
+        SoraServiceHandlerClassV1::Update | SoraServiceHandlerClassV1::PrivateUpdate
+    ) || source_handler.mailbox.is_none()
     {
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
-                "destination service `{}` is not deployed",
-                message.to_service
+                "source handler `{}` must be an admitted update/private_update mailbox handler",
+                message.from_handler
             )
             .into(),
         ));
     }
+    let destination_deployment = state_transaction
+        .world
+        .soracloud_service_deployments
+        .get(&message.to_service)
+        .cloned()
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "destination service `{}` is not deployed",
+                    message.to_service
+                )
+                .into(),
+            )
+        })?;
+    let destination_bundle = load_admitted_bundle(
+        state_transaction,
+        &message.to_service,
+        &destination_deployment.current_service_version,
+    )?;
+    let destination_handler = destination_bundle
+        .service
+        .handlers
+        .iter()
+        .find(|handler| handler.handler_name == message.to_handler)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "destination handler `{}` is not declared by active service `{}` revision `{}`",
+                    message.to_handler,
+                    message.to_service,
+                    destination_deployment.current_service_version
+                )
+                .into(),
+            )
+        })?;
+    let destination_mailbox = destination_handler.mailbox.as_ref().ok_or_else(|| {
+        InstructionExecutionError::InvariantViolation(
+            format!(
+                "destination handler `{}` is not an admitted mailbox handler",
+                message.to_handler
+            )
+            .into(),
+        )
+    })?;
+    if !matches!(
+        destination_handler.class,
+        SoraServiceHandlerClassV1::Update | SoraServiceHandlerClassV1::PrivateUpdate
+    ) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "destination handler `{}` must be an update/private_update mailbox handler",
+                message.to_handler
+            )
+            .into(),
+        ));
+    }
+    let payload_len = u64::try_from(message.payload_bytes.len()).map_err(|_| {
+        invalid_parameter("Soracloud mailbox payload length exceeds the u64 domain")
+    })?;
+    if payload_len > destination_mailbox.max_message_bytes.get() {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "mailbox message `{}` payload is {payload_len} bytes but destination handler `{}` allows at most {} bytes",
+                message.message_id,
+                message.to_handler,
+                destination_mailbox.max_message_bytes
+            )
+            .into(),
+        ));
+    }
+    let retention_sequences = destination_mailbox.retention_sequences.get();
+    if message.delivery_delay_sequences >= retention_sequences {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "mailbox message `{}` delivery delay {} must be less than destination retention {}",
+                message.message_id, message.delivery_delay_sequences, retention_sequences
+            )
+            .into(),
+        ));
+    }
+    message.from_service_version = source_deployment.current_service_version;
+    message.to_service_version = destination_deployment.current_service_version;
+    message.enqueue_sequence = next_soracloud_audit_sequence(state_transaction)?;
+    message.available_after_sequence = message
+        .enqueue_sequence
+        .checked_add(u64::from(message.delivery_delay_sequences))
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "Soracloud mailbox availability sequence is exhausted".into(),
+            )
+        })?;
+    message.expires_at_sequence = message
+        .enqueue_sequence
+        .checked_add(u64::from(retention_sequences))
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "Soracloud mailbox expiry sequence is exhausted".into(),
+            )
+        })?;
+    let pending_count = state_transaction
+        .world
+        .soracloud_mailbox_messages
+        .iter()
+        .filter(|(message_id, existing)| {
+            existing.to_service == message.to_service
+                && existing.to_handler == message.to_handler
+                && existing.expires_at_sequence > message.enqueue_sequence
+                && !state_transaction
+                    .world
+                    .soracloud_runtime_receipts
+                    .iter()
+                    .any(|(_receipt_id, receipt)| receipt.mailbox_message_id == Some(**message_id))
+        })
+        .count();
+    let max_pending_messages =
+        usize::try_from(destination_mailbox.max_pending_messages.get()).unwrap_or(usize::MAX);
+    if pending_count >= max_pending_messages {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "destination mailbox `{}` for handler `{}` has reached its {}-message pending limit",
+                destination_mailbox.queue_name,
+                message.to_handler,
+                destination_mailbox.max_pending_messages
+            )
+            .into(),
+        ));
+    }
+    message
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    ensure_soracloud_sequence_is_next(state_transaction, message.enqueue_sequence)?;
     state_transaction
         .world
         .soracloud_mailbox_messages
@@ -5814,10 +5885,10 @@ pub(crate) fn write_soracloud_mailbox_message(
 }
 pub(crate) fn write_soracloud_runtime_receipt(
     state_transaction: &mut StateTransaction<'_, '_>,
-    receipt: SoraRuntimeReceiptV1,
+    mut receipt: SoraRuntimeReceiptV1,
 ) -> Result<(), InstructionExecutionError> {
     receipt
-        .validate()
+        .validate_submission()
         .map_err(|err| invalid_parameter(err.to_string()))?;
     if state_transaction
         .world
@@ -5833,22 +5904,239 @@ pub(crate) fn write_soracloud_runtime_receipt(
             .into(),
         ));
     }
-    load_admitted_bundle(
+    let deployment = state_transaction
+        .world
+        .soracloud_service_deployments
+        .get(&receipt.service_name)
+        .cloned()
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!("service `{}` is not deployed", receipt.service_name).into(),
+            )
+        })?;
+    let revision_is_active = deployment.current_service_version == receipt.service_version
+        || deployment.active_rollout.as_ref().is_some_and(|rollout| {
+            rollout.baseline_version == receipt.service_version
+                || rollout.candidate_version == receipt.service_version
+        });
+    if !revision_is_active {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "runtime receipt `{}` references inactive service revision `{}` for `{}`",
+                receipt.receipt_id, receipt.service_version, receipt.service_name
+            )
+            .into(),
+        ));
+    }
+    let bundle = load_admitted_bundle(
         state_transaction,
         &receipt.service_name,
         &receipt.service_version,
     )?;
-    if let Some(message_id) = receipt.mailbox_message_id
-        && state_transaction
+    let handler = bundle
+        .service
+        .handlers
+        .iter()
+        .find(|handler| handler.handler_name == receipt.handler_name)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "runtime receipt `{}` references undeclared handler `{}` on service `{}` revision `{}`",
+                    receipt.receipt_id,
+                    receipt.handler_name,
+                    receipt.service_name,
+                    receipt.service_version
+                )
+                .into(),
+            )
+        })?;
+    if handler.class != receipt.handler_class || handler.certified_response != receipt.certified_by
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "runtime receipt `{}` handler class or certification policy does not match admitted handler `{}`",
+                receipt.receipt_id, receipt.handler_name
+            )
+            .into(),
+        ));
+    }
+    let hf_generated_binding =
+        crate::soracloud_runtime::soracloud_hf_generated_source_binding(&bundle);
+    if hf_generated_binding.is_some()
+        && !matches!(
+            receipt.execution_host.as_ref(),
+            Some(SoraRuntimeExecutionHostV1::HfModelHost(_))
+        )
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "runtime receipt `{}` for an HF-generated service must carry exact HF model-host attribution",
+                receipt.receipt_id
+            )
+            .into(),
+        ));
+    }
+    if let Some(message_id) = receipt.mailbox_message_id {
+        let message = state_transaction
             .world
             .soracloud_mailbox_messages
             .get(&message_id)
-            .is_none()
-    {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!("mailbox message `{message_id}` has not been recorded").into(),
-        ));
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("mailbox message `{message_id}` has not been recorded").into(),
+                )
+            })?;
+        if message.to_service != receipt.service_name
+            || message.to_service_version != receipt.service_version
+            || message.to_handler != receipt.handler_name
+            || message.payload_commitment != receipt.request_commitment
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "runtime receipt `{}` does not match mailbox message `{message_id}` destination and request commitment",
+                    receipt.receipt_id
+                )
+                .into(),
+            ));
+        }
+        let execution_sequence = next_soracloud_audit_sequence(state_transaction)?;
+        if execution_sequence < message.available_after_sequence {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "mailbox message `{message_id}` is not available until Soracloud sequence `{}`",
+                    message.available_after_sequence
+                )
+                .into(),
+            ));
+        }
+        if execution_sequence >= message.expires_at_sequence {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "mailbox message `{message_id}` expired at Soracloud sequence `{}`",
+                    message.expires_at_sequence
+                )
+                .into(),
+            ));
+        }
+        if state_transaction
+            .world
+            .soracloud_runtime_receipts
+            .iter()
+            .any(|(_receipt_id, existing)| existing.mailbox_message_id == Some(message_id))
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("mailbox message `{message_id}` has already been consumed").into(),
+            ));
+        }
     }
+    if let Some(execution_host) = receipt.execution_host.as_ref() {
+        match execution_host {
+            SoraRuntimeExecutionHostV1::InrouReplica(host) => {
+                let assignment = resolve_active_inrou_replica_assignment(
+                    state_transaction,
+                    &receipt.service_name,
+                    &receipt.service_version,
+                    host.replica_slot,
+                    state_transaction.block_unix_timestamp_ms().max(1),
+                )?
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "runtime receipt `{}` references inactive Inrou replica slot `{}`",
+                            receipt.receipt_id, host.replica_slot
+                        )
+                        .into(),
+                    )
+                })?;
+                if assignment.validator_account_id != host.validator_account_id
+                    || assignment.peer_id != host.peer_id
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "runtime receipt `{}` Inrou host attribution does not match replica slot `{}`",
+                            receipt.receipt_id, host.replica_slot
+                        )
+                        .into(),
+                    ));
+                }
+            }
+            SoraRuntimeExecutionHostV1::HfModelHost(host) => {
+                let binding = hf_generated_binding.as_ref().ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "runtime receipt `{}` carries HF host attribution for a non-HF-generated service",
+                            receipt.receipt_id
+                        )
+                        .into(),
+                    )
+                })?;
+                let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
+                let placement = crate::soracloud_runtime::resolve_generated_hf_active_placement(
+                    &state_transaction.world,
+                    receipt.service_name.as_ref(),
+                    binding.source_id.as_str(),
+                    now_ms,
+                )
+                .map_err(|message| {
+                    InstructionExecutionError::InvariantViolation(message.into())
+                })?
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "runtime receipt `{}` references an HF service without an active placement",
+                            receipt.receipt_id
+                        )
+                        .into(),
+                    )
+                })?;
+                if placement.placement_id != host.placement_id {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "runtime receipt `{}` HF placement `{}` is not the active placement `{}`",
+                            receipt.receipt_id, host.placement_id, placement.placement_id
+                        )
+                        .into(),
+                    ));
+                }
+                let assignment = placement
+                    .assigned_hosts
+                    .iter()
+                    .find(|assignment| {
+                        assignment.validator_account_id == host.validator_account_id
+                            && assignment.peer_id == host.peer_id
+                    })
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "runtime receipt `{}` HF host attribution is not assigned to placement `{}`",
+                                receipt.receipt_id, host.placement_id
+                            )
+                            .into(),
+                        )
+                    })?;
+                if !crate::soracloud_runtime::soracloud_hf_placement_assignment_has_active_capability(
+                    &state_transaction.world,
+                    &placement,
+                    assignment,
+                    now_ms,
+                    |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
+                ) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "runtime receipt `{}` HF host attribution is not backed by an active exact capability",
+                            receipt.receipt_id
+                        )
+                        .into(),
+                    ));
+                }
+            }
+        }
+    }
+    receipt.emitted_sequence = next_soracloud_audit_sequence(state_transaction)?;
+    receipt
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    ensure_soracloud_sequence_is_next(state_transaction, receipt.emitted_sequence)?;
     if let Some(mut runtime_state) = state_transaction
         .world
         .soracloud_service_runtime
@@ -5872,8 +6160,12 @@ pub(crate) fn write_soracloud_runtime_receipt(
 }
 pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
     state_transaction: &mut StateTransaction<'_, '_>,
-    receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+    mut receipt: SoraPrivateUploadedModelExecutionReceiptV1,
 ) -> Result<(), InstructionExecutionError> {
+    receipt
+        .validate_submission()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    receipt.emitted_sequence = next_soracloud_audit_sequence(state_transaction)?;
     receipt
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
@@ -5931,6 +6223,7 @@ pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
             .into(),
         ));
     }
+    ensure_soracloud_sequence_is_next(state_transaction, receipt.emitted_sequence)?;
     state_transaction
         .world
         .soracloud_private_uploaded_model_execution_receipts
@@ -6101,7 +6394,7 @@ pub(crate) fn apply_soracloud_state_mutation(
 fn build_rollout_state(
     bundle: &SoraDeploymentBundleV1,
     sequence: u64,
-    baseline_version: Option<String>,
+    baseline_version: String,
 ) -> Result<SoraServiceRolloutStateV1, InstructionExecutionError> {
     let canary_percent = bundle.service.rollout.canary_percent;
     if canary_percent > 100 {
@@ -6144,6 +6437,7 @@ fn record_audit_event(
     event
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
+    ensure_soracloud_sequence_is_next(state_transaction, event.sequence)?;
     state_transaction
         .world
         .soracloud_service_audit_events
@@ -6170,6 +6464,7 @@ fn record_app_infra_audit_event(
     event
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
+    ensure_soracloud_sequence_is_next(state_transaction, event.sequence)?;
     state_transaction
         .world
         .soracloud_app_infra_audit_events
@@ -6288,12 +6583,12 @@ fn build_http_service_lease_volume_states(
     bundle: &SoraDeploymentBundleV1,
     lease_state: Option<&SoraServiceLeaseStateV1>,
     existing: Option<&SoraServiceDeploymentStateV1>,
-) -> Vec<SoraServiceLeaseVolumeStateV1> {
+) -> Result<Vec<SoraServiceLeaseVolumeStateV1>, InstructionExecutionError> {
     if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let Some(lease_state) = lease_state else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     bundle
         .service
@@ -6312,7 +6607,16 @@ fn build_http_service_lease_volume_states(
                     && state.mount_path == volume.mount_path
                     && state.max_total_bytes == volume.max_total_bytes.get()
             });
-            SoraServiceLeaseVolumeStateV1 {
+            let authoritative_generation = match existing_state {
+                None => 1,
+                Some(state) if unchanged => state.authoritative_generation,
+                Some(state) => next_service_material_generation(
+                    &bundle.service.service_name,
+                    "lease volume",
+                    state.authoritative_generation,
+                )?,
+            };
+            Ok(SoraServiceLeaseVolumeStateV1 {
                 schema_version: SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1,
                 volume_name: volume.volume_name.clone(),
                 kind: volume.kind,
@@ -6321,16 +6625,10 @@ fn build_http_service_lease_volume_states(
                 max_total_bytes: volume.max_total_bytes.get(),
                 lease_started_sequence: lease_state.lease_started_sequence,
                 lease_expires_sequence: lease_state.lease_expires_sequence,
-                authoritative_generation: existing_state.map_or(1, |state| {
-                    if unchanged {
-                        state.authoritative_generation
-                    } else {
-                        state.authoritative_generation.saturating_add(1)
-                    }
-                }),
+                authoritative_generation,
                 last_materialized_sequence: existing_state
                     .and_then(|state| state.last_materialized_sequence),
-            }
+            })
         })
         .collect()
 }
@@ -6342,6 +6640,8 @@ fn apply_service_config_mutation(
     sequence: u64,
 ) -> Result<(SoraServiceDeploymentStateV1, SoraDeploymentBundleV1), InstructionExecutionError> {
     let (mut deployment, bundle) = load_active_bundle(state_transaction, service_name)?;
+    let next_config_generation =
+        next_service_material_generation(service_name, "config", deployment.config_generation)?;
     match value_json {
         Some(value_json) => {
             let value_hash = service_config_value_hash(&value_json)?;
@@ -6355,7 +6655,6 @@ fn apply_service_config_mutation(
                     last_update_sequence: sequence,
                 },
             );
-            deployment.config_generation = deployment.config_generation.saturating_add(1);
         }
         None => {
             if deployment.service_configs.remove(config_name).is_none() {
@@ -6364,9 +6663,9 @@ fn apply_service_config_mutation(
                         .into(),
                 ));
             }
-            deployment.config_generation = deployment.config_generation.saturating_add(1);
         }
     }
+    deployment.config_generation = next_config_generation;
     bundle
         .validate_required_service_materials(
             &deployment.service_configs,
@@ -6384,6 +6683,8 @@ fn apply_service_secret_mutation(
     sequence: u64,
 ) -> Result<(SoraServiceDeploymentStateV1, SoraDeploymentBundleV1), InstructionExecutionError> {
     let (mut deployment, bundle) = load_active_bundle(state_transaction, service_name)?;
+    let next_secret_generation =
+        next_service_material_generation(service_name, "secret", deployment.secret_generation)?;
     match secret {
         Some(secret) => {
             deployment.service_secrets.insert(
@@ -6395,7 +6696,6 @@ fn apply_service_secret_mutation(
                     last_update_sequence: sequence,
                 },
             );
-            deployment.secret_generation = deployment.secret_generation.saturating_add(1);
         }
         None => {
             if deployment.service_secrets.remove(secret_name).is_none() {
@@ -6404,9 +6704,9 @@ fn apply_service_secret_mutation(
                         .into(),
                 ));
             }
-            deployment.secret_generation = deployment.secret_generation.saturating_add(1);
         }
     }
+    deployment.secret_generation = next_secret_generation;
     bundle
         .validate_required_service_materials(
             &deployment.service_configs,
@@ -6459,6 +6759,7 @@ fn record_training_job_audit_event(
     event
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
+    ensure_soracloud_sequence_is_next(state_transaction, event.sequence)?;
     state_transaction
         .world
         .soracloud_training_job_audit_events
@@ -6508,6 +6809,7 @@ fn record_model_weight_audit_event(
     event
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
+    ensure_soracloud_sequence_is_next(state_transaction, event.sequence)?;
     state_transaction
         .world
         .soracloud_model_weight_audit_events
@@ -6537,6 +6839,7 @@ fn record_model_artifact_audit_event(
     event
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
+    ensure_soracloud_sequence_is_next(state_transaction, event.sequence)?;
     state_transaction
         .world
         .soracloud_model_artifact_audit_events
@@ -6668,65 +6971,100 @@ fn clear_soracloud_inrou_replica_runtime_state(
             replica_slot,
         ));
 }
-fn find_inrou_replica_assignment(
+fn resolve_active_inrou_replica_assignment(
     state_transaction: &StateTransaction<'_, '_>,
     service_name: &Name,
     service_version: &str,
     replica_slot: u16,
-) -> Option<SoraInrouReplicaPlacementV1> {
-    state_transaction
-        .world
-        .soracloud_inrou_service_placements
-        .get(&(service_name.as_ref().to_owned(), service_version.to_owned()))
-        .and_then(|placement| {
-            placement
-                .placements
-                .iter()
-                .find(|placement| placement.replica_slot == replica_slot)
-        })
-        .cloned()
+    now_ms: u64,
+) -> Result<Option<SoraInrouReplicaPlacementV1>, InstructionExecutionError> {
+    crate::soracloud_runtime::resolve_active_inrou_replica_assignment(
+        &state_transaction.world,
+        service_name.as_ref(),
+        service_version,
+        replica_slot,
+        now_ms,
+        |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
+    )
+    .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct InrouHostReservationUsage {
-    hosted_replicas: u16,
+    hosted_replicas: u32,
     cpu_millis: u64,
     memory_bytes: u64,
     storage_bytes: u64,
 }
-fn inrou_per_replica_storage_bytes(bundle: &SoraDeploymentBundleV1) -> u64 {
+fn inrou_per_replica_storage_bytes(bundle: &SoraDeploymentBundleV1) -> Option<u64> {
     let per_replica_volume_bytes = bundle
         .service
         .lease_volumes
         .iter()
         .filter(|volume| volume.kind.is_per_replica())
-        .fold(0_u64, |total, volume| {
-            total.saturating_add(volume.max_total_bytes.get())
-        });
+        .try_fold(0_u64, |total, volume| {
+            total.checked_add(volume.max_total_bytes.get())
+        })?;
     bundle
         .container
         .resources
         .ephemeral_storage_bytes
         .get()
-        .saturating_add(per_replica_volume_bytes)
+        .checked_add(per_replica_volume_bytes)
 }
 fn accumulate_inrou_host_reservation_usage(
     usage_by_validator: &mut BTreeMap<AccountId, InrouHostReservationUsage>,
     validator_account_id: &AccountId,
     bundle: &SoraDeploymentBundleV1,
-) {
+) -> Result<(), InstructionExecutionError> {
     let usage = usage_by_validator
         .entry(validator_account_id.clone())
         .or_default();
-    usage.hosted_replicas = usage.hosted_replicas.saturating_add(1);
+    usage.hosted_replicas = usage.hosted_replicas.checked_add(1).ok_or_else(|| {
+        InstructionExecutionError::InvariantViolation(
+            format!("Inrou replica reservations overflow for validator `{validator_account_id}`")
+                .into(),
+        )
+    })?;
     usage.cpu_millis = usage
         .cpu_millis
-        .saturating_add(u64::from(bundle.container.resources.cpu_millis.get()));
+        .checked_add(u64::from(bundle.container.resources.cpu_millis.get()))
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!("Inrou CPU reservations overflow for validator `{validator_account_id}`")
+                    .into(),
+            )
+        })?;
     usage.memory_bytes = usage
         .memory_bytes
-        .saturating_add(bundle.container.resources.memory_bytes.get());
+        .checked_add(bundle.container.resources.memory_bytes.get())
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "Inrou memory reservations overflow for validator `{validator_account_id}`"
+                )
+                .into(),
+            )
+        })?;
     usage.storage_bytes = usage
         .storage_bytes
-        .saturating_add(inrou_per_replica_storage_bytes(bundle));
+        .checked_add(inrou_per_replica_storage_bytes(bundle).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "Inrou per-replica storage reservation overflows for service `{}` revision `{}`",
+                    bundle.service.service_name, bundle.service.service_version
+                )
+                .into(),
+            )
+        })?)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "Inrou storage reservations overflow for validator `{validator_account_id}`"
+                )
+                .into(),
+            )
+        })?;
+    Ok(())
 }
 fn select_inrou_guest_isa_for_host(
     capability: &SoraInrouHostCapabilityRecordV1,
@@ -6756,16 +7094,16 @@ fn inrou_host_supports_bundle(
     }
     let selected_guest_isa = select_inrou_guest_isa_for_host(capability, bundle)?;
     let usage = reserved_usage.copied().unwrap_or_default();
-    let next_hosted_replicas = u32::from(usage.hosted_replicas).saturating_add(1);
+    let next_hosted_replicas = usage.hosted_replicas.checked_add(1)?;
     let next_cpu_millis = usage
         .cpu_millis
-        .saturating_add(u64::from(bundle.container.resources.cpu_millis.get()));
+        .checked_add(u64::from(bundle.container.resources.cpu_millis.get()))?;
     let next_memory_bytes = usage
         .memory_bytes
-        .saturating_add(bundle.container.resources.memory_bytes.get());
+        .checked_add(bundle.container.resources.memory_bytes.get())?;
     let next_storage_bytes = usage
         .storage_bytes
-        .saturating_add(inrou_per_replica_storage_bytes(bundle));
+        .checked_add(inrou_per_replica_storage_bytes(bundle)?)?;
     if next_hosted_replicas > u32::from(capability.max_hosted_replica_capacity)
         || next_cpu_millis > u64::from(capability.max_cpu_millis)
         || next_memory_bytes > capability.max_memory_bytes
@@ -6804,6 +7142,15 @@ fn select_inrou_replica_placement(
         .soracloud_inrou_host_capabilities
         .iter()
         .filter_map(|(validator_account_id, capability)| {
+            if &capability.validator_account_id != validator_account_id
+                || !crate::soracloud_runtime::soracloud_validator_is_active(
+                    &state_transaction.world,
+                    validator_account_id,
+                    |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
+                )
+            {
+                return None;
+            }
             let selected_guest_isa = inrou_host_supports_bundle(
                 capability,
                 bundle,
@@ -6843,7 +7190,7 @@ fn select_inrou_replica_placement(
         reserved_usage_by_validator,
         &validator_account_id,
         bundle,
-    );
+    )?;
     Ok(Some(SoraInrouReplicaPlacementV1 {
         replica_slot,
         validator_account_id,
@@ -6852,6 +7199,34 @@ fn select_inrou_replica_placement(
         selected_geography_tag: None,
         selection_latency_ms: None,
     }))
+}
+fn prune_unavailable_inrou_host_capabilities(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    now_ms: u64,
+) {
+    let unavailable_validator_account_ids = state_transaction
+        .world
+        .soracloud_inrou_host_capabilities
+        .iter()
+        .filter_map(|(validator_account_id, capability)| {
+            let validator_is_active = crate::soracloud_runtime::soracloud_validator_is_active(
+                &state_transaction.world,
+                validator_account_id,
+                |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
+            );
+            (capability.validate().is_err()
+                || capability.validator_account_id != *validator_account_id
+                || !validator_is_active
+                || !capability.can_host_replicas_at(now_ms))
+            .then_some(validator_account_id.clone())
+        })
+        .collect::<Vec<_>>();
+    for validator_account_id in unavailable_validator_account_ids {
+        state_transaction
+            .world
+            .soracloud_inrou_host_capabilities
+            .remove(validator_account_id);
+    }
 }
 fn active_inrou_service_versions(
     deployment: &SoraServiceDeploymentStateV1,
@@ -6871,15 +7246,7 @@ fn active_inrou_service_versions(
             .into(),
         ));
     }
-    let baseline_version = rollout.baseline_version.as_ref().ok_or_else(|| {
-        InstructionExecutionError::InvariantViolation(
-            format!(
-                "service `{}` active Inrou rollout has no baseline revision",
-                deployment.service_name
-            )
-            .into(),
-        )
-    })?;
+    let baseline_version = &rollout.baseline_version;
     if baseline_version == &rollout.candidate_version {
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
@@ -6898,7 +7265,8 @@ fn reconcile_inrou_service_placements(
     state_transaction: &mut StateTransaction<'_, '_>,
     now_ms: u64,
 ) -> Result<(), InstructionExecutionError> {
-    let current_sequence = next_soracloud_audit_sequence(state_transaction);
+    prune_unavailable_inrou_host_capabilities(state_transaction, now_ms);
+    let current_sequence = next_soracloud_audit_sequence(state_transaction)?;
     let deployment_keys = state_transaction
         .world
         .soracloud_service_deployments
@@ -6944,13 +7312,19 @@ fn reconcile_inrou_service_placements(
                     .soracloud_inrou_host_capabilities
                     .iter()
                     .filter(|(validator_account_id, capability)| {
-                        inrou_host_supports_bundle(
-                            capability,
-                            &bundle,
-                            reserved_usage_by_validator.get(validator_account_id),
-                            now_ms,
-                        )
-                        .is_some()
+                        &capability.validator_account_id == *validator_account_id
+                            && crate::soracloud_runtime::soracloud_validator_is_active(
+                                &state_transaction.world,
+                                validator_account_id,
+                                |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
+                            )
+                            && inrou_host_supports_bundle(
+                                capability,
+                                &bundle,
+                                reserved_usage_by_validator.get(validator_account_id),
+                                now_ms,
+                            )
+                            .is_some()
                     })
                     .count(),
             )
@@ -7244,6 +7618,7 @@ fn record_model_host_violation_evidence(
     record
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
+    ensure_soracloud_sequence_is_next(state_transaction, record.sequence)?;
     state_transaction
         .world
         .soracloud_model_host_violation_evidence
@@ -7253,7 +7628,7 @@ fn record_model_host_violation_evidence(
 fn assigned_heartbeat_miss_history(
     state_transaction: &StateTransaction<'_, '_>,
     validator_account_id: &AccountId,
-    placement_id: &Hash,
+    pool_id: &Hash,
     window_started_at_ms: u64,
 ) -> (u32, bool) {
     let mut max_strike_count = 0_u32;
@@ -7265,7 +7640,7 @@ fn assigned_heartbeat_miss_history(
     {
         if record.validator_account_id != *validator_account_id
             || record.kind != SoraModelHostViolationKindV1::AssignedHeartbeatMiss
-            || record.placement_id.as_ref() != Some(placement_id)
+            || record.pool_id.as_ref() != Some(pool_id)
             || record.window_started_at_ms != Some(window_started_at_ms)
         {
             continue;
@@ -7337,6 +7712,41 @@ fn model_host_violation_reason(kind: SoraModelHostViolationKindV1, detail: Optio
         }
     })
 }
+const MODEL_HOST_VALIDATOR_INACTIVE_REASON: &str = "validator lifecycle is no longer active";
+
+fn model_host_validator_is_active(
+    state_transaction: &StateTransaction<'_, '_>,
+    validator_account_id: &AccountId,
+) -> bool {
+    crate::soracloud_runtime::soracloud_validator_is_active(
+        &state_transaction.world,
+        validator_account_id,
+        |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
+    )
+}
+
+fn reconcile_inactive_model_host(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    validator_account_id: &AccountId,
+    observed_at_ms: u64,
+) -> Result<bool, InstructionExecutionError> {
+    if model_host_validator_is_active(state_transaction, validator_account_id) {
+        return Ok(false);
+    }
+    state_transaction
+        .world
+        .soracloud_model_host_capabilities
+        .remove(validator_account_id.clone());
+    refresh_hf_placements_for_host_status(
+        state_transaction,
+        validator_account_id,
+        SoraHfPlacementHostStatusV1::Unavailable,
+        observed_at_ms,
+        Some(MODEL_HOST_VALIDATOR_INACTIVE_REASON),
+    )?;
+    Ok(true)
+}
+
 fn report_model_host_violation(
     state_transaction: &mut StateTransaction<'_, '_>,
     validator_account_id: &AccountId,
@@ -7346,16 +7756,21 @@ fn report_model_host_violation(
     observed_at_ms: u64,
 ) -> Result<(), InstructionExecutionError> {
     let detail = normalize_model_host_violation_detail(detail)?;
+    if reconcile_inactive_model_host(state_transaction, validator_account_id, observed_at_ms)? {
+        return Ok(());
+    }
     let placement = placement_id
         .as_ref()
         .map(|placement_id| load_hf_placement_by_placement_id(state_transaction, placement_id))
         .transpose()?;
-    if let Some(placement) = placement.as_ref() {
-        if !placement
+    let assignment = placement.as_ref().and_then(|placement| {
+        placement
             .assigned_hosts
             .iter()
-            .any(|assignment| assignment.validator_account_id == *validator_account_id)
-        {
+            .find(|assignment| assignment.validator_account_id == *validator_account_id)
+    });
+    if let Some(placement) = placement.as_ref() {
+        if assignment.is_none() {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
                     "validator `{validator_account_id}` is not assigned to placement `{}`",
@@ -7369,26 +7784,87 @@ fn report_model_host_violation(
         .as_ref()
         .map(|placement| load_hf_shared_lease_pool_record(state_transaction, &placement.pool_id))
         .transpose()?;
-    let (strike_count, threshold_reached, penalty_already_applied) =
-        if let (SoraModelHostViolationKindV1::AssignedHeartbeatMiss, Some(placement), Some(pool)) =
-            (kind, placement.as_ref(), pool.as_ref())
+    if let (Some(placement), Some(pool), Some(assignment)) =
+        (placement.as_ref(), pool.as_ref(), assignment)
+    {
+        if matches!(
+            placement.status,
+            SoraHfPlacementStatusV1::Unavailable | SoraHfPlacementStatusV1::Retired
+        ) || !matches!(
+            pool.status,
+            SoraHfSharedLeaseStatusV1::Active | SoraHfSharedLeaseStatusV1::Draining
+        ) || pool.window_started_at_ms > observed_at_ms
+            || pool.window_expires_at_ms <= observed_at_ms
+            || matches!(
+                assignment.status,
+                SoraHfPlacementHostStatusV1::Unavailable | SoraHfPlacementHostStatusV1::Retired
+            )
         {
-            let (prior_strikes, prior_penalty_applied) = assigned_heartbeat_miss_history(
-                state_transaction,
-                validator_account_id,
-                &placement.placement_id,
-                pool.window_started_at_ms,
-            );
-            let strike_count = prior_strikes.saturating_add(1);
-            let threshold_reached = strike_count
-                >= state_transaction
-                    .nexus
-                    .hf_shared_leases
-                    .assigned_heartbeat_miss_strike_threshold;
-            (strike_count, threshold_reached, prior_penalty_applied)
-        } else {
-            (1, true, false)
+            return Err(invalid_parameter(
+                "model-host violation reports require an active assigned placement window",
+            ));
+        }
+        let status_matches_kind = match kind {
+            SoraModelHostViolationKindV1::WarmupNoShow => {
+                assignment.status == SoraHfPlacementHostStatusV1::Warming
+            }
+            SoraModelHostViolationKindV1::AssignedHeartbeatMiss => {
+                assignment.status == SoraHfPlacementHostStatusV1::Warm
+            }
+            SoraModelHostViolationKindV1::AdvertContradiction => true,
         };
+        if !status_matches_kind {
+            return Err(invalid_parameter(
+                "model-host violation kind does not match the active assignment status",
+            ));
+        }
+    }
+    if matches!(
+        kind,
+        SoraModelHostViolationKindV1::WarmupNoShow
+            | SoraModelHostViolationKindV1::AssignedHeartbeatMiss
+    ) && placement.is_none()
+    {
+        return Err(invalid_parameter(
+            "placement-scoped model-host violations require an active placement",
+        ));
+    }
+    let (strike_count, threshold_reached, penalty_already_applied) = if kind
+        == SoraModelHostViolationKindV1::AssignedHeartbeatMiss
+    {
+        let placement = placement.as_ref().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "heartbeat violation placement disappeared during admission".into(),
+            )
+        })?;
+        let pool = pool.as_ref().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "heartbeat violation lease pool disappeared during admission".into(),
+            )
+        })?;
+        let (prior_strikes, prior_penalty_applied) = assigned_heartbeat_miss_history(
+            state_transaction,
+            validator_account_id,
+            &placement.pool_id,
+            pool.window_started_at_ms,
+        );
+        let strike_count = prior_strikes.checked_add(1).ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "assigned heartbeat-miss strike count is exhausted for validator `{validator_account_id}`"
+                    )
+                    .into(),
+                )
+            })?;
+        let threshold_reached = strike_count
+            >= state_transaction
+                .nexus
+                .hf_shared_leases
+                .assigned_heartbeat_miss_strike_threshold;
+        (strike_count, threshold_reached, prior_penalty_applied)
+    } else {
+        (1, true, false)
+    };
     let should_apply_penalty = match kind {
         SoraModelHostViolationKindV1::WarmupNoShow
         | SoraModelHostViolationKindV1::AdvertContradiction => true,
@@ -7416,7 +7892,7 @@ fn report_model_host_violation(
                 .advert_contradiction_slash_bps
         }
     };
-    let sequence = next_soracloud_audit_sequence(state_transaction);
+    let sequence = next_soracloud_audit_sequence(state_transaction)?;
     let slash_id = if should_apply_penalty {
         let slash_id = model_host_violation_slash_id(
             validator_account_id,
@@ -7434,13 +7910,14 @@ fn report_model_host_violation(
     } else {
         None
     };
-    let host_evicted = should_apply_penalty;
-    if host_evicted {
-        state_transaction
-            .world
-            .soracloud_model_host_capabilities
-            .remove(validator_account_id.clone());
-    }
+    // A confirmed placement violation always invalidates the current advert. The
+    // strike threshold controls slashing, not whether stale capacity may remain
+    // eligible for a new placement.
+    let host_evicted = true;
+    state_transaction
+        .world
+        .soracloud_model_host_capabilities
+        .remove(validator_account_id.clone());
     let evidence_id = model_host_violation_evidence_id(
         validator_account_id,
         kind,
@@ -7478,24 +7955,48 @@ fn report_model_host_violation(
     }
     Ok(())
 }
-fn reconcile_expired_model_hosts(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModelHostReconciliationCause {
+    CapabilityExpired,
+    ValidatorInactive,
+}
+
+fn reconcile_unavailable_model_hosts(
     state_transaction: &mut StateTransaction<'_, '_>,
     now_ms: u64,
 ) -> Result<(), InstructionExecutionError> {
-    let expired_validator_account_ids = state_transaction
+    let unavailable_model_hosts = state_transaction
         .world
         .soracloud_model_host_capabilities
         .iter()
         .filter_map(|(validator_account_id, capability)| {
-            (!capability.is_active_at(now_ms)).then_some(validator_account_id.clone())
+            let validator_is_active =
+                model_host_validator_is_active(state_transaction, validator_account_id);
+            if !validator_is_active {
+                Some((
+                    validator_account_id.clone(),
+                    ModelHostReconciliationCause::ValidatorInactive,
+                ))
+            } else if !capability.is_active_at(now_ms) {
+                Some((
+                    validator_account_id.clone(),
+                    ModelHostReconciliationCause::CapabilityExpired,
+                ))
+            } else {
+                None
+            }
         })
         .collect::<Vec<_>>();
-    for validator_account_id in expired_validator_account_ids {
-        let impacted_placements = state_transaction
-            .world
-            .soracloud_hf_placements
-            .iter()
-            .filter_map(|(_pool_id, placement)| {
+    let reconciliation_plans = unavailable_model_hosts
+        .into_iter()
+        .map(|(validator_account_id, cause)| {
+            let impacted_placements = active_hf_assigned_placements_for_validator(
+                state_transaction,
+                &validator_account_id,
+                now_ms,
+            )
+            .into_iter()
+            .filter_map(|placement| {
                 placement
                     .assigned_hosts
                     .iter()
@@ -7503,42 +8004,76 @@ fn reconcile_expired_model_hosts(
                     .map(|assignment| (placement.placement_id, assignment.status))
             })
             .collect::<Vec<_>>();
-        if impacted_placements.is_empty() {
+            let warming_placement = impacted_placements.iter().find_map(
+                |(placement_id, status)| {
+                    (*status == SoraHfPlacementHostStatusV1::Warming)
+                        .then_some(*placement_id)
+                },
+            );
+            let warm_placement = impacted_placements.iter().find_map(|(placement_id, status)| {
+                (*status == SoraHfPlacementHostStatusV1::Warm).then_some(*placement_id)
+            });
+            // Leaving validator authority is an administrative lifecycle event, not
+            // evidence that the former validator violated its hosting obligations.
+            let violation = if cause == ModelHostReconciliationCause::ValidatorInactive {
+                None
+            } else if let Some(placement_id) = warming_placement {
+                Some((
+                    SoraModelHostViolationKindV1::WarmupNoShow,
+                    Some(placement_id),
+                    format!(
+                        "assigned host warmup expired before becoming ready across {} authoritative placement(s)",
+                        impacted_placements.len()
+                    ),
+                ))
+            } else if let Some(placement_id) = warm_placement {
+                Some((
+                    SoraModelHostViolationKindV1::AssignedHeartbeatMiss,
+                    Some(placement_id),
+                    format!(
+                        "assigned host heartbeat expired across {} authoritative placement(s)",
+                        impacted_placements.len()
+                    ),
+                ))
+            } else {
+                None
+            };
+            (validator_account_id, cause, violation)
+        })
+        .collect::<Vec<_>>();
+    ensure_soracloud_audit_sequence_capacity(
+        state_transaction,
+        reconciliation_plans
+            .iter()
+            .filter(|(_validator, _cause, violation)| violation.is_some())
+            .count(),
+    )?;
+    for (validator_account_id, cause, violation) in reconciliation_plans {
+        if cause == ModelHostReconciliationCause::ValidatorInactive {
+            let reconciled =
+                reconcile_inactive_model_host(state_transaction, &validator_account_id, now_ms)?;
+            debug_assert!(reconciled);
+        } else if let Some((kind, placement_id, detail)) = violation {
+            report_model_host_violation(
+                state_transaction,
+                &validator_account_id,
+                kind,
+                placement_id,
+                Some(detail),
+                now_ms,
+            )?;
+        } else {
+            state_transaction
+                .world
+                .soracloud_model_host_capabilities
+                .remove(validator_account_id.clone());
             refresh_hf_placements_for_host_status(
                 state_transaction,
                 &validator_account_id,
                 SoraHfPlacementHostStatusV1::Unavailable,
                 now_ms,
-                Some("assigned host heartbeat expired"),
+                Some("model-host capability expired"),
             )?;
-            continue;
-        }
-        for (placement_id, host_status) in impacted_placements {
-            match host_status {
-                SoraHfPlacementHostStatusV1::Warm => report_model_host_violation(
-                    state_transaction,
-                    &validator_account_id,
-                    SoraModelHostViolationKindV1::AssignedHeartbeatMiss,
-                    Some(placement_id),
-                    Some("assigned host heartbeat expired".to_string()),
-                    now_ms,
-                )?,
-                SoraHfPlacementHostStatusV1::Warming => report_model_host_violation(
-                    state_transaction,
-                    &validator_account_id,
-                    SoraModelHostViolationKindV1::WarmupNoShow,
-                    Some(placement_id),
-                    Some("assigned host warmup expired before becoming ready".to_string()),
-                    now_ms,
-                )?,
-                _ => refresh_hf_placements_for_host_status(
-                    state_transaction,
-                    &validator_account_id,
-                    SoraHfPlacementHostStatusV1::Unavailable,
-                    now_ms,
-                    Some("assigned host heartbeat expired"),
-                )?,
-            }
         }
     }
     Ok(())
@@ -7566,18 +8101,11 @@ fn refresh_hf_placements_for_host_status(
     now_ms: u64,
     reason: Option<&str>,
 ) -> Result<(), InstructionExecutionError> {
-    let placements = state_transaction
-        .world
-        .soracloud_hf_placements
-        .iter()
-        .filter_map(|(_pool_id, record)| {
-            record
-                .assigned_hosts
-                .iter()
-                .any(|assignment| assignment.validator_account_id == *validator_account_id)
-                .then_some(record.clone())
-        })
-        .collect::<Vec<_>>();
+    let placements = active_hf_assigned_placements_for_validator(
+        state_transaction,
+        validator_account_id,
+        now_ms,
+    );
     for mut placement in placements {
         let mut changed = false;
         for assignment in &mut placement.assigned_hosts {
@@ -7704,6 +8232,7 @@ fn record_hf_shared_lease_audit_event(
     event
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
+    ensure_soracloud_sequence_is_next(state_transaction, event.sequence)?;
     state_transaction
         .world
         .soracloud_hf_shared_lease_audit_events
@@ -7723,6 +8252,21 @@ fn hf_shared_lease_pool_id(
         invalid_parameter(format!("failed to encode hf shared lease pool id: {err}"))
     })?;
     Ok(Hash::new(payload))
+}
+fn ensure_hf_shared_lease_settlement_asset_matches(
+    pool: &SoraHfSharedLeasePoolV1,
+    lease_asset_definition_id: &AssetDefinitionId,
+) -> Result<(), InstructionExecutionError> {
+    if pool.lease_asset_definition_id != *lease_asset_definition_id {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "hf shared lease pool `{}` uses settlement asset `{}` and cannot mix lifetime member accounting with `{lease_asset_definition_id}`",
+                pool.pool_id, pool.lease_asset_definition_id
+            )
+            .into(),
+        ));
+    }
+    Ok(())
 }
 fn resolve_hf_resource_profile(
     source_record: &mut SoraHfSourceRecordV1,
@@ -7856,7 +8400,7 @@ fn hf_reserved_host_usage(
         ) {
             continue;
         }
-        if pool.window_expires_at_ms <= now_ms && pool.queued_next_window.is_none() {
+        if pool.window_expires_at_ms <= now_ms {
             continue;
         }
         for assignment in &placement.assigned_hosts {
@@ -7885,7 +8429,7 @@ fn hf_placement_seed_hash(
         source_id,
         pool_id,
         window_started_at_ms,
-        next_soracloud_audit_sequence(state_transaction),
+        next_soracloud_audit_sequence(state_transaction)?,
     ))
     .map_err(|err| invalid_parameter(format!("failed to encode hf placement seed: {err}")))?;
     Ok(Hash::new(payload))
@@ -8061,19 +8605,60 @@ fn select_hf_placement_for_window(
     recompute_hf_placement_total_reservation_fee(&mut placement)?;
     Ok(placement)
 }
+fn ensure_hf_placement_hosts_remain_eligible(
+    state_transaction: &StateTransaction<'_, '_>,
+    placement: &SoraHfPlacementRecordV1,
+    now_ms: u64,
+) -> Result<(), InstructionExecutionError> {
+    let eligible = ranked_hf_eligible_hosts_by_seed(
+        state_transaction,
+        &placement.resource_profile,
+        &placement.selection_seed_hash,
+        now_ms,
+        Some(&placement.pool_id),
+    )?
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
+    for assignment in &placement.assigned_hosts {
+        let Some(capability) = eligible.get(&assignment.validator_account_id) else {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "hf placement `{}` contains inactive or ineligible host `{}`; execute ReconcileSoracloudModelHosts before mutating the lease",
+                    placement.placement_id, assignment.validator_account_id
+                )
+                .into(),
+            ));
+        };
+        if matches!(
+            assignment.status,
+            SoraHfPlacementHostStatusV1::Unavailable | SoraHfPlacementHostStatusV1::Retired
+        ) || assignment.peer_id != capability.peer_id
+            || assignment.host_class != capability.host_class
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "hf placement `{}` host `{}` does not match its active capability identity; execute ReconcileSoracloudModelHosts before mutating the lease",
+                    placement.placement_id, assignment.validator_account_id
+                )
+                .into(),
+            ));
+        }
+    }
+    Ok(())
+}
 fn ensure_hf_placement_for_active_pool(
     state_transaction: &mut StateTransaction<'_, '_>,
     pool: &SoraHfSharedLeasePoolV1,
     resource_profile: &SoraHfResourceProfileV1,
     now_ms: u64,
 ) -> Result<SoraHfPlacementRecordV1, InstructionExecutionError> {
-    reconcile_expired_model_hosts(state_transaction, now_ms)?;
     if let Some(existing) = state_transaction
         .world
         .soracloud_hf_placements
         .get(&pool.pool_id)
         .cloned()
     {
+        ensure_hf_placement_hosts_remain_eligible(state_transaction, &existing, now_ms)?;
         return Ok(existing);
     }
     let placement = select_hf_placement_for_window(
@@ -8263,6 +8848,20 @@ fn transfer_hf_shared_lease_amount(
     )
     .execute(authority, state_transaction)
 }
+fn hf_shared_lease_account_balance(
+    state_transaction: &StateTransaction<'_, '_>,
+    lease_asset_definition_id: &AssetDefinitionId,
+    account_id: &AccountId,
+) -> Quantity {
+    state_transaction
+        .world
+        .assets
+        .get(&AssetId::new(
+            lease_asset_definition_id.clone(),
+            account_id.clone(),
+        ))
+        .map_or_else(Quantity::zero, |asset| asset.0.clone())
+}
 fn resolve_fee_asset_definition_id(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<AssetDefinitionId, InstructionExecutionError> {
@@ -8384,7 +8983,78 @@ fn expire_hf_shared_lease_members_except(
     }
     Ok(())
 }
-fn promote_hf_shared_lease_queued_window(
+const HF_QUEUED_WINDOW_EXPIRED_BEFORE_ACTIVATION_REASON: &str =
+    "queued lease window expired before host activation";
+const HF_QUEUED_WINDOW_UNFULFILLABLE_REASON: &str =
+    "queued lease window has no eligible model host";
+const HF_QUEUED_WINDOW_UNFUNDED_REASON: &str =
+    "queued lease window sponsor cannot fund activation compute reservation";
+fn expire_hf_shared_lease_queued_window(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    pool: &mut SoraHfSharedLeasePoolV1,
+    next_window: &SoraHfSharedLeaseQueuedWindowV1,
+    now_ms: u64,
+    reason: &str,
+) -> Result<(), InstructionExecutionError> {
+    let sponsor_key = (
+        pool.pool_id.to_string(),
+        next_window.sponsor_account_id.to_string(),
+    );
+    let sponsor_member = state_transaction
+        .world
+        .soracloud_hf_shared_lease_members
+        .get(&sponsor_key)
+        .cloned()
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "queued next-window sponsor `{}` is missing from hf shared lease pool `{}`",
+                    next_window.sponsor_account_id, pool.pool_id
+                )
+                .into(),
+            )
+        })?;
+    if sponsor_member.status != SoraHfSharedLeaseMemberStatusV1::Active {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "queued next-window sponsor `{}` is not active in hf shared lease pool `{}`",
+                next_window.sponsor_account_id, pool.pool_id
+            )
+            .into(),
+        ));
+    }
+    expire_hf_shared_lease_members(state_transaction, &pool.pool_id, now_ms)?;
+    pool.lease_asset_definition_id = next_window.lease_asset_definition_id.clone();
+    pool.base_fee = next_window.base_fee.clone();
+    pool.window_started_at_ms = next_window.window_started_at_ms;
+    pool.window_expires_at_ms = next_window.window_expires_at_ms;
+    pool.active_member_count = 0;
+    pool.status = SoraHfSharedLeaseStatusV1::Expired;
+    pool.queued_next_window = None;
+    record_hf_shared_lease_pool(state_transaction, pool.clone())?;
+    retire_hf_placement_for_pool(state_transaction, &pool.pool_id, now_ms, reason)?;
+    let audit_sequence = next_soracloud_audit_sequence(state_transaction)?;
+    record_hf_shared_lease_audit_event(
+        state_transaction,
+        SoraHfSharedLeaseAuditEventV1 {
+            schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
+            sequence: audit_sequence,
+            action: SoraHfSharedLeaseActionV1::ActivationFailed,
+            pool_id: pool.pool_id,
+            source_id: pool.source_id,
+            account_id: next_window.sponsor_account_id.clone(),
+            occurred_at_ms: now_ms,
+            active_member_count: 0,
+            charged: Quantity::zero(),
+            refunded: Quantity::zero(),
+            lease_expires_at_ms: next_window.window_expires_at_ms,
+            failure_reason: Some(reason.to_owned()),
+            service_name: Some(next_window.service_name.to_string()),
+            apartment_name: next_window.apartment_name.as_ref().map(ToString::to_string),
+        },
+    )
+}
+fn reconcile_hf_shared_lease_queued_window(
     state_transaction: &mut StateTransaction<'_, '_>,
     pool: &mut SoraHfSharedLeasePoolV1,
     source_record: &mut SoraHfSourceRecordV1,
@@ -8393,11 +9063,90 @@ fn promote_hf_shared_lease_queued_window(
     let Some(next_window) = pool.queued_next_window.clone() else {
         return Ok(false);
     };
-    expire_hf_shared_lease_members_except(
+    pool.validate().map_err(|error| {
+        InstructionExecutionError::InvariantViolation(
+            format!(
+                "queued hf shared lease pool `{}` is malformed before activation: {error}",
+                pool.pool_id
+            )
+            .into(),
+        )
+    })?;
+    source_record.validate().map_err(|error| {
+        InstructionExecutionError::InvariantViolation(
+            format!(
+                "queued hf shared lease pool `{}` references malformed source `{}`: {error}",
+                pool.pool_id, pool.source_id
+            )
+            .into(),
+        )
+    })?;
+    if source_record.source_id != pool.source_id
+        || source_record.resource_profile.as_ref() != Some(&next_window.resource_profile)
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "queued hf shared lease pool `{}` is not bound to source `{}` and its reviewed resource profile",
+                pool.pool_id, pool.source_id
+            )
+            .into(),
+        ));
+    }
+    if now_ms >= next_window.window_expires_at_ms {
+        expire_hf_shared_lease_queued_window(
+            state_transaction,
+            pool,
+            &next_window,
+            now_ms,
+            HF_QUEUED_WINDOW_EXPIRED_BEFORE_ACTIVATION_REASON,
+        )?;
+        return Ok(true);
+    }
+    let selection_seed_hash = hf_placement_seed_hash(
         state_transaction,
-        &pool.pool_id,
-        Some(&next_window.sponsor_account_id),
+        pool.source_id,
+        pool.pool_id,
         next_window.window_started_at_ms,
+    )?;
+    if ranked_hf_eligible_hosts_by_seed(
+        state_transaction,
+        &next_window.resource_profile,
+        &selection_seed_hash,
+        now_ms,
+        Some(&pool.pool_id),
+    )?
+    .is_empty()
+    {
+        expire_hf_shared_lease_queued_window(
+            state_transaction,
+            pool,
+            &next_window,
+            now_ms,
+            HF_QUEUED_WINDOW_UNFULFILLABLE_REASON,
+        )?;
+        return Ok(true);
+    }
+    let active_placement = select_hf_placement_for_window(
+        state_transaction,
+        pool.source_id,
+        pool.pool_id,
+        &next_window.resource_profile,
+        next_window.window_started_at_ms,
+        now_ms,
+        Some(&pool.pool_id),
+    )?;
+    ensure_hf_compute_reservation_charge_within_cap(
+        &active_placement.total_reservation_fee,
+        &next_window.compute_reservation_cap,
+    )?;
+    let remaining_window_ms = next_window
+        .window_expires_at_ms
+        .saturating_sub(now_ms)
+        .min(pool.lease_term_ms);
+    let settled_compute_reservation_fee = prorated_window_fee(
+        &active_placement.total_reservation_fee,
+        remaining_window_ms,
+        pool.lease_term_ms,
     )?;
     let sponsor_key = (
         pool.pool_id.to_string(),
@@ -8426,10 +9175,50 @@ fn promote_hf_shared_lease_queued_window(
             .into(),
         ));
     }
+    if hf_shared_lease_account_balance(
+        state_transaction,
+        &next_window.lease_asset_definition_id,
+        &next_window.sponsor_account_id,
+    ) < settled_compute_reservation_fee
+    {
+        expire_hf_shared_lease_queued_window(
+            state_transaction,
+            pool,
+            &next_window,
+            now_ms,
+            HF_QUEUED_WINDOW_UNFUNDED_REASON,
+        )?;
+        return Ok(true);
+    }
+    let activation_audit_sequence = next_soracloud_audit_sequence(state_transaction)?;
+    let total_compute_paid = sponsor_member
+        .total_compute_paid
+        .checked_add(&settled_compute_reservation_fee)
+        .map_err(|error| {
+            invalid_quantity_arithmetic(
+                "HF shared-lease member compute payment total exceeded the decimal domain",
+                error,
+            )
+        })?;
+    let sink_account = resolve_fee_sink_account(state_transaction)?;
+    transfer_hf_shared_lease_amount(
+        &next_window.sponsor_account_id,
+        &next_window.lease_asset_definition_id,
+        &settled_compute_reservation_fee,
+        &sink_account,
+        state_transaction,
+    )?;
+    expire_hf_shared_lease_members_except(
+        state_transaction,
+        &pool.pool_id,
+        Some(&next_window.sponsor_account_id),
+        next_window.window_started_at_ms,
+    )?;
     sponsor_member.joined_at_ms = next_window.window_started_at_ms;
     sponsor_member.updated_at_ms = now_ms;
     sponsor_member.last_charge = Quantity::zero();
-    sponsor_member.last_compute_charge = Quantity::zero();
+    sponsor_member.total_compute_paid = total_compute_paid;
+    sponsor_member.last_compute_charge = settled_compute_reservation_fee.clone();
     bind_hf_shared_lease_targets(
         &mut sponsor_member,
         &next_window.service_name,
@@ -8447,7 +9236,7 @@ fn promote_hf_shared_lease_queued_window(
         &next_window.service_name,
     );
     record_hf_source(state_transaction, source_record.clone())?;
-    pool.lease_asset_definition_id = next_window.lease_asset_definition_id;
+    pool.lease_asset_definition_id = next_window.lease_asset_definition_id.clone();
     pool.base_fee = next_window.base_fee.clone();
     pool.window_started_at_ms = next_window.window_started_at_ms;
     pool.window_expires_at_ms = next_window.window_expires_at_ms;
@@ -8455,9 +9244,82 @@ fn promote_hf_shared_lease_queued_window(
     pool.status = SoraHfSharedLeaseStatusV1::Active;
     pool.queued_next_window = None;
     record_hf_shared_lease_pool(state_transaction, pool.clone())?;
-    record_hf_placement(state_transaction, next_window.planned_placement)?;
-    reconcile_expired_model_hosts(state_transaction, now_ms)?;
+    record_hf_placement(state_transaction, active_placement)?;
+    record_hf_shared_lease_audit_event(
+        state_transaction,
+        SoraHfSharedLeaseAuditEventV1 {
+            schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
+            sequence: activation_audit_sequence,
+            action: SoraHfSharedLeaseActionV1::Activate,
+            pool_id: pool.pool_id,
+            source_id: pool.source_id,
+            account_id: next_window.sponsor_account_id,
+            occurred_at_ms: now_ms,
+            active_member_count: pool.active_member_count,
+            charged: settled_compute_reservation_fee,
+            refunded: Quantity::zero(),
+            lease_expires_at_ms: pool.window_expires_at_ms,
+            failure_reason: None,
+            service_name: Some(next_window.service_name.to_string()),
+            apartment_name: next_window.apartment_name.map(|name| name.to_string()),
+        },
+    )?;
     Ok(true)
+}
+fn reconcile_expired_hf_shared_lease_windows(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    now_ms: u64,
+) -> Result<(), InstructionExecutionError> {
+    let expired_pools = state_transaction
+        .world
+        .soracloud_hf_shared_lease_pools
+        .iter()
+        .filter_map(|(_pool_id, pool)| {
+            (pool.window_expires_at_ms <= now_ms
+                && matches!(
+                    pool.status,
+                    SoraHfSharedLeaseStatusV1::Active | SoraHfSharedLeaseStatusV1::Draining
+                ))
+            .then_some(pool.clone())
+        })
+        .collect::<Vec<_>>();
+    for mut pool in expired_pools {
+        if pool.queued_next_window.is_some() {
+            let mut source_record = state_transaction
+                .world
+                .soracloud_hf_sources
+                .get(&pool.source_id)
+                .cloned()
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "queued hf shared lease pool `{}` references missing source `{}`",
+                            pool.pool_id, pool.source_id
+                        )
+                        .into(),
+                    )
+                })?;
+            let reconciled = reconcile_hf_shared_lease_queued_window(
+                state_transaction,
+                &mut pool,
+                &mut source_record,
+                now_ms,
+            )?;
+            debug_assert!(reconciled);
+        } else {
+            expire_hf_shared_lease_members(state_transaction, &pool.pool_id, now_ms)?;
+            pool.active_member_count = 0;
+            pool.status = SoraHfSharedLeaseStatusV1::Expired;
+            record_hf_shared_lease_pool(state_transaction, pool.clone())?;
+            retire_hf_placement_for_pool(
+                state_transaction,
+                &pool.pool_id,
+                now_ms,
+                "lease window expired without a queued next-window sponsor",
+            )?;
+        }
+    }
+    Ok(())
 }
 fn bind_hf_shared_lease_targets(
     member: &mut SoraHfSharedLeaseMemberV1,
@@ -8717,6 +9579,7 @@ fn record_agent_apartment_audit_event(
     event
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
+    ensure_soracloud_sequence_is_next(state_transaction, event.sequence)?;
     state_transaction
         .world
         .soracloud_agent_apartment_audit_events
@@ -10149,12 +11012,164 @@ fn insert_admitted_bundle(
         bundle,
     );
 }
+fn next_service_process_generation(
+    service_name: &Name,
+    current_generation: u64,
+) -> Result<u64, InstructionExecutionError> {
+    if current_generation == 0 {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "service `{service_name}` process generation is noncanonical: expected a positive value"
+            )
+            .into(),
+        ));
+    }
+    current_generation.checked_add(1).ok_or_else(|| {
+        InstructionExecutionError::InvariantViolation(
+            format!("service `{service_name}` process generation is exhausted").into(),
+        )
+    })
+}
+fn next_service_material_generation(
+    service_name: &Name,
+    material_kind: &'static str,
+    current_generation: u64,
+) -> Result<u64, InstructionExecutionError> {
+    current_generation.checked_add(1).ok_or_else(|| {
+        InstructionExecutionError::InvariantViolation(
+            format!("service `{service_name}` {material_kind} generation is exhausted").into(),
+        )
+    })
+}
+fn enforce_service_upgrade_identity(
+    current: &SoraDeploymentBundleV1,
+    candidate: &SoraDeploymentBundleV1,
+) -> Result<(), InstructionExecutionError> {
+    if candidate.service.execution_plane != current.service.execution_plane {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "service upgrade cannot change execution_plane; deploy a distinct service identity"
+                .into(),
+        ));
+    }
+    if candidate.container.runtime != current.container.runtime {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "service upgrade cannot change container runtime; deploy a distinct service identity"
+                .into(),
+        ));
+    }
+    if candidate.service.route != current.service.route {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "service upgrade cannot change route identity; deploy a distinct service identity"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+fn enforce_service_mutation_precondition(
+    action: SoraServiceLifecycleActionV1,
+    service_name: &Name,
+    precondition: &SoraServiceMutationPreconditionV1,
+    existing: Option<&SoraServiceDeploymentStateV1>,
+) -> Result<(), InstructionExecutionError> {
+    match (action, precondition, existing) {
+        (
+            SoraServiceLifecycleActionV1::Deploy,
+            SoraServiceMutationPreconditionV1::ServiceAbsent,
+            None,
+        ) => Ok(()),
+        (
+            SoraServiceLifecycleActionV1::Deploy,
+            SoraServiceMutationPreconditionV1::ServiceAbsent,
+            Some(_),
+        ) => Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "service `{service_name}` deploy precondition failed: authoritative deployment state is present"
+            )
+            .into(),
+        )),
+        (
+            SoraServiceLifecycleActionV1::Deploy,
+            SoraServiceMutationPreconditionV1::ExactCurrentRevision(_),
+            _,
+        ) => Err(invalid_parameter(
+            "service deploy requires the signed `ServiceAbsent` precondition",
+        )),
+        (
+            SoraServiceLifecycleActionV1::Upgrade,
+            SoraServiceMutationPreconditionV1::ServiceAbsent,
+            _,
+        ) => Err(invalid_parameter(
+            "service upgrade requires a signed `ExactCurrentRevision` precondition",
+        )),
+        (
+            SoraServiceLifecycleActionV1::Upgrade,
+            SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+                SoraServiceExactCurrentRevisionPreconditionV1 {
+                    service_version,
+                    process_generation,
+                    ..
+                },
+            ),
+            _,
+        ) if service_version.trim().is_empty() || *process_generation == 0 => {
+            Err(invalid_parameter(
+                "service upgrade exact-revision precondition requires a nonblank version and positive process generation",
+            ))
+        }
+        (
+            SoraServiceLifecycleActionV1::Upgrade,
+            SoraServiceMutationPreconditionV1::ExactCurrentRevision(_),
+            None,
+        ) => Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "service `{service_name}` upgrade precondition failed: authoritative deployment state is absent"
+            )
+            .into(),
+        )),
+        (
+            SoraServiceLifecycleActionV1::Upgrade,
+            SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+                SoraServiceExactCurrentRevisionPreconditionV1 {
+                    service_version,
+                    service_manifest_hash,
+                    container_manifest_hash,
+                    process_generation,
+                    config_generation,
+                    secret_generation,
+                },
+            ),
+            Some(current),
+        ) if current.current_service_version.as_str() == service_version.as_str()
+            && &current.current_service_manifest_hash == service_manifest_hash
+            && &current.current_container_manifest_hash == container_manifest_hash
+            && current.process_generation == *process_generation
+            && current.config_generation == *config_generation
+            && current.secret_generation == *secret_generation =>
+        {
+            Ok(())
+        }
+        (
+            SoraServiceLifecycleActionV1::Upgrade,
+            SoraServiceMutationPreconditionV1::ExactCurrentRevision(_),
+            Some(_),
+        ) => Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "service `{service_name}` upgrade precondition failed: authoritative active revision changed after preflight"
+            )
+            .into(),
+        )),
+        _ => Err(invalid_parameter(
+            "service mutation precondition is only valid for deploy or upgrade",
+        )),
+    }
+}
 fn admit_bundle(
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
     bundle: SoraDeploymentBundleV1,
     initial_service_configs: BTreeMap<String, Json>,
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    precondition: SoraServiceMutationPreconditionV1,
     provenance: ManifestProvenance,
     action: SoraServiceLifecycleActionV1,
 ) -> Result<(), InstructionExecutionError> {
@@ -10164,6 +11179,7 @@ fn admit_bundle(
         &bundle,
         &initial_service_configs,
         &initial_service_secrets,
+        &precondition,
         &provenance,
     )?;
     bundle
@@ -10171,6 +11187,42 @@ fn admit_bundle(
         .map_err(|err| invalid_parameter(err.to_string()))?;
     let service_name = bundle.service.service_name.clone();
     let service_version = bundle.service.service_version.clone();
+    let existing = state_transaction
+        .world
+        .soracloud_service_deployments
+        .get(&service_name)
+        .cloned();
+    enforce_service_mutation_precondition(action, &service_name, &precondition, existing.as_ref())?;
+    if action == SoraServiceLifecycleActionV1::Upgrade {
+        let existing = existing.as_ref().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "service `{service_name}` upgrade has no authoritative deployment after precondition enforcement"
+                )
+                .into(),
+            )
+        })?;
+        if existing.active_rollout.is_some() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "service `{service_name}` upgrade cannot supersede an active rollout; promote or roll it back first"
+                )
+                .into(),
+            ));
+        }
+        let current_bundle = load_admitted_bundle(
+            state_transaction,
+            &service_name,
+            &existing.current_service_version,
+        )?;
+        enforce_service_upgrade_identity(&current_bundle, &bundle)?;
+    }
+    let process_generation = match existing.as_ref() {
+        Some(deployment) => {
+            next_service_process_generation(&service_name, deployment.process_generation)?
+        }
+        None => 1,
+    };
     let revision_key = (service_name.as_ref().to_owned(), service_version.clone());
     if state_transaction
         .world
@@ -10185,25 +11237,6 @@ fn admit_bundle(
             .into(),
         ));
     }
-    let existing = state_transaction
-        .world
-        .soracloud_service_deployments
-        .get(&service_name)
-        .cloned();
-    match (action, existing.as_ref()) {
-        (SoraServiceLifecycleActionV1::Deploy, Some(_)) => {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("service `{service_name}` is already deployed").into(),
-            ));
-        }
-        (SoraServiceLifecycleActionV1::Upgrade, None) => {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("service `{service_name}` must be deployed before it can be upgraded")
-                    .into(),
-            ));
-        }
-        _ => {}
-    }
     if existing
         .as_ref()
         .is_some_and(|state| state.current_service_version == service_version)
@@ -10212,7 +11245,7 @@ fn admit_bundle(
             format!("service `{service_name}` is already at version `{service_version}`").into(),
         ));
     }
-    let sequence = next_soracloud_audit_sequence(state_transaction);
+    let sequence = next_soracloud_audit_sequence(state_transaction)?;
     let previous_version = existing
         .as_ref()
         .map(|deployment| deployment.current_service_version.clone());
@@ -10231,7 +11264,8 @@ fn admit_bundle(
         .as_ref()
         .map_or(0, |deployment| deployment.secret_generation);
     if !initial_service_configs.is_empty() {
-        config_generation = config_generation.saturating_add(1);
+        config_generation =
+            next_service_material_generation(&service_name, "config", config_generation)?;
         for (config_name, value_json) in initial_service_configs {
             let value_hash = service_config_value_hash(&value_json)?;
             service_configs.insert(
@@ -10247,7 +11281,8 @@ fn admit_bundle(
         }
     }
     if !initial_service_secrets.is_empty() {
-        secret_generation = secret_generation.saturating_add(1);
+        secret_generation =
+            next_service_material_generation(&service_name, "secret", secret_generation)?;
         for (secret_name, envelope) in initial_service_secrets {
             service_secrets.insert(
                 secret_name.clone(),
@@ -10263,17 +11298,23 @@ fn admit_bundle(
     bundle
         .validate_required_service_materials(&service_configs, &service_secrets)
         .map_err(|err| invalid_parameter(err.to_string()))?;
-    insert_admitted_bundle(state_transaction, bundle.clone());
-    let revision_count = count_revisions_for_service(state_transaction, &service_name);
-    let process_generation = existing.as_ref().map_or(1, |deployment| {
-        deployment.process_generation.saturating_add(1)
-    });
+    let revision_count = existing.as_ref().map_or(Ok(1), |deployment| {
+        deployment.revision_count.checked_add(1).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!("service `{service_name}` revision count is exhausted").into(),
+            )
+        })
+    })?;
     let last_rollout = if action == SoraServiceLifecycleActionV1::Upgrade {
-        Some(build_rollout_state(
-            &bundle,
-            sequence,
-            previous_version.clone(),
-        )?)
+        let baseline_version = previous_version.clone().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "service `{service_name}` upgrade cannot start a rollout without an authoritative baseline revision"
+                )
+                .into(),
+            )
+        })?;
+        Some(build_rollout_state(&bundle, sequence, baseline_version)?)
     } else {
         None
     };
@@ -10287,7 +11328,8 @@ fn admit_bundle(
         action == SoraServiceLifecycleActionV1::Upgrade,
     )?;
     let lease_volume_states =
-        build_http_service_lease_volume_states(&bundle, service_lease.as_ref(), existing.as_ref());
+        build_http_service_lease_volume_states(&bundle, service_lease.as_ref(), existing.as_ref())?;
+    insert_admitted_bundle(state_transaction, bundle.clone());
     record_deployment_state(
         state_transaction,
         SoraServiceDeploymentStateV1 {
@@ -10353,6 +11395,7 @@ impl Execute for isi::DeploySoracloudService {
             self.bundle,
             self.initial_service_configs,
             self.initial_service_secrets,
+            self.precondition,
             self.provenance,
             SoraServiceLifecycleActionV1::Deploy,
         )
@@ -10370,20 +11413,109 @@ impl Execute for isi::UpgradeSoracloudService {
             self.bundle,
             self.initial_service_configs,
             self.initial_service_secrets,
+            self.precondition,
             self.provenance,
             SoraServiceLifecycleActionV1::Upgrade,
         )
+    }
+}
+fn enforce_app_infra_mutation_precondition(
+    action: SoraAppInfraActionV1,
+    app_name: &Name,
+    precondition: &SoraAppInfraMutationPreconditionV1,
+    existing: Option<&SoraAppInfraStateV1>,
+) -> Result<(), InstructionExecutionError> {
+    match (action, precondition, existing) {
+        (
+            SoraAppInfraActionV1::Deploy,
+            SoraAppInfraMutationPreconditionV1::AppAbsent,
+            None,
+        ) => Ok(()),
+        (
+            SoraAppInfraActionV1::Deploy,
+            SoraAppInfraMutationPreconditionV1::AppAbsent,
+            Some(_),
+        ) => Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "app `{app_name}` deploy precondition failed: authoritative topology state is present"
+            )
+            .into(),
+        )),
+        (
+            SoraAppInfraActionV1::Deploy,
+            SoraAppInfraMutationPreconditionV1::ExactCurrentRevision(_),
+            _,
+        ) => Err(invalid_parameter(
+            "app deploy requires the signed `AppAbsent` precondition",
+        )),
+        (
+            SoraAppInfraActionV1::Upgrade,
+            SoraAppInfraMutationPreconditionV1::AppAbsent,
+            _,
+        ) => Err(invalid_parameter(
+            "app upgrade requires a signed `ExactCurrentRevision` precondition",
+        )),
+        (
+            SoraAppInfraActionV1::Upgrade,
+            SoraAppInfraMutationPreconditionV1::ExactCurrentRevision(
+                SoraAppInfraExactCurrentRevisionPreconditionV1 {
+                    app_version,
+                    revision_count,
+                    ..
+                },
+            ),
+            _,
+        ) if app_version.trim().is_empty() || *revision_count == 0 => Err(invalid_parameter(
+            "app upgrade exact-revision precondition requires a nonblank version and positive revision count",
+        )),
+        (
+            SoraAppInfraActionV1::Upgrade,
+            SoraAppInfraMutationPreconditionV1::ExactCurrentRevision(_),
+            None,
+        ) => Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "app `{app_name}` upgrade precondition failed: authoritative topology state is absent"
+            )
+            .into(),
+        )),
+        (
+            SoraAppInfraActionV1::Upgrade,
+            SoraAppInfraMutationPreconditionV1::ExactCurrentRevision(
+                SoraAppInfraExactCurrentRevisionPreconditionV1 {
+                    app_version,
+                    manifest_hash,
+                    revision_count,
+                },
+            ),
+            Some(current),
+        ) if current.current_app_version.as_str() == app_version.as_str()
+            && &current.current_manifest_hash == manifest_hash
+            && current.revision_count == *revision_count =>
+        {
+            Ok(())
+        }
+        (
+            SoraAppInfraActionV1::Upgrade,
+            SoraAppInfraMutationPreconditionV1::ExactCurrentRevision(_),
+            Some(_),
+        ) => Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "app `{app_name}` upgrade precondition failed: authoritative topology revision changed after preflight"
+            )
+            .into(),
+        )),
     }
 }
 fn admit_app_infra(
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
     manifest: SoraAppInfraManifestV1,
+    precondition: SoraAppInfraMutationPreconditionV1,
     provenance: ManifestProvenance,
     action: SoraAppInfraActionV1,
 ) -> Result<(), InstructionExecutionError> {
     require_soracloud_permission(authority, state_transaction)?;
-    verify_app_infra_provenance(authority, &manifest, &provenance)?;
+    verify_app_infra_provenance(authority, &manifest, &precondition, &provenance)?;
     manifest
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
@@ -10393,21 +11525,18 @@ fn admit_app_infra(
         .soracloud_app_infra_states
         .get(&app_name)
         .cloned();
-    match (action, existing.as_ref()) {
-        (SoraAppInfraActionV1::Deploy, Some(_)) => {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("app `{app_name}` infrastructure is already deployed").into(),
-            ));
-        }
-        (SoraAppInfraActionV1::Upgrade, None) => {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "app `{app_name}` infrastructure must be deployed before it can be upgraded"
-                )
+    enforce_app_infra_mutation_precondition(action, &app_name, &precondition, existing.as_ref())?;
+    let manifest_hash = manifest.manifest_hash();
+    if action == SoraAppInfraActionV1::Upgrade
+        && existing.as_ref().is_some_and(|state| {
+            state.current_app_version == manifest.app_version
+                || state.current_manifest_hash == manifest_hash
+        })
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("app `{app_name}` upgrade must admit a distinct topology version and manifest")
                 .into(),
-            ));
-        }
-        _ => {}
+        ));
     }
     for service_ref in &manifest.services {
         let deployment = state_transaction
@@ -10476,14 +11605,17 @@ fn admit_app_infra(
             ));
         }
     }
-    let sequence = next_soracloud_audit_sequence(state_transaction);
+    let sequence = next_soracloud_audit_sequence(state_transaction)?;
     let previous_version = existing
         .as_ref()
         .map(|state| state.current_app_version.clone());
-    let manifest_hash = manifest.manifest_hash();
-    let revision_count = existing
-        .as_ref()
-        .map_or(1, |state| state.revision_count.saturating_add(1));
+    let revision_count = existing.as_ref().map_or(Ok(1), |state| {
+        state.revision_count.checked_add(1).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!("app `{app_name}` topology revision count is exhausted").into(),
+            )
+        })
+    })?;
     let deployed_sequence = existing
         .as_ref()
         .map_or(sequence, |state| state.deployed_sequence);
@@ -10525,6 +11657,7 @@ impl Execute for isi::DeploySoracloudAppInfra {
             authority,
             state_transaction,
             self.manifest,
+            self.precondition,
             self.provenance,
             SoraAppInfraActionV1::Deploy,
         )
@@ -10540,6 +11673,7 @@ impl Execute for isi::UpgradeSoracloudAppInfra {
             authority,
             state_transaction,
             self.manifest,
+            self.precondition,
             self.provenance,
             SoraAppInfraActionV1::Upgrade,
         )
@@ -10588,14 +11722,16 @@ impl Execute for isi::RollbackSoracloudService {
                 &existing.service_secrets,
             )
             .map_err(|err| invalid_parameter(err.to_string()))?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let process_generation =
+            next_service_process_generation(&self.service_name, existing.process_generation)?;
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let service_lease =
             build_http_service_lease_state(&bundle, Some(&existing), sequence, false)?;
         let lease_volume_states = build_http_service_lease_volume_states(
             &bundle,
             service_lease.as_ref(),
             Some(&existing),
-        );
+        )?;
         record_deployment_state(
             state_transaction,
             SoraServiceDeploymentStateV1 {
@@ -10605,7 +11741,7 @@ impl Execute for isi::RollbackSoracloudService {
                 current_service_manifest_hash: bundle.service_manifest_hash(),
                 current_container_manifest_hash: bundle.container_manifest_hash(),
                 revision_count: existing.revision_count,
-                process_generation: existing.process_generation.saturating_add(1),
+                process_generation,
                 process_started_sequence: sequence,
                 config_generation: existing.config_generation,
                 secret_generation: existing.secret_generation,
@@ -10661,7 +11797,7 @@ impl Execute for isi::SetSoracloudServiceConfig {
             &self.value_json,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = apply_service_config_mutation(
             state_transaction,
             &self.service_name,
@@ -10711,7 +11847,7 @@ impl Execute for isi::DeleteSoracloudServiceConfig {
             &self.config_name,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = apply_service_config_mutation(
             state_transaction,
             &self.service_name,
@@ -10762,7 +11898,7 @@ impl Execute for isi::SetSoracloudServiceSecret {
             &self.secret,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = apply_service_secret_mutation(
             state_transaction,
             &self.service_name,
@@ -10812,7 +11948,7 @@ impl Execute for isi::DeleteSoracloudServiceSecret {
             &self.secret_name,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = apply_service_secret_mutation(
             state_transaction,
             &self.service_name,
@@ -10923,7 +12059,7 @@ impl Execute for isi::MutateSoracloudState {
             admitted_fhe_bound.map_or((None, None, None), |(bound, mode, public_key_digest)| {
                 (Some(bound), Some(mode), Some(public_key_digest))
             });
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = apply_soracloud_state_mutation(
             state_transaction,
             &service_name,
@@ -11000,7 +12136,7 @@ impl Execute for isi::RegisterSoracloudFhePolicy {
             ));
         }
         let transaction_hash = current_signed_transaction_hash(state_transaction)?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (mut deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if deployment
             .fhe_policy_records
@@ -11114,7 +12250,7 @@ impl Execute for isi::RotateSoracloudFhePolicy {
             ));
         }
         let transaction_hash = current_signed_transaction_hash(state_transaction)?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (mut deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         resolve_active_soracloud_fhe_material(&deployment, &self.expected_active)?;
         let record = deployment
@@ -11194,7 +12330,7 @@ impl Execute for isi::RevokeSoracloudFhePolicy {
             &self.provenance,
         )?;
         let transaction_hash = current_signed_transaction_hash(state_transaction)?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (mut deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         resolve_active_soracloud_fhe_material(&deployment, &self.expected_active)?;
         let record = deployment
@@ -11389,7 +12525,7 @@ impl Execute for isi::RunSoracloudFheJob {
         let output_payload = encode_soracloud_fhe_output_payload(&output_envelope)?;
         let output_payload_bytes = u64::try_from(output_payload.len())
             .map_err(|_| invalid_parameter("FHE output payload length exceeds u64 range"))?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let binding = bundle
             .service
             .state_bindings
@@ -11558,7 +12694,7 @@ impl Execute for isi::RecordSoracloudDecryptionRequest {
         self.request
             .validate_for_policy(&self.policy)
             .map_err(|err| invalid_parameter(err.to_string()))?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         let binding = bundle
             .service
@@ -11759,6 +12895,9 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             .soracloud_hf_shared_lease_pools
             .get(&pool_id)
             .cloned();
+        if let Some(pool) = pool_record.as_ref() {
+            ensure_hf_shared_lease_settlement_asset_matches(pool, &lease_asset_definition_id)?;
+        }
         if let Some(pool) = pool_record.as_mut()
             && pool.window_expires_at_ms <= now_ms
             && matches!(
@@ -11766,7 +12905,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                 SoraHfSharedLeaseStatusV1::Active | SoraHfSharedLeaseStatusV1::Draining
             )
         {
-            if !promote_hf_shared_lease_queued_window(
+            if !reconcile_hf_shared_lease_queued_window(
                 state_transaction,
                 pool,
                 &mut source_record,
@@ -11803,11 +12942,6 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                 &Quantity::zero(),
                 &max_compute_reservation_fee,
             )?;
-            if pool.lease_asset_definition_id != lease_asset_definition_id {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "existing shared lease pool uses a different settlement asset".into(),
-                ));
-            }
             if pool.base_fee != base_fee {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "existing shared lease pool uses a different base_fee".into(),
@@ -11818,11 +12952,12 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             member.last_charge = Quantity::zero();
             member.last_compute_charge = Quantity::zero();
             record_hf_shared_lease_member(state_transaction, member)?;
+            let audit_sequence = next_soracloud_audit_sequence(state_transaction)?;
             return record_hf_shared_lease_audit_event(
                 state_transaction,
                 SoraHfSharedLeaseAuditEventV1 {
                     schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-                    sequence: next_soracloud_audit_sequence(state_transaction),
+                    sequence: audit_sequence,
                     action: SoraHfSharedLeaseActionV1::Join,
                     pool_id,
                     source_id,
@@ -11832,6 +12967,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                     charged: Quantity::zero(),
                     refunded: Quantity::zero(),
                     lease_expires_at_ms: pool.window_expires_at_ms,
+                    failure_reason: None,
                     service_name: Some(service_name.to_string()),
                     apartment_name: apartment_name.map(|name| name.to_string()),
                 },
@@ -11841,11 +12977,6 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             && pool.status == SoraHfSharedLeaseStatusV1::Active
             && pool.window_expires_at_ms > now_ms
         {
-            if pool.lease_asset_definition_id != lease_asset_definition_id {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "existing shared lease pool uses a different settlement asset".into(),
-                ));
-            }
             if pool.base_fee != base_fee {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "existing shared lease pool uses a different base_fee".into(),
@@ -11946,11 +13077,12 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                     error,
                 )
             })?;
+            let audit_sequence = next_soracloud_audit_sequence(state_transaction)?;
             return record_hf_shared_lease_audit_event(
                 state_transaction,
                 SoraHfSharedLeaseAuditEventV1 {
                     schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-                    sequence: next_soracloud_audit_sequence(state_transaction),
+                    sequence: audit_sequence,
                     action: SoraHfSharedLeaseActionV1::Join,
                     pool_id,
                     source_id,
@@ -11960,6 +13092,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                     charged: total_join_charge,
                     refunded: Quantity::zero(),
                     lease_expires_at_ms: pool.window_expires_at_ms,
+                    failure_reason: None,
                     service_name: Some(service_name.to_string()),
                     apartment_name: apartment_name.map(|name| name.to_string()),
                 },
@@ -11979,7 +13112,6 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             status: SoraHfSharedLeaseStatusV1::Active,
             queued_next_window: None,
         };
-        reconcile_expired_model_hosts(state_transaction, now_ms)?;
         let placement = select_hf_placement_for_window(
             state_transaction,
             source_id,
@@ -12060,11 +13192,12 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
         record_hf_shared_lease_pool(state_transaction, pool.clone())?;
         record_hf_placement(state_transaction, placement)?;
         record_hf_shared_lease_member(state_transaction, member)?;
+        let audit_sequence = next_soracloud_audit_sequence(state_transaction)?;
         record_hf_shared_lease_audit_event(
             state_transaction,
             SoraHfSharedLeaseAuditEventV1 {
                 schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-                sequence: next_soracloud_audit_sequence(state_transaction),
+                sequence: audit_sequence,
                 action: SoraHfSharedLeaseActionV1::CreateWindow,
                 pool_id,
                 source_id,
@@ -12074,6 +13207,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                 charged: initial_total_charge,
                 refunded: Quantity::zero(),
                 lease_expires_at_ms: pool.window_expires_at_ms,
+                failure_reason: None,
                 service_name: Some(service_name.to_string()),
                 apartment_name: apartment_name.map(|name| name.to_string()),
             },
@@ -12146,7 +13280,7 @@ impl Execute for isi::LeaveSoracloudHfSharedLease {
                 SoraHfSharedLeaseStatusV1::Active | SoraHfSharedLeaseStatusV1::Draining
             )
         {
-            if !promote_hf_shared_lease_queued_window(
+            if !reconcile_hf_shared_lease_queued_window(
                 state_transaction,
                 &mut pool,
                 &mut source_record,
@@ -12232,11 +13366,12 @@ impl Execute for isi::LeaveSoracloudHfSharedLease {
             pool.status = SoraHfSharedLeaseStatusV1::Active;
         }
         record_hf_shared_lease_pool(state_transaction, pool.clone())?;
+        let audit_sequence = next_soracloud_audit_sequence(state_transaction)?;
         record_hf_shared_lease_audit_event(
             state_transaction,
             SoraHfSharedLeaseAuditEventV1 {
                 schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-                sequence: next_soracloud_audit_sequence(state_transaction),
+                sequence: audit_sequence,
                 action: SoraHfSharedLeaseActionV1::Leave,
                 pool_id,
                 source_id,
@@ -12246,6 +13381,7 @@ impl Execute for isi::LeaveSoracloudHfSharedLease {
                 charged: Quantity::zero(),
                 refunded: Quantity::zero(),
                 lease_expires_at_ms: pool.window_expires_at_ms,
+                failure_reason: None,
                 service_name: service_name.map(|name| name.to_string()),
                 apartment_name: apartment_name.map(|name| name.to_string()),
             },
@@ -12335,13 +13471,14 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
                     .into(),
                 )
             })?;
+        ensure_hf_shared_lease_settlement_asset_matches(&pool, &lease_asset_definition_id)?;
         if pool.window_expires_at_ms <= now_ms
             && matches!(
                 pool.status,
                 SoraHfSharedLeaseStatusV1::Active | SoraHfSharedLeaseStatusV1::Draining
             )
         {
-            if !promote_hf_shared_lease_queued_window(
+            if !reconcile_hf_shared_lease_queued_window(
                 state_transaction,
                 &mut pool,
                 &mut source_record,
@@ -12405,31 +13542,16 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
             }
             let next_window_started_at_ms = pool.window_expires_at_ms;
             let next_window_expires_at_ms = pool.window_expires_at_ms.saturating_add(lease_term_ms);
-            reconcile_expired_model_hosts(state_transaction, now_ms)?;
-            let planned_placement = select_hf_placement_for_window(
-                state_transaction,
-                source_id,
-                pool_id,
-                &resource_profile,
-                next_window_started_at_ms,
-                now_ms,
-                Some(&pool_id),
-            )?;
             source_record.updated_at_ms = now_ms;
             record_hf_source(state_transaction, source_record.clone())?;
             let sink_account = resolve_fee_sink_account(state_transaction)?;
-            let queued_total_charge = base_fee
-                .checked_add(&planned_placement.total_reservation_fee)
-                .map_err(|error| {
-                    invalid_quantity_arithmetic(
-                        "HF shared-lease queued renewal charge exceeded the decimal domain",
-                        error,
-                    )
-                })?;
+            let compute_reservation_cap =
+                hf_shared_lease_max_compute_reservation_fee_v1(&resource_profile, lease_term_ms)
+                    .map_err(|error| invalid_parameter(error.to_string()))?;
             transfer_hf_shared_lease_amount(
                 authority,
                 &lease_asset_definition_id,
-                &queued_total_charge,
+                &base_fee,
                 &sink_account,
                 state_transaction,
             )?;
@@ -12441,24 +13563,15 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
                 )
             })?;
             member.last_charge = base_fee.clone();
-            member.total_compute_paid = member
-                .total_compute_paid
-                .checked_add(&planned_placement.total_reservation_fee)
-                .map_err(|error| {
-                    invalid_quantity_arithmetic(
-                        "HF shared-lease member compute payment total exceeded the decimal domain",
-                        error,
-                    )
-                })?;
-            member.last_compute_charge = planned_placement.total_reservation_fee.clone();
+            member.last_compute_charge = Quantity::zero();
             record_hf_shared_lease_member(state_transaction, member)?;
             let next_window = SoraHfSharedLeaseQueuedWindowV1 {
                 sponsor_account_id: authority.clone(),
                 model_name: model_name.clone(),
                 lease_asset_definition_id,
                 base_fee: base_fee.clone(),
-                compute_reservation_fee: planned_placement.total_reservation_fee.clone(),
-                planned_placement,
+                compute_reservation_cap,
+                resource_profile,
                 sponsored_at_ms: now_ms,
                 window_started_at_ms: next_window_started_at_ms,
                 window_expires_at_ms: next_window_expires_at_ms,
@@ -12467,20 +13580,22 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
             };
             pool.queued_next_window = Some(next_window.clone());
             record_hf_shared_lease_pool(state_transaction, pool.clone())?;
+            let audit_sequence = next_soracloud_audit_sequence(state_transaction)?;
             return record_hf_shared_lease_audit_event(
                 state_transaction,
                 SoraHfSharedLeaseAuditEventV1 {
                     schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-                    sequence: next_soracloud_audit_sequence(state_transaction),
+                    sequence: audit_sequence,
                     action: SoraHfSharedLeaseActionV1::Renew,
                     pool_id,
                     source_id,
                     account_id: authority.clone(),
                     occurred_at_ms: now_ms,
                     active_member_count: pool.active_member_count,
-                    charged: queued_total_charge,
+                    charged: base_fee,
                     refunded: Quantity::zero(),
                     lease_expires_at_ms: next_window.window_expires_at_ms,
+                    failure_reason: None,
                     service_name: Some(next_window.service_name.to_string()),
                     apartment_name: next_window.apartment_name.map(|name| name.to_string()),
                 },
@@ -12505,7 +13620,6 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
         pool.active_member_count = 1;
         pool.status = SoraHfSharedLeaseStatusV1::Active;
         pool.queued_next_window = None;
-        reconcile_expired_model_hosts(state_transaction, now_ms)?;
         let placement = select_hf_placement_for_window(
             state_transaction,
             source_id,
@@ -12582,11 +13696,12 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
         bind_hf_shared_lease_targets(&mut member, &service_name, apartment_name.as_ref());
         record_hf_placement(state_transaction, placement)?;
         record_hf_shared_lease_member(state_transaction, member)?;
+        let audit_sequence = next_soracloud_audit_sequence(state_transaction)?;
         record_hf_shared_lease_audit_event(
             state_transaction,
             SoraHfSharedLeaseAuditEventV1 {
                 schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-                sequence: next_soracloud_audit_sequence(state_transaction),
+                sequence: audit_sequence,
                 action: SoraHfSharedLeaseActionV1::Renew,
                 pool_id,
                 source_id,
@@ -12596,6 +13711,7 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
                 charged: renewed_total_charge,
                 refunded: Quantity::zero(),
                 lease_expires_at_ms: pool.window_expires_at_ms,
+                failure_reason: None,
                 service_name: Some(service_name.to_string()),
                 apartment_name: apartment_name.map(|name| name.to_string()),
             },
@@ -12624,7 +13740,7 @@ impl Execute for isi::AdvertiseSoracloudModelHost {
             .map_err(|err| invalid_parameter(err.to_string()))?;
         verify_model_host_advertise_provenance(authority, &capability, &provenance)?;
         let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
-        reconcile_expired_model_hosts(state_transaction, now_ms)?;
+        reconcile_unavailable_model_hosts(state_transaction, now_ms)?;
         if let Some(detail) = model_host_capability_advert_contradiction_detail(
             state_transaction,
             &capability,
@@ -12674,7 +13790,7 @@ impl Execute for isi::HeartbeatSoracloudModelHost {
                 "model host heartbeat_expires_at_ms must be in the future",
             ));
         }
-        reconcile_expired_model_hosts(state_transaction, now_ms)?;
+        reconcile_unavailable_model_hosts(state_transaction, now_ms)?;
         let mut capability = state_transaction
             .world
             .soracloud_model_host_capabilities
@@ -12719,11 +13835,12 @@ impl Execute for isi::WithdrawSoracloudModelHost {
         }
         verify_model_host_withdraw_provenance(authority, &validator_account_id, &provenance)?;
         let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
+        // Account for an already-expired assigned advert before voluntary withdrawal can erase it.
+        reconcile_unavailable_model_hosts(state_transaction, now_ms)?;
         state_transaction
             .world
             .soracloud_model_host_capabilities
             .remove(validator_account_id.clone());
-        reconcile_expired_model_hosts(state_transaction, now_ms)?;
         refresh_hf_placements_for_host_status(
             state_transaction,
             &validator_account_id,
@@ -12739,9 +13856,10 @@ impl Execute for isi::ReconcileSoracloudModelHosts {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        require_soracloud_permission(authority, state_transaction)?;
+        require_soracloud_runtime_authority(authority, state_transaction)?;
         let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
-        reconcile_expired_model_hosts(state_transaction, now_ms)
+        reconcile_unavailable_model_hosts(state_transaction, now_ms)?;
+        reconcile_expired_hf_shared_lease_windows(state_transaction, now_ms)
     }
 }
 impl Execute for isi::AdvertiseSoracloudInrouHost {
@@ -12883,7 +14001,7 @@ impl Execute for isi::DeploySoracloudAgentApartment {
                 format!("apartment `{apartment_name}` is already deployed").into(),
             ));
         }
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let manifest_hash = Hash::new(Encode::encode(&manifest));
         let record = SoraAgentApartmentRecordV1 {
             schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
@@ -12984,7 +14102,7 @@ impl Execute for isi::RenewSoracloudAgentLease {
             return Err(invalid_parameter("lease_ticks must be greater than zero"));
         }
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -13070,7 +14188,7 @@ impl Execute for isi::RestartSoracloudAgentApartment {
             return Err(invalid_parameter("reason must not be empty"));
         }
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -13175,7 +14293,7 @@ impl Execute for isi::RevokeSoracloudAgentPolicy {
             "agent policy revoke provenance signature verification failed",
         )?;
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -13300,7 +14418,7 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
         assert_numeric_spec_with(amount.as_numeric(), asset_numeric_spec)?;
         let canonical_asset_definition = canonical_asset_definition_id.to_string();
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -13457,7 +14575,7 @@ impl Execute for isi::ApproveSoracloudAgentWalletSpend {
             return Err(invalid_parameter("request_id must not be empty"));
         }
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -13628,7 +14746,7 @@ impl Execute for isi::EnqueueSoracloudAgentMessage {
         }
         let from_key = from_apartment.to_string();
         let to_key = to_apartment.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let message_id = format!("{to_key}:mail:{sequence}");
         let payload_hash = Hash::new(normalized_payload.as_bytes());
         let mut sender = state_transaction
@@ -13838,7 +14956,7 @@ impl Execute for isi::AcknowledgeSoracloudAgentMessage {
             return Err(invalid_parameter("message_id must not be empty"));
         }
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -13959,7 +15077,7 @@ impl Execute for isi::AllowSoracloudAgentAutonomyArtifact {
             "agent artifact allow provenance signature verification failed",
         )?;
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -14097,7 +15215,7 @@ impl Execute for isi::RunSoracloudAgentAutonomy {
             return Err(invalid_parameter("budget_units must be greater than zero"));
         }
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -14317,7 +15435,7 @@ impl Execute for isi::RecordSoracloudAgentAutonomyExecution {
             ));
         }
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -14471,7 +15589,7 @@ impl Execute for isi::StartSoracloudTrainingJob {
                 "compute_budget_units must cover at least one worker-group step ({minimum_step_units})"
             )));
         }
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if !bundle.container.capabilities.allow_model_training {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -14574,7 +15692,7 @@ impl Execute for isi::CheckpointSoracloudTrainingJob {
                 "checkpoint_size_bytes must be greater than zero",
             ));
         }
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if !bundle.container.capabilities.allow_model_training {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -14741,7 +15859,7 @@ impl Execute for isi::RetrySoracloudTrainingJob {
             &reason,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if !bundle.container.capabilities.allow_model_training {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -14838,7 +15956,7 @@ impl Execute for isi::RegisterSoracloudModelArtifact {
             self.provenance_attestation_hash,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if !bundle.container.capabilities.allow_model_training {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -14969,7 +16087,7 @@ impl Execute for isi::RegisterSoracloudModelWeight {
             self.provenance_attestation_hash,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if !bundle.container.capabilities.allow_model_training {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -15225,7 +16343,7 @@ impl Execute for isi::PromoteSoracloudModelWeight {
                 "model promotion gate is not approved".into(),
             ));
         }
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if !bundle.container.capabilities.allow_model_training {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -15322,7 +16440,7 @@ impl Execute for isi::RollbackSoracloudModelWeight {
             &reason,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if !bundle.container.capabilities.allow_model_training {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -15523,7 +16641,7 @@ impl Execute for isi::FinalizeSoracloudUploadedModelBundle {
             provenance_attestation_hash,
             &provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, service_bundle) = load_active_bundle(state_transaction, &service_name)?;
         if !service_allows_uploaded_model_plane(&service_bundle) {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -15765,7 +16883,7 @@ impl Execute for isi::AdvanceSoracloudRollout {
                 .into(),
             ));
         }
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let current_version = deployment.current_service_version.clone();
         let mut action = SoraServiceLifecycleActionV1::Rollout;
         let mut to_version = current_version.clone();
@@ -15809,23 +16927,19 @@ impl Execute for isi::AdvanceSoracloudRollout {
             rollout.health_failures = rollout.health_failures.saturating_add(1);
             rollout.updated_sequence = sequence;
             if rollout.health_failures >= rollout.max_health_failures {
-                let Some(baseline_version) = rollout.baseline_version.clone() else {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "service `{}` rollout `{}` has no baseline version for automatic rollback",
-                            self.service_name, rollout.rollout_handle
-                        )
-                        .into(),
-                    ));
-                };
+                let baseline_version = rollout.baseline_version.clone();
                 let bundle =
                     load_admitted_bundle(state_transaction, &self.service_name, &baseline_version)?;
+                let process_generation = next_service_process_generation(
+                    &self.service_name,
+                    deployment.process_generation,
+                )?;
                 rollout.stage = SoraRolloutStageV1::RolledBack;
                 rollout.traffic_percent = 0;
                 deployment.current_service_version = baseline_version.clone();
                 deployment.current_service_manifest_hash = bundle.service_manifest_hash();
                 deployment.current_container_manifest_hash = bundle.container_manifest_hash();
-                deployment.process_generation = deployment.process_generation.saturating_add(1);
+                deployment.process_generation = process_generation;
                 deployment.process_started_sequence = sequence;
                 deployment.active_rollout = None;
                 deployment.last_rollout = Some(rollout.clone());
@@ -15891,15 +17005,18 @@ impl Execute for isi::SetSoracloudInrouReplicaRuntimeState {
     ) -> Result<(), InstructionExecutionError> {
         require_soracloud_runtime_authority(authority, state_transaction)?;
         let state = self.state;
+        let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
         state
             .validate()
             .map_err(|err| invalid_parameter(err.to_string()))?;
-        let Some(assignment) = find_inrou_replica_assignment(
+        let Some(assignment) = resolve_active_inrou_replica_assignment(
             state_transaction,
             &state.service_name,
             &state.service_version,
             state.replica_slot,
-        ) else {
+            now_ms,
+        )?
+        else {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
                     "service `{}` revision `{}` replica {} has no authoritative Inrou placement",
@@ -15972,6 +17089,20 @@ impl Execute for isi::SetSoracloudInrouReplicaRuntimeState {
                 ));
             }
         }
+        let admitted_bundle = load_admitted_bundle(
+            state_transaction,
+            &state.service_name,
+            &state.service_version,
+        )?;
+        if state.materialized_bundle_hash != admitted_bundle.container.bundle_hash {
+            return Err(invalid_parameter(format!(
+                "Inrou replica runtime state for service `{}` revision `{}` reports materialized bundle hash `{}` but the admitted bundle hash is `{}`",
+                state.service_name,
+                state.service_version,
+                state.materialized_bundle_hash,
+                admitted_bundle.container.bundle_hash,
+            )));
+        }
         write_soracloud_inrou_replica_runtime_state(state_transaction, state)
     }
 }
@@ -15988,12 +17119,14 @@ impl Execute for isi::ClearSoracloudInrouReplicaRuntimeState {
         if self.replica_slot == 0 {
             return Err(invalid_parameter("replica_slot must be greater than zero"));
         }
-        let Some(assignment) = find_inrou_replica_assignment(
+        let Some(assignment) = resolve_active_inrou_replica_assignment(
             state_transaction,
             &self.service_name,
             &self.service_version,
             self.replica_slot,
-        ) else {
+            state_transaction.block_unix_timestamp_ms().max(1),
+        )?
+        else {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
                     "service `{}` revision `{}` replica {} has no authoritative Inrou placement",
@@ -16056,12 +17189,13 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
                     .into(),
                 )
             })?;
-        let assignment = find_inrou_replica_assignment(
+        let assignment = resolve_active_inrou_replica_assignment(
             state_transaction,
             &self.service_name,
             &self.active_service_version,
             self.replica_slot,
-        );
+            state_transaction.block_unix_timestamp_ms().max(1),
+        )?;
         let reporter_has_active_assignment = assignment
             .as_ref()
             .is_some_and(|assignment| assignment.validator_account_id == *authority);
@@ -16164,16 +17298,25 @@ impl Execute for isi::RecordSoracloudRuntimeReceipt {
             &self.receipt.service_version,
             state_transaction,
         )?;
-        if runtime_authority == SoracloudServiceRuntimeAuthority::AssignedValidator
-            && self.receipt.selected_validator_account_id.as_ref() != Some(authority)
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "runtime receipt `{}` must identify submitting validator `{authority}` as selected_validator_account_id",
-                    self.receipt.receipt_id
-                )
-                .into(),
-            ));
+        if runtime_authority == SoracloudServiceRuntimeAuthority::AssignedValidator {
+            let Some(execution_host) = self.receipt.execution_host.as_ref() else {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "runtime receipt `{}` from assigned validator `{authority}` must carry exact execution_host attribution",
+                        self.receipt.receipt_id
+                    )
+                    .into(),
+                ));
+            };
+            if execution_host.validator_account_id() != authority {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "runtime receipt `{}` must identify submitting validator `{authority}` in execution_host attribution",
+                        self.receipt.receipt_id
+                    )
+                    .into(),
+                ));
+            }
         }
         write_soracloud_runtime_receipt(state_transaction, self.receipt)
     }

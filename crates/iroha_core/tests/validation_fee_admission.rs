@@ -16,10 +16,7 @@ use iroha_core::{
     state::{State, StateTransaction, World, WorldReadOnly},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{
-    Algorithm, Hash, KeyPair,
-    blake2::{Blake2b512, Digest as _},
-};
+use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
@@ -30,14 +27,13 @@ use iroha_data_model::{
         time::{ExecutionTime, TimeEventFilter},
     },
     governance::types::{
-        BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, BodyInstanceId,
+        BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,
         DeliberationPhaseV1, GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceAttemptV1,
         GovernanceCertificateId, GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadV1,
         GovernanceStageV1, ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
-        ParliamentBodies, ParliamentBody, ParliamentRoster, ProposalContentId, ProposalKind,
-        RiskTierV1, SortitionRequestV1, TleKeySessionId, TleSessionId,
-        ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
-        parliament_candidate_root_v1,
+        ParliamentBody, ProposalContentId, ProposalKind, RiskTierV1, SortitionRequestV1,
+        TleKeySessionId, TleSessionId, ValidationFeePayoutLifecycleProposal,
+        ValidationFeePolicyProposal, parliament_candidate_root_v1,
     },
     isi::{SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry},
     nexus::DataSpaceId,
@@ -62,7 +58,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{json::Json, numeric::NumericSpec};
 use mv::storage::StorageReadOnly;
-use sha2::Sha256;
+use sha2::{Digest as _, Sha256};
 use std::{num::NonZeroU64, sync::Arc};
 const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
 const TEST_POLICY_ENACTMENT_HEIGHT: u64 = 7_202;
@@ -317,7 +313,7 @@ fn test_state() -> (
         Account::new(pool_contract_address().subject_id()).build(&user),
     ];
     accounts.extend((2..=6).map(|seed| Account::new(account(seed).0).build(&user)));
-    let mut state = State::new_for_testing(
+    let state = State::new_for_testing(
         World::with_assets(
             [domain],
             accounts,
@@ -387,46 +383,6 @@ fn validation_fee_policy(
         exemption_classes: vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()],
         treasury_payout_binding: Some(payout_binding),
     }
-}
-fn test_parliament_bodies(selection_epoch: u64) -> ParliamentBodies {
-    let member = account(250).0;
-    let rosters = [
-        ParliamentBody::RulesCommittee,
-        ParliamentBody::AgendaCouncil,
-        ParliamentBody::InterestPanel,
-        ParliamentBody::ReviewPanel,
-        ParliamentBody::CoordinationCouncil,
-        ParliamentBody::FmaCommittee,
-        ParliamentBody::OversightCommittee,
-        ParliamentBody::PolicyJury,
-    ]
-    .into_iter()
-    .map(|body| {
-        (
-            body,
-            ParliamentRoster {
-                body,
-                epoch: selection_epoch,
-                members: vec![member.clone()],
-                alternates: Vec::new(),
-                candidate_count: 1,
-                derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Sortition,
-            },
-        )
-    })
-    .collect();
-    ParliamentBodies {
-        selection_epoch,
-        rosters,
-    }
-}
-fn test_roster_root(selection_epoch: u64) -> [u8; 32] {
-    let encoded = norito::encode_canonical(&test_parliament_bodies(selection_epoch))
-        .expect("canonically encode Parliament bodies");
-    let digest = Blake2b512::digest(encoded);
-    let mut root = [0; 32];
-    root.copy_from_slice(&digest[..32]);
-    root
 }
 fn parliament_test_root(tag: u8) -> [u8; 32] {
     [tag.max(1); 32]
@@ -846,7 +802,6 @@ fn policy_registry(state: &State, policy: &ValidationFeePolicyV1) -> ValidationF
 fn seed_canonical_enacted_proposal(
     kind: ProposalKind,
     proposer: &AccountId,
-    enacted_at_height: u64,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> [u8; 32] {
     let proposal_id = kind.fingerprint();
@@ -982,12 +937,7 @@ fn install_canonical_post_enactment_validation_fee_state(
             ProposalContentId::new(proposal_id)
         );
         assert_eq!(
-            seed_canonical_enacted_proposal(
-                proposal_kind,
-                authority,
-                TEST_POLICY_ENACTMENT_HEIGHT,
-                &mut state_transaction,
-            ),
+            seed_canonical_enacted_proposal(proposal_kind, authority, &mut state_transaction,),
             proposal_id
         );
         let governance_attempt_id = attempt.attempt().id;

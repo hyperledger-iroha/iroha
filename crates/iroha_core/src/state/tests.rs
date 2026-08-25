@@ -22,9 +22,12 @@ use iroha_data_model::proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecor
 use iroha_data_model::soracloud::{
     SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1, SORA_APP_INFRA_MANIFEST_VERSION_V1,
     SORA_APP_INFRA_SERVICE_REF_VERSION_V1, SORA_APP_INFRA_STATE_VERSION_V1,
-    SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1, SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
-    SoraAppInfraActionV1, SoraAppInfraManifestV1, SoraAppInfraServiceRefV1, SoraInrouGuestIsaV1,
-    SoraInrouReplicaPlacementV1, SoraServiceHealthStatusV1,
+    SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1, SORA_RUNTIME_RECEIPT_VERSION_V1,
+    SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1, SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
+    SoraAppInfraActionV1, SoraAppInfraManifestV1, SoraAppInfraServiceRefV1,
+    SoraCertifiedResponsePolicyV1, SoraInrouGuestIsaV1, SoraInrouReplicaPlacementV1,
+    SoraRuntimeReceiptV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
+    SoraServiceMailboxMessageV1,
 };
 use iroha_data_model::zk::BackendTag;
 use iroha_data_model::{
@@ -32574,7 +32577,7 @@ state_test! { sync governance_proposal_first_release_shape_is_strict
     value
         .as_object_mut()
         .expect("governance proposal JSON object")
-        .insert("enacted_at_height".to_owned(), norito::json::json!(11_u64));
+        .insert("enacted_at_height".to_owned(), norito::json!(11_u64));
     let json_error = norito::json::from_value::<GovernanceProposalRecord>(value.clone())
         .expect_err("legacy governance proposal fields must fail closed");
     assert!(
@@ -32601,7 +32604,7 @@ state_test! { sync governance_proposal_first_release_shape_is_strict
         .expect("governance proposal JSON object")
         .insert(
             "created_height".to_owned(),
-            norito::json::json!(
+            norito::json!(
                 iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64 + 1
             ),
         );
@@ -32829,8 +32832,10 @@ state_test! { sync first_release_inrou_reachable_state_fields_are_required
         "soracloud_model_host_violation_evidence",
         "soracloud_agent_apartment_audit_events",
         "soracloud_service_state_entries",
+        "soracloud_uploaded_model_bundles",
         "soracloud_mailbox_messages",
         "soracloud_runtime_receipts",
+        "soracloud_private_uploaded_model_execution_receipts",
         "soracloud_inrou_replica_runtime",
         "soracloud_inrou_host_capabilities",
         "soracloud_inrou_service_placements",
@@ -32941,6 +32946,59 @@ fn sample_snapshot_service_bundle() -> SoraDeploymentBundleV1 {
         .validate_for_admission()
         .expect("deployment-bundle fixture remains canonical");
     bundle
+}
+fn sample_snapshot_mailbox_message(bundle: &SoraDeploymentBundleV1) -> SoraServiceMailboxMessageV1 {
+    let payload_bytes = b"snapshot-mailbox-payload".to_vec();
+    let enqueue_sequence = 1;
+    let delivery_delay_sequences = 2;
+    let retention_sequences = bundle
+        .service
+        .handlers
+        .iter()
+        .find(|handler| handler.handler_name.as_ref() == "update")
+        .and_then(|handler| handler.mailbox.as_ref())
+        .expect("snapshot update mailbox contract")
+        .retention_sequences
+        .get();
+    SoraServiceMailboxMessageV1 {
+        schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+        message_id: Hash::new(b"snapshot-mailbox-message"),
+        from_service: bundle.service.service_name.clone(),
+        from_service_version: bundle.service.service_version.clone(),
+        from_handler: "update".parse().expect("valid source handler"),
+        to_service: bundle.service.service_name.clone(),
+        to_service_version: bundle.service.service_version.clone(),
+        to_handler: "update".parse().expect("valid destination handler"),
+        payload_commitment: Hash::new(&payload_bytes),
+        payload_bytes,
+        delivery_delay_sequences,
+        enqueue_sequence,
+        available_after_sequence: enqueue_sequence + u64::from(delivery_delay_sequences),
+        expires_at_sequence: enqueue_sequence + u64::from(retention_sequences),
+    }
+}
+fn sample_snapshot_mailbox_receipt(
+    bundle: &SoraDeploymentBundleV1,
+    message: &SoraServiceMailboxMessageV1,
+    receipt_id_seed: &[u8],
+    emitted_sequence: u64,
+) -> SoraRuntimeReceiptV1 {
+    SoraRuntimeReceiptV1 {
+        schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
+        receipt_id: Hash::new(receipt_id_seed),
+        service_name: bundle.service.service_name.clone(),
+        service_version: bundle.service.service_version.clone(),
+        handler_name: "update".parse().expect("valid receipt handler"),
+        handler_class: SoraServiceHandlerClassV1::Update,
+        request_commitment: message.payload_commitment,
+        result_commitment: Hash::new(b"snapshot-mailbox-result"),
+        certified_by: SoraCertifiedResponsePolicyV1::None,
+        emitted_sequence,
+        execution_host: None,
+        mailbox_message_id: Some(message.message_id),
+        journal_artifact_hash: None,
+        checkpoint_artifact_hash: None,
+    }
 }
 fn sample_snapshot_service_deployment(
     bundle: &SoraDeploymentBundleV1,
@@ -33156,7 +33214,7 @@ state_test! { sync service_deployment_restore_requires_exact_admitted_revision_b
             schema_version:
                 iroha_data_model::soracloud::SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
             rollout_handle: "snapshot-rollout".to_owned(),
-            baseline_version: Some(rollout_revision.current_service_version.clone()),
+            baseline_version: rollout_revision.current_service_version.clone(),
             candidate_version: "missing-candidate".to_owned(),
             canary_percent: 20,
             traffic_percent: 0,
@@ -33352,6 +33410,24 @@ state_test! { sync global_clock_source_restore_validates_records_and_sequence_ke
             .contains("soracloud_model_host_violation_evidence"),
         "unexpected invalid model-host evidence error: {error}"
     );
+
+    let mut colliding_world = World::default();
+    colliding_world
+        .soracloud_training_job_audit_events
+        .insert(1, sample_snapshot_training_job_audit_event(1));
+    let evidence = sample_snapshot_model_host_violation(1);
+    colliding_world
+        .soracloud_model_host_violation_evidence
+        .insert(evidence.evidence_id, evidence);
+    let collision = norito::json::to_value(&snapshot_state_from_world(colliding_world))
+        .expect("serialize cross-domain Soracloud sequence collision");
+    let error = deserialize_state_snapshot_value(collision)
+        .err()
+        .expect("one authoritative Soracloud sequence must not name records in two stores");
+    assert!(
+        error.to_string().contains("collides with another Soracloud record"),
+        "unexpected cross-domain sequence collision error: {error}"
+    );
 }
 state_test! { sync service_revision_restore_requires_exact_embedded_identity_key
     let bundle = sample_snapshot_service_bundle();
@@ -33373,6 +33449,82 @@ state_test! { sync service_revision_restore_requires_exact_embedded_identity_key
             .to_string()
             .contains("soracloud_service_revisions"),
         "unexpected miskeyed-service-revision error: {error}"
+    );
+}
+state_test! { sync mailbox_and_receipt_restore_require_exact_ledger_context
+    let bundle = sample_snapshot_service_bundle();
+    let message = sample_snapshot_mailbox_message(&bundle);
+    let receipt = sample_snapshot_mailbox_receipt(&bundle, &message, b"snapshot-mailbox-receipt", 3);
+
+    let mut canonical_world = World::default();
+    canonical_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    canonical_world
+        .soracloud_mailbox_messages
+        .insert(message.message_id, message.clone());
+    canonical_world
+        .soracloud_runtime_receipts
+        .insert(receipt.receipt_id, receipt.clone());
+    let canonical = norito::json::to_value(&snapshot_state_from_world(canonical_world))
+        .expect("serialize canonical mailbox and receipt snapshot");
+    deserialize_state_snapshot_value(canonical)
+        .expect("exact ledger-derived mailbox and receipt context must restore");
+
+    let mut schedule_world = World::default();
+    schedule_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    let mut hostile_schedule = message.clone();
+    hostile_schedule.expires_at_sequence -= 1;
+    schedule_world
+        .soracloud_mailbox_messages
+        .insert(hostile_schedule.message_id, hostile_schedule);
+    let hostile = norito::json::to_value(&snapshot_state_from_world(schedule_world))
+        .expect("serialize hostile mailbox schedule snapshot");
+    let error = deserialize_state_snapshot_value(hostile)
+        .err()
+        .expect("restore must recompute the exact mailbox schedule from the admitted contract");
+    assert!(
+        error.to_string().contains("ledger schedule must be exactly derived"),
+        "unexpected mailbox schedule restore error: {error}"
+    );
+
+    let mut duplicate_world = World::default();
+    duplicate_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    duplicate_world
+        .soracloud_mailbox_messages
+        .insert(message.message_id, message.clone());
+    duplicate_world
+        .soracloud_runtime_receipts
+        .insert(receipt.receipt_id, receipt);
+    let second_receipt =
+        sample_snapshot_mailbox_receipt(&bundle, &message, b"second-snapshot-mailbox-receipt", 4);
+    duplicate_world
+        .soracloud_runtime_receipts
+        .insert(second_receipt.receipt_id, second_receipt);
+    let duplicate = norito::json::to_value(&snapshot_state_from_world(duplicate_world))
+        .expect("serialize duplicate mailbox consumption snapshot");
+    let error = deserialize_state_snapshot_value(duplicate)
+        .err()
+        .expect("one mailbox message must not restore as consumed twice");
+    assert!(
+        error.to_string().contains("must not be consumed by multiple receipts"),
+        "unexpected duplicate mailbox consumption restore error: {error}"
     );
 }
 fn sample_snapshot_app_infra_state() -> SoraAppInfraStateV1 {

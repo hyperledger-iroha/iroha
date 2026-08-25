@@ -9,6 +9,15 @@ enum PendingWorkProducer {
     Output,
 }
 
+/// Closed result of servicing exactly one attested post-Apply direct Broadcast.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ProductionApplyTerminalDirectBroadcastSettlementV1 {
+    /// The exact output was accepted and its lifecycle row became terminal.
+    Completed,
+    /// The output source retained the occurrence and the same owner remains parked.
+    SourceRetained,
+}
+
 /// Exact signed-Proposal replay owner retained beside the ordinary body pipeline.
 ///
 /// The stage changes only after the corresponding runtime or body-store cut
@@ -756,6 +765,114 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     /// Return whether a signed/diagnostic output is parked at the lifecycle cut.
     pub(in crate::sumeragi) fn has_pending_lifecycle_output_admissions(&self) -> bool {
         !self.pending_lifecycle_output_admissions.is_empty()
+    }
+
+    /// Install one exact pending output for a production-seam regression.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn install_pending_lifecycle_output_for_test(
+        &mut self,
+        pending: PendingLifecycleOutputAdmissionV1,
+    ) -> bool {
+        let key = pending.key();
+        match self.pending_lifecycle_output_admissions.entry(key) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(pending);
+                true
+            }
+            std::collections::btree_map::Entry::Occupied(_) => false,
+        }
+    }
+
+    /// Settle exactly one registry-attested direct Broadcast after Apply terminal settlement.
+    ///
+    /// Unlike the ordinary Runtime drain, this consumes only the pending-map key
+    /// sealed by the Ready `PendingAdapter` carrier. Later Broadcasts and all
+    /// diagnostic outputs remain untouched under the terminal-Apply fence.
+    pub(in crate::sumeragi) fn settle_apply_terminal_direct_broadcast<
+        S: V2EffectServices,
+    >(
+        &mut self,
+        owner: &mut ProductionLifecycleOwnerV1,
+        services: &mut S,
+        prepared: crate::sumeragi::v2_lifecycle_coordinator::PreparedApplyTerminalDirectBroadcastV1,
+    ) -> Result<ProductionApplyTerminalDirectBroadcastSettlementV1, EffectExecutorError> {
+        self.ensure_open()?;
+        let key = prepared.pending_key();
+        let Some(pending) = self.pending_lifecycle_output_admissions.remove(&key) else {
+            let error = EffectExecutorError::Contract(format!(
+                "post-Apply direct Broadcast ordinal {} lost its exact pending owner",
+                prepared.ordinal()
+            ));
+            return Err(self.close(error, services));
+        };
+        let settlement = owner.settle_apply_terminal_direct_broadcast(
+            prepared,
+            pending,
+            |effect, ownership| {
+                self.execute_lifecycle_output_service(effect, ownership, services)
+            },
+        );
+        match settlement {
+            ProductionLifecycleOutputAdmissionSettlementV1::Completed => {
+                Ok(ProductionApplyTerminalDirectBroadcastSettlementV1::Completed)
+            }
+            ProductionLifecycleOutputAdmissionSettlementV1::Deferred(pending) => {
+                if pending.key() != key
+                    || self
+                        .pending_lifecycle_output_admissions
+                        .insert(key, pending)
+                        .is_some()
+                {
+                    let error = EffectExecutorError::Contract(
+                        "post-Apply direct Broadcast retry changed or collided with its pending key"
+                            .to_owned(),
+                    );
+                    return Err(self.close(error, services));
+                }
+                Ok(ProductionApplyTerminalDirectBroadcastSettlementV1::SourceRetained)
+            }
+            ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted => {
+                let error = EffectExecutorError::Contract(
+                    "Ready post-Apply direct Broadcast unexpectedly terminal-stuttered".to_owned(),
+                );
+                Err(self.close(error, services))
+            }
+            ProductionLifecycleOutputAdmissionSettlementV1::Failed { failure, pending } => {
+                let pending_key = pending.key();
+                let collision = pending_key != key
+                    || self
+                        .pending_lifecycle_output_admissions
+                        .insert(key, pending)
+                        .is_some();
+                let error = if collision {
+                    EffectExecutorError::Contract(
+                        "failed post-Apply direct Broadcast changed or collided with its pending key"
+                            .to_owned(),
+                    )
+                } else {
+                    match failure {
+                        ProductionLifecycleOutputAdmissionFailureV1::Service(error) => error,
+                        ProductionLifecycleOutputAdmissionFailureV1::Projection(error) => {
+                            EffectExecutorError::Contract(format!(
+                                "post-Apply direct Broadcast projection failed: {error:?}"
+                            ))
+                        }
+                        ProductionLifecycleOutputAdmissionFailureV1::Registry(reason) => {
+                            EffectExecutorError::Contract(format!(
+                                "post-Apply direct Broadcast attestation failed: {reason:?}"
+                            ))
+                        }
+                        ProductionLifecycleOutputAdmissionFailureV1::Durability => {
+                            EffectExecutorError::Contract(
+                                "post-Apply direct Broadcast terminal publication failed"
+                                    .to_owned(),
+                            )
+                        }
+                    }
+                };
+                Err(self.close(error, services))
+            }
+        }
     }
 
     /// Settle each initially parked lifecycle output once in binding-key order.

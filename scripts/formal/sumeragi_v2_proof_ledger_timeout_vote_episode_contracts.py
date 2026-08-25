@@ -290,18 +290,28 @@ enum FairV2IngressQueueGateVerdict {
         ingress_path,
         items["ingress::try_recv_if_checked_retiring_obsolete"],
         """
-self.try_recv_if_at_checked_classified(Instant::now(), true, predicate)
+self.try_recv_if_at_checked_classified(
+    Instant::now(),
+    true,
+    FairV2IngressCheckedSelectionScope::Ordinary,
+    predicate,
+)
 """,
-        "test-only ordinary retirement must use the same classifier without a bypass policy",
+        "test-only ordinary retirement must use the same classifier with the closed ordinary scope",
         errors,
     )
     _require_rust_token_sequence(
         ingress_path,
         items["ingress::try_recv_if_at_checked"],
         """
-self.try_recv_if_at_checked_classified(service_attempt_at, false, predicate)
+self.try_recv_if_at_checked_classified(
+    service_attempt_at,
+    false,
+    FairV2IngressCheckedSelectionScope::Ordinary,
+    predicate,
+)
 """,
-        "ordinary timestamped ingress must use the same classifier without a bypass policy",
+        "ordinary timestamped ingress must use the same classifier with the closed ordinary scope",
         errors,
     )
 

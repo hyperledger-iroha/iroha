@@ -22,7 +22,8 @@ use super::schema::{
 use super::wal_recovery::{
     AuthenticatedRecoveredWalControlProjection, AuthenticatedRecoveredWalDecisionFetchProjection,
     AuthenticatedWalVoteLifecycleRepair, DurableAuthenticatedWalVoteLifecycleRepair,
-    RecoveredDecisionFetchStoreProjectionV1, RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
+    RecoveredDecisionFetchStoreProjectionV1, RecoveredDecisionValidateProjectionV1,
+    RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
     RecoveredLifecycleSignedBroadcastProjectionV1,
 };
 use super::{
@@ -3515,6 +3516,20 @@ impl ProductionLifecycleOwnerV1 {
             .stage_authenticated_wal_decision_fetch(&projection)
         {
             Ok(staged) => staged,
+            Err(_) if opened.has_recovered_decision_live_validate_parent(&projection) => {
+                return Self::open_recovered_decision_validate_startup(
+                    verified,
+                    projection,
+                    ledger_store,
+                    opened,
+                    body_store,
+                    config,
+                    reply_route_source_capacity,
+                    payload_store,
+                    serve_payloads,
+                    adapter_startup,
+                );
+            }
             Err(_) if opened.has_exact_recovered_decision_fetch_store_parent(&projection) => {
                 return Self::open_recovered_decision_store_startup(
                     verified,
@@ -3531,7 +3546,7 @@ impl ProductionLifecycleOwnerV1 {
             }
             Err(_) => {
                 return Err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
-                    "recovered Decision LedgerV1 is neither an exact live Fetch nor an exact advanced Store parent",
+                    "recovered Decision LedgerV1 is neither an exact live Fetch nor an exact Store/Validate crash prefix",
                 ));
             }
         };
@@ -3594,6 +3609,131 @@ impl ProductionLifecycleOwnerV1 {
         .ok_or_else(|| {
             ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
                 "verified height cannot derive recovered Decision Fetch lifecycle authority",
+            )
+        })?;
+        let (coordinator, mut recovery) = installed
+            .open_with_exact_store_authority(authority, ledger_store, &mut payload_store, recovery)
+            .map_err(|error| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(error.reason())
+            })?;
+        Ok(Self {
+            verified,
+            coordinator,
+            registry,
+            recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
+            payload_store,
+            serve_payloads: recovery.into_serve_payloads(),
+            body_store: Some(body_store),
+            body_store_identity: None,
+            kura_binding: None,
+            apply_service: None,
+            adapter_startup: Some(adapter_startup),
+            timeout_supersession_successor: None,
+        })
+    }
+    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
+    fn open_recovered_decision_validate_startup(
+        verified: VerifiedHeightContext,
+        projection: AuthenticatedRecoveredWalDecisionFetchProjection,
+        ledger_store: LifecycleLedgerStoreV1,
+        opened: LifecycleLedgerV1,
+        mut body_store: V2BodyStore,
+        config: &SumeragiV2Config,
+        reply_route_source_capacity: usize,
+        mut payload_store: CertifiedServePayloadStoreV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        adapter_startup: ProductionLifecycleAdapterStartupV1,
+    ) -> Result<Self, ProductionRecoveredWalDecisionFetchStartupErrorV1> {
+        let body = body_store
+            .recovered_decision_fetch_store_body(&projection)
+            .map_err(|_error| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                    "recovered Decision Validate lost its exact fsynced body frame",
+                )
+            })?;
+        let (adapter_startup, store_projection) = adapter_startup
+            .advance_recovered_decision_fetch_store(&verified, &projection, body)
+            .map_err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new)?;
+        let (adapter_startup, validate_projection) = adapter_startup
+            .advance_recovered_decision_store_validate(&verified, &projection, &store_projection)
+            .map_err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new)?;
+        let coordinates = opened
+            .authenticate_recovered_decision_store_validate(
+                &projection,
+                &store_projection,
+                &validate_projection,
+            )
+            .map_err(|_error| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                    "recovered Decision Store-to-Validate durable prefix is not exact",
+                )
+            })?;
+        if !ledger_store.load().is_ok_and(|loaded| {
+            loaded == opened
+                && loaded
+                    .authenticate_recovered_decision_store_validate(
+                        &projection,
+                        &store_projection,
+                        &validate_projection,
+                    )
+                    .is_ok_and(|observed| observed == coordinates)
+        }) {
+            return Err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                "recovered Decision Validate LedgerV1 reopen changed the exact prefix",
+            ));
+        }
+        let body_pipeline = opened
+            .authenticate_durable_certified_body_pipeline_startup(&verified, &body_store)
+            .map_err(|_error| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                    "recovered Decision Validate body-pipeline census authentication failed",
+                )
+            })?;
+        let (body_pipeline, adapter_startup) = body_pipeline
+            .replay_adapter_startup(adapter_startup)
+            .map_err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new)?;
+        let (recovery, body_pipeline) = AuthenticatedLifecycleRecoveryCut::
+            assemble_storage_only_with_recovered_decision_validate_and_body_pipeline_startup(
+                opened.clone(),
+                serve_payloads,
+                &mut body_store,
+                &projection,
+                &store_projection,
+                &validate_projection,
+                body_pipeline,
+            )
+            .map_err(|_error| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                    "recovered Decision Validate storage census assembly failed",
+                )
+            })?;
+        let mut registry = LifecycleWorkRegistryHolder::empty();
+        let mut installed = registry
+            .registry_mut()
+            .install_recovered_wal_decision_validate(
+                &verified,
+                &ledger_store,
+                &opened,
+                projection,
+                store_projection,
+                validate_projection,
+            )
+            .map_err(|error| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(error.reason())
+            })?;
+        installed
+            .install_body_pipeline(body_pipeline)
+            .map_err(|error| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(error.reason())
+            })?;
+        let authority = authority::production_authority(
+            &verified,
+            config,
+            reply_route_source_capacity,
+        )
+        .ok_or_else(|| {
+            ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                "verified height cannot derive recovered Decision Validate lifecycle authority",
             )
         })?;
         let (coordinator, mut recovery) = installed

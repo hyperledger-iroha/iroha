@@ -849,7 +849,7 @@ fn sample_update_handler() -> SoraServiceHandlerV1 {
             queue_name: "updates".parse().expect("valid name"),
             max_pending_messages: NonZeroU32::new(1_024).expect("nonzero"),
             max_message_bytes: NonZeroU64::new(65_536).expect("nonzero"),
-            retention_blocks: NonZeroU32::new(1_440).expect("nonzero"),
+            retention_sequences: NonZeroU32::new(1_440).expect("nonzero"),
         }),
     }
 }
@@ -864,7 +864,7 @@ fn sample_private_update_handler() -> SoraServiceHandlerV1 {
             queue_name: "private_updates".parse().expect("valid name"),
             max_pending_messages: NonZeroU32::new(256).expect("nonzero"),
             max_message_bytes: NonZeroU64::new(131_072).expect("nonzero"),
-            retention_blocks: NonZeroU32::new(2_880).expect("nonzero"),
+            retention_sequences: NonZeroU32::new(2_880).expect("nonzero"),
         }),
     }
 }
@@ -1689,14 +1689,17 @@ fn sample_service_mailbox_message() -> SoraServiceMailboxMessageV1 {
         schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
         message_id: sample_hash(162),
         from_service: "portal".parse().expect("valid name"),
+        from_service_version: "2026.1".to_string(),
         from_handler: "update".parse().expect("valid name"),
         to_service: "audit".parse().expect("valid name"),
+        to_service_version: "2026.1".to_string(),
         to_handler: "private_update".parse().expect("valid name"),
         payload_bytes: b"ciphertext".to_vec(),
         payload_commitment: Hash::new(b"ciphertext"),
+        delivery_delay_sequences: 0,
         enqueue_sequence: 10,
         available_after_sequence: 10,
-        expires_at_sequence: Some(12),
+        expires_at_sequence: 12,
     }
 }
 fn sample_runtime_receipt() -> SoraRuntimeReceiptV1 {
@@ -1711,9 +1714,13 @@ fn sample_runtime_receipt() -> SoraRuntimeReceiptV1 {
         result_commitment: sample_hash(166),
         certified_by: SoraCertifiedResponsePolicyV1::None,
         emitted_sequence: 44,
-        placement_id: Some(sample_hash(170)),
-        selected_validator_account_id: Some(sample_account_id(171)),
-        selected_peer_id: Some("12D3KooWRuntimePrimary".to_string()),
+        execution_host: Some(SoraRuntimeExecutionHostV1::HfModelHost(
+            SoraRuntimeHfModelHostV1 {
+            placement_id: sample_hash(170),
+            validator_account_id: sample_account_id(171),
+            peer_id: "12D3KooWRuntimePrimary".to_string(),
+            },
+        )),
         mailbox_message_id: Some(sample_hash(163)),
         journal_artifact_hash: Some(sample_hash(168)),
         checkpoint_artifact_hash: Some(sample_hash(169)),
@@ -1806,9 +1813,7 @@ fn service_world_records_are_closed_and_require_explicit_nullable_keys() {
         sample_runtime_receipt(),
         SoraRuntimeReceiptV1,
         [
-            "placement_id",
-            "selected_validator_account_id",
-            "selected_peer_id",
+            "execution_host",
             "mailbox_message_id",
             "journal_artifact_hash",
             "checkpoint_artifact_hash",
@@ -1902,8 +1907,7 @@ fn host_protocol_v1_json_rejects_unknown_fields_across_the_direct_graph() {
         to_service: "audit".parse().expect("valid name"),
         to_handler: "update".parse().expect("valid name"),
         payload_bytes: Vec::new(),
-        available_after_sequence: 1,
-        expires_at_sequence: None,
+        delivery_delay_sequences: 1,
     };
     let egress_response = SoracloudEgressFetchResponseV1 {
         status_code: 204,
@@ -2161,23 +2165,10 @@ fn host_protocol_v1_json_requires_explicit_null_and_empty_keys() {
             to_service: "audit".parse().expect("valid name"),
             to_handler: "update".parse().expect("valid name"),
             payload_bytes: Vec::new(),
-            available_after_sequence: 1,
-            expires_at_sequence: None,
+            delivery_delay_sequences: 1,
         },
         SoracloudEmitMailboxMessageRequestV1,
-        ["payload_bytes"],
-        "emit mailbox message request"
-    );
-    assert_required_nulls!(
-        SoracloudEmitMailboxMessageRequestV1 {
-            to_service: "audit".parse().expect("valid name"),
-            to_handler: "update".parse().expect("valid name"),
-            payload_bytes: Vec::new(),
-            available_after_sequence: 1,
-            expires_at_sequence: None,
-        },
-        SoracloudEmitMailboxMessageRequestV1,
-        ["expires_at_sequence"],
+        ["payload_bytes", "delivery_delay_sequences"],
         "emit mailbox message request"
     );
     assert_required_fields!(

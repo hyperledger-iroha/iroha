@@ -87,9 +87,7 @@ impl SoracloudRuntime for CountingSoracloudRuntime {
                 mailbox_message_id: Some(request.mailbox_message.message_id),
                 journal_artifact_hash: None,
                 checkpoint_artifact_hash: None,
-                placement_id: None,
-                selected_validator_account_id: None,
-                selected_peer_id: None,
+                execution_host: None,
             },
         })
     }
@@ -177,7 +175,7 @@ fn seed_soracloud_mailbox_fixture(
                     queue_name: "updates".parse().expect("valid queue name"),
                     max_pending_messages: NonZeroU32::new(1_024).expect("nonzero pending limit"),
                     max_message_bytes: NonZeroU64::new(65_536).expect("nonzero message limit"),
-                    retention_blocks: NonZeroU32::new(1_440).expect("nonzero retention"),
+                    retention_sequences: NonZeroU32::new(1_440).expect("nonzero retention"),
                 }),
             }],
             artifacts: Vec::new(),
@@ -233,14 +231,17 @@ fn seed_soracloud_mailbox_fixture(
             schema_version: iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
             message_id,
             from_service: service_name.clone(),
+            from_service_version: "1.0.0".to_string(),
             from_handler: "update".parse().expect("valid from handler"),
             to_service: service_name.clone(),
+            to_service_version: "1.0.0".to_string(),
             to_handler: "update".parse().expect("valid to handler"),
             payload_bytes: b"portal-mailbox-payload".to_vec(),
             payload_commitment: Hash::new(b"portal-mailbox-payload"),
+            delivery_delay_sequences: 0,
             enqueue_sequence: 1,
             available_after_sequence: 1,
-            expires_at_sequence: Some(16),
+            expires_at_sequence: 16,
         },
     );
     (service_name, message_id)
@@ -928,7 +929,8 @@ fn validate_and_record_transactions_persists_soracloud_mailbox_state_mutations()
     assert_eq!(
         crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
             &follow_up_transaction
-        ),
+        )
+        .expect("runtime receipt must leave an available Soracloud audit sequence"),
         receipt.emitted_sequence.saturating_add(1),
         "runtime receipts must advance the shared Soracloud execution sequence"
     );

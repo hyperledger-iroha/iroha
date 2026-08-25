@@ -11,12 +11,13 @@ use crate::{
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         AgentApartmentManifestV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheJobSpecV1,
-        SecretEnvelopeV1, SoraAppInfraManifestV1, SoraDeploymentBundleV1, SoraHfResourceProfileV1,
-        SoraInrouHostCapabilityRecordV1, SoraInrouReplicaRuntimeStateV1,
-        SoraModelHostCapabilityRecordV1, SoraModelHostViolationKindV1,
-        SoraPrivateUploadedModelExecutionReceiptV1, SoraRuntimeReceiptV1,
-        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
-        SoraStateMutationOperationV1, SoraUploadedModelBundleV1, SoracloudFheBootstrapKeyProofV1,
+        SecretEnvelopeV1, SoraAppInfraManifestV1, SoraAppInfraMutationPreconditionV1,
+        SoraDeploymentBundleV1, SoraHfResourceProfileV1, SoraInrouHostCapabilityRecordV1,
+        SoraInrouReplicaRuntimeStateV1, SoraModelHostCapabilityRecordV1,
+        SoraModelHostViolationKindV1, SoraPrivateUploadedModelExecutionReceiptV1,
+        SoraRuntimeReceiptV1, SoraServiceMailboxMessageV1, SoraServiceMutationPreconditionV1,
+        SoraServiceRuntimeStateV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
+        SoraUploadedModelBundleV1, SoracloudFheBootstrapKeyProofV1,
         SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheGovernedMaterialV1,
         SoracloudFheInputAdmissionProofV1, SoracloudFhePolicyReferenceV1,
         SoracloudFhePublicKeyProofV1,
@@ -46,6 +47,8 @@ pub struct DeploySoracloudService {
     pub initial_service_configs: BTreeMap<String, Json>,
     /// Authoritative secret entries committed atomically; an empty map must be explicit.
     pub initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    /// Signed atomic condition requiring this service to remain absent until execution.
+    pub precondition: SoraServiceMutationPreconditionV1,
     /// Provenance attestation over the bundle payload.
     pub provenance: ManifestProvenance,
 }
@@ -66,6 +69,8 @@ pub struct UpgradeSoracloudService {
     pub initial_service_configs: BTreeMap<String, Json>,
     /// Authoritative secret entries committed atomically; an empty map must be explicit.
     pub initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    /// Signed atomic condition binding the exact active revision observed by the caller.
+    pub precondition: SoraServiceMutationPreconditionV1,
     /// Provenance attestation over the bundle payload.
     pub provenance: ManifestProvenance,
 }
@@ -82,6 +87,8 @@ impl PartialOrd for UpgradeSoracloudService {
 pub struct DeploySoracloudAppInfra {
     /// App topology manifest being admitted.
     pub manifest: SoraAppInfraManifestV1,
+    /// Signed atomic condition requiring this app topology to remain absent until execution.
+    pub precondition: SoraAppInfraMutationPreconditionV1,
     /// Provenance attestation over the app topology payload.
     pub provenance: ManifestProvenance,
 }
@@ -97,6 +104,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DeploySoracloudAppInfra {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
+        let precondition = super::decode_aos_canonical_field::<SoraAppInfraMutationPreconditionV1>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         let provenance = super::decode_aos_canonical_field::<ManifestProvenance>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
@@ -108,6 +119,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DeploySoracloudAppInfra {
         Ok((
             Self {
                 manifest,
+                precondition,
                 provenance,
             },
             offset,
@@ -126,6 +138,8 @@ impl PartialOrd for DeploySoracloudAppInfra {
 pub struct UpgradeSoracloudAppInfra {
     /// App topology manifest being admitted.
     pub manifest: SoraAppInfraManifestV1,
+    /// Signed atomic condition binding the exact active topology observed by the caller.
+    pub precondition: SoraAppInfraMutationPreconditionV1,
     /// Provenance attestation over the app topology payload.
     pub provenance: ManifestProvenance,
 }
@@ -141,6 +155,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for UpgradeSoracloudAppInfra {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
+        let precondition = super::decode_aos_canonical_field::<SoraAppInfraMutationPreconditionV1>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         let provenance = super::decode_aos_canonical_field::<ManifestProvenance>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
@@ -152,6 +170,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for UpgradeSoracloudAppInfra {
         Ok((
             Self {
                 manifest,
+                precondition,
                 provenance,
             },
             offset,
@@ -553,7 +572,7 @@ impl PartialOrd for WithdrawSoracloudModelHost {
         Some(encoded_order(self, other))
     }
 }
-/// Reconcile expired validator-host adverts against authoritative HF placements.
+/// Reconcile validator-host availability and expired HF lease windows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReconcileSoracloudModelHosts;
@@ -1249,7 +1268,7 @@ impl PartialOrd for RecordSoracloudMailboxMessage {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct RecordSoracloudRuntimeReceipt {
-    /// Runtime receipt to persist.
+    /// Runtime receipt to persist; `emitted_sequence` must be the zero submission sentinel.
     pub receipt: SoraRuntimeReceiptV1,
 }
 impl crate::seal::Instruction for RecordSoracloudRuntimeReceipt {}
@@ -1323,12 +1342,14 @@ impl_soracloud_decode_from_slice!(DeploySoracloudService {
     bundle: SoraDeploymentBundleV1,
     initial_service_configs: BTreeMap<String, Json>,
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    precondition: SoraServiceMutationPreconditionV1,
     provenance: ManifestProvenance,
 });
 impl_soracloud_decode_from_slice!(UpgradeSoracloudService {
     bundle: SoraDeploymentBundleV1,
     initial_service_configs: BTreeMap<String, Json>,
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    precondition: SoraServiceMutationPreconditionV1,
     provenance: ManifestProvenance,
 });
 impl_soracloud_decode_from_slice!(RollbackSoracloudService {
@@ -1665,6 +1686,8 @@ impl_soracloud_decode_from_slice!(RecordSoracloudPrivateUploadedModelExecutionRe
 mod tests {
     use super::*;
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
+    #[cfg(feature = "json")]
+    use crate::soracloud::SoraServiceExactCurrentRevisionPreconditionV1;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     fn name(raw: &str) -> Name {
         raw.parse().expect("valid name")
@@ -1887,7 +1910,7 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn soracloud_deploy_upgrade_and_rollout_v1_require_explicit_wire_keys() {
-        macro_rules! assert_required_maps {
+        macro_rules! assert_required_fields {
             ($value:expr, $ty:ty, $label:literal) => {{
                 let canonical =
                     norito::json::to_value(&$value).expect(concat!("serialize ", $label));
@@ -1896,7 +1919,11 @@ mod tests {
                     $label,
                     " must decode"
                 ));
-                for field in ["initial_service_configs", "initial_service_secrets"] {
+                for field in [
+                    "initial_service_configs",
+                    "initial_service_secrets",
+                    "precondition",
+                ] {
                     let mut missing = canonical.clone();
                     assert!(
                         missing
@@ -1906,34 +1933,45 @@ mod tests {
                             .is_some()
                     );
                     norito::json::from_value::<$ty>(missing)
-                        .expect_err(concat!($label, " must reject omitted material maps"));
+                        .expect_err(concat!($label, " must reject omitted required fields"));
 
                     let mut null = canonical.clone();
                     null.as_object_mut()
                         .expect(concat!($label, " JSON object"))
                         .insert(field.to_owned(), norito::json::Value::Null);
                     norito::json::from_value::<$ty>(null)
-                        .expect_err(concat!($label, " must reject null material maps"));
+                        .expect_err(concat!($label, " must reject null required fields"));
                 }
             }};
         }
 
         let bundle = deployment_bundle();
-        assert_required_maps!(
+        assert_required_fields!(
             DeploySoracloudService {
                 bundle: bundle.clone(),
                 initial_service_configs: BTreeMap::new(),
                 initial_service_secrets: BTreeMap::new(),
+                precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
                 provenance: provenance(14),
             },
             DeploySoracloudService,
             "Soracloud deploy instruction"
         );
-        assert_required_maps!(
+        assert_required_fields!(
             UpgradeSoracloudService {
                 bundle,
                 initial_service_configs: BTreeMap::new(),
                 initial_service_secrets: BTreeMap::new(),
+                precondition: SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+                    SoraServiceExactCurrentRevisionPreconditionV1 {
+                        service_version: "2026.4".to_owned(),
+                        service_manifest_hash: hash("current-service-manifest"),
+                        container_manifest_hash: hash("current-container-manifest"),
+                        process_generation: 1,
+                        config_generation: 0,
+                        secret_generation: 0,
+                    },
+                ),
                 provenance: provenance(15),
             },
             UpgradeSoracloudService,

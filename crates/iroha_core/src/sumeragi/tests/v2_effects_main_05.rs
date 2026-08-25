@@ -462,6 +462,85 @@ fn newly_installed_decision_holds_apply_until_runner_cleanup_acknowledges_exact_
     assert!(executor.pending_runner_decision_cleanup.is_none());
 }
 #[test]
+fn live_decision_installed_before_apply_step_still_waits_for_runner_cleanup() {
+    let mut fixture = Fixture::new();
+    fixture.manifest = canonical_payload_manifest(
+        &fixture.context,
+        round(&fixture.context, 3),
+        fixture.manifest.subject,
+        &fixture.body,
+    );
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    install_fsynced_validation_fixture(
+        &mut executor,
+        &mut services,
+        &fixture,
+        fixture.manifest.clone(),
+    );
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let decision = (
+        commit.round,
+        commit.proposal_round,
+        commit.subject,
+        commit.execution_commitment,
+    );
+    let apply = AdapterEffect::Apply {
+        tag: tag(0),
+        subject: commit.subject,
+        certificate: commit,
+    };
+    executor.runtime.decided_body = Some(decision);
+    assert!(
+        executor
+            .plan_runner_decision_cleanup(Some(decision), Some(decision))
+            .expect("inspect the cold recovered Decision")
+            .is_none(),
+        "an unarmed cold recovery has no process-local proposal owner to clean up"
+    );
+    executor.runtime.live_clocks_armed = true;
+    executor
+        .runtime
+        .steps
+        .push_back(Ok(RuntimeStep::Advanced(vec![apply.clone()])));
+
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("retain Apply for a Decision installed before this live step"),
+        EffectExecutorStep::Advanced { effects: 0 }
+    );
+    assert_eq!(executor.protected_decision, Some(decision));
+    assert_eq!(
+        executor
+            .pending_runner_decision_cleanup
+            .map(|pending| pending.decision),
+        Some(decision)
+    );
+    assert!(services.apply_tasks.is_empty());
+    assert_eq!(
+        executor
+            .retained_effect_batch
+            .as_ref()
+            .and_then(|batch| batch.effects.front())
+            .map(|owned| &owned.effect),
+        Some(&apply)
+    );
+
+    executor
+        .acknowledge_runner_decision_cleanup(tag(0), Some(decision.2))
+        .expect("acknowledge the exact live Decision after runner owner cleanup");
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("dispatch retained Apply after runner cleanup"),
+        EffectExecutorStep::Advanced { effects: 1 }
+    );
+    assert_eq!(services.apply_tasks.len(), 1);
+    assert_eq!(services.apply_tasks[0].subject(), decision.2);
+    assert!(executor.pending_runner_decision_cleanup.is_none());
+}
+#[test]
 fn decision_cleanup_batch_accepts_zero_or_one_exact_apply_only() {
     let fixture = Fixture::new();
     let commit = fixture.qc(wire::GlobalPhase::Commit);

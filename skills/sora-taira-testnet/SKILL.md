@@ -91,6 +91,10 @@ Use `python3 scripts/taira_devnet.py up --full-doctor` only when the broad publi
 product-route surface is part of the test. A minimal throwaway chain must not
 be rejected merely because an unrelated optional application route is absent.
 
+This optional local diagnostic does not qualify a public ingress. Run the
+same-revision `iroha taira doctor` directly against the public ingress under
+test for that purpose.
+
 The generated bundle contains private keys and tokens. Do not print, move,
 archive, or commit it. On failure the command attempts bounded teardown and
 leaves bounded peer logs for diagnosis; if ownership or termination cannot be

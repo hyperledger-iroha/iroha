@@ -107,6 +107,10 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
             max_total_bytes: std::num::NonZeroU64::new(512 * 1024 * 1024).expect("bytes"),
         },
     ];
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+    bundle
+        .validate_for_admission()
+        .map_err(|error| eyre::eyre!("invalid external Inrou smoke-test bundle: {error}"))?;
     let mut state = test_state()?;
     let deployment_state = sample_deployment_state(&bundle);
     {
@@ -147,6 +151,7 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
                     last_error: None,
                 },
             );
+        insert_active_inrou_host_authority_fixture(world, local_peer_id, selected_guest_isa);
     }
     let artifacts_root = temp_dir.path().join("artifacts");
     fs::create_dir_all(&artifacts_root)?;

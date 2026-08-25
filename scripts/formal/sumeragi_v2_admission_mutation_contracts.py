@@ -710,7 +710,7 @@ DurableValidateCompletionPublication::PublishedValidated(
     ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished { ordinal }
 }
 """,
-        "validated output must retain its exact Ready successor before retiring the guarded owner",
+        "a validated owner must install its exact durable successor before retiring the guard",
     )
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
@@ -729,7 +729,7 @@ DurableValidateCompletionPublication::PublishedRejected(
     ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished { ordinal }
 }
 """,
-        "rejected output must retain its exact Ready successor before retiring the guarded owner",
+        "a rejected owner must install its exact durable successor before retiring the guard",
     )
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
@@ -797,20 +797,9 @@ if lease
         "rejected Validate must carry its pre-reserved report output before execution",
     )
     require_sequence(
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_census_impl.rs",
         """
-coordinator
-    .durable_records
-    .get(&ordinal)
-    .is_none_or(|metadata| {
-        !metadata.replay_authority.structurally_matches_record(
-            coordinator.active_context,
-            record.key,
-            record.work_class,
-            record.stage,
-            metadata.payload,
-        )
-    })
+|| !candidate.replay_authority_is_exact(coordinator.active_context)
 """,
         "restart coverage must reject any row without exact durable replay authority",
     )

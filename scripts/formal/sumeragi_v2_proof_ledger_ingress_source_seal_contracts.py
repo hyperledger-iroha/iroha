@@ -747,13 +747,13 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "eb2a36ec0884655d739e38e34b4031467c0f5ed983c77583b3d331df6cceffac"
     ),
     "try_recv_if_at_checked": (
-        "7b3b4b907715d56dba2dcc36dee64db07ef61cd7a456d039e24146cf4d60d20d"
+        "73722eaedc36f6ef5265f77198fb95ea520b686ea71406cca9326a8376c2c13b"
     ),
     "try_recv_if_at_checked_classified": (
-        "5f6184b1089ce6fee2ccb7f1ad8dadc5d47b8b017dfec383f7211eaec6fe9060"
+        "ca657eaedc48fdfdf96aeca1558d4b17774762c22fd0cd7e8cce82270aff5487"
     ),
     "dequeue_selected_locked": (
-        "14a706a0784006194f78d56b50268fca87a84de28f2bf0447d757f7c9dcd63a8"
+        "09219d6ee0f38a277e24a57d4cc9938be2902ec9f7cb45f2aea9e421bb5a24d3"
     ),
 }
 _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256 = {
@@ -771,7 +771,7 @@ _PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 = {
         "66d33b07c062bd6dc4a1b879b0b3624bc0403e59305cbc44763d409f97d109fc"
     ),
     "LockedPreparedFairIngressExactDequeue::commit": (
-        "2df7516317611dcc3fc0f959cca1e80a7b6aa3670a90d2add798f744cfebbd4c"
+        "abdd5434d703b75f26bb2053ac05942564deffb181ddfe040609f6583405ebe9"
     ),
     "locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit": (
         "ea093accfdb33740bc7f21e9c26b17e74a1d7600c885ff45a5718caed8cb457a"

@@ -247,6 +247,132 @@ fn durable_view_cut_retires_carrierless_leader_wire_without_exact_retry() {
     }
 }
 #[test]
+fn certified_view_cut_reopen_retires_restored_timeout_certificate() {
+    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+    ingress.close();
+    let validator = PeerId::new(KeyPair::random().public_key().clone());
+    let alternate_validator = PeerId::new(KeyPair::random().public_key().clone());
+    ingress
+        .configure_roster([validator.clone(), alternate_validator.clone()])
+        .expect("two-validator fair-ingress geometry");
+    ingress.require_leader_wire_lifecycle_gate();
+    ingress.state.lock().leader_wire_max_chunk_count = 2;
+    let message = v2_timeout_certificate(1);
+    let BlockMessage::V2(envelope) = &message else {
+        unreachable!("timeout fixture is a v2 envelope");
+    };
+    let wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) = &envelope.payload else {
+        unreachable!("timeout fixture carries a v2 TimeoutCertificate");
+    };
+    let round = certificate.round;
+    let wire_hash = CryptoHash::new(envelope.encode());
+    let (identity, slot) = {
+        let state = ingress.state.lock();
+        match super::fair_v2_ingress_leader_wire_identity(&state, &message, &validator, wire_hash) {
+            super::FairV2IngressLeaderWireDerivation::Exact { identity, slot } => (identity, slot),
+            _ => panic!("timeout fixture must derive an exact leader-wire identity"),
+        }
+    };
+    let token = super::FairV2IngressLeaderWireToken {
+        source_class: identity.phase.source_class(),
+        identity,
+        slot,
+        admission_ordinal: 7,
+        scheduler_ordinal: 41,
+    };
+    let directory = TempDir::new().expect("temporary leader-wire restart directory");
+    let wal_path = directory.path().join("safety.wal");
+    let owner = [0xA7; 32];
+    let roster = [validator.clone(), alternate_validator.clone()]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let capacity =
+        super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(2, 2)
+            .expect("finite leader-wire geometry");
+    let authority_at = |durable_view, decision_durable| {
+        super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            round.context_id,
+            round.height,
+            owner,
+            durable_view,
+            decision_durable,
+        )
+    };
+    let (gate, _) = super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+        &wal_path,
+        round.context_id,
+        round.height,
+        owner,
+        roster.clone(),
+        capacity,
+        2,
+        authority_at(round.view, false),
+        &[],
+        &[],
+    )
+    .expect("open leader-wire restart fixture");
+    gate.reserve(token.clone())
+        .expect("reserve restart fixture token");
+    gate.mark_ingress(&token)
+        .expect("persist fixture ingress cut");
+    drop(gate);
+    let opened_view = round.view.checked_add(1).expect("fixture view advances");
+    let (gate, restore) = super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+        &wal_path,
+        round.context_id,
+        round.height,
+        owner,
+        roster,
+        capacity,
+        2,
+        authority_at(opened_view, false),
+        &[],
+        &[],
+    )
+    .expect("reopen at the certified view that installing TC(V) produced");
+    assert!(
+        restore.records().is_empty(),
+        "reopening past TC(V) must retire its restored lifecycle owner"
+    );
+    ingress
+        .bind_leader_wire_lifecycle_gate(
+            Arc::clone(&gate),
+            restore,
+            super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            round.context_id,
+            round.height,
+        )
+        .expect("bind restored leader-wire gate");
+    ingress.open().expect("open restored fair ingress");
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            v2_timeout_certificate(0),
+            alternate_validator.clone()
+        )),
+        Ok(super::FairV2IngressPushDisposition::Coalesced)
+    ));
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            v2_timeout_certificate(opened_view),
+            validator
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    assert_eq!(
+        ingress
+            .advance_leader_wire_recovery_cut(authority_at(opened_view, true))
+            .expect("publish the durable Decision cut"),
+        0
+    );
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            v2_timeout_certificate(opened_view),
+            alternate_validator
+        )),
+        Ok(super::FairV2IngressPushDisposition::Coalesced)
+    ));
+}
+#[test]
 fn durable_view_cut_drains_live_obsolete_carrier_despite_downstream_backpressure() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
     let validator = PeerId::new(KeyPair::random().public_key().clone());
@@ -330,7 +456,7 @@ fn durable_view_cut_drains_live_obsolete_carrier_despite_downstream_backpressure
         ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             message, validator
         )),
-        Err(super::FairV2IngressPushError::Rejected(_))
+        Ok(super::FairV2IngressPushDisposition::Coalesced)
     ));
     let state = ingress.state.lock();
     let replacement = state
@@ -488,7 +614,7 @@ fn durable_decision_cut_retires_and_closes_carrierless_leader_wire_height() {
                     message,
                     fixture.validator.clone(),
                 )),
-            Err(super::FairV2IngressPushError::Rejected(_))
+            Ok(super::FairV2IngressPushDisposition::Coalesced)
         ));
     }
     assert!(fixture.ingress.state.lock().open);

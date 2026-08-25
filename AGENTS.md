@@ -188,8 +188,8 @@ Note: First release policy
   secrets and never persist them in repo files or committed docs.
 - For a disposable four-validator Taira deployment, use
   `python3 scripts/taira_devnet.py up`; use its `check` and `down` subcommands
-  for inspection and teardown. Keep the default smoke narrow; request
-  `--full-doctor` only when the public product-route surface is under test.
+  for inspection and teardown. Keep public product-route qualification
+  separate from the disposable local smoke.
 - For public Taira diagnostics use the same-revision compiled
   `iroha taira doctor`. For an explicitly authorized signed public canary, use
   `iroha taira write-canary` with a populated runtime-only copy of

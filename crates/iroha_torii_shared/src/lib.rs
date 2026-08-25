@@ -26,6 +26,19 @@ pub mod sorafs_hedging_billing_api;
 pub mod sorafs_moderation_api;
 /// Public Torii DTOs for Parliament-governed validation-fee policy state.
 pub mod validation_fee_api;
+/// Response header binding a hosted Soracloud response to the served service name.
+pub const SORACLOUD_SERVED_SERVICE_NAME_HEADER: &str = "x-iroha-soracloud-served-service-name";
+/// Response header binding a hosted Soracloud response to the served service version.
+pub const SORACLOUD_SERVED_SERVICE_VERSION_HEADER: &str =
+    "x-iroha-soracloud-served-service-version";
+/// Response header binding a hosted Soracloud response to the served replica slot.
+pub const SORACLOUD_SERVED_REPLICA_SLOT_HEADER: &str = "x-iroha-soracloud-served-replica-slot";
+/// Response header binding a hosted Soracloud response to the authoritative process generation.
+pub const SORACLOUD_SERVED_PROCESS_GENERATION_HEADER: &str =
+    "x-iroha-soracloud-served-process-generation";
+/// Response header binding a hosted Soracloud response to the materialized bundle hash.
+pub const SORACLOUD_SERVED_MATERIALIZED_BUNDLE_HASH_HEADER: &str =
+    "x-iroha-soracloud-served-materialized-bundle-hash";
 /// Required WebSocket subprotocol for canonical Norito event and block streams.
 pub const NORITO_V1_WEBSOCKET_SUBPROTOCOL: &str = "iroha-norito-v1";
 /// Canonical request body for account-signed `POST /v1/fees/quote`.

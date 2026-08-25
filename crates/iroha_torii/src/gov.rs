@@ -2670,9 +2670,9 @@ mod tests {
             .expect("capability route projection end")];
         assert!(capabilities.contains("/v1/gov/ballots/plain"));
         assert!(capabilities.contains("/v1/gov/ballots/zk-v1"));
-        assert!(capabilities.contains(
-            "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof"
-        ));
+        assert!(
+            capabilities.contains("/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof")
+        );
         assert!(!capabilities.contains("\"/v1/gov/parliament/ballots\".to_owned()"));
         assert!(!capabilities.contains("/v1/gov/finalize"));
         assert!(!capabilities.contains("/v1/gov/enact"));
@@ -3208,6 +3208,11 @@ seiyaku GovernedReadFixture {
     fn decode_governance_proposal_instruction(
         instr: &GovernanceProposalInstructionDraftV1,
     ) -> iroha_data_model::isi::InstructionBox {
+        let bytes = hex::decode(&instr.payload_hex).expect("instruction payload hex");
+        iroha_data_model::isi::decode_instruction_from_pair(&instr.wire_id, &bytes)
+            .expect("instruction payload decode")
+    }
+    fn decode_tx_instruction(instr: &TxInstr) -> iroha_data_model::isi::InstructionBox {
         let bytes = hex::decode(&instr.payload_hex).expect("instruction payload hex");
         iroha_data_model::isi::decode_instruction_from_pair(&instr.wire_id, &bytes)
             .expect("instruction payload decode")
@@ -4317,6 +4322,7 @@ seiyaku GovernedReadFixture {
         let rid = "rid-tally-closed-lock".to_string();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let block_hash = iroha_crypto::HashOf::new(&header);
+        let custody = generic_lock_custody(&state);
         {
             let mut block = state.block(header);
             let mut tx = block.transaction();
@@ -4339,7 +4345,7 @@ seiyaku GovernedReadFixture {
                     expiry_height: 0,
                     direction: 0,
                     duration_blocks: 0,
-                    custody: None,
+                    custody,
                 },
             );
             tx.world.governance_locks_mut().insert(rid.clone(), locks);

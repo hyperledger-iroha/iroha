@@ -117,6 +117,7 @@ fn app_infra_manifest_validation_rejects_duplicate_services() {
 #[test]
 fn app_infra_manifest_hash_and_provenance_are_canonical() {
     let manifest = sample_app_infra_manifest();
+    let precondition = SoraAppInfraMutationPreconditionV1::AppAbsent;
     manifest
         .validate()
         .expect("sample app infra manifest must validate");
@@ -130,8 +131,9 @@ fn app_infra_manifest_hash_and_provenance_are_canonical() {
         Hash::new(Encode::encode(&manifest))
     );
     assert_eq!(
-        encode_app_infra_provenance_payload(&manifest).expect("encode app infra provenance"),
-        norito::to_bytes(&manifest).expect("encode canonical manifest")
+        encode_app_infra_provenance_payload(&manifest, &precondition)
+            .expect("encode app infra provenance"),
+        norito::to_bytes(&(manifest, precondition)).expect("encode canonical app mutation")
     );
 }
 #[cfg(feature = "json")]
@@ -920,6 +922,7 @@ fn sample_hf_shared_lease_audit_event() -> SoraHfSharedLeaseAuditEventV1 {
         charged: xor_quantity_from_nanos(5_000),
         refunded: Quantity::zero(),
         lease_expires_at_ms: 604_810_000,
+        failure_reason: None,
         service_name: Some("demo_service".to_string()),
         apartment_name: Some("demo_apartment".to_string()),
     }
@@ -1380,14 +1383,14 @@ fn canonical_deployment_and_hosting_json_graph_requires_explicit_keys() {
         ["resource_profile", "last_error"],
         "HF source record"
     );
-    let planned_placement = sample_hf_placement_record();
+    let placement_fixture = sample_hf_placement_record();
     let queued_window = SoraHfSharedLeaseQueuedWindowV1 {
         sponsor_account_id: sample_account_id(0xB2),
         model_name: "demo_model".to_owned(),
         lease_asset_definition_id: sample_asset_definition_id("4cuvDVPuLBKJyN6dPbRQhmLh68sU"),
         base_fee: xor_quantity_from_nanos(10_000),
-        compute_reservation_fee: planned_placement.total_reservation_fee.clone(),
-        planned_placement,
+        compute_reservation_cap: placement_fixture.total_reservation_fee.clone(),
+        resource_profile: placement_fixture.resource_profile,
         sponsored_at_ms: 1_000,
         window_started_at_ms: 2_000,
         window_expires_at_ms: 3_000,
@@ -1397,7 +1400,7 @@ fn canonical_deployment_and_hosting_json_graph_requires_explicit_keys() {
     assert_required_keys!(
         queued_window,
         SoraHfSharedLeaseQueuedWindowV1,
-        ["compute_reservation_fee", "apartment_name"],
+        ["compute_reservation_cap", "resource_profile", "apartment_name"],
         ["apartment_name"],
         "HF queued lease window"
     );

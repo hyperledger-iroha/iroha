@@ -51,8 +51,12 @@ struct SoracloudInrouPersistedStateV1<'a> {
     service_state_entries: &'a Storage<(String, String, String), SoraServiceStateEntryV1>,
     inrou_host_capabilities: &'a Storage<AccountId, SoraInrouHostCapabilityRecordV1>,
     inrou_service_placements: &'a Storage<(String, String), SoraInrouServicePlacementRecordV1>,
+    uploaded_model_bundles:
+        &'a Storage<(String, String, String), SoraUploadedModelBundleV1>,
     mailbox_messages: &'a Storage<Hash, SoraServiceMailboxMessageV1>,
     runtime_receipts: &'a Storage<Hash, SoraRuntimeReceiptV1>,
+    private_uploaded_model_execution_receipts:
+        &'a Storage<Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
 }
 
 impl SoracloudInrouPersistedStateV1<'_> {
@@ -61,6 +65,7 @@ impl SoracloudInrouPersistedStateV1<'_> {
         reason = "first-release restore validation keeps every authoritative Inrou-reachable store in one fail-closed boundary"
     )]
     fn validate(self) -> Result<(), json::Error> {
+        let mut authoritative_sequences = std::collections::BTreeSet::new();
         let service_revisions = self.service_revisions.view();
         for (key, bundle) in service_revisions.iter() {
             bundle.validate_for_admission().map_err(|error| {
@@ -74,6 +79,27 @@ impl SoracloudInrouPersistedStateV1<'_> {
                 return Err(invalid_soracloud_state(
                     "soracloud_service_revisions",
                     "storage key must match the embedded service_name and service_version",
+                ));
+            }
+        }
+
+        let uploaded_model_bundles = self.uploaded_model_bundles.view();
+        for (key, bundle) in uploaded_model_bundles.iter() {
+            bundle.validate().map_err(|error| {
+                invalid_soracloud_state(
+                    "soracloud_uploaded_model_bundles",
+                    error.to_string(),
+                )
+            })?;
+            let expected_key = (
+                bundle.service_name.as_ref().to_owned(),
+                bundle.model_id.clone(),
+                bundle.weight_version.clone(),
+            );
+            if key != &expected_key {
+                return Err(invalid_soracloud_state(
+                    "soracloud_uploaded_model_bundles",
+                    "storage key must match embedded service_name, model_id, and weight_version",
                 ));
             }
         }
@@ -152,7 +178,7 @@ impl SoracloudInrouPersistedStateV1<'_> {
                         "candidate_version",
                         Some(rollout.candidate_version.as_str()),
                     ),
-                    ("baseline_version", rollout.baseline_version.as_deref()),
+                    ("baseline_version", Some(rollout.baseline_version.as_str())),
                 ] {
                     let Some(version) = version else {
                         continue;
@@ -185,6 +211,11 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     "storage key must match the embedded audit sequence",
                 ));
             }
+            register_soracloud_sequence(
+                &mut authoritative_sequences,
+                "soracloud_app_infra_audit_events",
+                event.sequence,
+            )?;
         }
         for (key, state) in self.app_infra_states.view().iter() {
             state.validate().map_err(|error| {
@@ -376,6 +407,11 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     "storage key must match the embedded audit sequence",
                 ));
             }
+            register_soracloud_sequence(
+                &mut authoritative_sequences,
+                "soracloud_service_audit_events",
+                event.sequence,
+            )?;
         }
 
         for (sequence, event) in self.training_job_audit_events.view().iter() {
@@ -388,6 +424,11 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     "storage key must match the embedded audit sequence",
                 ));
             }
+            register_soracloud_sequence(
+                &mut authoritative_sequences,
+                "soracloud_training_job_audit_events",
+                event.sequence,
+            )?;
         }
 
         for (sequence, event) in self.model_weight_audit_events.view().iter() {
@@ -400,6 +441,11 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     "storage key must match the embedded audit sequence",
                 ));
             }
+            register_soracloud_sequence(
+                &mut authoritative_sequences,
+                "soracloud_model_weight_audit_events",
+                event.sequence,
+            )?;
         }
 
         for (sequence, event) in self.model_artifact_audit_events.view().iter() {
@@ -412,6 +458,11 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     "storage key must match the embedded audit sequence",
                 ));
             }
+            register_soracloud_sequence(
+                &mut authoritative_sequences,
+                "soracloud_model_artifact_audit_events",
+                event.sequence,
+            )?;
         }
 
         for (sequence, event) in self.hf_shared_lease_audit_events.view().iter() {
@@ -424,15 +475,31 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     "storage key must match the embedded audit sequence",
                 ));
             }
+            register_soracloud_sequence(
+                &mut authoritative_sequences,
+                "soracloud_hf_shared_lease_audit_events",
+                event.sequence,
+            )?;
         }
 
-        for (_, record) in self.model_host_violation_evidence.view().iter() {
+        for (key, record) in self.model_host_violation_evidence.view().iter() {
             record.validate().map_err(|error| {
                 invalid_soracloud_state(
                     "soracloud_model_host_violation_evidence",
                     error.to_string(),
                 )
             })?;
+            if key != &record.evidence_id {
+                return Err(invalid_soracloud_state(
+                    "soracloud_model_host_violation_evidence",
+                    "storage key must match the embedded evidence_id",
+                ));
+            }
+            register_soracloud_sequence(
+                &mut authoritative_sequences,
+                "soracloud_model_host_violation_evidence",
+                record.sequence,
+            )?;
         }
 
         for (sequence, event) in self.agent_apartment_audit_events.view().iter() {
@@ -445,6 +512,11 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     "storage key must match the embedded audit sequence",
                 ));
             }
+            register_soracloud_sequence(
+                &mut authoritative_sequences,
+                "soracloud_agent_apartment_audit_events",
+                event.sequence,
+            )?;
         }
 
         for (key, entry) in self.service_state_entries.view().iter() {
@@ -549,7 +621,8 @@ impl SoracloudInrouPersistedStateV1<'_> {
             }
         }
 
-        for (key, message) in self.mailbox_messages.view().iter() {
+        let mailbox_messages = self.mailbox_messages.view();
+        for (key, message) in mailbox_messages.iter() {
             message.validate().map_err(|error| {
                 invalid_soracloud_state("soracloud_mailbox_messages", error.to_string())
             })?;
@@ -559,8 +632,125 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     "storage key must match the embedded message_id",
                 ));
             }
+            register_soracloud_sequence(
+                &mut authoritative_sequences,
+                "soracloud_mailbox_messages",
+                message.enqueue_sequence,
+            )?;
+            let source_bundle = service_revisions
+                .get(&(
+                    message.from_service.as_ref().to_owned(),
+                    message.from_service_version.clone(),
+                ))
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_mailbox_messages",
+                        "source service revision must exist in admitted Soracloud state",
+                    )
+                })?;
+            let source_handler = source_bundle
+                .service
+                .handlers
+                .iter()
+                .find(|handler| handler.handler_name == message.from_handler)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_mailbox_messages",
+                        "source handler must exist in the bound admitted service revision",
+                    )
+                })?;
+            if !matches!(
+                source_handler.class,
+                iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update
+                    | iroha_data_model::soracloud::SoraServiceHandlerClassV1::PrivateUpdate
+            ) || source_handler.mailbox.is_none()
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_mailbox_messages",
+                    "source handler must be an update/private_update mailbox handler",
+                ));
+            }
+            let destination_bundle = service_revisions
+                .get(&(
+                    message.to_service.as_ref().to_owned(),
+                    message.to_service_version.clone(),
+                ))
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_mailbox_messages",
+                        "destination service revision must exist in admitted Soracloud state",
+                    )
+                })?;
+            let destination_handler = destination_bundle
+                .service
+                .handlers
+                .iter()
+                .find(|handler| handler.handler_name == message.to_handler)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_mailbox_messages",
+                        "destination handler must exist in the bound admitted service revision",
+                    )
+                })?;
+            let destination_mailbox = destination_handler.mailbox.as_ref().ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_mailbox_messages",
+                    "destination handler must carry an admitted mailbox contract",
+                )
+            })?;
+            if !matches!(
+                destination_handler.class,
+                iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update
+                    | iroha_data_model::soracloud::SoraServiceHandlerClassV1::PrivateUpdate
+            ) {
+                return Err(invalid_soracloud_state(
+                    "soracloud_mailbox_messages",
+                    "destination handler must be update/private_update",
+                ));
+            }
+            let payload_len = u64::try_from(message.payload_bytes.len()).map_err(|error| {
+                invalid_soracloud_state(
+                    "soracloud_mailbox_messages",
+                    format!("payload length does not fit u64: {error}"),
+                )
+            })?;
+            if payload_len > destination_mailbox.max_message_bytes.get() {
+                return Err(invalid_soracloud_state(
+                    "soracloud_mailbox_messages",
+                    "payload exceeds the bound destination mailbox contract",
+                ));
+            }
+            let retention_sequences = destination_mailbox.retention_sequences.get();
+            if message.delivery_delay_sequences >= retention_sequences
+                || message.available_after_sequence
+                    != message
+                        .enqueue_sequence
+                        .checked_add(u64::from(message.delivery_delay_sequences))
+                        .ok_or_else(|| {
+                            invalid_soracloud_state(
+                                "soracloud_mailbox_messages",
+                                "derived availability sequence overflows",
+                            )
+                        })?
+                || message.expires_at_sequence
+                    != message
+                        .enqueue_sequence
+                        .checked_add(u64::from(retention_sequences))
+                        .ok_or_else(|| {
+                            invalid_soracloud_state(
+                                "soracloud_mailbox_messages",
+                                "derived expiry sequence overflows",
+                            )
+                        })?
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_mailbox_messages",
+                    "ledger schedule must be exactly derived from enqueue, delay, and destination retention",
+                ));
+            }
         }
 
+        let mut consumed_mailbox_messages = std::collections::BTreeSet::new();
         for (key, receipt) in self.runtime_receipts.view().iter() {
             receipt.validate().map_err(|error| {
                 invalid_soracloud_state("soracloud_runtime_receipts", error.to_string())
@@ -571,8 +761,153 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     "storage key must match the embedded receipt_id",
                 ));
             }
+            register_soracloud_sequence(
+                &mut authoritative_sequences,
+                "soracloud_runtime_receipts",
+                receipt.emitted_sequence,
+            )?;
+            let receipt_bundle = service_revisions
+                .get(&(
+                    receipt.service_name.as_ref().to_owned(),
+                    receipt.service_version.clone(),
+                ))
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_runtime_receipts",
+                        "receipt service revision must exist in admitted Soracloud state",
+                    )
+                })?;
+            let receipt_handler = receipt_bundle
+                .service
+                .handlers
+                .iter()
+                .find(|handler| handler.handler_name == receipt.handler_name)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_runtime_receipts",
+                        "receipt handler must exist in the bound admitted service revision",
+                    )
+                })?;
+            if receipt_handler.class != receipt.handler_class
+                || receipt_handler.certified_response != receipt.certified_by
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_runtime_receipts",
+                    "receipt class and certification must match the admitted handler contract",
+                ));
+            }
+            let hf_generated =
+                crate::soracloud_runtime::soracloud_hf_generated_source_binding(receipt_bundle)
+                    .is_some();
+            if hf_generated
+                != matches!(
+                    receipt.execution_host.as_ref(),
+                    Some(
+                        iroha_data_model::soracloud::SoraRuntimeExecutionHostV1::HfModelHost(_)
+                    )
+                )
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_runtime_receipts",
+                    "HF-generated receipts and only those receipts must carry HF model-host attribution",
+                ));
+            }
+            if let Some(message_id) = receipt.mailbox_message_id {
+                let message = mailbox_messages.get(&message_id).ok_or_else(|| {
+                        invalid_soracloud_state(
+                            "soracloud_runtime_receipts",
+                            "mailbox receipt must reference an authoritative mailbox message",
+                        )
+                    })?;
+                if message.to_service != receipt.service_name
+                    || message.to_service_version != receipt.service_version
+                    || message.to_handler != receipt.handler_name
+                    || message.payload_commitment != receipt.request_commitment
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_runtime_receipts",
+                        "mailbox receipt must match the exact destination revision, handler, and payload commitment",
+                    ));
+                }
+                if receipt.emitted_sequence < message.available_after_sequence
+                    || receipt.emitted_sequence >= message.expires_at_sequence
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_runtime_receipts",
+                        "mailbox receipt sequence must be within the message delivery window",
+                    ));
+                }
+                if !consumed_mailbox_messages.insert(message_id) {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_runtime_receipts",
+                        "one mailbox message must not be consumed by multiple receipts",
+                    ));
+                }
+            }
+        }
+
+        for (key, receipt) in self
+            .private_uploaded_model_execution_receipts
+            .view()
+            .iter()
+        {
+            receipt.validate().map_err(|error| {
+                invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_receipts",
+                    error.to_string(),
+                )
+            })?;
+            if key != &receipt.receipt_id {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_receipts",
+                    "storage key must match the embedded receipt_id",
+                ));
+            }
+            register_soracloud_sequence(
+                &mut authoritative_sequences,
+                "soracloud_private_uploaded_model_execution_receipts",
+                receipt.emitted_sequence,
+            )?;
+            let bundle = uploaded_model_bundles
+                .get(&(
+                    receipt.service_name.as_ref().to_owned(),
+                    receipt.model_id.clone(),
+                    receipt.weight_version.clone(),
+                ))
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_private_uploaded_model_execution_receipts",
+                        "private receipt must reference an authoritative uploaded-model bundle",
+                    )
+                })?;
+            if bundle.sorafs_manifest_digest != receipt.model_manifest_digest
+                || bundle.bundle_root != receipt.model_bundle_root
+                || bundle.decryption_policy_ref != receipt.policy_id
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_private_uploaded_model_execution_receipts",
+                    "private receipt must exactly match its uploaded-model bundle and policy",
+                ));
+            }
         }
         Ok(())
+    }
+}
+
+fn register_soracloud_sequence(
+    authoritative_sequences: &mut std::collections::BTreeSet<u64>,
+    field: &str,
+    sequence: u64,
+) -> Result<(), json::Error> {
+    if authoritative_sequences.insert(sequence) {
+        Ok(())
+    } else {
+        Err(invalid_soracloud_state(
+            field,
+            format!(
+                "authoritative sequence `{sequence}` collides with another Soracloud record"
+            ),
+        ))
     }
 }
 
@@ -2691,7 +3026,7 @@ fn parse_world(
     let soracloud_model_artifact_audit_events =
         take_required(&mut map, "soracloud_model_artifact_audit_events")?;
     let soracloud_uploaded_model_bundles =
-        take_optional_default(&mut map, "soracloud_uploaded_model_bundles")?;
+        take_required(&mut map, "soracloud_uploaded_model_bundles")?;
     let soracloud_model_host_capabilities =
         take_optional_default(&mut map, "soracloud_model_host_capabilities")?;
     let soracloud_inrou_host_capabilities =
@@ -2710,6 +3045,8 @@ fn parse_world(
         take_required(&mut map, "soracloud_inrou_service_placements")?;
     let soracloud_mailbox_messages = take_required(&mut map, "soracloud_mailbox_messages")?;
     let soracloud_runtime_receipts = take_required(&mut map, "soracloud_runtime_receipts")?;
+    let soracloud_private_uploaded_model_execution_receipts =
+        take_required(&mut map, "soracloud_private_uploaded_model_execution_receipts")?;
     SoracloudInrouPersistedStateV1 {
         service_revisions: &soracloud_service_revisions,
         service_deployments: &soracloud_service_deployments,
@@ -2727,14 +3064,13 @@ fn parse_world(
         service_state_entries: &soracloud_service_state_entries,
         inrou_host_capabilities: &soracloud_inrou_host_capabilities,
         inrou_service_placements: &soracloud_inrou_service_placements,
+        uploaded_model_bundles: &soracloud_uploaded_model_bundles,
         mailbox_messages: &soracloud_mailbox_messages,
         runtime_receipts: &soracloud_runtime_receipts,
+        private_uploaded_model_execution_receipts:
+            &soracloud_private_uploaded_model_execution_receipts,
     }
     .validate()?;
-    let soracloud_private_uploaded_model_execution_receipts = take_optional_default(
-        &mut map,
-        "soracloud_private_uploaded_model_execution_receipts",
-    )?;
     let provider_owners = take_required(&mut map, "provider_owners")?;
     let provider_ingest_completion_authorities =
         take_required(&mut map, "provider_ingest_completion_authorities")?;

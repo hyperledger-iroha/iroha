@@ -5563,7 +5563,7 @@ pub(crate) mod tests {
         },
         kura::Kura,
         query::store::LiveQueryStore,
-        state::{State, StateReadOnly as _, World},
+        state::{State, World},
         tle_release::{
             ParliamentTimedOvnCastingPhaseV1, TimedOvnCastingAuthorizationErrorV1,
             ValidatedTleKeySessionV1, authorize_parliament_timed_ovn_casting_context_v1,
@@ -6892,7 +6892,7 @@ pub(crate) mod tests {
         let governance_attempt_id = state.attempt.id;
         let ballot_attempt_id = BallotAttemptId::derive_v1(body_id, 0);
         let network_id = network_id();
-        let network_binding = *network_id.as_ref();
+        let network_binding = *network_id.as_bytes();
         let tle_key = casting_tle_key(network_binding, 0xA0);
         let tle_key_session_id = tle_key.public_state().key_session_id;
         let release_beacon_session_id = beacon_session(0xA4);
@@ -7466,7 +7466,7 @@ pub(crate) mod tests {
                 retry_tle_session,
                 key_session_id,
                 retry_beacon,
-                41,
+                50,
                 policy,
                 retry_release_height,
             )

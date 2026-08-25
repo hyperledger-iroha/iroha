@@ -258,7 +258,7 @@ fn expected_service_manifest() -> SoraServiceManifestV1 {
                     queue_name: "updates".parse().expect("valid name"),
                     max_pending_messages: NonZeroU32::new(1_024).expect("nonzero"),
                     max_message_bytes: NonZeroU64::new(65_536).expect("nonzero"),
-                    retention_blocks: NonZeroU32::new(1_440).expect("nonzero"),
+                    retention_sequences: NonZeroU32::new(1_440).expect("nonzero"),
                 }),
             },
             SoraServiceHandlerV1 {
@@ -271,7 +271,7 @@ fn expected_service_manifest() -> SoraServiceManifestV1 {
                     queue_name: "private_updates".parse().expect("valid name"),
                     max_pending_messages: NonZeroU32::new(256).expect("nonzero"),
                     max_message_bytes: NonZeroU64::new(131_072).expect("nonzero"),
-                    retention_blocks: NonZeroU32::new(2_880).expect("nonzero"),
+                    retention_sequences: NonZeroU32::new(2_880).expect("nonzero"),
                 }),
             },
         ],
@@ -1393,7 +1393,7 @@ fn service_handler_rejects_mailbox_on_query_handler() {
         queue_name: "query_mailbox".parse().expect("valid name"),
         max_pending_messages: NonZeroU32::new(16).expect("nonzero"),
         max_message_bytes: NonZeroU64::new(256).expect("nonzero"),
-        retention_blocks: NonZeroU32::new(32).expect("nonzero"),
+        retention_sequences: NonZeroU32::new(32).expect("nonzero"),
     });
     let error = handler
         .validate()

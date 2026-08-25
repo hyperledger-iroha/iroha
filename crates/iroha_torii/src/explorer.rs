@@ -692,6 +692,7 @@ pub(crate) struct ExplorerInstructionDto {
     pub authority: String,
     pub created_at: String,
     pub kind: String,
+    #[norito(rename = "box")]
     pub r#box: ExplorerInstructionBoxDto,
     pub transaction_hash: String,
     pub transaction_status: String,
@@ -2986,6 +2987,12 @@ mod tests {
         let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         let dto = instruction_dto_with_kind(&tx, 7, &result, &instruction, kind, 0);
         assert_eq!(dto.kind, "AddSignatory");
+        let serialized = json::to_value(&dto).expect("instruction dto should serialize");
+        let Value::Object(fields) = serialized else {
+            panic!("instruction dto should serialize into an object");
+        };
+        assert!(fields.contains_key("box"));
+        assert!(!fields.contains_key("r#box"));
     }
     #[test]
     fn instruction_box_dto_wraps_payload_and_encoded() {

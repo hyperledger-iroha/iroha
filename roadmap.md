@@ -634,6 +634,9 @@ runtime receipt only from the exact checked dequeue and terminalizes that body
 after every registry, coordinator, executor, service, and worker
 acknowledgement. Superseded generic WAL, storage-recovery, dedicated parked-
 completion, and coordinator-to-runtime ordinal adoption surfaces are absent.
+The production tree also contains no generic `step_recovery`, `RecoveryFifo`,
+retry-retained/idle scheduler, `RecoveryAfterClocksArmed`, or generic
+`Recovery*` effect owner; PendingKura is the sole lifecycle scheduler.
 
 Exact checkpoint evidence is recorded in `status.md`. The final source-only
 Sumeragi audit matched the frozen 1,745-path formal cone at SHA-256
@@ -663,8 +666,9 @@ The outstanding revision-4 work includes:
   preflight that rehydrates late canonical ownership, services historical
   dependencies, and requires every winning certificate plus its application
   witness to be durable before rollover authority or successor activation.
-  There is no incomplete-session successor branch. Run the remaining focused
-  Rust and four-validator loss/hold/heal corridors against this exact source
+  There is no incomplete-session successor branch. Preserve the completed
+  focused Rust and four-validator loss/hold/heal evidence while closing the
+  remaining release-qualification work against the eventual merged source
   seal.
 - Run a fresh strict source-bound TLAPS wave over the exact-cardinality change
   closure. The TLA model now preserves `DualQuorum` as mathematical
@@ -939,9 +943,10 @@ The outstanding revision-4 work includes:
   post-LedgerV1-fsync fail-stop in exact four-validator BLS/RS16 contexts, plus
   real four-validator success, view-change, restart, and authenticated
   consensus Hold/Drop convergence. The feature-only controller and exact
-  four-validator test now cover authenticated, Proposal-bound `PayloadChunk`
-  Hold/heal selection, but the current-tree integration acceptance run remains
-  outstanding. The other strict live-network gaps are an unskipped invalid-
+  four-validator test cover authenticated, Proposal-bound `PayloadChunk`
+  Hold/heal selection, and the final current-tree locked/offline acceptance run
+  is green, 1/1 in 84.82 seconds. The other strict live-network gaps are an
+  unskipped invalid-
   body-report test, merge-sidecar-recovery test, publication-phase-targeted
   restart matrix, and the ignored strongest observer/body-recovery case. These
   are evidence gaps, not missing production joins. CompleteTip
@@ -985,8 +990,10 @@ The outstanding revision-4 work includes:
   adapter/body-store/service startup path. The isolated one-height PendingKura
   path now has its dedicated lifecycle state and an executable Kura-first
   shutdown/finalization fixture with source mutations. The former monolithic
-  height body is removed; the remaining gate is coordinated Rust execution of
-  that restricted no-clock corridor and the full source/formal suite.
+  height body is removed. The current-source runtime slice is 159/159, the
+  lifecycle height-driver slice is 12/12, and the production-shaped terminal
+  CurrentServe regressions are green; broader formal baseline debt and the
+  unrelated all-target workspace errors remain release-wide gates.
 - Exercise autonomous carrier terminal gating, bootstrap roll-forward, and
   lifecycle retention with the focused Kura/Sumeragi regressions and a fresh
   disposable four-validator devnet. Require the multi-stage workload to apply,
@@ -1012,11 +1019,13 @@ The outstanding revision-4 work includes:
   retries on their immutable owner, reject owner replacement before refinement,
   and retain only the separately typed monotone Fetch/Store/Validate authority
   lineage.
-- Preserve the clean final-source 462/462 enlarged-stack coordinator and exact
-  `iroha_core` compile receipts while closing release evidence. Resolve or
-  explicitly scope the 19 unrelated/pre-existing source-budget findings before
-  release evidence is sealed. Run the remaining workspace tests, strict Clippy,
-  and the revision-4 formal syntax, invariant, and mutation corridor. Focused
+- Preserve the final-seam targeted lifecycle and exact `iroha_core`
+  compilation receipts while closing release evidence. The current-source
+  enlarged-stack coordinator sweep is green 510/510. Resolve or explicitly
+  scope all 66 broader source-budget findings before release evidence is
+  sealed. Run the
+  remaining workspace tests, strict Clippy, and the revision-4 formal syntax,
+  invariant, and mutation corridor. Focused
   consensus validation must include pre-Decision cache rejection,
   disjoint-roster historical lane signing/recovery, exact-predecessor sidecar
   reservation under outsider pressure, DA resource-cap boundaries, volatile
@@ -1527,8 +1536,11 @@ source validation.
   `python3 scripts/taira_devnet.py up`. It must generate fresh keys, canonical
   Taira chain identity, NPoS Nexus configuration, validate all four daemon
   configs with the current binaries, start only its owned cohort, and require
-  readiness, a blocking signed transaction, converged advancing heights, and
-  semantic MCP initialization before returning success.
+  readiness, typed `Applied` status for its signed transaction, converged
+  advancing heights, semantic MCP initialization, bounded live diagnostics,
+  and post-smoke stability before returning success. Keep the exact
+  per-subcommand CLI preflight ahead of cohort replacement, and reject invalid
+  or non-finite deadlines before any mutation.
 - `up` must build the fixed `local-release` toolchain for the exact native
   Linux/AArch64 Rust target from the `optimizations` worktree. Observe the HEAD,
   tracked diff, and non-ignored untracked entries before and after the run, while
@@ -1541,13 +1553,15 @@ source validation.
   `check` reports configured capacity and current cohort health only; it must
   not claim to requalify KVM, source/binary identity, signed finality, or Inrou
   routes.
+- Once peer shutdown is proven, `down` must destroy every generated peer,
+  operator, and onboarding signer plus the onboarding token.
   Do not restore release authorities, source-seal handoffs, publication
   receipts, LaunchAgents, systemd validator units, predecessor rollback, or
   24-hour soak requirements to this path.
 - Treat public Taira product-surface qualification as a separate operator
   activity. The compiled `iroha taira doctor` and `iroha taira write-canary`
-  commands remain available for an explicitly configured public deployment;
-  the broad doctor is opt-in for disposable networks.
+  commands remain available for an explicitly configured public deployment,
+  not as disposable-local deployment gates.
 
 ## ZK-ACE JavaScript signed-transaction parity
 

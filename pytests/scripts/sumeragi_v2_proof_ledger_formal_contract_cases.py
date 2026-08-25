@@ -164,9 +164,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('kura/tests/13_manifests_and_fsync.rs'),
     ),
     Path('crates/iroha_core/src/kura/autonomous_application_evidence.rs'): (Path('passive_diagnostic_reads.rs'),),
-    Path('crates/iroha_core/src/kura/tests/10_native_amx_and_roster.rs'): (
-        Path('10c_native_amx_latest_index_support_and_bounds.rs'),
-    ),
+    Path('crates/iroha_core/src/kura/tests/10_native_amx_and_roster.rs'): (Path('10c_native_amx_latest_index_support_and_bounds.rs'),),
     Path('crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs'): (
         Path('autonomous_merge_bundle_support.rs'),
         Path('autonomous_reservation_types.rs'),
@@ -260,8 +258,11 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('snapshot/write_roundtrip_tests.rs'),
         Path('snapshot/reconciliation_generation_tests.rs'),
     ),
-    Path('crates/iroha_core/src/sumeragi/evidence.rs'): (
-        Path('evidence/missing_signer_pop_test.rs'),
+    Path('crates/iroha_core/src/sumeragi/evidence.rs'): (Path('evidence/missing_signer_pop_test.rs'),),
+    Path('crates/iroha_core/src/sumeragi/serviced_candidate_store.rs'): (Path('serviced_candidate_store_cases.rs'),),
+    Path('crates/iroha_core/src/sumeragi/serviced_candidate_store_cases.rs'): (
+        Path('serviced_candidate_store/body_terminal_recovery_tests.rs'),
+        Path('serviced_candidate_store_tail_tests.rs'),
     ),
     Path('crates/iroha_p2p/src/network.rs'): (
         Path('network/handle_update_tests.rs'),
@@ -288,6 +289,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('main/startup_tail_tests.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/mod.rs'): (
+        Path('fair_v2_ingress_leader_wire_identity.rs'),
         Path('fair_v2_ingress_selector.rs'),
         Path('tests/queue_plan_admission_handoff.rs'),
         Path('tests/mod_authoritative_runtime_gate_01_support.rs'),
@@ -303,6 +305,8 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/sumeragi/status.rs'): (Path('status/test_guards.rs'),),
     Path('crates/iroha_core/src/sumeragi/v2.rs'): (
+        Path('v2_adapter_persistence_and_wal_types.rs'),
+        Path('v2_recovered_decision_validate_adapter_startup.rs'),
         Path('v2_authenticated_recovered_adapter_startup_impl.rs'),
         Path('v2_verified_height_context_recovered_output_auth.rs'),
         Path('v2_adapter_equivocation_evidence.rs'),
@@ -315,16 +319,13 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_adapter_main_03.rs'),
         Path('tests/v2_adapter_main_04.rs'),
     ),
-    Path('crates/iroha_core/src/sumeragi/v2_recovery.rs'): (
-        Path('v2_recovery_tests.rs'),
-    ),
+    Path('crates/iroha_core/src/sumeragi/v2_recovery.rs'): (Path('v2_recovery_tests.rs'),),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs'): (
         Path('v2_lifecycle_coordinator_state_helpers.rs'),
         Path('tests/v2_lifecycle_coordinator_explorer_cases.rs'),
     ),
-    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs'): (
-        Path('v2_lifecycle_launch_tests.rs'),
-    ),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs'): (Path('v2_lifecycle_launch_tests.rs'),),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs'): (Path('v2_lifecycle_launch_recovered_fetch_source_tests.rs'), Path('v2_lifecycle_launch_recovered_fetch_settlement_source_tests.rs')),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs'): (
         Path('v2_lifecycle_ledger_operations.rs'),
         Path('v2_lifecycle_ledger_store.rs'),
@@ -335,13 +336,13 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lifecycle_ledger_tests_durable_recovery_02.rs'),
         Path('v2_lifecycle_ledger_tests_frame_and_store.rs'),
     ),
-    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs'): (
-        Path('tests/v2_lifecycle_projection_cases.rs'),
-    ),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs'): (Path('tests/v2_lifecycle_projection_cases.rs'),),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs'): (
+        Path('tests/v2_lifecycle_scheduler_completion_cases.rs'),
         Path('tests/v2_lifecycle_scheduler_certified_serve_cases.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs'): (
+        Path('v2_lifecycle_replay_authority_recovered_decision_validate.rs'),
         Path('v2_lifecycle_replay_authority_live_wal.rs'),
         Path('v2_lifecycle_replay_authority_certified_serve.rs'),
         Path('v2_lifecycle_replay_authority_certified_body.rs'),
@@ -355,12 +356,14 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lifecycle_work_registry_validate_recovery_parent.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs'): (
+        Path('v2_lifecycle_work_registry_validate_recovery_census_impl.rs'),
         Path('v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs'),
         Path('v2_lifecycle_work_registry_validate_completion_impl.rs'),
         Path('v2_lifecycle_work_registry_access_impl.rs'),
         Path('v2_lifecycle_work_registry_validate_recovery_execution_impl.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs'): (
+        Path('v2_lifecycle_work_registry_body_validate_carriers.rs'),
         Path('v2_lifecycle_work_registry_pre_admission.rs'),
         Path('v2_lifecycle_work_registry_live_wal_sign.rs'),
         Path('v2_lifecycle_work_registry_output.rs'),
@@ -380,10 +383,13 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_lifecycle_work_registry_recovery_surface_cases.rs'),
         Path('tests/v2_lifecycle_work_registry_replay_evidence_cases.rs'),
     ),
-    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs'): (
-        Path('v2_lifecycle_work_registry_recovered_wal_persisted_ledger_impl.rs'),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs'): (
+        Path('v2_lifecycle_work_registry_validate_apply_cases.rs'),
+        Path('v2_lifecycle_work_registry_validate_completion_cases.rs'),
     ),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs'): (Path('v2_lifecycle_work_registry_recovered_wal_persisted_ledger_impl.rs'),),
     Path('crates/iroha_core/src/sumeragi/v2_runtime.rs'): (
+        Path('v2_runtime_lifecycle_ordinal_source.rs'),
         Path('v2_runtime_durable_recovery_pending.rs'),
         Path('v2_runtime_effect_ownership_core_impl.rs'),
         Path('v2_runtime_effect_ownership_rebind_impl.rs'),
@@ -428,7 +434,9 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_worker/kura_replica_advert_refresh.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs'): (
+        Path('v2_worker/pending_kura_apply_io_snapshot.rs'),
         Path('v2_worker/current_lane_output_rollover_claim.rs'),
+        Path('v2_worker/production_services_drop_impl.rs'),
         Path('v2_worker/effect_services_impl.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_runner.rs'): (
@@ -461,6 +469,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('reducer/counterfeit_boundary_capability_test.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_core/refinement.rs'): (
+        Path('refinement/leader_wire_admission_trace_projection.rs'),
         Path('refinement/first_release_witness.rs'),
         Path('refinement/volatile_summary_well_formed.rs'),
         Path('refinement/post_carrier_transition.rs'),
@@ -479,8 +488,11 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_core_terminal_transactionality.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_effects.rs'): (
+        Path('v2_effects_recovered_fetch_and_pipeline_types.rs'),
         Path('v2_effects_recovered_lifecycle_output_service.rs'),
         Path('v2_effects_lifecycle_admission_settlement.rs'),
+        Path('v2_effects_runner_decision_cleanup_plan.rs'),
+        Path('v2_effects_test_consumer_wrappers.rs'),
         Path('tests/v2_effects_main_00.rs'),
         Path('tests/v2_effects_main_01.rs'),
         Path('tests/v2_effects_main_02.rs'),
@@ -506,39 +518,27 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lane_work/autonomous_retirement_and_merge_tests.rs'),
         Path('v2_lane_work/queue_plan_admission_handoff_tests.rs'),
     ),
-    Path('crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs'): (
-        Path('v2_lane_work_effect_queue.rs'),
-    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs'): (Path('v2_lane_work_effect_queue.rs'),),
     Path('integration_tests/tests/sumeragi_v2_runner.rs'): (
         Path('sumeragi_v2_runner/prepare_qc_split_tests.rs'),
         Path('sumeragi_v2_runner/status_validation_helpers.rs'),
         Path('sumeragi_v2_runner/status_set_validation.rs'),
     ),
-    Path('integration_tests/tests/sumeragi_v2_runner/prepare_qc_split_tests.rs'): (
-        Path('restart_timing_test.rs'),
-    ),
+    Path('integration_tests/tests/sumeragi_v2_runner/prepare_qc_split_tests.rs'): (Path('restart_timing_test.rs'),),
     Path('crates/iroha_sumeragi_core/src/verus_proofs.rs'): (
         Path('verus_proofs/production_transition_contracts.rs'),
         Path('verus_proofs/in_flight_first_release_proofs.rs'),
         Path('verus_proofs/production_kernel_tail.rs'),
     ),
-    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_main_00.rs'): (
-        Path('v2_adapter_activation_context.rs'),
-    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_main_00.rs'): (Path('v2_adapter_activation_context.rs'),),
     Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_main_03.rs'): (
         Path('v2_adapter_04_wal_recovery.rs'),
         Path('v2_adapter_04b_lifecycle_startup.rs'),
         Path('v2_adapter_05_direct_lifecycle.rs'),
     ),
-    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle.rs'): (
-        Path('v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs'),
-    ),
-    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs'): (
-        Path('v2_adapter_04_wal_recovery_decision_classifier_cases.rs'),
-    ),
-    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs'): (
-        Path('v2_adapter_04b_lifecycle_startup_tail.rs'),
-    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle.rs'): (Path('v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs'),),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs'): (Path('v2_adapter_04_wal_recovery_decision_classifier_cases.rs'),),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs'): (Path('v2_adapter_04b_lifecycle_startup_tail.rs'),),
     Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_main_04.rs'): (
         Path('v2_adapter_01_replay_and_registry.rs'),
         Path('v2_adapter_02_view_and_lock_progress.rs'),
@@ -557,20 +557,21 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_effects_02_admission_handoffs.rs'),
     ),
 }
-
 REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
-    Path("crates/iroha_config/src/parameters/actual.rs"): (
-        Path("crates/iroha_config/src/parameters/actual/tests.rs"),
-    ),
+    Path("crates/iroha_config/src/parameters/actual.rs"): (Path("crates/iroha_config/src/parameters/actual/tests.rs"),),
     Path("integration_tests/tests/sumeragi_v2_runner.rs"): (
         Path(
             "integration_tests/tests/sumeragi_v2_runner/"
             "prepare_qc_split_tests.rs"
         ),
     ),
+    Path("crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"): (
+        Path("crates/iroha_core/src/sumeragi/serviced_candidate_store_cases.rs"),
+    ),
     Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"): (
         Path("crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs"),
     ),
+    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"): (Path("crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs"),),
     Path("crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"): (
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests.rs"),
@@ -584,6 +585,10 @@ REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
         Path(
             "crates/iroha_core/src/sumeragi/"
             "v2_lifecycle_work_registry_validate_recovery.rs"
+        ),
+        Path(
+            "crates/iroha_core/src/sumeragi/tests/"
+            "v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs"
         ),
     ),
     Path(
@@ -601,18 +606,15 @@ REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
         Path("crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs"),
     ),
 }
-REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS = tuple(
-    companion for companions in REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS.values() for companion in companions
-)
+REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS = tuple(companion for companions in REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS.values() for companion in companions)
 REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     parent
     for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
-assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 66
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 12
-assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 12
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 54
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 70
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 15
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 55
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
     REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
@@ -621,10 +623,7 @@ assert (
     | set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)
     == set(REVIEWED_RUST_INCLUDE_MANIFESTS)
 )
-assert set(REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS).issubset(
-    REVIEWED_RUST_INCLUDE_MANIFESTS
-)
-
+assert set(REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS).issubset(REVIEWED_RUST_INCLUDE_MANIFESTS)
 
 def copy_merge_runtime_config_fixture(tmp_path: Path) -> Path:
     """Copy only the config-v6 merge/pending projection and its live consumers."""
