@@ -805,6 +805,7 @@ struct RecoveredDecisionStageProjectionFixture {
     live_fetch: LifecycleLedgerRecordV1,
     lineage: RecoveredDecisionApplyCandidateLineageV1,
     collision_validate: LifecycleLedgerRecordV1,
+    validate_crash_prefix: LifecycleLedgerV1,
 }
 
 impl RecoveredDecisionApplyStageProjectionV1 for RecoveredDecisionStageProjectionFixture {
@@ -939,7 +940,7 @@ fn recovered_decision_store_crash_prefix_fixture(
         None,
         collision_root.digest(),
         validate_case.payload,
-        validate_case.authority,
+        validate_case.authority.clone(),
         DurableContinuation::None,
     )
     .expect("construct exact-key recovered Decision Validate collision");
@@ -947,6 +948,44 @@ fn recovered_decision_store_crash_prefix_fixture(
         *Hash::new(b"unrelated row after recovered Decision Store").as_ref(),
     ));
     let unrelated = unrelated_live_record(context, OwnerId::new(unrelated_root, 3), 3, 0xD8);
+    let advanced_store = LifecycleLedgerRecordV1::new(
+        store_case.key,
+        owner,
+        2,
+        store_case.work_class,
+        store_case.stage,
+        Some(TerminalOutcome::Advanced),
+        causal_root.digest(),
+        store_case.payload,
+        store_case.authority,
+        DurableContinuation::successor(DurableContinuationEdge::StoreToValidate, 4),
+    )
+    .expect("construct advanced recovered Decision Store fixture");
+    let live_validate = LifecycleLedgerRecordV1::new(
+        validate_case.key,
+        owner,
+        4,
+        validate_case.work_class,
+        validate_case.stage,
+        None,
+        causal_root.digest(),
+        validate_case.payload,
+        validate_case.authority.clone(),
+        DurableContinuation::None,
+    )
+    .expect("construct recovered Decision Validate crash cut");
+    let validate_crash_prefix = LifecycleLedgerV1::new(
+        context,
+        4,
+        vec![
+            advanced_fetch.clone(),
+            advanced_store,
+            unrelated.clone(),
+            live_validate,
+        ],
+        BTreeMap::new(),
+    )
+    .expect("construct exact Validate crash prefix beside unrelated history");
     let ledger = LifecycleLedgerV1::new(
         context,
         3,
@@ -961,6 +1000,7 @@ fn recovered_decision_store_crash_prefix_fixture(
             live_fetch,
             lineage,
             collision_validate,
+            validate_crash_prefix,
         },
     )
 }
@@ -1433,6 +1473,53 @@ fn recovered_decision_store_crash_prefix_restarts_once_then_stutters() {
     let (stutter, stutter_apply, stutter_changed) = successor
         .stage_recovered_decision_apply_projection(&projection)
         .expect("coalesce the already complete recovered Decision chain");
+    assert!(!stutter_changed);
+    assert_eq!(stutter_apply, apply_ordinal);
+    assert_eq!(stutter, successor);
+}
+
+#[test]
+fn recovered_decision_validate_crash_prefix_restarts_once_then_stutters() {
+    let fixture = RecoveryFixture::new("decision-validate-restart-stutter", 0x35);
+    let (_, projection) = recovered_decision_store_crash_prefix_fixture(&fixture);
+    let prefix = projection.validate_crash_prefix.clone();
+
+    let (successor, apply_ordinal, changed) = prefix
+        .stage_recovered_decision_apply_projection(&projection)
+        .expect("advance exact Fetch/Store-to-Validate crash prefix");
+    assert!(changed);
+    assert_eq!(apply_ordinal, 5);
+    assert_eq!(successor.high_water(), 5);
+    assert_eq!(successor.records().len(), 5);
+    let store = successor
+        .records()
+        .iter()
+        .find(|record| record.ordinal() == 2)
+        .expect("retain exact advanced Store");
+    let validate = successor
+        .records()
+        .iter()
+        .find(|record| record.ordinal() == 4)
+        .expect("retain exact advanced Validate");
+    assert_eq!(
+        store.continuation(),
+        Some(DurableContinuation::successor(
+            DurableContinuationEdge::StoreToValidate,
+            4,
+        ))
+    );
+    assert_eq!(validate.terminal(), Some(Some(TerminalOutcome::Advanced)));
+    assert_eq!(
+        validate.continuation(),
+        Some(DurableContinuation::successor(
+            DurableContinuationEdge::ValidateToApply,
+            apply_ordinal,
+        ))
+    );
+
+    let (stutter, stutter_apply, stutter_changed) = successor
+        .stage_recovered_decision_apply_projection(&projection)
+        .expect("coalesce the recovered Decision chain repaired from Validate");
     assert!(!stutter_changed);
     assert_eq!(stutter_apply, apply_ordinal);
     assert_eq!(stutter, successor);

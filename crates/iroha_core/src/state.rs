@@ -12755,6 +12755,12 @@ impl<'state> StateView<'state> {
     pub fn height(&self) -> usize {
         StateReadOnly::height(self)
     }
+    /// Return whether a lane is active for authority checks in this exact state snapshot.
+    #[inline]
+    pub fn is_lane_active_for_authority(&self, lane_id: LaneId) -> bool {
+        let authority_height = u64::try_from(self.height()).unwrap_or(u64::MAX);
+        consensus_lane_dataspace_at_height(lane_id, &self.nexus, authority_height).is_some()
+    }
     /// Latest committed block hash (if any) for this snapshot.
     #[inline]
     pub fn latest_block_hash(&self) -> Option<HashOf<BlockHeader>> {
@@ -16880,6 +16886,12 @@ impl World {
         &mut self,
     ) -> &mut Storage<Hash, SoraHfPlacementRecordV1> {
         &mut self.soracloud_hf_placements
+    }
+    /// Provides mutable access to public-lane validators for direct world fixtures.
+    pub fn public_lane_validators_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(LaneId, AccountId), PublicLaneValidatorRecord> {
+        &mut self.public_lane_validators
     }
     /// Provides mutable access to active Inrou placement records for tests and API scaffolding.
     pub fn soracloud_inrou_service_placements_mut_for_testing(

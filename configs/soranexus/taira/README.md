@@ -206,10 +206,24 @@ generated local endpoint. It is independent of `--inrou-canary-dir`; combine
 the two flags only when both broad route diagnostics and the real Inrou canary
 are part of the same run.
 
+The optional local diagnostic is not public-ingress qualification and is never
+a default devnet gate. Run the same-revision `iroha taira doctor` directly
+against a public ingress when qualifying that deployment.
+
 The dedicated daemon's config validation, help, and version commands are
 offline introspection surfaces: they never open or consume the inherited
 runtime-signer descriptor. Every node-starting invocation still requires the
 exact descriptor and compiled Taira profile.
+
+Use already-built binaries when iterating on orchestration:
+
+```bash
+python3 scripts/taira_devnet.py up \
+  --no-build \
+  --bin-dir "$PWD/target/local-release"
+```
+
+The directory needs the three default binaries above.
 
 The output directory is owner-only and contains private keys and runtime
 tokens. Never commit, print, upload, or archive it. On failure the command
@@ -245,6 +259,52 @@ cargo build --locked --profile local-release -p iroha_cli --bin iroha
 target/local-release/iroha -c /private/runtime/client.toml \
   taira doctor --public-root https://taira.sora.org --json
 ```
+
+The public doctor remains non-mutating and does not impersonate an operator.
+It requires the exact two-field operator-signature `401` from
+`/v1/sumeragi/status` and the exact two-field canonical-account `401` from
+`/v1/soracloud/status`; arbitrary gateway challenges fail closed. Exact runtime
+topology and four-replica Inrou convergence belong to the signed Inrou canary,
+not the public route-posture probe.
+
+The offline `taira inrou-stage` command assigns the canary an immutable
+`artifact-<digest>` service version derived from the complete canonical bundle
+with only the version field cleared. Final guest publication references are
+therefore part of the revision identity. A staged directory and receipt bind
+the service manifest, container manifest, materialized bundle, and both SoraFS
+manifests; changing any input produces a different revision.
+
+The signed `taira inrou-canary` mutation path checks authoritative SoraCloud
+state before publishing either staged SoraFS manifest. `deploy` requires the
+service to be absent. `upgrade` requires it to exist at a different immutable
+revision; replaying the current staged revision fails before upload. That
+preflight produces a mandatory signed compare-and-set condition: deploy binds
+service absence, while upgrade binds the exact current version, service and
+container manifest hashes, positive process generation, and the current config
+and secret generations. The ledger checks the condition atomically in the same
+transaction that admits the new revision, so revision or material drift after
+preflight cannot become a lost update. Process, config, and secret generations
+use checked monotonic increments; an exhausted counter fails closed and never
+wraps or saturates into a replayable token.
+
+An upgrade cannot supersede an active rollout or change the service execution
+plane, container runtime, or route identity. The admitted candidate becomes the
+current revision while the required, distinct baseline remains active for the
+complement of the canary traffic split; promotion or rollback must finish that
+rollout before another upgrade begins.
+
+After the explicit mutation, convergence requires the exact current/latest
+version, both staged manifest hashes, four placements, and a positive process
+generation on every status poll. A failed or changed status generation discards
+all collected route evidence. Each accepted health response must also carry Torii-owned
+served-service, served-version, replica-slot, process-generation, and
+materialized-bundle headers. Torii only stamps those headers for an
+authoritatively healthy placement whose host capability is valid, unexpired,
+and matches the validator, peer, backend, and guest ISA, and whose exact bundle,
+generation, and snapshot peer identity match the node-local process. Local-only
+health or an expired host advert never substitutes for authoritative state.
+Both local and remote ingress overwrite upstream values, so guest self-reporting
+or a stale process cannot satisfy the proof.
 
 For an explicitly authorized public write canary, copy the example client
 configuration to a runtime-only location and supply the onboarding token from

@@ -148,8 +148,8 @@ use iroha_data_model::{
         manifest::{ContractManifest, ManifestProvenance},
     },
     soracloud::{
-        SORACLOUD_XOR_SCALE, SecretEnvelopeV1, encode_agent_deploy_provenance_payload,
-        encode_bundle_with_materials_provenance_payload,
+        SORACLOUD_XOR_SCALE, SecretEnvelopeV1, SoraServiceMutationPreconditionV1,
+        encode_agent_deploy_provenance_payload, encode_bundle_with_materials_provenance_payload,
         encode_hf_shared_lease_join_provenance_payload, is_canonical_hf_commit_oid_v1,
     },
     sorafs::{
@@ -1529,9 +1529,13 @@ pub fn soracloud_build_hf_deploy_request_json(
     );
     let configs: BTreeMap<String, Json> = BTreeMap::new();
     let secrets: BTreeMap<String, SecretEnvelopeV1> = BTreeMap::new();
-    let service_provenance_payload =
-        encode_bundle_with_materials_provenance_payload(&generated_bundle, &configs, &secrets)
-            .map_err(norito_to_napi)?;
+    let service_provenance_payload = encode_bundle_with_materials_provenance_payload(
+        &generated_bundle,
+        &configs,
+        &secrets,
+        &SoraServiceMutationPreconditionV1::ServiceAbsent,
+    )
+    .map_err(norito_to_napi)?;
     let generated_service_provenance =
         sign_soracloud_payload(&keypair, &service_provenance_payload)?;
     let generated_apartment_provenance = apartment_name

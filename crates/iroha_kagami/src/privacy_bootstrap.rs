@@ -55,6 +55,9 @@ enum Command {
     /// Validate an emitted exact-12 instruction set and its digest inventory.
     #[command(name = "validate-taira-v1")]
     ValidateTairaV1(ValidateTairaV1Args),
+    /// Validate a reviewed Taira NEVO unsigned genesis without creating release artifacts.
+    #[command(name = "validate-taira-nevo-review-v1")]
+    ValidateTairaNevoReviewV1(release::ValidateTairaNevoReviewV1Args),
     /// Compose a complete secret-free Taira release plan, config, and genesis.
     #[command(name = "render-taira-release-v1")]
     RenderTairaReleaseV1(Box<release::RenderTairaReleaseV1Args>),
@@ -126,6 +129,9 @@ impl<T: Write> RunArgs<T> for Args {
                     "instruction_count": (PrivacyProtocolIdV1::COUNT as u64),
                 });
                 writeln!(writer, "{}", norito::json::to_json(&status)?)?;
+            }
+            Command::ValidateTairaNevoReviewV1(args) => {
+                release::validate_taira_nevo_review_v1(&args, writer)?;
             }
             Command::RenderTairaReleaseV1(args) => {
                 release::render_taira_release_v1(&args, writer)?;

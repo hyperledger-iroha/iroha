@@ -238,6 +238,14 @@ mod tests {
         );
         assert!(
             parse(
+                "kagami privacy-bootstrap validate-taira-nevo-review-v1 \
+                 --unsigned-genesis ./unsigned-genesis.json \
+                 --review ./review.json"
+            )
+            .is_ok()
+        );
+        assert!(
+            parse(
                 "kagami privacy-bootstrap render-taira-release-v1 \
                  --activation-instructions ./privacy-instructions.json \
                  --activation-report ./privacy-report.json \
@@ -245,6 +253,7 @@ mod tests {
                  --plan-template ./privacy-plan.staging.json \
                  --config-template ./config.staging.toml \
                  --genesis-template ./genesis.staging.json \
+                 --nevo-review ./review.json \
                  --plan-output ./privacy-plan.release.json \
                  --config-output ./config.release.toml \
                  --genesis-output ./genesis.release.json \
@@ -261,6 +270,14 @@ mod tests {
             )
             .is_err(),
             "release composition without every staging input and fresh output must fail"
+        );
+        assert!(
+            parse(
+                "kagami privacy-bootstrap validate-taira-nevo-review-v1 \
+                 --unsigned-genesis ./unsigned-genesis.json"
+            )
+            .is_err(),
+            "NEVO validation without the review manifest must remain unavailable"
         );
         assert!(
             parse(

@@ -15471,10 +15471,13 @@ which BeginTimeout could execute; the runner's only current Runtime turn is
 the ingress target-only jump.  All comparisons are recipient-local.  No
 ordinal belonging to another node participates in either statement.
 ***************************************************************************)
-\* `step` and `step_recovery` classify and acknowledge only a ready selected
-\* handoff.  A restart-dormant Local record first replays its exact immutable
-\* candidate through the matching Local/Runtime carrier.  Phase selection may
-\* skip later ingress/timeout/retransmit owners but may not execute them.
+\* `step` classifies and acknowledges only a ready selected live handoff.
+\* Interrupted-tip recovery is not a second serialized-Runtime scheduler:
+\* lifecycle-owned `drive_apply_recovery_turn` binds the exact recovered Apply
+\* ordinal and stage before dispatch.  A restart-dormant Local record first
+\* replays its exact immutable candidate through its typed lifecycle carrier.
+\* Phase selection may skip later ingress/timeout/retransmit owners but may not
+\* execute them.
 \* ConditionalTransport and VolatileBody records remain owned by their exact
 \* retained transport/body corridors until those predicates make them ready.
 ResolveRunNodeCandidateProducerContinuation(node) ==

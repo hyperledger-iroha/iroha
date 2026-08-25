@@ -150,3 +150,7 @@ identities before it builds or replaces a cohort. The optional
 `sorafs-node`, preseeds the exact guest and bundle commitments into four
 disjoint stores, and proves four hosted replicas plus the authoritative route;
 it may be combined with `--full-doctor` when both checks are required.
+
+This optional local diagnostic is not public-ingress qualification. Run the
+same-revision `iroha taira doctor` directly against a public ingress when
+qualifying that deployment.

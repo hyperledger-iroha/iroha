@@ -36,8 +36,9 @@ use iroha::{
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_network::{
-    ConsensusMessageControlAction, ConsensusMessageControlKind, ConsensusMessageControlRule,
-    Network, NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
+    ConsensusMessageControlAck, ConsensusMessageControlAction, ConsensusMessageControlKind,
+    ConsensusMessageControlRule, Network, NetworkBuilder, genesis_factory_with_post_topology,
+    init_instruction_registry,
 };
 use iroha_test_samples::ALICE_ID;
 use norito::codec::DecodeAll as _;
@@ -407,6 +408,65 @@ fn hold_exact_manifest_chunks_and_finality_traffic(
     }
     rules.extend(hold_bounded_view_finality_traffic(receiver_index, peer_ids));
     rules
+}
+type HeldPayloadChunkMatch = (u64, HashOf<PayloadManifest>, u32, u64);
+
+fn proposal_bound_payload_chunk_matches(
+    ack: &ConsensusMessageControlAck,
+) -> Result<Vec<HeldPayloadChunkMatch>> {
+    let mut matched = Vec::new();
+    for held in &ack.held {
+        if held.kind != ConsensusMessageControlKind::PayloadChunk
+            || held.height.is_some()
+            || held.view.is_some()
+            || held.block_hash.is_some()
+            || held.subject.is_some()
+            || held.execution_commitment.is_some()
+            || held.sender != held.authenticated_via
+        {
+            continue;
+        }
+        let (Some(manifest_hash), Some(index)) = (held.manifest_hash, held.chunk_index) else {
+            continue;
+        };
+        let Some(exact_rule) = ack.rules.iter().find(|rule| {
+            rule.kind == ConsensusMessageControlKind::PayloadChunk
+                && rule.sender == held.sender
+                && rule.authenticated_via == held.authenticated_via
+                && rule.height == 0
+                && rule.view == 0
+                && rule.block_hash.is_none()
+                && rule.chunk_index == Some(index)
+                && rule.proposal_height == Some(PACKET_LOSS_HEIGHT)
+                && rule
+                    .proposal_view
+                    .is_some_and(|view| PACKET_LOSS_CARRIER_VIEWS.contains(&view))
+                && rule.manifest_hash == Some(manifest_hash)
+                && rule.action == ConsensusMessageControlAction::Hold
+        }) else {
+            continue;
+        };
+        let Some(resolved_manifest_hash) = exact_rule.manifest_hash else {
+            // A chunk may arrive before its Proposal. The Hold is already
+            // effective, but it is not evidence for this exact experiment
+            // until Proposal resolution binds the rule to the manifest.
+            continue;
+        };
+        ensure!(
+            resolved_manifest_hash == manifest_hash && PACKET_LOSS_CHUNK_INDICES.contains(&index),
+            "retained occurrence disagreed with its exact manifest/index selector"
+        );
+        let proposal_view = exact_rule
+            .proposal_view
+            .expect("bounded carrier rule must select a proposal view");
+        if !matched
+            .iter()
+            .any(|(sequence, _, _, _)| *sequence == held.sequence)
+        {
+            matched.push((held.sequence, manifest_hash, index, proposal_view));
+        }
+    }
+    Ok(matched)
 }
 fn validate_committed_da_status(status: &SumeragiV2Status, expected_height: u64) -> Result<()> {
     status
@@ -1483,8 +1543,13 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         )
         .await?;
 
-        let match_deadline = Instant::now() + PACKET_LOSS_CONTROL_TIMEOUT;
-        let (matched_sequences, held_manifest_hash, held_proposal_view) = loop {
+        let proposal_match_deadline = Instant::now() + PACKET_LOSS_CONTROL_TIMEOUT;
+        // Arm the finality fence as soon as one common authenticated Proposal
+        // occurrence reaches three receivers. Waiting for every selected
+        // chunk first leaves a legitimate timeout already delivered to fair
+        // ingress; that timeout can advance the view ahead of the released
+        // chunks and correctly retire their now-unprotected stale pipeline.
+        let (pre_fence_matches, held_manifest_hash, held_proposal_view) = loop {
             let mut matched_sequences = vec![Vec::new(); peers.len()];
             for (receiver_index, peer) in peers.iter().enumerate() {
                 let ack = peer
@@ -1501,70 +1566,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
                     "{} drifted from its acknowledged deferred chunk selector command",
                     peer.mnemonic()
                 );
-                for held in &ack.held {
-                    if held.kind != ConsensusMessageControlKind::PayloadChunk
-                        || held.height.is_some()
-                        || held.view.is_some()
-                        || held.block_hash.is_some()
-                        || held.subject.is_some()
-                        || held.execution_commitment.is_some()
-                        || held.sender != held.authenticated_via
-                    {
-                        continue;
-                    }
-                    let (Some(manifest_hash), Some(index)) =
-                        (held.manifest_hash, held.chunk_index)
-                    else {
-                        continue;
-                    };
-                    let Some(exact_rule) = ack
-                        .rules
-                        .iter()
-                        .find(|rule| {
-                            rule.kind == ConsensusMessageControlKind::PayloadChunk
-                                && rule.sender == held.sender
-                                && rule.authenticated_via == held.authenticated_via
-                                && rule.height == 0
-                                && rule.view == 0
-                                && rule.block_hash.is_none()
-                                && rule.chunk_index == Some(index)
-                                && rule.proposal_height == Some(PACKET_LOSS_HEIGHT)
-                                && rule.proposal_view.is_some_and(|view| {
-                                    PACKET_LOSS_CARRIER_VIEWS.contains(&view)
-                                })
-                                && rule.manifest_hash == Some(manifest_hash)
-                                && rule.action == ConsensusMessageControlAction::Hold
-                        })
-                    else {
-                        continue;
-                    };
-                    let Some(resolved_manifest_hash) = exact_rule.manifest_hash else {
-                        // A chunk may arrive before its Proposal. The Hold is
-                        // already effective, but it is not evidence for this
-                        // exact experiment until Proposal resolution binds the
-                        // rule to the chunk's manifest.
-                        continue;
-                    };
-                    ensure!(
-                        resolved_manifest_hash == manifest_hash
-                            && PACKET_LOSS_CHUNK_INDICES.contains(&index),
-                        "retained occurrence disagreed with its exact manifest/index selector"
-                    );
-                    let proposal_view = exact_rule
-                        .proposal_view
-                        .expect("bounded carrier rule must select a proposal view");
-                    if !matched_sequences[receiver_index]
-                        .iter()
-                        .any(|(sequence, _, _, _)| *sequence == held.sequence)
-                    {
-                        matched_sequences[receiver_index].push((
-                            held.sequence,
-                            manifest_hash,
-                            index,
-                            proposal_view,
-                        ));
-                    }
-                }
+                matched_sequences[receiver_index] = proposal_bound_payload_chunk_matches(&ack)?;
             }
             let common_manifest_and_view = matched_sequences
                 .iter()
@@ -1577,15 +1579,11 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
                     matched_sequences
                         .iter()
                         .filter(|matches| {
-                            PACKET_LOSS_CHUNK_INDICES.iter().all(|index| {
-                                matches.iter().any(
-                                    |(_, matched_manifest, matched_index, matched_view)| {
-                                        matched_manifest == manifest
-                                            && matched_index == index
-                                            && matched_view == view
-                                    },
-                                )
-                            })
+                            matches.iter().any(
+                                |(_, matched_manifest, _, matched_view)| {
+                                    matched_manifest == manifest && matched_view == view
+                                },
+                            )
                         })
                         .count()
                         >= 3
@@ -1594,54 +1592,11 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
                 break (matched_sequences, manifest_hash, proposal_view);
             }
             ensure!(
-                Instant::now() < match_deadline,
-                "fewer than three receivers retained one common authenticated RS16 manifest/view's exact chunk loss set"
+                Instant::now() < proposal_match_deadline,
+                "fewer than three receivers observed one common authenticated RS16 manifest/view before the capture fence"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         };
-        for peer in &peers {
-            ensure!(
-                peer.client().get_status()?.blocks < expected_height,
-                "{} committed before the three-of-six RS16 loss was healed",
-                peer.mnemonic()
-            );
-        }
-
-        let matched_receivers = matched_sequences
-            .iter()
-            .map(|matches| {
-                PACKET_LOSS_CHUNK_INDICES.iter().all(|index| {
-                    matches
-                        .iter()
-                        .any(|(_, manifest, matched_index, proposal_view)| {
-                            *manifest == held_manifest_hash
-                                && matched_index == index
-                                && *proposal_view == held_proposal_view
-                        })
-                })
-            })
-            .collect::<Vec<_>>();
-        ensure!(
-            matched_receivers.iter().filter(|matched| **matched).count() >= 3,
-            "healing evidence lost the common authenticated manifest/view witness"
-        );
-        for peer in &peers {
-            let status = fetch_v2_status(peer.client())?;
-            status
-                .validate()
-                .map_err(|error| eyre!("invalid pre-fence v2 status: {error}"))?;
-            ensure!(
-                status.height == expected_height
-                    && PACKET_LOSS_CARRIER_VIEWS.contains(&status.view)
-                    && status.last_committed_height < expected_height,
-                "{} escaped the bounded h{expected_height} capture corridor before its finality fence was armed: active=h{}/v{}, committed={}",
-                peer.mnemonic(),
-                status.height,
-                status.view,
-                status.last_committed_height
-            );
-        }
-
         // Keep the original chunk selectors active while arming the finality
         // fence on every receiver. A non-drain command changes each selector
         // atomically while leaving old retained occurrences queued; combining
@@ -1658,7 +1613,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
                 rules
             })
             .collect::<Vec<_>>();
-        let capture_armed = try_join_all((0..peers.len()).map(|peer_index| {
+        let capture_arm_acknowledgements = try_join_all((0..peers.len()).map(|peer_index| {
             let peer = &peers[peer_index];
             let rules = &capture_arm_rules[peer_index];
             async move {
@@ -1676,8 +1631,8 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         .await?;
         for (((peer, ack), matched), rules) in peers
             .iter()
-            .zip(&capture_armed)
-            .zip(&matched_sequences)
+            .zip(&capture_arm_acknowledgements)
+            .zip(&pre_fence_matches)
             .zip(&capture_arm_rules)
         {
             ensure!(
@@ -1702,16 +1657,91 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
                 ack.held
             );
         }
+        // With timeout and Commit traffic fenced, wait for the complete exact
+        // loss set on a receiver quorum. The acknowledgement snapshot returned
+        // here is also the sole release source, so chunks arriving during the
+        // cross-peer arm cannot be omitted from the healed sequence set.
+        let complete_match_deadline = Instant::now() + PACKET_LOSS_CONTROL_TIMEOUT;
+        let (matched_sequences, capture_armed) = loop {
+            let mut matched_sequences = vec![Vec::new(); peers.len()];
+            let mut acknowledgements = Vec::with_capacity(peers.len());
+            for (receiver_index, peer) in peers.iter().enumerate() {
+                let ack = peer
+                    .consensus_message_control()
+                    .ok_or_else(|| eyre!("{} lacks message control", peer.mnemonic()))?
+                    .read_ack()?;
+                let expected_ack = &capture_arm_acknowledgements[receiver_index];
+                ensure!(
+                    ack.revision == 3
+                        && ack.command_digest == expected_ack.command_digest
+                        && ack.rules.as_slice() == expected_ack.rules.as_slice()
+                        && ack.queue_capacity == PACKET_LOSS_CAPTURE_QUEUE_CAPACITY
+                        && !ack.draining
+                        && !ack.fatal
+                        && ack.dropped == 0
+                        && ack.overflowed == 0,
+                    "{} drifted from the pre-release finality capture fence",
+                    peer.mnemonic()
+                );
+                matched_sequences[receiver_index] = proposal_bound_payload_chunk_matches(&ack)?;
+                acknowledgements.push(ack);
+            }
+            let complete_receivers = matched_sequences
+                .iter()
+                .filter(|matches| {
+                    PACKET_LOSS_CHUNK_INDICES.iter().all(|index| {
+                        matches.iter().any(
+                            |(_, matched_manifest, matched_index, matched_view)| {
+                                *matched_manifest == held_manifest_hash
+                                    && matched_index == index
+                                    && *matched_view == held_proposal_view
+                            },
+                        )
+                    })
+                })
+                .count();
+            if complete_receivers >= 3 {
+                break (matched_sequences, acknowledgements);
+            }
+            ensure!(
+                Instant::now() < complete_match_deadline,
+                "the armed finality fence retained fewer than three complete exact chunk loss sets for the common authenticated RS16 manifest/view"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        let matched_receivers = matched_sequences
+            .iter()
+            .map(|matches| {
+                PACKET_LOSS_CHUNK_INDICES.iter().all(|index| {
+                    matches
+                        .iter()
+                        .any(|(_, manifest, matched_index, proposal_view)| {
+                            *manifest == held_manifest_hash
+                                && matched_index == index
+                                && *proposal_view == held_proposal_view
+                        })
+                })
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            matched_receivers.iter().filter(|matched| **matched).count() >= 3,
+            "healing evidence lost the common authenticated manifest/view witness"
+        );
         for peer in &peers {
+            ensure!(
+                peer.client().get_status()?.blocks < expected_height,
+                "{} committed before the three-of-six RS16 loss was healed",
+                peer.mnemonic()
+            );
             let status = fetch_v2_status(peer.client())?;
             status
                 .validate()
                 .map_err(|error| eyre!("invalid armed-fence v2 status: {error}"))?;
             ensure!(
                 status.height == expected_height
-                    && PACKET_LOSS_CARRIER_VIEWS.contains(&status.view)
+                    && status.view <= held_proposal_view
                     && status.last_committed_height < expected_height,
-                "{} crossed the bounded h{expected_height} capture fence during the all-peer cutover: active=h{}/v{}, committed={}",
+                "{} advanced past the fenced h{expected_height}/v{held_proposal_view} proposal during the all-peer cutover: active=h{}/v{}, committed={}",
                 peer.mnemonic(),
                 status.height,
                 status.view,
@@ -1797,7 +1827,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         {
             ensure!(
                 ack.revision == 4
-                    && ack.rules.as_slice() == rules.as_slice()
+                    && ack.rules.len() == rules.len()
                     && ack.queue_capacity == PACKET_LOSS_CAPTURE_QUEUE_CAPACITY
                     && !ack.draining
                     && ack.release_pending.is_empty()
@@ -1827,17 +1857,29 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
                 ack.retired
             );
         }
+        for peer in &peers {
+            let status = fetch_v2_status(peer.client())?;
+            status
+                .validate()
+                .map_err(|error| eyre!("invalid released-fence v2 status: {error}"))?;
+            ensure!(
+                status.height == expected_height
+                    && status.view <= held_proposal_view
+                    && status.last_committed_height < expected_height,
+                "{} advanced past fenced h{expected_height}/v{held_proposal_view} while the selected chunks crossed ingress: active=h{}/v{}, committed={}",
+                peer.mnemonic(),
+                status.height,
+                status.view,
+                status.last_committed_height
+            );
+        }
 
         // The finality fence keeps the height-three body-store namespace alive
         // while the released chunks reconstruct and validate the exact held
-        // manifest. A receiver may accept or coalesce a released chunk after a
-        // newer certified view has legitimately retired its unprotected stale
-        // body pipeline, so controller delivery does not require every matched
-        // receiver to mint a duplicate old-view marker. Instead, capture an
-        // exact held-round durable quorum before healing Commit traffic. In a
-        // four-validator committee it intersects the held receiver quorum in
-        // at least two peers; prior-round markers never count as authority for
-        // this check.
+        // manifest. Capture an exact held-round durable quorum before healing
+        // Commit traffic. In a four-validator committee it intersects the held
+        // receiver quorum in at least two peers; prior-round markers never
+        // count as authority for this check.
         let store_dirs = peers
             .iter()
             .map(|peer| peer.kura_store_dir())

@@ -1872,12 +1872,6 @@ def test_decision_apply_runner_cleanup_semantics_survive_effect_item_reseal(
             "stop at the runner-cleanup fence before consume_one",
         ),
         (
-            "plan_runner_decision_cleanup",
-            "let (None, Some(decision)) = (before, after)",
-            "let (Some(_), Some(decision)) = (before, after)",
-            "only the first Decision transition may mint cleanup debt",
-        ),
-        (
             "step",
             "if self.pending_runner_decision_cleanup.is_some()\n"
             "            && self.retained_effect_batch.is_none()",
@@ -1958,6 +1952,60 @@ def test_decision_apply_runner_cleanup_semantics_survive_effect_item_reseal(
         )
 
     effects_path.write_text(canonical_source, encoding="utf-8")
+
+
+def test_live_same_decision_cleanup_plan_mutation_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """A live Some-to-same-Some completion must still mint cleanup debt."""
+
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path, module, "SumeragiV2AsyncNetwork.tla"
+    )
+    plan_path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/v2_effects_runner_decision_cleanup_plan.rs"
+    )
+    canonical_source = plan_path.read_text(encoding="utf-8")
+    plan_item, = module.rust_items(
+        canonical_source, "plan_runner_decision_cleanup"
+    )
+    old = (
+        "self.runtime.lifecycle_live_clocks_are_armed() "
+        "&& self.protected_decision.is_none()"
+    )
+    new = (
+        "self.runtime.lifecycle_live_clocks_are_armed() "
+        "&& self.protected_decision.is_some()"
+    )
+    assert plan_item.source.count(old) == 1
+    mutated_source = canonical_source.replace(
+        plan_item.source,
+        plan_item.source.replace(old, new, 1),
+        1,
+    )
+    plan_path.write_text(mutated_source, encoding="utf-8")
+    mutated_item, = module.rust_items(
+        mutated_source, "plan_runner_decision_cleanup"
+    )
+    canonical_digest = module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256[
+        "plan_runner_decision_cleanup"
+    ]
+    module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256[
+        "plan_runner_decision_cleanup"
+    ] = module._rust_item_token_sha256(mutated_item)
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "live unreconciled same-Decision completion must mint cleanup debt"
+        in error
+        for error in errors
+    ), errors
+    module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256[
+        "plan_runner_decision_cleanup"
+    ] = canonical_digest
 
 
 def test_rust_item_scanner_masks_noncode_and_records_fail_closed_context() -> None:

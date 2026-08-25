@@ -2670,9 +2670,9 @@ mod tests {
             .expect("capability route projection end")];
         assert!(capabilities.contains("/v1/gov/ballots/plain"));
         assert!(capabilities.contains("/v1/gov/ballots/zk-v1"));
-        assert!(capabilities.contains(
-            "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof"
-        ));
+        assert!(
+            capabilities.contains("/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof")
+        );
         assert!(!capabilities.contains("\"/v1/gov/parliament/ballots\".to_owned()"));
         assert!(!capabilities.contains("/v1/gov/finalize"));
         assert!(!capabilities.contains("/v1/gov/enact"));

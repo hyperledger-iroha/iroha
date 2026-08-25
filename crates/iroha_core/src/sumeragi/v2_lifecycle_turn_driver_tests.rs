@@ -103,3 +103,71 @@ fn completion_classifier_consumes_composite_fetch_and_refanout_results() {
         !ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied.restart_required()
     );
 }
+
+#[test]
+fn settled_apply_reenters_only_sealed_broadcast_output_paths() {
+    use super::super::ProductionCompletionReadyWorkV1 as ReadyWork;
+    use super::turn_driver::{
+        ProductionApplyTerminalReadyWorkV1 as ApplyTerminalWork, classify_apply_terminal_ready_work,
+    };
+
+    for pass_through in [
+        ReadyWork::None,
+        ReadyWork::PassThrough,
+        ReadyWork::CompletionIo,
+    ] {
+        assert_eq!(
+            classify_apply_terminal_ready_work(pass_through),
+            ApplyTerminalWork::PassThrough,
+            "post-Apply Completion I/O must reach the existing Runtime fence without dispatch"
+        );
+    }
+    assert_eq!(
+        classify_apply_terminal_ready_work(ReadyWork::RetainedDirectOutput),
+        ApplyTerminalWork::RetainedDirectOutput,
+        "a retained direct Broadcast must use its exact pending-output owner"
+    );
+    assert_eq!(
+        classify_apply_terminal_ready_work(ReadyWork::RecoveredLifecycleBroadcast),
+        ApplyTerminalWork::RecoveredLifecycleBroadcast,
+        "a recovered Broadcast must use its typed refanout owner"
+    );
+    assert_eq!(
+        classify_apply_terminal_ready_work(ReadyWork::Invalid),
+        ApplyTerminalWork::RestartRequired,
+        "an invalid Ready census must fail closed"
+    );
+
+    let turn_driver = include_str!("v2_lifecycle_turn_driver.rs");
+    let launched_start = turn_driver
+        .find("fn drive_apply_terminal_ready_broadcast_turn<'cursor>(")
+        .expect("the launched terminal Ready method remains present");
+    let launched_tail = &turn_driver[launched_start..];
+    let launched_end = launched_tail
+        .find("/// Dispatch fresh Ready work only after")
+        .expect("the launched terminal Ready method stays bounded");
+    let launched_method = &launched_tail[..launched_end];
+    assert!(launched_method.contains("classify_apply_terminal_ready_work("));
+    assert!(
+        launched_method.contains("refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(")
+    );
+    assert!(launched_method.contains("settle_apply_terminal_direct_broadcast("));
+    assert!(!launched_method.contains("settle_pending_lifecycle_output_admissions("));
+    assert!(launched_method.contains("self.close_output_for_restart();"));
+    assert!(!launched_method.contains("dispatch_completion_with_runner_debt("));
+    assert!(!launched_method.contains("dispatch_completion_requiring_ready_ordinal("));
+
+    let activated_tail = &launched_tail[launched_end..];
+    let activated_start = activated_tail
+        .find("fn drive_apply_terminal_ready_broadcast_turn<'cursor>(")
+        .expect("the activated terminal Ready forwarding method remains present");
+    let activated_method = &activated_tail[activated_start..];
+    assert!(activated_method.contains(".drive_apply_terminal_ready_broadcast_turn(ready, permit)"));
+
+    let height_driver = include_str!("v2_runner/lifecycle_height_driver.rs");
+    assert!(
+        height_driver.contains("PreGate::Ready(ready) if producer_claim.apply_terminal_settled()")
+    );
+    assert!(height_driver.contains(".drive_apply_terminal_ready_broadcast_turn(ready, permit)"));
+    assert!(height_driver.contains("blocked_runtime_drain_disposition(producer_claim)"));
+}

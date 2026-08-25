@@ -26,12 +26,14 @@ import fcntl
 import grp
 import hashlib
 import json
+import math
 import os
 import platform
 import pwd
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -40,9 +42,10 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, Iterator, NoReturn
 
 try:
     from taira_constants import (
@@ -65,6 +68,8 @@ DEFAULT_DIR = Path("/var/lib/iroha-taira-devnet")
 DEFAULT_API_PORT = 29_080
 DEFAULT_P2P_PORT = 33_337
 DEFAULT_OPERATION_TIMEOUT_SECONDS = 300
+DEFAULT_GENERATION_TIMEOUT_SECONDS = 2 * 60
+POST_SMOKE_STABILITY_SECONDS = 6.0
 # Four optimized daemons plus the Nexus/AMX lane pipeline routinely need more
 # than the ten-second view-zero deadline derived from Kagami's generic
 # one-second localnet cadence.  The five-second proposal cadence deliberately
@@ -75,10 +80,20 @@ MARKER = ".iroha-taira-devnet"
 MARKER_BODY = "managed by scripts/taira_devnet.py\n"
 MAX_BUNDLE_TEXT_BYTES = 8 * 1024 * 1024
 MAX_LOG_TAIL_BYTES = 64 * 1024
+MAX_INITIAL_LOG_STATE_SCAN_BYTES = 64 * 1024 * 1024
 MAX_HTTP_RESPONSE_BYTES = 1024 * 1024
 MAX_MARKER_BYTES = 128
 MAX_PID_FILE_BYTES = 32
+SUMERAGI_NO_PROGRESS_LOG_MESSAGE = (
+    "Sumeragi v2 height has no classified semantic progress"
+)
+SUMERAGI_PROGRESS_RECOVERED_LOG_MESSAGE = (
+    "Sumeragi v2 semantic height progress cleared the liveness alert"
+)
+MUTATION_LOCK_FILE = ".taira-devnet-operation.lock"
+MAX_STRUCTURED_LOG_LINE_BYTES = 128 * 1024
 BUILD_ENV_REMOVALS = (
+    "CARGO_BUILD_JOBS",
     "CARGO_BUILD_TARGET",
     "CARGO_INCREMENTAL",
     "CARGO_TARGET_DIR",
@@ -88,9 +103,19 @@ BUILD_ENV_REMOVALS = (
     "VERGEN_GIT_SHA",
     "IROHA_GIT_COMMIT_HASH",
 )
+PEER_STOP_ATTEMPTS = 40
+PEER_STOP_POLL_SECONDS = 0.25
+PEER_LAUNCH_DISCOVERY_ATTEMPTS = 40
+PEER_LAUNCH_DISCOVERY_POLL_SECONDS = 0.05
+BOUNDED_COMMAND_HEARTBEAT_SECONDS = 0.5
 TAIRA_BUILD_PROFILE = "local-release"
 RUNTIME_SIGNER_DIRECTORY = Path("runtime") / "taira-runtime-signers"
 RUNTIME_SIGNER_FILE_BYTES = 71
+GENERATED_RUNTIME_SECRET_SPECS = (
+    ("operator-signer.key", RUNTIME_SIGNER_FILE_BYTES),
+    ("onboarding-signer.key", RUNTIME_SIGNER_FILE_BYTES),
+    ("onboarding.token", len("iroha-localnet-") + 64),
+)
 GENERATED_LOCALNET_NEXUS_STORAGE_BYTES = 1_073_741_824
 TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES = 68_719_476_736
 TAIRA_NEXUS_STORAGE_WEIGHTS = (
@@ -134,7 +159,8 @@ GENERATED_TAIRA_EGRESS_RATE_PER_MINUTE = 60
 GENERATED_TAIRA_EGRESS_MAX_BYTES_PER_MINUTE = 1024 * 1024
 LINUX_KVM_GET_API_VERSION = 0xAE00
 LINUX_KVM_API_VERSION = 12
-INROU_CANARY_DEPLOY_VERSION_V1 = "1.0.0"
+INROU_CANARY_SERVICE_VERSION_PREFIX_V1 = "artifact-"
+INROU_CANARY_SERVICE_VERSION_V1_RE = re.compile(r"artifact-[0-9a-f]{64}")
 INROU_CANARY_ROUTE_HOST_V1 = "taira-inrou-canary.sora"
 INROU_CANARY_HEALTH_PATH_V1 = "/api/v1/health"
 INROU_CANARY_REPORT_KEYS_V1 = frozenset(
@@ -165,6 +191,28 @@ INROU_CANARY_REPORT_KEYS_V1 = frozenset(
 INROU_CANARY_CHECK_KEYS_V1 = frozenset({"name", "http_status", "ok", "detail"})
 INROU_CANARY_REPLICA_KEYS_V1 = frozenset(
     {"replica_slot", "identity", "response_sha256"}
+)
+INROU_STAGE_RECEIPT_KEYS_V1 = frozenset(
+    {
+        "schema_version",
+        "mutation_mode",
+        "service_name",
+        "service_version",
+        "container_file",
+        "service_file",
+        "bundle_payload_file",
+        "bundle_manifest_file",
+        "bundle_hash",
+        "bundle_content_cid",
+        "bundle_manifest_digest_hex",
+        "guest_isa",
+        "guest_payload_dir",
+        "guest_manifest_file",
+        "guest_content_cid",
+        "guest_manifest_digest_hex",
+        "container_manifest_hash",
+        "service_manifest_hash",
+    }
 )
 SORAFS_CONTENT_CID_V1_RE = re.compile(r"b[a-z2-7]{58}")
 LOWER_32_BYTE_HEX_RE = re.compile(r"[0-9a-f]{64}")
@@ -377,30 +425,98 @@ def run_command(
     env: dict[str, str] | None = None,
     timeout: float | None = None,
     capture_output: bool = True,
+    pass_fds: Sequence[int] = (),
+    heartbeat: Callable[[], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one command and surface its useful trailing diagnostics."""
 
-    try:
-        completed = subprocess.run(
-            list(command),
-            cwd=cwd,
-            env=env,
-            timeout=timeout,
-            capture_output=capture_output,
-            text=True,
-            errors="surrogateescape",
-            check=False,
+    executable_name = Path(command[0]).name
+    if timeout is not None and executable_name in {"cargo", "cargo_fast.sh", "rustc"}:
+        fail("Cargo and rustc commands must run without a script-imposed timeout")
+
+    if timeout is None:
+        try:
+            completed = subprocess.run(
+                list(command),
+                cwd=cwd,
+                env=env,
+                capture_output=capture_output,
+                text=True,
+                errors="surrogateescape",
+                check=False,
+                pass_fds=tuple(pass_fds),
+            )
+        except OSError as error:
+            fail(f"could not start {executable_name}: {error}")
+    else:
+        try:
+            process = subprocess.Popen(
+                list(command),
+                cwd=cwd,
+                env=env,
+                stdout=subprocess.PIPE if capture_output else None,
+                stderr=subprocess.PIPE if capture_output else None,
+                text=True,
+                errors="surrogateescape",
+                start_new_session=True,
+                pass_fds=tuple(pass_fds),
+            )
+        except (OSError, UnicodeError) as error:
+            fail(f"could not start {executable_name}: {error}")
+        try:
+            if heartbeat is None:
+                stdout, stderr = process.communicate(timeout=timeout)
+            else:
+                deadline = time.monotonic() + timeout
+                while True:
+                    heartbeat()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(list(command), timeout)
+                    try:
+                        stdout, stderr = process.communicate(
+                            timeout=min(BOUNDED_COMMAND_HEARTBEAT_SECONDS, remaining)
+                        )
+                        break
+                    except subprocess.TimeoutExpired:
+                        if time.monotonic() >= deadline:
+                            raise
+        except subprocess.TimeoutExpired:
+            terminate_owned_process_group(process)
+            process.communicate()
+            fail(f"{executable_name} timed out after {timeout:g}s")
+        except BaseException:
+            terminate_owned_process_group(process)
+            process.communicate()
+            raise
+        completed = subprocess.CompletedProcess(
+            list(command), process.returncode, stdout, stderr
         )
-    except subprocess.TimeoutExpired:
-        fail(f"{Path(command[0]).name} timed out after {timeout:g}s")
-    except (OSError, UnicodeError) as error:
-        fail(f"cannot execute {Path(command[0]).name}: {error}")
     if completed.returncode != 0:
         stderr = completed.stderr or ""
         stdout = completed.stdout or ""
         detail = (stderr.strip() or stdout.strip())[-6000:]
-        fail(f"{Path(command[0]).name} failed: {detail or completed.returncode}")
+        fail(f"{executable_name} failed: {detail or completed.returncode}")
     return completed
+
+
+def terminate_owned_process_group(process: subprocess.Popen[str]) -> None:
+    """Terminate only the private process group created for one bounded command."""
+
+    try:
+        process_group = os.getpgid(process.pid)
+    except ProcessLookupError:
+        return
+    if process_group != process.pid:
+        fail(
+            f"refusing to signal non-private process group {process_group} "
+            f"for child {process.pid}"
+        )
+    try:
+        os.killpg(process_group, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    process.wait()
 
 
 def submitted_transaction_hash(completed: subprocess.CompletedProcess[str]) -> str:
@@ -531,6 +647,47 @@ def managed_root(path: Path, *, create: bool) -> Path:
     return path.resolve(strict=True)
 
 
+@contextmanager
+def mutation_lock(root: Path) -> Iterator[int]:
+    """Serialize ``up`` and ``down`` across independent script processes."""
+
+    path = root / MUTATION_LOCK_FILE
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as error:
+        fail(f"cannot open Taira devnet operation lock {path}: {error}")
+    try:
+        try:
+            metadata = os.fstat(descriptor)
+        except OSError as error:
+            fail(f"cannot inspect Taira devnet operation lock {path}: {error}")
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or metadata.st_size != 0
+        ):
+            fail(f"untrusted Taira devnet operation lock: {path}")
+        try:
+            os.fchmod(descriptor, 0o600)
+        except OSError as error:
+            fail(f"cannot secure Taira devnet operation lock {path}: {error}")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            fail(
+                "another Taira devnet mutation is already running; "
+                "interrupt that command before retrying"
+            )
+        except OSError as error:
+            fail(f"cannot lock Taira devnet operation file {path}: {error}")
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
 def network_dir(root: Path) -> Path:
     """Return the sole disposable network directory below a managed root."""
 
@@ -549,7 +706,6 @@ def require_network_bundle(root: Path) -> Path:
         target / "client.toml",
         target / "genesis.expected_hash",
         target / "start.sh",
-        target / "stop.sh",
     ]
     required.extend(target / f"peer{index}.toml" for index in range(PEER_COUNT))
     for path in required:
@@ -574,6 +730,16 @@ def runtime_signer_launch_paths(target: Path) -> tuple[Path, ...]:
     return tuple(
         target / RUNTIME_SIGNER_DIRECTORY / f"peer{index}.fd198"
         for index in range(PEER_COUNT)
+    )
+
+
+def generated_runtime_secret_paths(target: Path) -> tuple[tuple[Path, int], ...]:
+    """Return generated operator/onboarding secrets and their exact sizes."""
+
+    directory = target / "runtime"
+    return tuple(
+        (directory / name, expected_size)
+        for name, expected_size in GENERATED_RUNTIME_SECRET_SPECS
     )
 
 
@@ -606,56 +772,83 @@ def require_runtime_signer_files(target: Path) -> None:
 
 
 def delete_runtime_signer_files(target: Path) -> None:
-    """Idempotently delete the stopped cohort's validated signer material."""
+    """Idempotently delete all validated signing and onboarding material."""
 
+    runtime_directory = target / "runtime"
+    if runtime_directory.is_symlink():
+        fail(f"refusing symlinked Taira runtime directory: {runtime_directory}")
+    if not runtime_directory.exists():
+        return
+    if not runtime_directory.is_dir():
+        fail(f"Taira runtime path is not a directory: {runtime_directory}")
     directory = target / RUNTIME_SIGNER_DIRECTORY
     if directory.is_symlink():
         fail(f"refusing symlinked Taira runtime signer directory: {directory}")
-    if not directory.exists():
-        return
-    if not directory.is_dir():
-        fail(f"Taira runtime signer path is not a directory: {directory}")
-    require_runtime_signer_files(target)
     source_paths = runtime_signer_paths(target)
     launch_paths = runtime_signer_launch_paths(target)
-    expected = {path.name for path in (*source_paths, *launch_paths)}
-    actual = {path.name for path in directory.iterdir()}
-    if not actual.issubset(expected):
-        fail(f"refusing unexpected Taira runtime signer directory contents: {directory}")
-    for path in launch_paths:
+    if directory.exists():
+        if not directory.is_dir():
+            fail(f"Taira runtime signer path is not a directory: {directory}")
+        require_runtime_signer_files(target)
+        expected = {path.name for path in (*source_paths, *launch_paths)}
+        actual = {path.name for path in directory.iterdir()}
+        if not actual.issubset(expected):
+            fail(f"refusing unexpected Taira runtime signer directory contents: {directory}")
+    control_secrets = generated_runtime_secret_paths(target)
+    for path, expected_size in control_secrets:
         if path.is_symlink():
-            fail(f"refusing symlinked Taira FD198 launch file: {path}")
+            fail(f"refusing symlinked Taira runtime secret: {path}")
         if not path.exists():
             continue
         try:
             metadata = path.stat()
         except OSError as error:
-            fail(f"cannot inspect Taira FD198 launch file {path}: {error}")
+            fail(f"cannot inspect Taira runtime secret {path}: {error}")
         if (
             not path.is_file()
             or metadata.st_uid != os.geteuid()
             or metadata.st_mode & 0o7777 != 0o600
             or metadata.st_nlink != 1
-            or metadata.st_size not in (0, RUNTIME_SIGNER_FILE_BYTES)
+            or metadata.st_size != expected_size
         ):
-            fail(f"untrusted Taira FD198 launch file: {path}")
-        path.unlink()
-    for path in source_paths:
-        path.unlink()
-    directory.rmdir()
+            fail(f"untrusted Taira runtime secret: {path}")
+    if directory.exists():
+        for path in launch_paths:
+            if path.is_symlink():
+                fail(f"refusing symlinked Taira FD198 launch file: {path}")
+            if not path.exists():
+                continue
+            try:
+                metadata = path.stat()
+            except OSError as error:
+                fail(f"cannot inspect Taira FD198 launch file {path}: {error}")
+            if (
+                not path.is_file()
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_mode & 0o7777 != 0o600
+                or metadata.st_nlink != 1
+                or metadata.st_size not in (0, RUNTIME_SIGNER_FILE_BYTES)
+            ):
+                fail(f"untrusted Taira FD198 launch file: {path}")
+        for path in (*launch_paths, *source_paths):
+            if path.exists():
+                path.unlink()
+        directory.rmdir()
+    for path, _expected_size in control_secrets:
+        if path.exists():
+            path.unlink()
+    if not any(runtime_directory.iterdir()):
+        runtime_directory.rmdir()
 
 
 def require_stoppable_network(root: Path) -> Path:
-    """Require the generated stop surface without depending on intact configs."""
+    """Require the generated network directory without trusting a stop script."""
 
     target = network_dir(root)
     if target.is_symlink():
         fail(f"refusing symlinked network directory: {target}")
     if not target.is_dir():
         fail(f"no generated Taira network exists at {target}; run `up` first")
-    stop = target / "stop.sh"
-    if stop.is_symlink() or not stop.is_file():
-        fail(f"generated Taira network is incomplete: missing {stop.name}")
     return target
 
 
@@ -804,6 +997,45 @@ def read_peer_pid(path: Path) -> int:
     return int(value)
 
 
+def peer_launch_paths(target: Path, index: int) -> tuple[Path, Path]:
+    """Return the fixed launch-intent and atomic PID staging paths for one peer."""
+
+    return target / f"peer{index}.launching", target / f"peer{index}.pid.tmp"
+
+
+def require_owned_launch_artifact(path: Path, *, maximum_size: int) -> None:
+    """Require one owner-only regular launch artifact before deleting it."""
+
+    if path.is_symlink():
+        fail(f"refusing symlinked Taira launch custody artifact: {path}")
+    try:
+        metadata = path.stat()
+    except OSError as error:
+        fail(f"cannot inspect Taira launch custody artifact {path}: {error}")
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o7777 != 0o600
+        or metadata.st_nlink != 1
+        or metadata.st_size > maximum_size
+    ):
+        fail(f"untrusted Taira launch custody artifact: {path}")
+
+
+def delete_peer_launch_artifacts(target: Path, index: int) -> None:
+    """Delete only validated fixed-name custody artifacts for one stopped peer."""
+
+    launch_path, pid_temporary = peer_launch_paths(target, index)
+    for path, maximum_size in (
+        (launch_path, 0),
+        (pid_temporary, MAX_PID_FILE_BYTES),
+    ):
+        if not (path.exists() or path.is_symlink()):
+            continue
+        require_owned_launch_artifact(path, maximum_size=maximum_size)
+        path.unlink()
+
+
 def command_uses_config(command: str, config: Path) -> bool:
     """Return whether one daemon argv owns exactly one exact peer config."""
 
@@ -827,6 +1059,17 @@ def command_uses_config(command: str, config: Path) -> bool:
 def require_running_cohort(target: Path, run: Runner) -> None:
     """Require exactly the four PID-bound processes generated for this bundle."""
 
+    residual_custody = sorted(
+        path.name
+        for index in range(PEER_COUNT)
+        for path in peer_launch_paths(target, index)
+        if path.exists() or path.is_symlink()
+    )
+    if residual_custody:
+        fail(
+            "Taira startup left incomplete peer custody artifacts: "
+            + ", ".join(residual_custody)
+        )
     pids: list[int] = []
     for index in range(PEER_COUNT):
         config = target / f"peer{index}.toml"
@@ -856,6 +1099,17 @@ def require_stopped_cohort(target: Path, run: Runner) -> None:
     residual_pidfiles = sorted(path.name for path in target.glob("peer*.pid"))
     if residual_pidfiles:
         fail(f"Taira teardown left peer PID files: {', '.join(residual_pidfiles)}")
+    residual_custody = sorted(
+        path.name
+        for index in range(PEER_COUNT)
+        for path in peer_launch_paths(target, index)
+        if path.exists() or path.is_symlink()
+    )
+    if residual_custody:
+        fail(
+            "Taira teardown left peer custody artifacts: "
+            + ", ".join(residual_custody)
+        )
     processes = process_table(run)
     residual = [
         pid
@@ -869,7 +1123,7 @@ def require_stopped_cohort(target: Path, run: Runner) -> None:
         fail(f"Taira teardown left managed peer processes running: {residual}")
 
 
-def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> None:
+def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> bool:
     """Stop only peers owned by the generated Kagami bundle."""
 
     try:
@@ -877,34 +1131,168 @@ def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> 
         if target.is_symlink():
             fail(f"refusing symlinked network directory: {target}")
         if not target.exists():
-            return
+            return True
         if not target.is_dir():
             fail(f"network path is not a directory: {target}")
         pid_paths = [target / f"peer{index}.pid" for index in range(PEER_COUNT)]
-        present_pid_paths = [
-            path for path in pid_paths if path.exists() or path.is_symlink()
-        ]
-        if not present_pid_paths:
+        errors: list[str] = []
+        for index, pid_path in enumerate(pid_paths):
+            config = target / f"peer{index}.toml"
+            try:
+                pid_present = pid_path.exists() or pid_path.is_symlink()
+                launch_path, pid_temporary = peer_launch_paths(target, index)
+                launch_present = launch_path.exists() or launch_path.is_symlink()
+                temporary_present = (
+                    pid_temporary.exists() or pid_temporary.is_symlink()
+                )
+                if launch_present:
+                    require_owned_launch_artifact(launch_path, maximum_size=0)
+                if temporary_present:
+                    require_owned_launch_artifact(
+                        pid_temporary,
+                        maximum_size=MAX_PID_FILE_BYTES,
+                    )
+
+                processes = process_table(run)
+                matches = [
+                    process_pid
+                    for process_pid, command in processes.items()
+                    if command_uses_config(command, config)
+                ]
+                if launch_present and not pid_present and not matches:
+                    # The launch intent is published before Popen.  If the
+                    # supervisor was interrupted just after spawning, give the
+                    # child a bounded interval to finish exec and expose its
+                    # exact-config argv before deciding that no daemon exists.
+                    for attempt in range(PEER_LAUNCH_DISCOVERY_ATTEMPTS):
+                        if attempt:
+                            processes = process_table(run)
+                            matches = [
+                                process_pid
+                                for process_pid, command in processes.items()
+                                if command_uses_config(command, config)
+                            ]
+                        if matches:
+                            break
+                        if attempt + 1 < PEER_LAUNCH_DISCOVERY_ATTEMPTS:
+                            time.sleep(PEER_LAUNCH_DISCOVERY_POLL_SECONDS)
+
+                has_evidence = (
+                    pid_present or launch_present or temporary_present or bool(matches)
+                )
+                if not has_evidence:
+                    continue
+                if config.is_symlink() or not config.is_file():
+                    fail(f"generated peer config is missing or unsafe: {config}")
+
+                if pid_present:
+                    pid = read_peer_pid(pid_path)
+                else:
+                    if len(matches) > 1:
+                        fail(
+                            f"peer{index} has multiple running processes for its "
+                            "generated config and no published PID"
+                        )
+                    if not matches:
+                        delete_peer_launch_artifacts(target, index)
+                        continue
+                    pid = matches[0]
+
+                if pid_present and processes.get(pid) is None and not matches:
+                    # A peer may have already completed its own fail-closed
+                    # shutdown.  With neither the recorded PID nor any daemon
+                    # using this exact config still present, the PID file is
+                    # stale evidence rather than a process we need to signal.
+                    if read_peer_pid(pid_path) != pid:
+                        fail(f"peer{index} PID evidence changed during teardown")
+                    pid_path.unlink()
+                    delete_peer_launch_artifacts(target, index)
+                    continue
+                if matches != [pid]:
+                    fail(
+                        f"peer{index} PID {pid} is not the sole running process "
+                        "for its generated config"
+                    )
+
+                # Signal only the exact PID/config pair proved above.  A
+                # generated stop script cannot safely distinguish this pair
+                # from unrelated or malformed evidence in a partial cohort.
+                try:
+                    run(["/bin/kill", "-TERM", str(pid)], timeout=5)
+                except (DevnetError, subprocess.TimeoutExpired):
+                    # The peer can exit after the ownership snapshot but before
+                    # SIGTERM reaches it.  Accept only the exact clean-exit
+                    # state; a reused PID, replacement process, or changed PID
+                    # file remains a hard failure.
+                    processes = process_table(run)
+                    replacements = [
+                        process_pid
+                        for process_pid, process_command in processes.items()
+                        if command_uses_config(process_command, config)
+                    ]
+                    if processes.get(pid) is None and not replacements:
+                        if pid_present:
+                            if read_peer_pid(pid_path) != pid:
+                                fail(f"peer{index} PID evidence changed during teardown")
+                            pid_path.unlink()
+                        delete_peer_launch_artifacts(target, index)
+                        continue
+                    raise
+                stopped = False
+                for attempt in range(PEER_STOP_ATTEMPTS):
+                    processes = process_table(run)
+                    command = processes.get(pid)
+                    replacements = [
+                        process_pid
+                        for process_pid, process_command in processes.items()
+                        if command_uses_config(process_command, config)
+                    ]
+                    if command is None and not replacements:
+                        stopped = True
+                        break
+                    if command is not None and not command_uses_config(command, config):
+                        # macOS can briefly retain an exiting process in the
+                        # table after its full argv is no longer available.
+                        # Never signal that ambiguous PID again, but keep the
+                        # bounded wait open for the exact-config process to
+                        # disappear.  A persistent mismatch still fails
+                        # closed below instead of being mistaken for a clean
+                        # stop or targeted as if it were the original daemon.
+                        if attempt + 1 < PEER_STOP_ATTEMPTS:
+                            time.sleep(PEER_STOP_POLL_SECONDS)
+                            continue
+                        fail(
+                            f"peer{index} PID {pid} changed ownership during teardown"
+                        )
+                    if replacements != [pid]:
+                        fail(
+                            f"peer{index} PID {pid} is no longer the sole running "
+                            "process for its generated config"
+                        )
+                    if attempt + 1 < PEER_STOP_ATTEMPTS:
+                        time.sleep(PEER_STOP_POLL_SECONDS)
+                if not stopped:
+                    fail(f"peer{index} PID {pid} did not stop after SIGTERM")
+                if pid_present:
+                    if read_peer_pid(pid_path) != pid:
+                        fail(f"peer{index} PID evidence changed during teardown")
+                    pid_path.unlink()
+                delete_peer_launch_artifacts(target, index)
+            except (DevnetError, subprocess.TimeoutExpired) as error:
+                errors.append(str(error))
+
+        try:
             require_stopped_cohort(target, run)
-            return
-        if len(present_pid_paths) != PEER_COUNT:
-            fail(
-                "Taira teardown left peer PID files: "
-                + ", ".join(path.name for path in present_pid_paths)
-            )
-        # The generated stop script has process-control authority. Do not run
-        # it until all four PID files, daemon argvs, and exact config paths
-        # prove that the live cohort is ours.
-        require_running_cohort(target, run)
-        stop = target / "stop.sh"
-        if stop.is_symlink() or not stop.is_file():
-            fail(f"generated Taira network is incomplete: missing safe {stop.name}")
-        run(["/bin/bash", str(stop)], cwd=stop.parent, timeout=30)
-        require_stopped_cohort(target, run)
+        except DevnetError as error:
+            errors.append(str(error))
+        if errors:
+            fail("could not safely stop every Taira peer: " + "; ".join(errors))
+        return True
     except (DevnetError, subprocess.TimeoutExpired) as error:
         if not tolerate_failure:
             raise
         print(f"warning: could not prove Taira cohort stopped: {error}", file=sys.stderr)
+        return False
 
 
 def _direct_root_owned_directory_identity(
@@ -1035,6 +1423,7 @@ def cargo_build_command(
     target_dir: Path,
     target_triple: str,
     *,
+    jobs: int | None = None,
     include_inrou_canary: bool = False,
 ) -> list[str]:
     """Return the current-workspace build needed by the shipping smoke."""
@@ -1044,26 +1433,32 @@ def cargo_build_command(
         "--target-dir",
         str(target_dir),
         "--no-sccache",
-        "--",
-        "build",
-        "--locked",
-        "--profile",
-        profile,
-        "--target",
-        target_triple,
-        "-p",
-        "iroha_kagami",
-        "--bin",
-        "kagami",
-        "-p",
-        "irohad",
-        "--bin",
-        "iroha3d_taira",
-        "-p",
-        "iroha_cli",
-        "--bin",
-        "iroha",
     ]
+    if jobs is not None:
+        command.extend(("--jobs", str(jobs)))
+    command.extend(
+        [
+            "--",
+            "build",
+            "--locked",
+            "--profile",
+            profile,
+            "--target",
+            target_triple,
+            "-p",
+            "iroha_kagami",
+            "--bin",
+            "kagami",
+            "-p",
+            "irohad",
+            "--bin",
+            "iroha3d_taira",
+            "-p",
+            "iroha_cli",
+            "--bin",
+            "iroha",
+        ]
+    )
     if include_inrou_canary:
         command.extend(("-p", "sorafs_node", "--bin", "sorafs-node"))
     return command
@@ -1418,11 +1813,12 @@ def binary_paths(
             TAIRA_BUILD_PROFILE,
             target_dir,
             target_triple,
+            jobs=getattr(args, "jobs", None),
             include_inrou_canary=include_inrou_canary,
         ),
         cwd=REPO_ROOT,
         env=cargo_build_env(rustc),
-        timeout=args.build_timeout_seconds,
+        timeout=None,
         capture_output=False,
     )
     if (
@@ -1579,6 +1975,9 @@ def generate_network(
     p2p_port: int,
     block_cadence_ms: int,
     run: Runner,
+    *,
+    timeout: float = DEFAULT_GENERATION_TIMEOUT_SECONDS,
+    pass_fds: Sequence[int] = (),
 ) -> None:
     """Generate exactly one fresh-key, four-validator Taira network."""
 
@@ -1609,8 +2008,9 @@ def generate_network(
             str(block_cadence_ms),
         ],
         cwd=REPO_ROOT,
-        timeout=None,
+        timeout=timeout,
         capture_output=False,
+        pass_fds=pass_fds,
     )
 
 
@@ -1744,8 +2144,8 @@ def require_cli_build_identity(
         fail("current Iroha CLI build identity does not match source HEAD")
 
 
-def check_sumeragi_status(root: str, request: Request) -> None:
-    """Fail on authoritative restart or watchdog blockers when JSON is exposed."""
+def check_sumeragi_status(root: str, request: Request) -> bool:
+    """Fail on authoritative blockers and report whether JSON was exposed."""
 
     url = root + "v1/sumeragi/status"
     status, payload = request(url, None)
@@ -1754,7 +2154,7 @@ def check_sumeragi_status(root: str, request: Request) -> None:
     # mandatory portable surface; inspect the richer status whenever Torii
     # actually exposes its current JSON representation.
     if status in {0, 401, 403, 404}:
-        return
+        return False
     if status != 200:
         fail(f"Sumeragi status route failed at {root} (HTTP {status})")
     if not isinstance(payload, dict):
@@ -1769,11 +2169,197 @@ def check_sumeragi_status(root: str, request: Request) -> None:
         fail(f"Sumeragi status omitted liveness diagnostics at {root}")
     blocker = liveness.get("blocker")
     if blocker is None:
-        return
+        return True
     blocker_name = blocker.get("blocker") if isinstance(blocker, dict) else None
     if not isinstance(blocker_name, str) or not blocker_name:
         fail(f"Sumeragi status returned an invalid liveness blocker at {root}")
     fail(f"Sumeragi liveness blocker at {root}: {blocker_name}")
+
+
+def peer_log_offsets(target: Path) -> dict[int, int]:
+    """Snapshot the current end of each safe peer log for a fresh monitor."""
+
+    offsets: dict[int, int] = {}
+    for index in range(PEER_COUNT):
+        path = target / f"peer{index}.log"
+        if path.is_symlink():
+            fail(f"refusing symlinked Taira peer log: {path}")
+        if not path.exists():
+            offsets[index] = 0
+            continue
+        if not path.is_file():
+            fail(f"Taira peer log is not a regular file: {path}")
+        try:
+            offsets[index] = path.stat().st_size
+        except OSError as error:
+            fail(f"cannot inspect Taira peer log {path}: {error}")
+    return offsets
+
+
+def check_sumeragi_liveness_logs(
+    target: Path,
+    after_offsets: dict[int, int] | None = None,
+    committed_heights: Sequence[int] | None = None,
+    authoritative_status: Sequence[bool] | None = None,
+) -> dict[int, int]:
+    """Fail when the latest watchdog transition still blocks a live height."""
+
+    incremental = after_offsets is not None
+    after_offsets = after_offsets or {}
+    observed_offsets: dict[int, int] = {}
+    if committed_heights is not None and (
+        len(committed_heights) != PEER_COUNT
+        or any(
+            isinstance(height, bool) or not isinstance(height, int) or height < 0
+            for height in committed_heights
+        )
+    ):
+        fail("Taira log diagnostics require four valid committed heights")
+    if authoritative_status is not None and (
+        len(authoritative_status) != PEER_COUNT
+        or any(not isinstance(available, bool) for available in authoritative_status)
+    ):
+        fail("Taira log diagnostics require four status-availability flags")
+    for index in range(PEER_COUNT):
+        path = target / f"peer{index}.log"
+        if path.is_symlink():
+            fail(f"refusing symlinked Taira peer log: {path}")
+        if not path.exists():
+            observed_offsets[index] = 0
+            continue
+        if not path.is_file():
+            fail(f"Taira peer log is not a regular file: {path}")
+        try:
+            with path.open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                end = stream.tell()
+                observed_offsets[index] = end
+                if authoritative_status is not None and authoritative_status[index]:
+                    continue
+                lower_bound = (
+                    after_offsets.get(index, 0)
+                    if incremental
+                    else max(0, end - MAX_INITIAL_LOG_STATE_SCAN_BYTES)
+                )
+                if end < lower_bound:
+                    fail(f"Taira peer log was truncated during monitoring: {path}")
+                cursor = end
+                carry: bytes | None = b""
+                latest: tuple[str, str | None, int | None] | None = None
+                while cursor > lower_bound and latest is None:
+                    start = max(lower_bound, cursor - MAX_LOG_TAIL_BYTES)
+                    stream.seek(start)
+                    block = stream.read(cursor - start)
+                    if carry is None:
+                        separator = block.rfind(b"\n")
+                        if separator < 0:
+                            cursor = start
+                            continue
+                        block = block[:separator]
+                        carry = b""
+                    parts = (block + carry).split(b"\n")
+                    carry = parts[0]
+                    for line in reversed(parts[1:]):
+                        if not line or len(line) > MAX_STRUCTURED_LOG_LINE_BYTES:
+                            continue
+                        try:
+                            record = json.loads(line)
+                        except ValueError:
+                            continue
+                        if (
+                            not isinstance(record, dict)
+                            or record.get("target") != "iroha_core::sumeragi::status"
+                        ):
+                            continue
+                        fields = record.get("fields")
+                        message = fields.get("message") if isinstance(fields, dict) else None
+                        if message == SUMERAGI_NO_PROGRESS_LOG_MESSAGE:
+                            blocker = fields.get("blocker")
+                            height = fields.get("height")
+                            if (
+                                not isinstance(blocker, str)
+                                or not blocker
+                                or blocker == "None"
+                                or isinstance(height, bool)
+                                or not isinstance(height, int)
+                                or height <= 0
+                            ):
+                                fail(f"invalid Sumeragi liveness warning in peer{index} log")
+                            latest = ("blocked", blocker, height)
+                            break
+                        if message == SUMERAGI_PROGRESS_RECOVERED_LOG_MESSAGE:
+                            latest = ("recovered", None, None)
+                            break
+                    if len(carry) > MAX_STRUCTURED_LOG_LINE_BYTES:
+                        carry = None
+                    cursor = start
+                if latest is None and carry is not None and carry:
+                    include = lower_bound == 0
+                    if lower_bound:
+                        stream.seek(lower_bound - 1)
+                        include = stream.read(1) == b"\n"
+                    if include and len(carry) <= MAX_STRUCTURED_LOG_LINE_BYTES:
+                        try:
+                            record = json.loads(carry)
+                        except ValueError:
+                            record = None
+                        if (
+                            isinstance(record, dict)
+                            and record.get("target") == "iroha_core::sumeragi::status"
+                            and isinstance(record.get("fields"), dict)
+                        ):
+                            fields = record["fields"]
+                            message = fields.get("message")
+                            if message == SUMERAGI_NO_PROGRESS_LOG_MESSAGE:
+                                blocker = fields.get("blocker")
+                                height = fields.get("height")
+                                if (
+                                    not isinstance(blocker, str)
+                                    or not blocker
+                                    or blocker == "None"
+                                    or isinstance(height, bool)
+                                    or not isinstance(height, int)
+                                    or height <= 0
+                                ):
+                                    fail(
+                                        f"invalid Sumeragi liveness warning in peer{index} log"
+                                    )
+                                latest = ("blocked", blocker, height)
+                            elif message == SUMERAGI_PROGRESS_RECOVERED_LOG_MESSAGE:
+                                latest = ("recovered", None, None)
+        except OSError as error:
+            fail(f"cannot inspect Taira peer log {path}: {error}")
+        if latest is None or latest[0] == "recovered":
+            if latest is None and not incremental and lower_bound > 0:
+                fail(
+                    f"cannot derive peer{index} Sumeragi liveness state from the "
+                    f"latest {MAX_INITIAL_LOG_STATE_SCAN_BYTES} log bytes"
+                )
+            continue
+        _, blocker, blocked_height = latest
+        assert blocker is not None and blocked_height is not None
+        if (
+            committed_heights is not None
+            and blocked_height < committed_heights[index]
+        ):
+            continue
+        fail(
+            f"Sumeragi liveness blocker in peer{index} log at height "
+            f"{blocked_height}: {blocker}"
+        )
+    return observed_offsets
+
+
+def check_owned_cluster_diagnostics(
+    target: Path,
+    run: Runner,
+    log_offsets: dict[int, int] | None = None,
+    committed_heights: Sequence[int] | None = None,
+) -> dict[int, int]:
+    """Fail immediately when an owned peer exits or publishes a blocker."""
+
+    require_running_cohort(target, run)
+    return check_sumeragi_liveness_logs(target, log_offsets, committed_heights)
 
 
 def wait_for_cluster(
@@ -1782,18 +2368,21 @@ def wait_for_cluster(
     request: Request,
     *,
     above: int | None = None,
+    diagnose: Callable[[], None] | None = None,
+    diagnose_heights: Callable[[Sequence[int], Sequence[bool]], None] | None = None,
 ) -> list[int]:
     """Wait for four ready peers at one converged height, optionally advanced."""
 
     deadline = time.monotonic() + timeout
     last = "not reachable"
     while time.monotonic() < deadline:
+        if diagnose is not None:
+            diagnose()
         # These probes ignore an unavailable/protected status route but make a
         # published fail-stop or watchdog blocker terminal immediately.  Keep
         # them outside the retryable readiness block so a serious consensus
         # diagnosis is not hidden behind a generic convergence timeout.
-        for root in roots:
-            check_sumeragi_status(root, request)
+        status_available = [check_sumeragi_status(root, request) for root in roots]
         try:
             for root in roots:
                 for endpoint in ("health", "readyz"):
@@ -1801,13 +2390,66 @@ def wait_for_cluster(
                     if not 200 <= status < 300:
                         fail(f"{root}{endpoint} returned HTTP {status}")
             heights = [read_height(root, request) for root in roots]
+        except DevnetError as error:
+            last = str(error)
+        else:
+            if diagnose_heights is not None:
+                diagnose_heights(heights, status_available)
             if len(set(heights)) == 1 and (above is None or heights[0] > above):
                 return heights
             last = f"heights={heights}, required_above={above}"
-        except DevnetError as error:
-            last = str(error)
         time.sleep(0.5)
     fail(f"four-peer cluster did not converge within {timeout:g}s: {last}")
+
+
+def verify_cluster_stability(
+    roots: Sequence[str],
+    minimum_height: int,
+    duration: float,
+    request: Request,
+    *,
+    diagnose: Callable[[], None] | None = None,
+) -> list[int]:
+    """Require every converged peer to stay live and monotonic for a grace window."""
+
+    if duration <= 0:
+        fail("post-smoke stability duration must be positive")
+    deadline = time.monotonic() + duration
+    heights: list[int] = []
+    previous_heights: list[int] | None = None
+    while True:
+        if diagnose is not None:
+            diagnose()
+        for root in roots:
+            check_sumeragi_status(root, request)
+            for endpoint in ("health", "readyz"):
+                status, _ = request(root + endpoint, None)
+                if not 200 <= status < 300:
+                    fail(f"{root}{endpoint} returned HTTP {status} during stability check")
+        heights = [read_height(root, request) for root in roots]
+        if any(height < minimum_height for height in heights):
+            fail(
+                "four-peer cluster regressed during post-smoke stability check: "
+                f"heights={heights}, minimum_height={minimum_height}"
+            )
+        if previous_heights is not None:
+            rollbacks = [
+                f"peer{index}={previous}->{current}"
+                for index, (previous, current) in enumerate(
+                    zip(previous_heights, heights, strict=True)
+                )
+                if current < previous
+            ]
+            if rollbacks:
+                fail(
+                    "four-peer cluster height rollback during post-smoke "
+                    f"stability check: {', '.join(rollbacks)}"
+                )
+        previous_heights = heights
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return heights
+        time.sleep(min(0.5, remaining))
 
 
 def check_mcp(root: str, request: Request) -> None:
@@ -2511,6 +3153,28 @@ def _canonical_storage_text(
     return "".join(rendered)
 
 
+def _atomic_replace_generated_file(
+    path: Path, text: str, *, temporary_label: str
+) -> None:
+    """Replace one generated file without exposing partially written contents."""
+
+    metadata = path.stat()
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.{temporary_label}-",
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, metadata.st_mode & 0o7777)
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as output:
+            output.write(text)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def taira_inrou_identity(peer_index: int) -> tuple[str, int, int]:
     """Return one canonical same-host Taira Inrou identity slot."""
 
@@ -2575,24 +3239,40 @@ def _canonical_inrou_text(config: Path, text: str, peer_index: int) -> str:
     return "".join((*lines[: egress[2]], replacement, *lines[egress[3] :]))
 
 
-def _atomic_replace_generated_config(path: Path, text: str) -> None:
-    """Replace one generated config without exposing a partially written file."""
+def harden_generated_start_script(target: Path) -> None:
+    """Add recoverable launch intent and atomic PID publication to Kagami output."""
 
-    metadata = path.stat()
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.storage-overlay-",
+    path = target / "start.sh"
+    text = read_bounded_text(
+        path,
+        limit=MAX_BUNDLE_TEXT_BYTES,
+        label="generated start script",
     )
-    temporary = Path(temporary_name)
-    try:
-        os.fchmod(descriptor, metadata.st_mode & 0o7777)
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as output:
-            output.write(text)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    launch_anchor = "  if command -v python3 >/dev/null 2>&1; then\n"
+    pid_anchor = '  echo "$peer_pid" > "$PIDFILE"\n'
+    if text.count(launch_anchor) != 1 or text.count(pid_anchor) != 1:
+        fail("generated start script is missing the current peer launch custody surface")
+    launch_replacement = (
+        '  CUSTODYFILE="$DIR/peer${i}.launching"\n'
+        '  rm -f "$CUSTODYFILE"\n'
+        '  : > "$CUSTODYFILE"\n'
+        + launch_anchor
+    )
+    pid_replacement = (
+        '  PIDFILE_TMP="${PIDFILE}.tmp"\n'
+        '  rm -f "$PIDFILE_TMP"\n'
+        "  printf '%s\\n' \"$peer_pid\" > \"$PIDFILE_TMP\"\n"
+        '  mv -f "$PIDFILE_TMP" "$PIDFILE"\n'
+        '  rm -f "$CUSTODYFILE"\n'
+    )
+    hardened = text.replace(launch_anchor, launch_replacement, 1).replace(
+        pid_anchor, pid_replacement, 1
+    )
+    _atomic_replace_generated_file(
+        path,
+        hardened,
+        temporary_label="custody-overlay",
+    )
 
 
 def _require_canonical_taira_storage_profiles(target: Path) -> None:
@@ -2770,7 +3450,11 @@ def apply_canonical_taira_profiles(target: Path) -> None:
         for peer_index in range(PEER_COUNT)
     ]
     for config, text in replacements:
-        _atomic_replace_generated_config(config, text)
+        _atomic_replace_generated_file(
+            config,
+            text,
+            temporary_label="taira-profile-overlay",
+        )
     require_canonical_taira_profiles(target)
 
 
@@ -2908,6 +3592,62 @@ def require_inrou_stage(stage_dir: Path) -> None:
                 fail(f"native Taira Inrou guest stage contains a non-file entry: {entry}")
     if guest_files == 0:
         fail(f"native Taira Inrou guest payload stage is empty: {guest}")
+
+
+def canonical_inrou_stage_receipt(stage_dir: Path) -> dict[str, Any]:
+    """Decode and validate the exact deploy-stage identity used by the canary."""
+
+    require_inrou_stage(stage_dir)
+    receipt_path = stage_dir / INROU_STAGE_RECEIPT_FILE
+    try:
+        receipt = json.loads(
+            read_bounded_text(
+                receipt_path,
+                limit=MAX_INROU_CANARY_MANIFEST_BYTES,
+                label="native Taira Inrou stage receipt",
+            )
+        )
+    except ValueError:
+        fail("native Taira Inrou stage receipt is not canonical JSON")
+    if not isinstance(receipt, dict) or set(receipt) != INROU_STAGE_RECEIPT_KEYS_V1:
+        fail("native Taira Inrou stage receipt violates the exact V1 schema")
+    expected_fields = {
+        "schema_version": 1,
+        "mutation_mode": "deploy",
+        "service_name": "taira_inrou_canary",
+        "container_file": INROU_STAGE_CONTAINER_FILE,
+        "service_file": INROU_STAGE_SERVICE_FILE,
+        "bundle_payload_file": INROU_STAGE_BUNDLE_PAYLOAD.as_posix(),
+        "bundle_manifest_file": INROU_STAGE_BUNDLE_MANIFEST.as_posix(),
+        "guest_isa": "aarch64",
+        "guest_payload_dir": INROU_STAGE_GUEST_PAYLOAD.as_posix(),
+        "guest_manifest_file": INROU_STAGE_GUEST_MANIFEST.as_posix(),
+    }
+    if any(receipt.get(field) != value for field, value in expected_fields.items()):
+        fail("native Taira Inrou stage receipt is not the canonical V1 deploy stage")
+    service_version = receipt.get("service_version")
+    if (
+        not isinstance(service_version, str)
+        or INROU_CANARY_SERVICE_VERSION_V1_RE.fullmatch(service_version) is None
+    ):
+        fail("native Taira Inrou stage receipt has a malformed artifact revision")
+    for field in (
+        "bundle_hash",
+        "container_manifest_hash",
+        "service_manifest_hash",
+    ):
+        value = receipt.get(field)
+        if not isinstance(value, str) or IROHA_HASH_LITERAL_RE.fullmatch(value) is None:
+            fail(f"native Taira Inrou stage receipt has malformed {field}")
+    for field in ("bundle_content_cid", "guest_content_cid"):
+        value = receipt.get(field)
+        if not isinstance(value, str) or SORAFS_CONTENT_CID_V1_RE.fullmatch(value) is None:
+            fail(f"native Taira Inrou stage receipt has malformed {field}")
+    for field in ("bundle_manifest_digest_hex", "guest_manifest_digest_hex"):
+        value = receipt.get(field)
+        if not isinstance(value, str) or LOWER_32_BYTE_HEX_RE.fullmatch(value) is None:
+            fail(f"native Taira Inrou stage receipt has malformed {field}")
+    return receipt
 
 
 def _require_unchanged_inrou_canary_workspace(
@@ -3083,7 +3823,7 @@ def prepare_inrou_stage(
         snapshot,
         phase="while the compiled stager consumed its snapshot",
     )
-    require_inrou_stage(stage_dir)
+    canonical_inrou_stage_receipt(stage_dir)
     return stage_dir
 
 
@@ -3130,6 +3870,7 @@ def preseed_inrou_stage(
 def canonical_inrou_canary_outcome(
     completed: subprocess.CompletedProcess[str],
     expected_public_root: str,
+    expected_stage_receipt: dict[str, Any],
 ) -> dict[str, Any]:
     """Require the compiled canary's exact four-replica success receipt."""
 
@@ -3147,7 +3888,7 @@ def canonical_inrou_canary_outcome(
         or receipt.get("public_root") != expected_public_root
         or receipt.get("mutation_mode") != "deploy"
         or receipt.get("service_name") != "taira_inrou_canary"
-        or receipt.get("service_version") != INROU_CANARY_DEPLOY_VERSION_V1
+        or receipt.get("service_version") != expected_stage_receipt["service_version"]
         or receipt.get("route_host") != INROU_CANARY_ROUTE_HOST_V1
         or receipt.get("route_path") != INROU_CANARY_HEALTH_PATH_V1
         or receipt.get("warnings") != []
@@ -3161,7 +3902,7 @@ def canonical_inrou_canary_outcome(
 
     for field in ("bundle_hash", "mutation_response_digest"):
         value = receipt.get(field)
-        if not isinstance(value, str) or LOWER_32_BYTE_HEX_RE.fullmatch(value) is None:
+        if not isinstance(value, str) or IROHA_HASH_LITERAL_RE.fullmatch(value) is None:
             fail(f"compiled Taira Inrou canary receipt has malformed {field}")
     for field in ("bundle_content_cid", "guest_content_cid"):
         value = receipt.get(field)
@@ -3177,6 +3918,16 @@ def canonical_inrou_canary_outcome(
         or IROHA_HASH_LITERAL_RE.fullmatch(submitted_tx_hash) is None
     ):
         fail("compiled Taira Inrou canary receipt has malformed submitted_tx_hash")
+    for field in (
+        "service_version",
+        "bundle_hash",
+        "bundle_content_cid",
+        "bundle_manifest_digest_hex",
+        "guest_content_cid",
+        "guest_manifest_digest_hex",
+    ):
+        if receipt.get(field) != expected_stage_receipt.get(field):
+            fail(f"compiled Taira Inrou canary receipt does not match staged {field}")
 
     checks = receipt.get("checks")
     if not isinstance(checks, list) or len(checks) != 2:
@@ -3238,7 +3989,7 @@ def run_inrou_canary(
 ) -> dict[str, Any]:
     """Register and verify the preseeded canonical deploy stage."""
 
-    require_inrou_stage(stage_dir)
+    stage_receipt = canonical_inrou_stage_receipt(stage_dir)
     public_root = root.rstrip("/")
     completed = run(
         [
@@ -3262,9 +4013,7 @@ def run_inrou_canary(
         cwd=target,
         timeout=timeout_seconds + 30,
     )
-    return canonical_inrou_canary_outcome(completed, public_root)
-
-
+    return canonical_inrou_canary_outcome(completed, public_root, stage_receipt)
 def dump_logs(target: Path) -> None:
     """Print bounded daemon log tails without reading configs or key files."""
 
@@ -3301,6 +4050,27 @@ def up(
     require_inrou_qualification_host()
     inrou_canary_workspace = requested_inrou_canary_workspace(args)
     root = managed_root(args.dir, create=True)
+    with mutation_lock(root) as mutation_descriptor:
+        return _up_locked(
+            args,
+            root,
+            inrou_canary_workspace,
+            mutation_descriptor,
+            run,
+            request,
+        )
+
+
+def _up_locked(
+    args: argparse.Namespace,
+    root: Path,
+    inrou_canary_workspace: InrouCanaryWorkspaceEvidence | None,
+    mutation_descriptor: int,
+    run: Runner,
+    request: Request,
+) -> dict[str, Any]:
+    """Run the mutating startup corridor while holding the root operation lock."""
+
     root_identity = _direct_root_owned_directory_identity(
         root,
         label="managed devnet root",
@@ -3360,7 +4130,10 @@ def up(
             args.base_p2p_port,
             args.block_cadence_ms,
             run,
+            timeout=args.generation_timeout_seconds,
+            pass_fds=(mutation_descriptor,),
         )
+        harden_generated_start_script(target)
         apply_canonical_taira_profiles(target)
         validate_configs(target, irohad, run)
         require_bundle_identity(target, roots)
@@ -3393,18 +4166,37 @@ def up(
                 "IROHA_LOCALNET_FAUCET_RESERVE_RETRIES": "0",
             }
         )
+        # The bundle is fresh, so these are normally zero. Capture them before
+        # the launcher can emit an edge-triggered blocker; a post-start cursor
+        # could hide the exact failure that startup is meant to diagnose.
+        log_offsets = peer_log_offsets(target)
         run(
             ["/bin/bash", str(target / "start.sh")],
             cwd=target,
             env=env,
             timeout=60,
             capture_output=False,
+            pass_fds=(mutation_descriptor,),
         )
         require_running_cohort(target, run)
         # Health/readiness can become available before genesis is committed.
         # Do not quote or submit a signed transaction against the empty height-0
         # state, where the freshly generated authority is not registered yet.
-        baseline = wait_for_cluster(roots, args.timeout_seconds, request, above=0)
+        def diagnostics() -> None:
+            nonlocal log_offsets
+            log_offsets = check_owned_cluster_diagnostics(
+                target,
+                run,
+                log_offsets,
+            )
+
+        baseline = wait_for_cluster(
+            roots,
+            args.timeout_seconds,
+            request,
+            above=0,
+            diagnose=diagnostics,
+        )
         require_cluster_build_identity(
             roots,
             source_observation["git_head"],
@@ -3442,6 +4234,7 @@ def up(
             ],
             cwd=target,
             timeout=args.timeout_seconds,
+            pass_fds=(mutation_descriptor,),
         )
         transaction_hash = submitted_transaction_hash(submitted)
         print(
@@ -3470,10 +4263,18 @@ def up(
             ],
             cwd=target,
             timeout=args.timeout_seconds + 5,
+            pass_fds=(mutation_descriptor,),
+            heartbeat=diagnostics,
         )
         require_applied_transaction(waited, transaction_hash)
         print("Signed smoke reached Applied; waiting for four-peer convergence...", flush=True)
-        final = wait_for_cluster(roots, args.timeout_seconds, request, above=max(baseline))
+        final = wait_for_cluster(
+            roots,
+            args.timeout_seconds,
+            request,
+            above=max(baseline),
+            diagnose=diagnostics,
+        )
         check_all_mcp(roots, request)
         if inrou_canary_workspace is not None:
             if inrou_stage is None:
@@ -3491,20 +4292,59 @@ def up(
                 args.timeout_seconds,
                 request,
                 above=max(final),
+                diagnose=diagnostics,
             )
         if args.full_doctor:
             run_full_doctor(target, iroha, roots[0], run)
+        if POST_SMOKE_STABILITY_SECONDS > 0:
+            print(
+                "Smoke converged; verifying the four-peer cohort stays healthy...",
+                flush=True,
+            )
+            verify_cluster_stability(
+                roots,
+                final[0],
+                POST_SMOKE_STABILITY_SECONDS,
+                request,
+                diagnose=diagnostics,
+            )
+            final = wait_for_cluster(
+                roots,
+                args.timeout_seconds,
+                request,
+                diagnose=diagnostics,
+            )
+        require_running_cohort(target, run)
         if current_source_observation(run) != source_observation:
             fail("observed non-ignored worktree changed during Taira qualification")
         if compiled_toolchain_evidence(kagami, irohad, iroha, sorafs_node) != toolchain_evidence:
             fail("compiled Taira toolchain changed during qualification")
     except (DevnetError, subprocess.TimeoutExpired, KeyboardInterrupt) as error:
-        stop_network(root, run, tolerate_failure=True)
+        # Capture causal startup records while every peer is still running.
+        # Shutdown and peer-monitor chatter can otherwise displace the bounded
+        # tail that makes a failed disposable deployment actionable.
         dump_logs(target)
+        stopped = stop_network(root, run, tolerate_failure=True)
+        if stopped:
+            try:
+                delete_runtime_signer_files(target)
+            except DevnetError as cleanup_error:
+                print(
+                    f"warning: could not delete stopped Taira runtime signers: {cleanup_error}",
+                    file=sys.stderr,
+                )
         if isinstance(error, subprocess.TimeoutExpired):
             fail(f"command timed out: {error.cmd}")
         if isinstance(error, KeyboardInterrupt):
-            fail("Taira devnet startup was interrupted; bounded cohort teardown was attempted")
+            if stopped:
+                fail(
+                    "Taira devnet startup was interrupted; "
+                    "the generated cohort was stopped"
+                )
+            fail(
+                "Taira devnet startup was interrupted, but teardown could not be "
+                "proven; retained peers may still be live and `down` must be retried"
+            )
         raise
     report = {
         "directory": str(target),
@@ -3554,7 +4394,27 @@ def check(
     require_canonical_taira_profiles(target)
     require_bundle_identity(target, roots)
     require_running_cohort(target, run)
-    heights = wait_for_cluster(roots, args.timeout_seconds, request)
+    log_offsets: dict[int, int] | None = None
+
+    def diagnose_heights(
+        observed: Sequence[int],
+        status_available: Sequence[bool],
+    ) -> None:
+        nonlocal log_offsets
+        log_offsets = check_sumeragi_liveness_logs(
+            target,
+            log_offsets,
+            observed,
+            status_available,
+        )
+
+    heights = wait_for_cluster(
+        roots,
+        args.timeout_seconds,
+        request,
+        diagnose=lambda: require_running_cohort(target, run),
+        diagnose_heights=diagnose_heights,
+    )
     check_all_mcp(roots, request)
     report = {
         "directory": str(target),
@@ -3571,12 +4431,33 @@ def down(args: argparse.Namespace, *, run: Runner = run_command) -> dict[str, An
     """Stop the peers and destroy their disposable runtime signer keys."""
 
     root = managed_root(args.dir, create=False)
-    target = require_stoppable_network(root)
-    stop_network(root, run)
-    delete_runtime_signer_files(target)
+    with mutation_lock(root):
+        target = require_stoppable_network(root)
+        stop_network(root, run)
+        delete_runtime_signer_files(target)
     report = {"directory": str(target), "runtime_signers_deleted": True, "stopped": True}
     print(json.dumps(report, indent=2, sort_keys=True))
     return report
+
+
+def positive_integer(value: str) -> int:
+    """Parse one canonical positive decimal command-line integer."""
+
+    if re.fullmatch(r"[1-9][0-9]*", value) is None:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return int(value)
+
+
+def finite_positive_float(value: str) -> float:
+    """Parse one finite positive command-line duration."""
+
+    try:
+        parsed = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a finite positive number") from error
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a finite positive number")
+    return parsed
 
 
 def parser() -> argparse.ArgumentParser:
@@ -3590,6 +4471,11 @@ def parser() -> argparse.ArgumentParser:
 
     up_parser = commands.add_parser("up", help="replace, start, and verify the devnet")
     up_parser.add_argument(
+        "--jobs",
+        type=positive_integer,
+        help="override Cargo build jobs; the default uses Cargo's jobserver",
+    )
+    up_parser.add_argument(
         "--target-dir",
         type=Path,
         help=(
@@ -3598,13 +4484,14 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     up_parser.add_argument(
-        "--build-timeout-seconds",
-        type=float,
-        help="optional Cargo build deadline; the default lets a cold build finish",
+        "--generation-timeout-seconds",
+        type=finite_positive_float,
+        default=DEFAULT_GENERATION_TIMEOUT_SECONDS,
+        help="Kagami network-generation deadline (default: 120 seconds)",
     )
     up_parser.add_argument(
         "--timeout-seconds",
-        type=float,
+        type=finite_positive_float,
         default=DEFAULT_OPERATION_TIMEOUT_SECONDS,
         help="deadline for each startup, transaction, and convergence phase",
     )
@@ -3632,7 +4519,9 @@ def parser() -> argparse.ArgumentParser:
     up_parser.set_defaults(handler=up)
 
     check_parser = commands.add_parser("check", help="read four-peer readiness and height")
-    check_parser.add_argument("--timeout-seconds", type=float, default=20)
+    check_parser.add_argument(
+        "--timeout-seconds", type=finite_positive_float, default=20
+    )
     check_parser.add_argument(
         "--base-api-port",
         type=int,

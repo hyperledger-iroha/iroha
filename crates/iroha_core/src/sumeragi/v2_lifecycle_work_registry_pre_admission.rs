@@ -223,6 +223,12 @@ impl PreparedLifecycleOutputExecutionV1 {
         execute(&self.effect, &self.ownership)
     }
 
+    /// Whether the serialized runtime authorized a fresh physical periodic resend.
+    pub(super) fn is_periodic_retransmit_broadcast(&self) -> bool {
+        self.ownership
+            .exactly_binds_periodic_retransmit_broadcast(&self.effect)
+    }
+
     /// Restore the exact bounded handoff when lifecycle ordering defers I/O.
     pub(super) fn into_pending(self) -> PendingLifecycleOutputAdmissionV1 {
         let pending = self.exact_pending_binding();
@@ -2506,6 +2512,18 @@ impl PreparedDurableValidateAdmissionV1 {
                     durable_receipt,
                     expected_manifest_hash,
                     replay_evidence: DurableValidateReplayEvidenceV1::RecoveredStandalone(
+                        replay_evidence,
+                    ),
+                })
+            }
+            DurableValidateReplayEvidenceV1::RecoveredDecision(replay_evidence) => {
+                Err(DurableValidateBody {
+                    address,
+                    effect,
+                    pending,
+                    durable_receipt,
+                    expected_manifest_hash,
+                    replay_evidence: DurableValidateReplayEvidenceV1::RecoveredDecision(
                         replay_evidence,
                     ),
                 })

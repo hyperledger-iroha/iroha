@@ -1071,6 +1071,55 @@ pub(crate) struct PreparedLifecycleIngressSelector {
         BTreeMap<HashOf<wire::CertifiedBodyRequest>, PreparedClaimedResponseFamily>,
     selector_debt: u64,
 }
+/// Queue-independent result of one complete lifecycle-ingress classification.
+///
+/// Keeping the classification separate from the queue authority lets the
+/// current Certified-Serve path retain both queue locks through exact dequeue,
+/// while Fetch paths continue to receive the existing borrow-free witness.
+struct PreparedLifecycleIngressSelectorClassification {
+    context: LifecycleContext,
+    request_fence_active: bool,
+    io_target: PreparedLifecycleIngressIoTarget,
+    verdicts: BTreeMap<u64, LifecycleIngressOccurrenceVerdict>,
+    priority_owners: BTreeSet<u64>,
+    claimed_response_families:
+        BTreeMap<HashOf<wire::CertifiedBodyRequest>, PreparedClaimedResponseFamily>,
+    selector_debt: u64,
+}
+
+impl PreparedLifecycleIngressSelectorClassification {
+    fn into_borrow_free(
+        self,
+        queue_witness: PreparedFairIngressQueueWitness,
+    ) -> PreparedLifecycleIngressSelector {
+        let Self {
+            context,
+            request_fence_active,
+            io_target,
+            verdicts,
+            priority_owners,
+            claimed_response_families,
+            selector_debt,
+        } = self;
+        PreparedLifecycleIngressSelector {
+            context,
+            request_fence_active,
+            queue_witness,
+            io_target,
+            verdicts,
+            priority_owners,
+            claimed_response_families,
+            selector_debt,
+        }
+    }
+}
+
+/// Current Certified-Serve classification that still owns the exact fenced cut.
+#[must_use = "the fenced Certified-Serve selector must lock or retain its queue cut"]
+pub(super) struct PreparedFencedCertifiedServeSelectorV1<'a> {
+    cut: FairIngressQueueCut<'a>,
+    classification: PreparedLifecycleIngressSelectorClassification,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreparedLifecycleIngressIoTarget {
     CertifiedServe { request: LifecycleDigest },
@@ -2113,6 +2162,72 @@ impl PreparedLifecycleIngressSelector {
                 == Some(self.selected_identity()),
             self.request_fence_active,
         )
+    }
+}
+
+impl<'a> PreparedFencedCertifiedServeSelectorV1<'a> {
+    /// Consume the still-fenced current-Serve census into its exact dequeue.
+    ///
+    /// The service and producer-publication guards move from the queue cut into
+    /// the returned dequeue, so queued retransmits cannot refresh ownership in
+    /// the classification-to-publication gap.
+    pub(in crate::sumeragi) fn into_locked_certified_serve_dequeue(
+        self,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+    ) -> Result<
+        (
+            PreparedCertifiedServeExactDequeueV1<'a>,
+            LifecycleIngressIoTargetSeal,
+        ),
+        CertifiedServeExactDequeueErrorV1,
+    > {
+        let Self {
+            cut,
+            classification,
+        } = self;
+        let selected_identity = *cut.selected_identity();
+        let selected_disposition = cut.selected_disposition();
+        let PreparedLifecycleIngressSelectorClassification {
+            context,
+            request_fence_active: _,
+            io_target,
+            verdicts: _,
+            priority_owners: _,
+            claimed_response_families,
+            selector_debt,
+        } = classification;
+        let PreparedLifecycleIngressIoTarget::CertifiedServe { request } = io_target else {
+            return Err(CertifiedServeExactDequeueErrorV1::SelectorAuthority);
+        };
+        let target = LifecycleIngressIoTargetSeal {
+            context,
+            ingress_identity: selected_identity,
+            kind: LifecycleIngressIoTargetKind::CertifiedServe,
+            certified_serve_request: Some(request),
+            certified_fetch_work_id: None,
+            recovered_decision_fetch_key: None,
+            _linearity: LifecycleIngressIoTargetSealLinearity,
+        };
+        if selected_identity.context() != context
+            || selected_disposition != FairV2IngressDequeueDisposition::Admit
+            || !target.matches_certified_serve_request(authenticated.request_hash())
+        {
+            return Err(CertifiedServeExactDequeueErrorV1::SelectorAuthority);
+        }
+        drop(claimed_response_families);
+        let locked = cut
+            .into_locked_exact_dequeue_retaining(
+                context,
+                selected_identity.physical_admission_ordinal(),
+            )
+            .map_err(|(error, _cut)| CertifiedServeExactDequeueErrorV1::Queue(error))?;
+        Ok((
+            PreparedCertifiedServeExactDequeueV1 {
+                locked,
+                selector_debt,
+            },
+            target,
+        ))
     }
 }
 fn certified_fetch_scheduler_generation(wait: super::WaitToken) -> Option<u64> {
@@ -3321,11 +3436,49 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
         self.capture_lifecycle_ingress_selector_for_response_family(cut, None)
     }
 
+    /// Classify current Certified-Serve while retaining the queue's fenced cut.
+    ///
+    /// Unlike the borrow-free Fetch surface, this path never releases either
+    /// queue lock between the complete executor census and exact dequeue.
+    pub(super) fn capture_fenced_certified_serve_ingress_selector<'a>(
+        &self,
+        cut: FairIngressQueueCut<'a>,
+    ) -> Result<PreparedFencedCertifiedServeSelectorV1<'a>, LifecycleIngressSelectorError> {
+        let (cut, classification) =
+            self.classify_lifecycle_ingress_selector_for_response_family(cut, None)?;
+        Ok(PreparedFencedCertifiedServeSelectorV1 {
+            cut,
+            classification,
+        })
+    }
+
     fn capture_lifecycle_ingress_selector_for_response_family(
         &self,
         cut: FairIngressQueueCut<'_>,
         selected_response_family: Option<HashOf<wire::CertifiedBodyRequest>>,
     ) -> Result<PreparedLifecycleIngressSelector, LifecycleIngressSelectorError> {
+        let (cut, classification) = self.classify_lifecycle_ingress_selector_for_response_family(
+            cut,
+            selected_response_family,
+        )?;
+        let queue_witness = cut.into_prepared_witness();
+        if !queue_witness.is_internally_exact() {
+            return Err(LifecycleIngressSelectorError::InvalidCensus);
+        }
+        Ok(classification.into_borrow_free(queue_witness))
+    }
+
+    fn classify_lifecycle_ingress_selector_for_response_family<'a>(
+        &self,
+        cut: FairIngressQueueCut<'a>,
+        selected_response_family: Option<HashOf<wire::CertifiedBodyRequest>>,
+    ) -> Result<
+        (
+            FairIngressQueueCut<'a>,
+            PreparedLifecycleIngressSelectorClassification,
+        ),
+        LifecycleIngressSelectorError,
+    > {
         self.validate_lifecycle_ingress_selector_authority()
             .map_err(|error| LifecycleIngressSelectorError::ExecutorAuthority {
                 ordinal: None,
@@ -3609,20 +3762,18 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
         if revalidated_presence != request_fence_active || !cut.pre_cut_is_intact() {
             return Err(LifecycleIngressSelectorError::QueueCutChanged);
         }
-        let queue_witness = cut.into_prepared_witness();
-        if !queue_witness.is_internally_exact() {
-            return Err(LifecycleIngressSelectorError::InvalidCensus);
-        }
-        Ok(PreparedLifecycleIngressSelector {
-            context,
-            request_fence_active,
-            queue_witness,
-            io_target,
-            verdicts,
-            priority_owners,
-            claimed_response_families,
-            selector_debt,
-        })
+        Ok((
+            cut,
+            PreparedLifecycleIngressSelectorClassification {
+                context,
+                request_fence_active,
+                io_target,
+                verdicts,
+                priority_owners,
+                claimed_response_families,
+                selector_debt,
+            },
+        ))
     }
 }
 /// Map receiver-local delivery ownership into the formal ingress resource lane.

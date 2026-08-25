@@ -35,16 +35,28 @@ economic lease. An upgrade or rollback that retains that lease must reject
 unit-price drift; a reporting rollover never renews or reprices the lease and
 never changes a leased volume's start or expiry.
 
-Every newly assigned Inrou reporter must first submit an accepted zero/open
-checkpoint for the current `reporting_epoch` before its replica may be marked
-as serving. Reporter counters are monotonic and terminal delivery is explicit.
-At exactly 4,096 reporter identities, the exact newly assigned active
-public-lane validator may compare-and-swap to `reporting_epoch + 1` only with a
-zero/open counter, after every old checkpoint is finalized and none of those
-old keys remains placed. The transition folds the exact checked `u128` old
-total into `settled_egress_bytes`, opens the trigger checkpoint, and records a
-typed audit event atomically. No manager or reconciliation path may force-clear
-unknown usage.
+Every lease-usage report must compare-and-swap against both the exact economic
+lease incarnation (`lease_started_sequence`) and the current
+`reporting_epoch`. A report from any prior lease incarnation is rejected even
+if its epoch, revision, replica slot, and validator otherwise match. Every newly
+assigned Inrou reporter must first submit an accepted zero/open checkpoint for
+that exact lease-and-epoch pair before its replica may be marked as serving.
+Reporter counters are monotonic and terminal delivery is explicit. At exactly
+4,096 reporter identities, the exact newly assigned active public-lane
+validator may compare-and-swap the same `lease_started_sequence` and the exact
+successor `reporting_epoch` only with a zero/open counter, after every old
+checkpoint is finalized and none of those old keys remains placed. The
+transition folds the exact checked `u128` old total into
+`settled_egress_bytes`, opens the trigger checkpoint, and records a typed audit
+event atomically. No manager or reconciliation path may force-clear unknown
+usage.
+
+Reporter checkpoints are keyed by the canonical validator `AccountId`, not by
+its routable peer ID. Capability adverts and placements must still match the
+validator's exact active on-chain peer binding, so a peer rotation invalidates
+stale routing immediately without resetting the authority's durable usage
+counter. The replacement worker must retain or transfer that counter before it
+can pass the zero/open checkpoint gate.
 
 Liveness therefore assumes an honest retiring worker can stop, join its final
 writes, and deliver its terminal report. A crashed or malicious reporter that

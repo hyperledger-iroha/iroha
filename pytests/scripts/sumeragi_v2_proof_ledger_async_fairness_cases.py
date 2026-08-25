@@ -35,6 +35,7 @@
 )
 def test_local_runner_service_contract_rejects_production_loop_mutations(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     relative: str,
     old: str,
     new: str,
@@ -47,6 +48,27 @@ def test_local_runner_service_contract_rejects_production_loop_mutations(
     source = path.read_text(encoding="utf-8")
     assert source.count(old) >= 1, old
     path.write_text(source.replace(old, new, 1), encoding="utf-8")
+    if relative.endswith("v2_runner/lifecycle_run_inner.rs"):
+        items = module.rust_items(
+            path.read_text(encoding="utf-8"), "run_lifecycle_active_height"
+        )
+        assert len(items) == 1
+        item_sha256 = module._rust_item_token_sha256(items[0])
+        for seals, key in (
+            (
+                module._PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256,
+                "ordinary_active",
+            ),
+            (
+                module._LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256,
+                "ordinary:run_lifecycle_active_height",
+            ),
+            (
+                module._LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256,
+                "run_lifecycle_active_height",
+            ),
+        ):
+            monkeypatch.setitem(seals, key, item_sha256)
 
     errors = module._local_runner_service_contract_source_fidelity_errors(
         module.load_ledger(),
@@ -55,6 +77,7 @@ def test_local_runner_service_contract_rejects_production_loop_mutations(
     )
 
     assert any(expected_error in error for error in errors), errors
+
 
 @pytest.mark.parametrize(
     ("old", "new"),

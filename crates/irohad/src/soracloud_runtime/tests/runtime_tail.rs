@@ -107,8 +107,19 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
             max_total_bytes: std::num::NonZeroU64::new(512 * 1024 * 1024).expect("bytes"),
         },
     ];
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+    bundle
+        .validate_for_admission()
+        .map_err(|error| eyre::eyre!("invalid external Inrou smoke-test bundle: {error}"))?;
     let mut state = test_state();
-    let deployment_state = sample_deployment_state(&bundle);
+    let mut deployment_state = sample_deployment_state(&bundle);
+    seed_open_inrou_reporter_fixture(
+        &mut deployment_state,
+        &bundle,
+        temp_dir.path(),
+        1,
+        &ALICE_ID,
+    )?;
     {
         let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
         insert_service_revision_fixture(world, &bundle);

@@ -104,9 +104,6 @@ fn queued_body_completion_coalesces_only_its_incumbent_owner() {
         authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
     let tag = runtime.round_tag();
     let manifest = runtime_manifest(&context, 0xA7);
-    runtime
-        .enqueue_body_available(tag, manifest.clone())
-        .expect("enqueue one exact body completion owner");
     let fetch = AdapterEffect::FetchBody {
         tag,
         round: manifest.round,
@@ -115,17 +112,26 @@ fn queued_body_completion_coalesces_only_its_incumbent_owner() {
         certified_sources: Vec::new(),
         certificate: None,
     };
+    let incumbent_ordinal = runtime
+        .ingress
+        .mint_non_fifo_lifecycle_ordinal()
+        .expect("mint the incumbent Fetch lifecycle");
     let incumbent = bind_adapter_effect_batch_ownership(
         std::slice::from_ref(&fetch),
-        vec![RuntimeEffectOwnerAssignment::inherit(
-            runtime.ingress.commands[0]
-                .lifecycle_owner()
-                .expect("queued body completion has one exact owner"),
+        vec![RuntimeEffectOwnership::fresh_for_test(
+            tag,
+            incumbent_ordinal,
         )],
     )
     .expect("bind the incumbent Fetch predecessor")
     .pop()
     .expect("one incumbent Fetch predecessor");
+    let reservation = runtime
+        .reserve_body_available_with_owner(tag, manifest.clone(), &incumbent)
+        .expect("reserve one owned body completion");
+    runtime
+        .commit_body_available(reservation)
+        .expect("publish one exact body completion owner");
     let next_ordinal = runtime.ingress.next_admission_ordinal;
     let exact = runtime
         .reserve_body_available_with_owner(tag, manifest.clone(), &incumbent)
@@ -148,13 +154,20 @@ fn queued_body_completion_coalesces_only_its_incumbent_owner() {
     .expect("bind the foreign Fetch predecessor")
     .pop()
     .expect("one foreign Fetch predecessor");
+    let coalesced = runtime
+        .reserve_body_available_with_owner(tag, manifest, &foreign)
+        .expect("an equivalent Fetch retry coalesces under the incumbent owner");
+    assert!(!coalesced.owns_new_slot());
     assert_eq!(
-        runtime.reserve_body_available_with_owner(tag, manifest, &foreign),
-        Err(EnqueueError::FailClosed),
+        coalesced.lifecycle_owner().as_ref(),
+        Some(incumbent.owner())
     );
+    runtime
+        .commit_body_available(coalesced)
+        .expect("coalesced retry publishes no second completion");
     assert_eq!(runtime.queued_commands(), 1);
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
-    assert!(runtime.fail_closed);
+    assert!(!runtime.fail_closed);
 }
 #[test]
 fn same_owner_wrong_stage_cannot_coalesce_a_body_completion() {

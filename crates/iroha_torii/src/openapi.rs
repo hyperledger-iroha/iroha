@@ -4681,12 +4681,17 @@ mod tests {
     }
     #[test]
     fn retired_validation_fee_plain_ballot_draft_is_absent() {
-        const RETIRED_PATH: &str =
-            "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft";
+        const RETIRED_PATH: &str = "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft";
         for (surface, source) in [
-            ("Torii validation-fee implementation", include_str!("validation_fee_api.rs")),
+            (
+                "Torii validation-fee implementation",
+                include_str!("validation_fee_api.rs"),
+            ),
             ("Torii router mounts", include_str!("lib.rs")),
-            ("canonical route catalog", include_str!("../../iroha_torii_shared/src/route_catalog.rs")),
+            (
+                "canonical route catalog",
+                include_str!("../../iroha_torii_shared/src/route_catalog.rs"),
+            ),
         ] {
             assert!(
                 !source.contains(RETIRED_PATH),
