@@ -1,8 +1,5 @@
 // Iroha node executable and feature-isolated real-network consensus fault-injection control.
-#[cfg(all(
-    feature = "test-network-parliament-signers",
-    not(debug_assertions)
-))]
+#[cfg(all(feature = "test-network-parliament-signers", not(debug_assertions)))]
 compile_error!(
     "the feature-isolated Parliament fixture signers cannot be compiled into an optimized daemon"
 );
@@ -155,12 +152,11 @@ pub use runtime_provider_broker::{
     GlobalBeaconPartialSignerBrokerBackendV1,
     ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     ParliamentTlePartialReleaseSignerBrokerBackendV1, RuntimeProviderBrokerBackendRegistryV1,
-    RuntimeProviderBrokerBackendsV1,
-    RuntimeProviderBrokerDeploymentV1, RuntimeProviderBrokerExecutableArgsV1,
-    RuntimeProviderBrokerExecutableErrorV1, RuntimeProviderBrokerExecutableV1,
-    RuntimeProviderBrokerLauncherErrorV1, RuntimeProviderBrokerLifecycleV1,
-    RuntimeProviderBrokerReadinessErrorV1, RuntimeProviderBrokerServerErrorV1,
-    StockGovernanceDagServiceRuntimeProviderRegistryV1,
+    RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerDeploymentV1,
+    RuntimeProviderBrokerExecutableArgsV1, RuntimeProviderBrokerExecutableErrorV1,
+    RuntimeProviderBrokerExecutableV1, RuntimeProviderBrokerLauncherErrorV1,
+    RuntimeProviderBrokerLifecycleV1, RuntimeProviderBrokerReadinessErrorV1,
+    RuntimeProviderBrokerServerErrorV1, StockGovernanceDagServiceRuntimeProviderRegistryV1,
     load_runtime_provider_broker_catalog_file_v1, serve_runtime_provider_broker_v1,
     serve_runtime_provider_broker_with_fallible_readiness_v1,
     serve_runtime_provider_broker_with_lifecycle_v1,
@@ -7662,7 +7658,7 @@ impl Iroha {
                 state.network_id, expected_network_id
             )));
         }
-        // Thread the display/configuration label into state for legacy VRF prehash binding.
+        // Keep the restored state's display/configuration label aligned with this deployment.
         state.chain_id = config.common.chain.clone();
         install_configured_kagemusha_release_catalog(&mut state, &config)
             .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
@@ -13227,19 +13223,13 @@ fn run_main_with_config_guard(
             .attach("failed to resolve deployment runtime-provider bindings")?;
     #[cfg(feature = "test-network-parliament-signers")]
     let runtime_deps = {
-        if runtime_deps
-            .sumeragi_global_beacon_partial_signer
-            .is_some()
-            || runtime_deps
-                .parliament_tle_partial_release_signer
-                .is_some()
+        if runtime_deps.sumeragi_global_beacon_partial_signer.is_some()
+            || runtime_deps.parliament_tle_partial_release_signer.is_some()
         {
-            return Err(Report::new(MainError::Config).attach(
-                "the test-network Parliament signers reject a second injected provider",
-            ));
+            return Err(Report::new(MainError::Config)
+                .attach("the test-network Parliament signers reject a second injected provider"));
         }
-        let ordered_roster =
-            filter_validators_from_trusted(config.common.trusted_peers.value());
+        let ordered_roster = filter_validators_from_trusted(config.common.trusted_peers.value());
         let test_network_id = NetworkId::from_genesis_hash(config.genesis.expected_hash);
         let beacon_signer = iroha_core::beacon::parliament_test_network_signer::
             TestNetworkParliamentBeaconPartialSignerV1::try_new(

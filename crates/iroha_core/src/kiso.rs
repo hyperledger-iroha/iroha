@@ -1698,6 +1698,15 @@ mod tests {
                     iroha_config::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
                 parliament_quorum_bps:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS,
+                parliament_invitation_phase_blocks:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
+                parliament_public_finding_phase_blocks:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
+                parliament_timed_ovn:
+                    iroha_config::parameters::actual::ParliamentTimedOvn::default(),
+                parliament_tle_partial_release_signer_provider_handle: None,
+                parliament_tle_partial_release_signer_provider_revision: None,
+                parliament_tle_partial_release_signer_provider_policy_digest: None,
                 rules_committee_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_RULES_COMMITTEE_SIZE,
                 agenda_council_size:

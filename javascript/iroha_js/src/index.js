@@ -233,7 +233,6 @@ export {
   buildSoracloudPrivateUploadedModelReceiptQuery,
   buildSoracloudHfDeployDraft,
   deploySoracloudAppInfraInstruction,
-  privateUploadedModelReceiptInstruction,
   upgradeSoracloudAppInfraInstruction,
 } from "./soracloud.js";
 export {

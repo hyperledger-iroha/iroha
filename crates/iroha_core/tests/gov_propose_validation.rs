@@ -2,12 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::items_after_statements)]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
-use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
-    smartcontracts::Execute,
-    state::{State, WorldReadOnly},
-};
+use iroha_core::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State};
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
     governance::types::{
@@ -19,7 +14,6 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::{
     CanProposeContractDeployment, CanSubmitGovernanceBallot,
 };
-use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 fn checked_random_governance_proposal_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked governance proposal keypair")

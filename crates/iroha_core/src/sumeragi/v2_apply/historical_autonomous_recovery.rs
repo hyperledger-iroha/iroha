@@ -194,7 +194,18 @@ fn preflight_historical_autonomous_lane_recovery_inner(
     let expected_epoch = input.historical_context.epoch;
     if retained_record.is_none() {
         let world = state.world_view();
-        if crate::sumeragi::epoch_for_height_from_world(&world, height) != expected_epoch {
+        let derived_epoch = crate::sumeragi::epoch_for_height_from_world(
+            &world,
+            height,
+            input.historical_context.mode,
+        )
+        .map_err(|error| {
+            invalid_historical_autonomous_recovery(
+                input,
+                format!("committed epoch schedule is invalid: {error}"),
+            )
+        })?;
+        if derived_epoch != expected_epoch {
             return Err(invalid_historical_autonomous_recovery(
                 input,
                 "State historical epoch differs from the retained finality context",

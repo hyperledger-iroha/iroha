@@ -1,9 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -11,31 +9,36 @@ import java.util.Objects;
 public final class SoracloudPrivateUploadedModelExecuteResponse {
   private final long schemaVersion;
   private final Map<String, Object> status;
+  private final String submissionStatus;
+  private final String transactionHash;
   private final SoracloudPrivateUploadedModelExecutionReceipt receipt;
-  private final List<SoracloudTxInstruction> txInstructions;
+  private final SoracloudPrivateModelArtifactRef outputArtifact;
 
   public SoracloudPrivateUploadedModelExecuteResponse(
       final long schemaVersion,
       final Map<String, Object> status,
+      final String submissionStatus,
+      final String transactionHash,
       final SoracloudPrivateUploadedModelExecutionReceipt receipt,
-      final List<SoracloudTxInstruction> txInstructions) {
+      final SoracloudPrivateModelArtifactRef outputArtifact) {
     this.schemaVersion = schemaVersion;
     this.status = Collections.unmodifiableMap(new LinkedHashMap<>(Objects.requireNonNull(status, "status")));
+    this.submissionStatus = Objects.requireNonNull(submissionStatus, "submissionStatus");
+    this.transactionHash = transactionHash;
     this.receipt = Objects.requireNonNull(receipt, "receipt");
-    this.txInstructions =
-        Collections.unmodifiableList(new ArrayList<>(Objects.requireNonNull(txInstructions, "txInstructions")));
+    this.outputArtifact = Objects.requireNonNull(outputArtifact, "outputArtifact");
   }
 
   public long schemaVersion() { return schemaVersion; }
 
   public Map<String, Object> status() { return status; }
 
+  public String submissionStatus() { return submissionStatus; }
+
+  /** Signed transaction hash for `submitted`; absent for an already `committed` replay. */
+  public String transactionHash() { return transactionHash; }
+
   public SoracloudPrivateUploadedModelExecutionReceipt receipt() { return receipt; }
 
-  public List<SoracloudTxInstruction> txInstructions() { return txInstructions; }
-
-  public SoracloudTxInstruction receiptInstruction() {
-    return SoracloudPrivateUploadedModelJsonParser.privateUploadedModelReceiptInstruction(txInstructions);
-  }
+  public SoracloudPrivateModelArtifactRef outputArtifact() { return outputArtifact; }
 }
-

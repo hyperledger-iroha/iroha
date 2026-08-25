@@ -13933,29 +13933,26 @@ export interface SoracloudPrivateArtifactRefInput {
   artifactRole: "input" | "output";
 }
 
-export interface SoracloudPrivateQuantizedCpuModelInput {
-  inputLen: number | bigint | string;
-  outputLen: number | bigint | string;
-  weightsI8: number[];
-  biasI32: number[];
-  outputShift: number | bigint | string;
-  outputMin: number;
-  outputMax: number;
+export interface SoracloudPrivateOutputRecipientInput {
+  schemaVersion: number | bigint | string;
+  keyId: string;
+  keyVersion: number | bigint | string;
+  kem: "X25519HkdfSha256";
+  aead: "Aes256Gcm";
+  publicKeyBytes: string;
+  publicKeyFingerprint: string;
 }
 
 export interface SoracloudPrivateUploadedModelExecuteInput {
   serviceName: string;
+  serviceVersion: string;
   weightVersion: string;
   modelId: string | null;
   modelName: string | null;
   bundleRoot: string | null;
-  policyId: string;
-  decryptionRequestId: string | null;
-  model: SoracloudPrivateQuantizedCpuModelInput;
-  plaintextInputI32: number[];
+  decryptionRequestId: string;
   inputArtifact: SoracloudPrivateArtifactRefInput;
-  outputArtifact: SoracloudPrivateArtifactRefInput;
-  emittedSequence: number | bigint | string;
+  outputRecipient: SoracloudPrivateOutputRecipientInput;
 }
 
 export interface SoracloudPrivateUploadedModelReceiptQueryInput {
@@ -13967,11 +13964,6 @@ export interface SoracloudPrivateUploadedModelReceiptQueryInput {
   countMode?: "bounded" | "exact";
 }
 
-export interface SoracloudTxInstruction {
-  wire_id: string;
-  payload_hex: string;
-}
-
 export function buildSoracloudPrivateUploadedModelExecuteRequest(
   input: SoracloudPrivateUploadedModelExecuteInput,
 ): Record<string, unknown>;
@@ -13979,10 +13971,6 @@ export function buildSoracloudPrivateUploadedModelExecuteRequest(
 export function buildSoracloudPrivateUploadedModelReceiptQuery(
   input?: SoracloudPrivateUploadedModelReceiptQueryInput,
 ): Record<string, string>;
-
-export function privateUploadedModelReceiptInstruction(
-  response: Record<string, unknown>,
-): SoracloudTxInstruction;
 
 export class NumericV1Error extends Error {
   readonly code: string;

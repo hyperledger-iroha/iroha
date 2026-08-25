@@ -194,8 +194,9 @@ fn validate_threshold_signer_startup_readiness_v1(
     let topology_roster_hash =
         iroha_core::beacon::global_threshold_beacon_roster_hash_v1(&topology);
     let committed_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
-    let active_session_id = iroha_core::beacon::active_global_threshold_beacon_session_id_v1(&world)
-        .map_err(|_| "active global-beacon key-session storage is noncanonical")?;
+    let active_session_id =
+        iroha_core::beacon::active_global_threshold_beacon_session_id_v1(&world)
+            .map_err(|_| "active global-beacon key-session storage is noncanonical")?;
     if let Some(active_session_id) = active_session_id {
         let record = world
             .global_beacon_key_sessions()

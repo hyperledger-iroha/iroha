@@ -9,9 +9,11 @@
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
+    NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
     name::Name,
+    nexus::LaneId,
     peer::PeerId,
     proof::ProofAttachment,
     sorafs::pin_registry::{
@@ -228,6 +230,28 @@ pub const SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1: u16 = 1;
 const SORA_UPLOADED_MODEL_X25519_PUBLIC_KEY_BYTES: usize = 32;
 /// Schema version for [`SoraPrivateModelArtifactRefV1`].
 pub const SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateModelEncryptedArtifactV1`].
+pub const SORA_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateQuantizedCpuModelV1`].
+pub const SORA_PRIVATE_QUANTIZED_CPU_MODEL_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateQuantizedCpuInputV1`].
+pub const SORA_PRIVATE_QUANTIZED_CPU_INPUT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateQuantizedCpuOutputV1`].
+pub const SORA_PRIVATE_QUANTIZED_CPU_OUTPUT_VERSION_V1: u16 = 1;
+/// AES-256-GCM key length used by private-model artifact envelopes.
+pub const SORA_PRIVATE_MODEL_AEAD_KEY_BYTES_V1: usize = 32;
+/// AES-256-GCM nonce length used by private-model artifact envelopes.
+pub const SORA_PRIVATE_MODEL_AEAD_NONCE_BYTES_V1: usize = 12;
+/// AES-256-GCM authentication-tag length carried in ciphertext fields.
+pub const SORA_PRIVATE_MODEL_AEAD_TAG_BYTES_V1: usize = 16;
+/// Maximum encoded encrypted artifact accepted at the private runtime boundary.
+pub const SORA_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_MAX_BYTES_V1: usize = 72 * 1024 * 1024;
+/// Maximum quantized inputs admitted by the deterministic private CPU runtime.
+pub const SORA_PRIVATE_QUANTIZED_CPU_MAX_INPUTS_V1: usize = 16_384;
+/// Maximum quantized outputs admitted by the deterministic private CPU runtime.
+pub const SORA_PRIVATE_QUANTIZED_CPU_MAX_OUTPUTS_V1: usize = 4_096;
+/// Maximum signed 8-bit weights admitted by one deterministic private CPU model.
+pub const SORA_PRIVATE_QUANTIZED_CPU_MAX_WEIGHTS_V1: usize = 64 * 1024 * 1024;
 /// Schema version for [`SoraPrivateUploadedModelExecutionReceiptV1`].
 pub const SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHfSourceRecordV1`].
@@ -320,6 +344,48 @@ pub fn derive_hf_source_id_v1(
         })?;
     Ok(Hash::new(payload))
 }
+/// Derive the canonical placement identifier for one HF lease pool and selection seed.
+///
+/// # Errors
+/// Returns [`SoracloudManifestError`] when the canonical preimage cannot be encoded.
+pub fn derive_hf_placement_id_v1(
+    pool_id: Hash,
+    selection_seed_hash: Hash,
+) -> Result<Hash, SoracloudManifestError> {
+    let payload = norito::to_bytes(&("soracloud:hf-placement-id:v1", pool_id, selection_seed_hash))
+        .map_err(|error| {
+            invalid_field(
+                "sora hf placement identity",
+                "placement_id",
+                format!("failed to encode the canonical placement preimage: {error}"),
+            )
+        })?;
+    Ok(Hash::new(payload))
+}
+/// Derive the canonical shared-lease pool identifier from its immutable pricing dimensions.
+///
+/// # Errors
+/// Returns [`SoracloudManifestError`] when the canonical preimage cannot be encoded.
+pub fn derive_hf_shared_lease_pool_id_v1(
+    source_id: Hash,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+) -> Result<Hash, SoracloudManifestError> {
+    let payload = norito::to_bytes(&(
+        "soracloud:hf-shared-lease-pool-id:v1",
+        source_id,
+        storage_class,
+        lease_term_ms,
+    ))
+    .map_err(|error| {
+        invalid_field(
+            "sora hf shared lease pool identity",
+            "pool_id",
+            format!("failed to encode the canonical pool preimage: {error}"),
+        )
+    })?;
+    Ok(Hash::new(payload))
+}
 /// Schema version for [`SoraModelHostCapabilityRecordV1`].
 pub const SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraInrouHostCapabilityRecordV1`].
@@ -355,6 +421,10 @@ pub const SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraRuntimeReceiptV1`].
 pub const SORA_RUNTIME_RECEIPT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraOrderedMailboxStateMutationV1`].
+pub const SORA_ORDERED_MAILBOX_STATE_MUTATION_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraOrderedMailboxResultV1`].
+pub const SORA_ORDERED_MAILBOX_RESULT_VERSION_V1: u16 = 1;
 /// Schema version for [`CanonicalRequestWitnessV1`].
 pub const CANONICAL_REQUEST_WITNESS_VERSION_V1: u16 = 1;
 /// Schema version for [`SoracloudHostRequestEnvelopeV1`].
@@ -367,6 +437,10 @@ pub const SORA_SERVICE_ROLLOUT_STATE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseStateV1`].
 pub const SORA_SERVICE_LEASE_STATE_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraServiceLeaseUsageAuditV1`].
+pub const SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraServiceLeaseReporterAssignmentV1`].
+pub const SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseReportingEpochRolloverV1`].
 pub const SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseVolumeStateV1`].

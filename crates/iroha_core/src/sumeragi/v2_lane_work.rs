@@ -7465,12 +7465,9 @@ impl V2LaneWorkAdapter {
         let autonomous_payload = session.prepare_qc.payload_availability_qc.is_some();
         let (recovered_payload, autonomous_epoch) = if autonomous_payload {
             let proposal_height = session.proposal.descriptor.proposal_height;
-            let expected_epoch = if proposal_height == self.context.height {
-                self.context.epoch
-            } else {
-                let world = self.state.world_view();
-                crate::sumeragi::epoch_for_height_from_world(&world, proposal_height)
-            };
+            let expected_epoch = self
+                .epoch_for_proposal_height(proposal_height)
+                .map_err(V2LaneWorkError::InvalidContext)?;
             let recovered = match self.kura.recover_autonomous_lane_block_payload(
                 &session.proposal,
                 self.native_network_id(),
@@ -7914,9 +7911,15 @@ impl V2LaneWorkAdapter {
                 proposal_from_ownership(ownership, block.hash()).as_ref() == Some(proposal)
             })
             .count();
-        let expected_epoch = {
+        let Ok(expected_epoch) = ({
             let world = self.state.world_view();
-            crate::sumeragi::epoch_for_height_from_world(&world, hint.proposal_height)
+            crate::sumeragi::epoch_for_height_from_world(
+                &world,
+                hint.proposal_height,
+                self.context.mode,
+            )
+        }) else {
+            return false;
         };
         for envelope in &bundle.autonomous_lane_payloads {
             let Ok(payload) = decode_autonomous_lane_payload_envelope(
@@ -8613,7 +8616,7 @@ impl V2LaneWorkAdapter {
         prepare_qc: &LaneBlockQcV1,
     ) -> Result<(), String> {
         let network_id = self.native_network_id();
-        let epoch = self.epoch_for_proposal_height(proposal.descriptor.proposal_height);
+        let epoch = self.epoch_for_proposal_height(proposal.descriptor.proposal_height)?;
         let existing = self
             .kura
             .read_autonomous_lane_block_artifact(
@@ -8680,7 +8683,9 @@ impl V2LaneWorkAdapter {
         active_view: wire::View,
     ) -> V2LaneIngressOutcome {
         let proposal_height = payload.origin_proposal.descriptor.proposal_height;
-        let expected_epoch = self.epoch_for_proposal_height(proposal_height);
+        let Ok(expected_epoch) = self.epoch_for_proposal_height(proposal_height) else {
+            return V2LaneIngressOutcome::Rejected;
+        };
         if sender != Some(&payload.producer)
             || payload
                 .validate(self.native_network_id(), expected_epoch)
@@ -9537,9 +9542,15 @@ impl V2LaneWorkAdapter {
                     return V2LaneIngressOutcome::Rejected;
                 }
                 let descriptor = &session.proposal.descriptor;
-                let expected_epoch = {
+                let Ok(expected_epoch) = ({
                     let world = self.state.world_view();
-                    crate::sumeragi::epoch_for_height_from_world(&world, descriptor.proposal_height)
+                    crate::sumeragi::epoch_for_height_from_world(
+                        &world,
+                        descriptor.proposal_height,
+                        self.context.mode,
+                    )
+                }) else {
+                    return V2LaneIngressOutcome::Rejected;
                 };
                 let certified = match self.kura.read_certified_lane_block_artifact(
                     descriptor.lane_id,
@@ -9793,9 +9804,15 @@ impl V2LaneWorkAdapter {
                 let Some(availability) = prepare_qc.payload_availability_qc.as_ref() else {
                     return V2LaneIngressOutcome::Rejected;
                 };
-                let expected_epoch = {
+                let Ok(expected_epoch) = ({
                     let world = self.state.world_view();
-                    crate::sumeragi::epoch_for_height_from_world(&world, descriptor.proposal_height)
+                    crate::sumeragi::epoch_for_height_from_world(
+                        &world,
+                        descriptor.proposal_height,
+                        self.context.mode,
+                    )
+                }) else {
+                    return V2LaneIngressOutcome::Rejected;
                 };
                 if prepare_qc != certificate.prepare_qc
                     || commit_qc != certificate.commit_qc
@@ -10065,7 +10082,7 @@ impl V2LaneWorkAdapter {
                 }
                 if let Err(error) = self
                     .state
-                    .validate_certified_merge_entry_for_global_order(&entry)
+                    .validate_certified_merge_entry_for_global_order(&entry, self.context.mode)
                 {
                     return Ok(MergeSidecarDeferralDisposition::Rejected(error.to_string()));
                 }
@@ -11925,7 +11942,7 @@ impl V2LaneWorkAdapter {
         }
         if let Err(error) = self
             .state
-            .validate_certified_merge_entry_for_global_order(&entry)
+            .validate_certified_merge_entry_for_global_order(&entry, self.context.mode)
         {
             let active_requests = self.merge_sidecars.active_request_hashes();
             let affected = self
@@ -13393,6 +13410,7 @@ impl V2LaneWorkAdapter {
         }
         let current_height = self.context.height;
         let current_epoch = self.context.epoch;
+        let frozen_mode = self.context.mode;
         let state = Arc::clone(&self.state);
         let recovered_autonomous = self
             .kura
@@ -13400,12 +13418,19 @@ impl V2LaneWorkAdapter {
                 network_id,
                 hydration_capacity.saturating_add(1),
                 move |proposal_height| {
-                    if proposal_height == current_height {
-                        current_epoch
-                    } else {
-                        let world = state.world_view();
-                        crate::sumeragi::epoch_for_height_from_world(&world, proposal_height)
+                    let world = state.world_view();
+                    let epoch = crate::sumeragi::epoch_for_height_from_world(
+                        &world,
+                        proposal_height,
+                        frozen_mode,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    if proposal_height == current_height && epoch != current_epoch {
+                        return Err(format!(
+                            "committed epoch schedule derives epoch {epoch} for frozen context epoch {current_epoch} at height {proposal_height}"
+                        ));
                     }
+                    Ok(epoch)
                 },
             )
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
@@ -13753,11 +13778,8 @@ impl V2LaneWorkAdapter {
         {
             return false;
         }
-        let expected_epoch = if hint.proposal_height == self.context.height {
-            self.context.epoch
-        } else {
-            let world = self.state.world_view();
-            crate::sumeragi::epoch_for_height_from_world(&world, hint.proposal_height)
+        let Ok(expected_epoch) = self.epoch_for_proposal_height(hint.proposal_height) else {
+            return false;
         };
         let Some(durable_payload) = self
             .kura
@@ -14106,13 +14128,21 @@ impl V2LaneWorkAdapter {
     fn native_network_id(&self) -> iroha_data_model::NetworkId {
         self.context.network_id
     }
-    fn epoch_for_proposal_height(&self, proposal_height: u64) -> u64 {
-        if proposal_height == self.context.height {
-            self.context.epoch
-        } else {
-            let world = self.state.world_view();
-            crate::sumeragi::epoch_for_height_from_world(&world, proposal_height)
+    fn epoch_for_proposal_height(&self, proposal_height: u64) -> Result<u64, String> {
+        let world = self.state.world_view();
+        let epoch = crate::sumeragi::epoch_for_height_from_world(
+            &world,
+            proposal_height,
+            self.context.mode,
+        )
+        .map_err(|error| error.to_string())?;
+        if proposal_height == self.context.height && epoch != self.context.epoch {
+            return Err(format!(
+                "committed epoch schedule derives epoch {epoch} for frozen context epoch {} at height {proposal_height}",
+                self.context.epoch
+            ));
         }
+        Ok(epoch)
     }
     fn native_coordinator_height_is_current(&self, body: &NativeAmxAttestationBodyV2) -> bool {
         let expected = self
@@ -15297,7 +15327,12 @@ impl V2LaneWorkAdapter {
             return Ok(None);
         }
         self.state
-            .merge_drain_candidate_for_next_carrier(parent_header, active_view, certificate)
+            .merge_drain_candidate_for_next_carrier(
+                parent_header,
+                active_view,
+                certificate,
+                self.context.mode,
+            )
             .map(Some)
             .map_err(|error| {
                 V2LaneWorkError::InvalidContext(format!(
@@ -15478,7 +15513,12 @@ impl V2LaneWorkAdapter {
             }
         }
         self.state
-            .validate_merge_candidate_for_global_round(candidate, parent_header, active_view)
+            .validate_merge_candidate_for_global_round(
+                candidate,
+                parent_header,
+                active_view,
+                self.context.mode,
+            )
             .map_err(|error| error.to_string())
     }
     fn local_merge_share(
@@ -15781,10 +15821,13 @@ impl V2LaneWorkAdapter {
             } else {
                 let execution_candidate = self
                     .state
-                    .has_pending_merge_execution_sources()
+                    .has_pending_merge_execution_sources(self.context.mode)
                     .then(|| self.merge_carrier_context_header(active_view))
                     .transpose()?
-                    .and_then(|header| self.state.build_merge_execution_candidate(header));
+                    .and_then(|header| {
+                        self.state
+                            .build_merge_execution_candidate(header, self.context.mode)
+                    });
                 execution_candidate.or_else(|| {
                     self.state
                         .merge_entry_candidates_from_lane_relays_for_view(active_view)
@@ -16144,7 +16187,7 @@ impl V2LaneWorkAdapter {
         }
         if let Err(error) = self
             .state
-            .validate_certified_merge_entry_for_global_order(&entry)
+            .validate_certified_merge_entry_for_global_order(&entry, self.context.mode)
         {
             iroha_logger::warn!(
                 ?error,

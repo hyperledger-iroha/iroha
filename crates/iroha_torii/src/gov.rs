@@ -3215,7 +3215,12 @@ seiyaku GovernedReadFixture {
     fn queue_instruction_skeleton(harness: &GovHarness, tx_instructions: &[TxInstr]) {
         let instructions = tx_instructions
             .iter()
-            .map(decode_tx_instruction)
+            .map(|instruction| {
+                let payload =
+                    hex::decode(&instruction.payload_hex).expect("instruction payload hex");
+                iroha_data_model::isi::decode_instruction_from_pair(&instruction.wire_id, &payload)
+                    .expect("instruction payload decode")
+            })
             .collect::<Vec<_>>();
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
             *harness.state.network_id_ref(),
@@ -4317,6 +4322,7 @@ seiyaku GovernedReadFixture {
         let rid = "rid-tally-closed-lock".to_string();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let block_hash = iroha_crypto::HashOf::new(&header);
+        let custody = generic_lock_custody(&state);
         {
             let mut block = state.block(header);
             let mut tx = block.transaction();
@@ -4339,7 +4345,7 @@ seiyaku GovernedReadFixture {
                     expiry_height: 0,
                     direction: 0,
                     duration_blocks: 0,
-                    custody: None,
+                    custody,
                 },
             );
             tx.world.governance_locks_mut().insert(rid.clone(), locks);

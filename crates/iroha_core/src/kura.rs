@@ -33006,7 +33006,7 @@ impl Kura {
         mut epoch_for_height: F,
     ) -> Result<Vec<(AutonomousLaneBlockArtifact, LaneBlockProposalV1)>>
     where
-        F: FnMut(u64) -> u64,
+        F: FnMut(u64) -> Result<u64, String>,
     {
         if limit == 0 {
             return Ok(Vec::new());
@@ -33036,7 +33036,12 @@ impl Kura {
             if pointer.network_id != expected_network_id {
                 continue;
             }
-            let expected_epoch = epoch_for_height(pointer.proposal_height);
+            let expected_epoch = epoch_for_height(pointer.proposal_height).map_err(|reason| {
+                Error::AutonomousEpochResolution {
+                    proposal_height: pointer.proposal_height,
+                    reason,
+                }
+            })?;
             let record = {
                 let _guard = self.sidecar_lock.lock();
                 if self.prune_recovery_is_required() {

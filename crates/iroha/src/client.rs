@@ -75,7 +75,6 @@ use iroha_data_model::{
         pin_intent::DaPinIntentProof,
         types::{BlobDigest, ExtraMetadata},
     },
-    governance::types::{ProposalKind, SccpRouteGovernanceProposal},
     nexus::{
         AssetPermissionManifest, FeeSponsorProgramId, LaneLifecycleParameterV1, LaneLifecyclePlan,
         LaneLifecycleStatusV1, UniversalAccountId,
@@ -3232,10 +3231,10 @@ fn validate_deploy_contract_proposal_draft_response(
     Ok(())
 }
 
-fn sccp_route_governance_proposal_id(
+fn sccp_route_governance_proposal_kind(
     network_id: iroha_data_model::NetworkId,
     action: &iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
-) -> [u8; 32] {
+) -> iroha_data_model::governance::types::ProposalKind {
     use iroha_data_model::governance::types::{ProposalKind, SccpRouteGovernanceProposal};
     let anchor = iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
         network_id,
@@ -3244,19 +3243,21 @@ fn sccp_route_governance_proposal_id(
     ProposalKind::SccpRouteGovernance(SccpRouteGovernanceProposal {
         anchor: Box::new(anchor),
     })
-    .fingerprint()
 }
+
+fn sccp_route_governance_proposal_id(
+    network_id: iroha_data_model::NetworkId,
+    action: &iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
+) -> [u8; 32] {
+    sccp_route_governance_proposal_kind(network_id, action).fingerprint()
+}
+
 fn validate_sccp_route_governance_draft_response(
     response: &SccpRouteGovernanceProposalDraftResponseV1,
     request: &SccpRouteGovernanceProposalDraftRequestV1,
     network_id: iroha_data_model::NetworkId,
 ) -> Result<()> {
-    let proposal = ProposalKind::SccpRouteGovernance(SccpRouteGovernanceProposal {
-        anchor: Box::new(iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
-            network_id,
-            action: request.action.clone(),
-        }),
-    });
+    let proposal = sccp_route_governance_proposal_kind(network_id, &request.action);
     if let Some(reason) = proposal.first_release_exact_json_u64_invariant_error() {
         return Err(eyre!(reason));
     }
@@ -16900,12 +16901,7 @@ impl Client {
             .action
             .validate_static()
             .map_err(|error| eyre!("invalid SCCP route-governance action: {error}"))?;
-        let proposal = ProposalKind::SccpRouteGovernance(SccpRouteGovernanceProposal {
-            anchor: Box::new(iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
-                network_id: self.network_id,
-                action: request.action.clone(),
-            }),
-        });
+        let proposal = sccp_route_governance_proposal_kind(self.network_id, &request.action);
         if let Some(reason) = proposal.first_release_exact_json_u64_invariant_error() {
             return Err(eyre!(reason));
         }

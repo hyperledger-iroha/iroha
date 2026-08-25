@@ -51,7 +51,7 @@ use iroha_core::privacy_profiles::{
     compiled_privacy_profile_catalog_v1, validate_local_privacy_compiled_profile_catalog_archive_v1,
 };
 use iroha_core::soracloud_runtime::{
-    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
+    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_BLOCKS,
     build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
 };
 use iroha_core::zk::confidential_v2::{
@@ -217,7 +217,7 @@ use napi::{
 };
 use napi_derive::napi;
 use norito::{
-    codec::{DecodeAll, Encode},
+    codec::DecodeAll,
     core as norito_core, decode_from_bytes,
     json::{self, Map, Value},
 };
@@ -1551,8 +1551,8 @@ pub fn soracloud_build_hf_deploy_request_json(
                 build_soracloud_hf_generated_agent_manifest(apartment_name, &generated_bundle);
             let payload = encode_agent_deploy_provenance_payload(
                 manifest,
-                HF_GENERATED_AGENT_LEASE_TICKS,
-                Some(HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS),
+                HF_GENERATED_AGENT_LEASE_BLOCKS,
+                HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS,
             )
             .map_err(norito_to_napi)?;
             sign_soracloud_payload(&keypair, &payload)
@@ -17534,7 +17534,7 @@ seiyaku Privacy {
             versioned.as_slice()
         );
 
-        let bare = Encode::encode(&signed);
+        let bare = NoritoEncode::encode(&signed);
         let framed = norito::to_bytes(&signed).expect("framed signed transaction");
         let headerless = versioned[1..].to_vec();
         let alternate_layout = {

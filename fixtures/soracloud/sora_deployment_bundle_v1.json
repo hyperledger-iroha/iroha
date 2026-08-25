@@ -94,9 +94,9 @@
       "quota_class": "taira-open",
       "deployment_deposit": "1",
       "prepaid_runtime_balance": "50",
-      "lease_duration_sequences": 86400,
-      "runtime_price_per_sequence": "0.00025",
-      "storage_price_per_gib_sequence": "0.000025",
+      "lease_duration_blocks": 86400,
+      "runtime_price_per_block": "0.00025",
+      "storage_price_per_gib_block": "0.000025",
       "egress_price_per_mib": "0.000005"
     },
     "state_bindings": [
@@ -185,7 +185,7 @@
           "queue_name": "updates",
           "max_pending_messages": 1024,
           "max_message_bytes": 65536,
-          "retention_sequences": 1440
+          "retention_blocks": 1440
         }
       },
       {
@@ -204,7 +204,7 @@
           "queue_name": "private_updates",
           "max_pending_messages": 256,
           "max_message_bytes": 131072,
-          "retention_sequences": 2880
+          "retention_blocks": 2880
         }
       }
     ],

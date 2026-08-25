@@ -1,5 +1,13 @@
 const INROU_HEALTH_SERVER_PY: &str = include_str!("fixtures/inrou_health_server.py");
 
+fn url_host_port(url: &str) -> Option<(String, u16)> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    Some((
+        parsed.host_str()?.to_owned(),
+        parsed.port_or_known_default()?,
+    ))
+}
+
 #[test]
 #[ignore = "requires an unprivileged guest plus a complete canonical IROHA_INROU_PORTABLE_SMOKE_BUNDLE_FILE"]
 fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result<()> {
@@ -119,6 +127,8 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
         temp_dir.path(),
         1,
         &ALICE_ID,
+        local_peer_id,
+        selected_guest_isa,
     )?;
     {
         let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;

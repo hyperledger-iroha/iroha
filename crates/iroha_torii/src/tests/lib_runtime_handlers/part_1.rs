@@ -1803,6 +1803,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
             .unwrap_or(usize::MAX),
         state: state.clone(),
         #[cfg(feature = "app_api")]
+        parliament_tle_release_coordinator: Arc::new(
+            iroha_core::tle_release::TleReleaseCoordinatorV1::without_signer(),
+        ),
+        #[cfg(feature = "app_api")]
         musubi_search: Arc::new(RwLock::new(
             iroha_core::musubi_search::MusubiSearchIndexV1::default(),
         )),
@@ -2024,6 +2028,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         vpn_receipts: Arc::new(DashMap::new()),
         vpn_state_lock: Arc::new(std::sync::Mutex::new(vpn::VpnRuntimeState::default())),
         soracloud_runtime: None,
+        soracloud_private_execution_submissions: Arc::new(
+            soracloud::PrivateExecutionSubmissionTracker::default(),
+        ),
+        soracloud_private_execution_inflight: Arc::new(tokio::sync::Semaphore::new(1)),
         #[cfg(feature = "app_api")]
         soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
         #[cfg(feature = "app_api")]

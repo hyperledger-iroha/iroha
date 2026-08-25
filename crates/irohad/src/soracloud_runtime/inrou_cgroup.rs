@@ -24,6 +24,7 @@ const INROU_CGROUP_WORKER_PREFIX: &str = "worker-";
 const INROU_CGROUP_REQUIRED_CONTROLLERS: [&str; 4] = ["cpu", "io", "memory", "pids"];
 const INROU_CGROUP_PROC_MAX_BYTES: u64 = 64 * 1024;
 const INROU_CGROUP_CONTROL_MAX_BYTES: u64 = 1024 * 1024;
+const INROU_CGROUP_ROOT_MAX_ENTRIES: usize = 1_024;
 const INROU_CGROUP_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const INROU_CGROUP_BARRIER_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 const INROU_CGROUP_CPU_PERIOD_MICROS: u64 = 100_000;
@@ -123,7 +124,18 @@ pub(super) struct InrouCgroupAttestation {
 
 pub(super) struct InrouWorkerCgroup {
     attestation: InrouCgroupAttestation,
+    launcher_placement_attempted: bool,
     active: bool,
+}
+
+/// Proof that one exact worker cgroup was empty after a bounded kill-and-wait.
+///
+/// The proof deliberately does not remove the cgroup. The supervisor may
+/// consume it only after it has independently reaped the direct child.
+pub(super) struct InrouEmptyCgroupAttestation {
+    worker_path: PathBuf,
+    device: u64,
+    inode: u64,
 }
 
 pub(super) struct InrouLaunchBarrier {
@@ -197,6 +209,7 @@ impl InrouWorkerCgroup {
                 worker_path,
                 expected_proc_path,
             },
+            launcher_placement_attempted: false,
             active: true,
         };
         let initialize = (|| -> eyre::Result<()> {
@@ -216,7 +229,7 @@ impl InrouWorkerCgroup {
             )
         })();
         if let Err(error) = initialize {
-            let cleanup = worker.cleanup_bounded();
+            let cleanup = worker.cleanup_unlaunched_bounded();
             return Err(error).wrap_err_with(|| {
                 format!(
                     "initialize root-custodied Inrou worker cgroup{}",
@@ -227,7 +240,7 @@ impl InrouWorkerCgroup {
             });
         }
         if let Err(error) = worker.configure(resources, io_backing_paths) {
-            let cleanup = worker.cleanup_bounded();
+            let cleanup = worker.cleanup_unlaunched_bounded();
             return Err(error).wrap_err_with(|| {
                 format!(
                     "configure finite Inrou cgroup limits{}",
@@ -244,7 +257,11 @@ impl InrouWorkerCgroup {
         &self.attestation
     }
 
-    pub(super) fn place_launcher(&self, pid: u32) -> eyre::Result<()> {
+    pub(super) fn place_launcher(&mut self, pid: u32) -> eyre::Result<()> {
+        // A failed control-file write cannot safely prove that the kernel did
+        // not consume the pid, so every placement attempt requires the full
+        // direct-child teardown protocol from this point onward.
+        self.launcher_placement_attempted = true;
         write_control(
             &self.attestation.worker_path.join("cgroup.procs"),
             &pid.to_string(),
@@ -255,9 +272,11 @@ impl InrouWorkerCgroup {
             .wrap_err("attest Inrou launcher cgroup before releasing its exec barrier")
     }
 
-    pub(super) fn cleanup_bounded(&mut self) -> eyre::Result<()> {
+    pub(super) fn kill_and_attest_empty_bounded(
+        &self,
+    ) -> eyre::Result<InrouEmptyCgroupAttestation> {
         if !self.active {
-            return Ok(());
+            eyre::bail!("cannot attest an already released Inrou worker cgroup");
         }
         let kill_path = self.attestation.worker_path.join("cgroup.kill");
         write_control(&kill_path, "1", "kill the exact Inrou worker cgroup")?;
@@ -283,6 +302,60 @@ impl InrouWorkerCgroup {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+        let metadata = fs::symlink_metadata(&self.attestation.worker_path).wrap_err_with(|| {
+            format!(
+                "reinspect empty Inrou worker cgroup {}",
+                self.attestation.worker_path.display()
+            )
+        })?;
+        validate_root_custodied_directory(
+            &self.attestation.worker_path,
+            "empty Inrou worker cgroup",
+        )?;
+        Ok(InrouEmptyCgroupAttestation {
+            worker_path: self.attestation.worker_path.clone(),
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+
+    pub(super) fn release_attested_empty(
+        &mut self,
+        empty: InrouEmptyCgroupAttestation,
+    ) -> eyre::Result<()> {
+        if !self.active {
+            eyre::bail!("cannot release an already released Inrou worker cgroup");
+        }
+        if empty.worker_path != self.attestation.worker_path {
+            eyre::bail!("empty-cgroup proof belongs to another Inrou worker");
+        }
+        let metadata = fs::symlink_metadata(&self.attestation.worker_path).wrap_err_with(|| {
+            format!(
+                "reinspect attested empty Inrou worker cgroup {}",
+                self.attestation.worker_path.display()
+            )
+        })?;
+        validate_root_custodied_directory(
+            &self.attestation.worker_path,
+            "attested empty Inrou worker cgroup",
+        )?;
+        if metadata.dev() != empty.device || metadata.ino() != empty.inode {
+            eyre::bail!("attested empty Inrou worker cgroup changed identity before release");
+        }
+        let events = read_bounded_text(
+            &self.attestation.worker_path.join("cgroup.events"),
+            INROU_CGROUP_CONTROL_MAX_BYTES,
+            "attested empty Inrou cgroup events",
+        )?;
+        let populated = parse_inrou_cgroup_populated(&events)?;
+        let pids = read_cgroup_pids(&self.attestation.worker_path.join("cgroup.procs"))?;
+        if populated || !pids.is_empty() {
+            eyre::bail!(
+                "attested empty Inrou worker cgroup {} became populated by pids {:?} before release",
+                self.attestation.worker_path.display(),
+                pids,
+            );
+        }
         fs::remove_dir(&self.attestation.worker_path).wrap_err_with(|| {
             format!(
                 "remove empty Inrou worker cgroup {}",
@@ -291,6 +364,16 @@ impl InrouWorkerCgroup {
         })?;
         self.active = false;
         Ok(())
+    }
+
+    fn cleanup_unlaunched_bounded(&mut self) -> eyre::Result<()> {
+        if self.launcher_placement_attempted {
+            eyre::bail!(
+                "Inrou worker cgroup cannot use unlaunched cleanup after launcher placement was attempted"
+            );
+        }
+        let empty = self.kill_and_attest_empty_bounded()?;
+        self.release_attested_empty(empty)
     }
 
     fn configure(
@@ -369,17 +452,32 @@ impl InrouWorkerCgroup {
 
 impl Drop for InrouWorkerCgroup {
     fn drop(&mut self) {
-        if self.active
-            && let Err(error) = self.cleanup_bounded()
-        {
-            // Leaving the root-custodied cgroup in place retains every limit
-            // and makes the deterministic worker name unavailable. That is a
-            // deliberate fail-closed state for operator inspection.
-            iroha_logger::error!(
+        if !self.active {
+            return;
+        }
+        if !self.launcher_placement_attempted {
+            if let Err(error) = self.cleanup_unlaunched_bounded() {
+                iroha_logger::error!(
+                    ?error,
+                    cgroup = %self.attestation.worker_path.display(),
+                    "failed to clean an unlaunched Inrou cgroup; retaining the confined subtree"
+                );
+            }
+            return;
+        }
+        // Killing and proving the subgroup empty is safe on drop, but removal
+        // still requires the owner's explicit direct-child exit proof. Keep
+        // the empty root-custodied directory as a fail-closed restart barrier.
+        match self.kill_and_attest_empty_bounded() {
+            Ok(_) => iroha_logger::error!(
+                cgroup = %self.attestation.worker_path.display(),
+                "dropped a launched Inrou cgroup without direct-child exit proof; retaining the empty confined subtree"
+            ),
+            Err(error) => iroha_logger::error!(
                 ?error,
                 cgroup = %self.attestation.worker_path.display(),
-                "failed to clean an Inrou cgroup; retaining the confined subtree"
-            );
+                "failed to empty a dropped Inrou cgroup; retaining the confined subtree"
+            ),
         }
     }
 }
@@ -499,6 +597,52 @@ impl Drop for InrouLaunchBarrier {
 
 pub(super) fn ensure_inrou_cgroup_v2_available() -> eyre::Result<()> {
     prepare_inrou_cgroup_root().map(|_| ())
+}
+
+/// Prove that startup inherited no worker cgroup from an earlier supervisor.
+///
+/// This must run immediately before the real startup probe. An empty worker
+/// subtree is the only durable evidence that no orphaned worker can continue
+/// charging a reporter counter after process restart.
+pub(super) fn attest_inrou_worker_absence() -> eyre::Result<()> {
+    let subtree = prepare_inrou_cgroup_root()?;
+    validate_root_custodied_directory(&subtree, "Inrou cgroup root")?;
+    let directory = fs::File::open(&subtree)
+        .wrap_err_with(|| format!("open Inrou cgroup root {}", subtree.display()))?;
+    let opened = directory.metadata()?;
+    let named_before = fs::symlink_metadata(&subtree)?;
+    if opened.dev() != named_before.dev() || opened.ino() != named_before.ino() {
+        eyre::bail!("Inrou cgroup root changed while it was opened");
+    }
+    let mut entry_count = 0_usize;
+    for entry in fs::read_dir(&subtree)? {
+        if entry_count == INROU_CGROUP_ROOT_MAX_ENTRIES {
+            eyre::bail!(
+                "Inrou cgroup root exceeds its {INROU_CGROUP_ROOT_MAX_ENTRIES}-entry startup scan bound"
+            );
+        }
+        entry_count += 1;
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            eyre::bail!(
+                "Inrou cgroup root contains unexpected symlink {}",
+                entry.path().display()
+            );
+        }
+        if file_type.is_dir() {
+            eyre::bail!(
+                "Inrou startup found a pre-existing child cgroup {}; worker absence is not attested",
+                entry.path().display()
+            );
+        }
+    }
+    let named_after = fs::symlink_metadata(&subtree)?;
+    validate_root_custodied_directory(&subtree, "Inrou cgroup root")?;
+    if opened.dev() != named_after.dev() || opened.ino() != named_after.ino() {
+        eyre::bail!("Inrou cgroup root changed during the bounded startup scan");
+    }
+    Ok(())
 }
 
 fn prepare_inrou_cgroup_root() -> eyre::Result<PathBuf> {

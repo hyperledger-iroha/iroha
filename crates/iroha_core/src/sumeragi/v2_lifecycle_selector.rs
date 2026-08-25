@@ -1849,59 +1849,6 @@ impl PreparedLifecycleIngressSelector {
             .map_err(|(error, _witness)| RecoveredDecisionFetchExactDequeueErrorV1::Queue(error))?;
         Ok(PreparedRecoveredDecisionFetchExactDequeueV1 { locked })
     }
-    /// Consume one selector into an exact prelocked Certified-Serve dequeue.
-    ///
-    /// The returned target remains separate so the worker reservation and
-    /// lifecycle owner must transfer the same move-only authority. The queue
-    /// service lock stays held until the caller either drops this preparation
-    /// before publication or assertion-dequeues it afterwards.
-    pub(in crate::sumeragi) fn into_locked_certified_serve_dequeue<'a>(
-        mut self,
-        ingress: &'a FairV2Ingress,
-        authenticated: &AuthenticatedCertifiedBodyRequest,
-    ) -> Result<
-        (
-            PreparedCertifiedServeExactDequeueV1<'a>,
-            LifecycleIngressIoTargetSeal,
-        ),
-        CertifiedServeExactDequeueErrorV1,
-    > {
-        let target = self
-            .take_lifecycle_io_target()
-            .map_err(|_| CertifiedServeExactDequeueErrorV1::SelectorAuthority)?;
-        if target.context() != self.context
-            || target.ingress_identity() != *self.selected_identity()
-            || !target.matches_certified_serve_request(authenticated.request_hash())
-            || self.queue_witness.selected_disposition() != FairV2IngressDequeueDisposition::Admit
-        {
-            return Err(CertifiedServeExactDequeueErrorV1::SelectorAuthority);
-        }
-        let Self {
-            context,
-            request_fence_active: _,
-            queue_witness,
-            io_target: _,
-            verdicts: _,
-            priority_owners: _,
-            claimed_response_families,
-            selector_debt,
-        } = self;
-        drop(claimed_response_families);
-        let locked = queue_witness
-            .lock_exact_dequeue_retaining(
-                ingress,
-                context,
-                target.ingress_identity().physical_admission_ordinal(),
-            )
-            .map_err(|(error, _witness)| CertifiedServeExactDequeueErrorV1::Queue(error))?;
-        Ok((
-            PreparedCertifiedServeExactDequeueV1 {
-                locked,
-                selector_debt,
-            },
-            target,
-        ))
-    }
     fn into_exact_certified_fetch_dequeue(
         self,
         executor: &V2EffectExecutor<SerializedV2Runtime>,

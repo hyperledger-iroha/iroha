@@ -5262,15 +5262,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.commit_ready_body_install(ready_plan);
         self.publish_status(services)
     }
-    /// Consume startup or reducer effects in their exact emitted order.
-    #[cfg(test)]
-    pub(crate) fn consume_effects<S: V2EffectServices>(
-        &mut self,
-        effects: Vec<AdapterEffect>,
-        services: &mut S,
-    ) -> Result<usize, EffectExecutorError> {
-        self.consume_effects_with_runner_decision_cleanup(effects, services, None)
-    }
     /// Retain one reducer batch while optionally fencing its exact Apply until
     /// the synchronous runner has retired process-local Decision losers.
     fn consume_effects_with_runner_decision_cleanup<S: V2EffectServices>(
@@ -7015,14 +7006,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(self.close(error, services));
         }
         Ok(count)
-    }
-    #[cfg(test)]
-    fn consume_pacemaker_effects<S: V2EffectServices>(
-        &mut self,
-        effects: Vec<AdapterEffect>,
-        services: &mut S,
-    ) -> Result<usize, EffectExecutorError> {
-        self.consume_pacemaker_effects_with_runner_decision_cleanup(effects, services, None)
     }
     fn consume_pacemaker_effects_with_runner_decision_cleanup<S: V2EffectServices>(
         &mut self,
@@ -9621,6 +9604,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         Ok(())
     }
+    /// Reject any interrupted-tip recovery effect that cannot be satisfied
+    /// entirely from the exact process-local recovery catalogs.
     fn ensure_pending_tip_recovery_effect_is_local(
         &self,
         effect: &AdapterEffect,

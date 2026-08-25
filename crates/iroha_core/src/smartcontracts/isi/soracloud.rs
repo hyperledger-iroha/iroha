@@ -7,7 +7,7 @@ use super::{
 use crate::{
     smartcontracts::Execute,
     soracloud_runtime::soracloud_hf_generated_source_binding,
-    state::{StateTransaction, public_lane_validator_record_matches_key},
+    state::{StateReadOnly, StateTransaction, public_lane_validator_record_matches_key},
 };
 #[cfg(all(test, feature = "zk-stark"))]
 use iroha_crypto::fhe_bfv::{
@@ -102,13 +102,15 @@ use iroha_data_model::{
         SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1, SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
         SORA_SERVICE_AUDIT_EVENT_VERSION_V1, SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
         SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+        SORA_SERVICE_LEASE_MAX_EGRESS_BYTES_PER_REPORTER_BLOCK_V1,
         SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
+        SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
         SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1,
-        SORA_SERVICE_LEASE_STATE_VERSION_V1, SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1,
-        SORA_SERVICE_ROLLOUT_STATE_VERSION_V1, SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
-        SORA_SERVICE_STATE_ENTRY_VERSION_V1, SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1,
-        SORA_TRAINING_JOB_RECORD_VERSION_V1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
-        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+        SORA_SERVICE_LEASE_STATE_VERSION_V1, SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
+        SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1, SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+        SORA_SERVICE_SECRET_ENTRY_VERSION_V1, SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+        SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1, SORA_TRAINING_JOB_RECORD_VERSION_V1,
+        SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
@@ -151,24 +153,28 @@ use iroha_data_model::{
         SoraModelHostViolationEvidenceRecordV1, SoraModelHostViolationKindV1,
         SoraModelProvenanceKindV1, SoraModelProvenanceRefV1, SoraModelRegistryV1,
         SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
-        SoraPrivateUploadedModelExecutionReceiptV1, SoraRolloutStageV1, SoraRuntimeExecutionHostV1,
-        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceConfigEntryV1,
+        SoraPrivateModelArtifactRefV1, SoraPrivateUploadedModelExecutionReceiptV1,
+        SoraRolloutStageV1, SoraRuntimeExecutionHostV1, SoraRuntimeReceiptV1,
+        SoraServiceAuditEventV1, SoraServiceConfigEntryV1, SoraServiceConfigMutationV1,
         SoraServiceDeploymentStateV1, SoraServiceExactCurrentRevisionPreconditionV1,
         SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
-        SoraServiceLeaseEgressCheckpointV1, SoraServiceLeaseReportingEpochRolloverV1,
-        SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1, SoraServiceLeaseVolumeStateV1,
+        SoraServiceLeaseEgressCheckpointV1, SoraServiceLeaseReporterAssignmentV1,
+        SoraServiceLeaseReportingEpochRolloverV1, SoraServiceLeaseStateV1,
+        SoraServiceLeaseStatusV1, SoraServiceLeaseUsageAuditV1, SoraServiceLeaseVolumeStateV1,
         SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
         SoraServiceMutationPreconditionV1, SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1,
-        SoraServiceSecretEntryV1, SoraServiceStateEntryV1, SoraStateEncryptionV1,
-        SoraStateMutationOperationV1, SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1,
-        SoraTrainingJobRecordV1, SoraTrainingJobStatusV1, SoraUploadedModelBundleV1,
-        SoracloudFheBootstrapKeyProofV1, SoracloudFheFullBootstrapExecutionProofV1,
-        SoracloudFheGovernancePermissionScopeV1, SoracloudFheGovernedMaterialV1,
-        SoracloudFheInputAdmissionProofV1, SoracloudFhePolicyRecordV1,
-        SoracloudFhePolicyReferenceV1, SoracloudFhePolicyVersionLifecycleV1,
-        SoracloudFhePolicyVersionStateV1, SoracloudFhePublicKeyProofV1,
-        derive_agent_autonomy_request_commitment, derive_hf_source_id_v1,
+        SoraServiceSecretEntryV1, SoraServiceSecretMutationV1, SoraServiceStateEntryV1,
+        SoraStateEncryptionV1, SoraStateMutationOperationV1, SoraTrainingJobActionV1,
+        SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraTrainingJobStatusV1,
+        SoraUploadedModelBundleV1, SoracloudFheBootstrapKeyProofV1,
+        SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheGovernancePermissionScopeV1,
+        SoracloudFheGovernedMaterialV1, SoracloudFheInputAdmissionProofV1,
+        SoracloudFhePolicyRecordV1, SoracloudFhePolicyReferenceV1,
+        SoracloudFhePolicyVersionLifecycleV1, SoracloudFhePolicyVersionStateV1,
+        SoracloudFhePublicKeyProofV1, derive_agent_autonomy_request_commitment,
+        derive_hf_placement_id_v1, derive_hf_shared_lease_pool_id_v1, derive_hf_source_id_v1,
         derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode,
+        derive_soracloud_local_read_receipt_id_v1, derive_soracloud_service_lease_commitment_v1,
         encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
@@ -209,7 +215,7 @@ use iroha_data_model::{
         soracloud_fhe_public_key_proof_open_verify_bounds,
         soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1,
     },
-    sorafs::pin_registry::{PinStatus, StorageClass},
+    sorafs::pin_registry::{ManifestDigest, PinStatus, StorageClass},
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
 use iroha_primitives::{
@@ -234,7 +240,7 @@ const MODEL_WEIGHT_MAX_DATASET_REF_BYTES: usize = 512;
 const MODEL_WEIGHT_MAX_REASON_BYTES: usize = 512;
 const MODEL_HOST_VIOLATION_MAX_DETAIL_BYTES: usize = 512;
 const HF_MODEL_NAME_MAX_BYTES: usize = 128;
-const AGENT_WALLET_DAY_TICKS: u64 = 10_000;
+const MILLISECONDS_PER_UTC_DAY: u64 = 86_400_000;
 const AGENT_MAILBOX_MAX_PAYLOAD_BYTES: usize = 8 * 1024;
 const AGENT_AUTONOMY_MAX_HASH_BYTES: usize = 256;
 const AGENT_AUTONOMY_MAX_LABEL_BYTES: usize = 128;
@@ -398,7 +404,7 @@ fn ensure_hf_compute_reservation_charge_within_cap(
     }
     Ok(())
 }
-fn validate_model_host_capability_against_class(
+pub(crate) fn validate_model_host_capability_against_class(
     capability: &SoraModelHostCapabilityRecordV1,
 ) -> Result<(), InstructionExecutionError> {
     let policy = hf_host_class_policy(&capability.host_class).ok_or_else(|| {
@@ -661,17 +667,34 @@ fn require_inrou_host_peer_binding(
     peer_id: &str,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
-    let matches_active_binding = crate::soracloud_runtime::soracloud_validator_peer_is_active(
+    if crate::soracloud_runtime::soracloud_validator_has_active_peer_binding(
         &state_transaction.world,
         authority,
         peer_id,
         |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
-    );
-    if matches_active_binding {
+    ) {
         Ok(())
     } else {
         Err(invalid_parameter(
-            "Inrou host capability peer_id must exactly match the validator's active on-chain peer binding",
+            "Inrou host capability peer_id must be derived from the validator account's single signatory and exactly match its active on-chain peer binding",
+        ))
+    }
+}
+fn require_hf_model_host_peer_binding(
+    authority: &AccountId,
+    peer_id: &str,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), InstructionExecutionError> {
+    if crate::soracloud_runtime::soracloud_validator_has_active_peer_binding(
+        &state_transaction.world,
+        authority,
+        peer_id,
+        |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
+    ) {
+        Ok(())
+    } else {
+        Err(invalid_parameter(
+            "HF model host capability peer_id must be derived from the validator account's single signatory and exactly match its active on-chain peer binding",
         ))
     }
 }
@@ -706,6 +729,7 @@ fn require_soracloud_service_runtime_authority(
         service_name.as_ref(),
         service_version,
         state_transaction.block_unix_timestamp_ms().max(1),
+        state_transaction.block_height(),
         |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
     )
     .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
@@ -4733,7 +4757,7 @@ pub(crate) fn next_soracloud_audit_sequence(
         })
 }
 fn ensure_soracloud_sequence_is_next(
-    state_transaction: &StateTransaction<'_, '_>,
+    state_transaction: &mut StateTransaction<'_, '_>,
     sequence: u64,
 ) -> Result<(), InstructionExecutionError> {
     let expected = next_soracloud_audit_sequence(state_transaction)?;
@@ -4745,6 +4769,10 @@ fn ensure_soracloud_sequence_is_next(
             .into(),
         ));
     }
+    *state_transaction
+        .world
+        .soracloud_sequence_watermark
+        .get_mut() = sequence;
     Ok(())
 }
 fn ensure_soracloud_audit_sequence_capacity(
@@ -5126,21 +5154,11 @@ fn agent_policy_capability_active(record: &SoraAgentApartmentRecordV1, capabilit
         .any(|candidate| candidate.as_ref() == capability);
     declared && !record.revoked_policy_capabilities.contains(capability)
 }
-fn agent_runtime_status_for_sequence(
-    record: &SoraAgentApartmentRecordV1,
-    current_sequence: u64,
-) -> SoraAgentRuntimeStatusV1 {
-    if current_sequence >= record.lease_expires_sequence {
-        SoraAgentRuntimeStatusV1::LeaseExpired
-    } else {
-        record.status
-    }
-}
 fn touch_agent_runtime_activity(record: &mut SoraAgentApartmentRecordV1, sequence: u64) {
     record.last_active_sequence = record.last_active_sequence.max(sequence);
 }
-fn wallet_day_bucket(sequence: u64) -> u64 {
-    sequence / AGENT_WALLET_DAY_TICKS
+pub(crate) fn wallet_day_bucket(block_timestamp_ms: u64) -> u64 {
+    block_timestamp_ms / MILLISECONDS_PER_UTC_DAY
 }
 fn wallet_day_spent(
     record: &SoraAgentApartmentRecordV1,
@@ -5219,10 +5237,10 @@ fn projected_binding_state_total_bytes(
             )
         })
 }
-fn autonomy_checkpoint_key(apartment_name: &str, run_id: &str) -> String {
+pub(crate) fn autonomy_checkpoint_key(apartment_name: &str, run_id: &str) -> String {
     format!("/{apartment_name}/autonomy/{run_id}")
 }
-fn autonomy_checkpoint_value_size(
+pub(crate) fn autonomy_checkpoint_value_size(
     artifact_hash: &str,
     provenance_hash: Option<&str>,
     run_label: &str,
@@ -5377,6 +5395,19 @@ pub(crate) fn write_soracloud_runtime_state(
             .into(),
         ));
     }
+    let admitted_bundle = load_admitted_bundle(
+        state_transaction,
+        &state.service_name,
+        &state.active_service_version,
+    )?;
+    if state.materialized_bundle_hash != admitted_bundle.container.bundle_hash {
+        return Err(invalid_parameter(format!(
+            "service `{}` runtime state reports materialized bundle hash `{}` but the active admitted bundle hash is `{}`",
+            state.service_name,
+            state.materialized_bundle_hash,
+            admitted_bundle.container.bundle_hash,
+        )));
+    }
     state_transaction
         .world
         .soracloud_service_runtime
@@ -5387,7 +5418,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
     state_transaction: &mut StateTransaction<'_, '_>,
     reporter: &AccountId,
     service_name: Name,
-    lease_started_sequence: u64,
+    lease_started_height: u64,
     reporting_epoch: u64,
     active_service_version: String,
     replica_slot: u16,
@@ -5400,6 +5431,49 @@ pub(crate) fn write_soracloud_service_lease_usage(
             "an active Inrou replica assignment must not finalize its reporter checkpoint",
         ));
     }
+    let block_height = state_transaction.block_height();
+    let active_assignment = if reporter_has_active_assignment {
+        let placement_key = (
+            service_name.as_ref().to_owned(),
+            active_service_version.clone(),
+        );
+        let placement_record = state_transaction
+            .world
+            .soracloud_inrou_service_placements
+            .get(&placement_key)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "active reporter `{reporter}` has no authoritative placement record for service `{service_name}` revision `{active_service_version}`"
+                    )
+                    .into(),
+                )
+            })?;
+        let placement = placement_record
+            .placements
+            .iter()
+            .find(|placement| {
+                placement.replica_slot == replica_slot
+                    && placement.validator_account_id == *reporter
+            })
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "active reporter `{reporter}` is absent from authoritative placement evidence for service `{service_name}` revision `{active_service_version}` replica {replica_slot}"
+                    )
+                    .into(),
+                )
+            })?;
+        Some(SoraServiceLeaseReporterAssignmentV1 {
+            schema_version: SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
+            service_version: active_service_version.clone(),
+            placement,
+            placement_reconciled_at_ms: placement_record.reconciled_at_ms,
+        })
+    } else {
+        None
+    };
     let mut deployment = state_transaction
         .world
         .soracloud_service_deployments
@@ -5410,8 +5484,13 @@ pub(crate) fn write_soracloud_service_lease_usage(
                 format!("service `{service_name}` is not deployed").into(),
             )
         })?;
+    let active_service_versions = if reporter_has_active_assignment {
+        active_inrou_service_versions(&deployment)?
+    } else {
+        Vec::new()
+    };
     if reporter_has_active_assignment
-        && !active_inrou_service_versions(&deployment)?
+        && !active_service_versions
             .iter()
             .any(|version| version == &active_service_version)
     {
@@ -5423,17 +5502,17 @@ pub(crate) fn write_soracloud_service_lease_usage(
         ));
     }
     let accounted_storage_bytes = deployment.accounted_storage_bytes();
-    let current_sequence = next_soracloud_audit_sequence(state_transaction)?;
     let mut reporting_epoch_rollover = None;
+    let accepted_assignment;
     let lease = deployment.service_lease.as_mut().ok_or_else(|| {
         InstructionExecutionError::InvariantViolation(
             format!("service `{service_name}` does not have an active hosted-service lease").into(),
         )
     })?;
-    if lease_started_sequence != lease.lease_started_sequence {
+    if lease_started_height != lease.lease_started_height {
         return Err(invalid_parameter(format!(
-            "service `{service_name}` lease-incarnation CAS expected {}, got {lease_started_sequence}",
-            lease.lease_started_sequence
+            "service `{service_name}` lease-incarnation CAS expected height {}, got {lease_started_height}",
+            lease.lease_started_height
         )));
     }
     if reporting_epoch == lease.reporting_epoch {
@@ -5442,11 +5521,26 @@ pub(crate) fn write_soracloud_service_lease_usage(
             .iter_mut()
             .find(|checkpoint| {
                 checkpoint.reporting_epoch == reporting_epoch
-                    && checkpoint.active_service_version == active_service_version
-                    && checkpoint.replica_slot == replica_slot
-                    && checkpoint.validator_account_id == *reporter
+                    && checkpoint.assignment.service_version == active_service_version
+                    && checkpoint.assignment.placement.replica_slot == replica_slot
+                    && checkpoint.assignment.placement.validator_account_id == *reporter
             })
         {
+            if replica_accounted_egress_bytes == checkpoint.accounted_egress_bytes
+                && finalize_reporter == checkpoint.finalize_reporter
+            {
+                return Ok(());
+            }
+            if reporter_has_active_assignment
+                && checkpoint.finalize_reporter
+                && !finalize_reporter
+                && replica_accounted_egress_bytes != checkpoint.accounted_egress_bytes
+            {
+                return Err(invalid_parameter(format!(
+                    "service `{service_name}` revision `{active_service_version}` replica {replica_slot} reporter `{reporter}` must reopen its finalized checkpoint at the exact terminal byte value {} before increasing",
+                    checkpoint.accounted_egress_bytes
+                )));
+            }
             if replica_accounted_egress_bytes < checkpoint.accounted_egress_bytes {
                 return Err(invalid_parameter(format!(
                     "service `{service_name}` revision `{active_service_version}` replica {replica_slot} reporter `{reporter}` must not decrease egress bytes from {} to {replica_accounted_egress_bytes}",
@@ -5460,16 +5554,25 @@ pub(crate) fn write_soracloud_service_lease_usage(
                     )));
                 }
                 if checkpoint.finalize_reporter {
-                    if replica_accounted_egress_bytes == checkpoint.accounted_egress_bytes {
-                        return Ok(());
-                    }
                     return Err(invalid_parameter(format!(
                         "former reporter `{reporter}` for service `{service_name}` revision `{active_service_version}` replica {replica_slot} is already finalized at {} bytes",
                         checkpoint.accounted_egress_bytes
                     )));
                 }
             }
+            let delta = replica_accounted_egress_bytes - checkpoint.accounted_egress_bytes;
+            let elapsed_blocks = block_height.saturating_sub(checkpoint.last_updated_height);
+            let maximum_delta = elapsed_blocks
+                .checked_mul(SORA_SERVICE_LEASE_MAX_EGRESS_BYTES_PER_REPORTER_BLOCK_V1)
+                .unwrap_or(u64::MAX);
+            if delta > maximum_delta {
+                return Err(invalid_parameter(format!(
+                    "reporter `{reporter}` egress delta {delta} exceeds the {maximum_delta}-byte bound for {elapsed_blocks} elapsed consensus blocks"
+                )));
+            }
+            accepted_assignment = checkpoint.assignment.clone();
             checkpoint.accounted_egress_bytes = replica_accounted_egress_bytes;
+            checkpoint.last_updated_height = block_height;
             checkpoint.finalize_reporter = finalize_reporter;
         } else {
             if !reporter_has_active_assignment {
@@ -5489,14 +5592,18 @@ pub(crate) fn write_soracloud_service_lease_usage(
                     "service `{service_name}` reporting epoch {reporting_epoch} reached the protocol limit of {SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1} reporter checkpoints"
                 )));
             }
+            accepted_assignment = active_assignment.clone().ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "active reporter assignment evidence disappeared during lease update".into(),
+                )
+            })?;
             lease
                 .egress_reporter_checkpoints
                 .push(SoraServiceLeaseEgressCheckpointV1 {
                     reporting_epoch,
-                    active_service_version: active_service_version.clone(),
-                    replica_slot,
-                    validator_account_id: reporter.clone(),
+                    assignment: accepted_assignment.clone(),
                     accounted_egress_bytes: 0,
+                    last_updated_height: block_height,
                     finalize_reporter: false,
                 });
         }
@@ -5538,21 +5645,35 @@ pub(crate) fn write_soracloud_service_lease_usage(
                 "every prior-epoch reporter checkpoint must be finalized before rollover",
             ));
         }
-        for checkpoint in &lease.egress_reporter_checkpoints {
-            let assignment = resolve_active_inrou_replica_assignment(
-                state_transaction,
-                &service_name,
-                &checkpoint.active_service_version,
-                checkpoint.replica_slot,
+        let mut active_reporter_assignments = BTreeSet::new();
+        for service_version in &active_service_versions {
+            let assignments = crate::soracloud_runtime::resolve_active_inrou_replica_assignments(
+                &state_transaction.world,
+                service_name.as_ref(),
+                service_version,
                 state_transaction.block_unix_timestamp_ms().max(1),
-            )?;
-            if assignment.is_some_and(|assignment| {
-                assignment.validator_account_id == checkpoint.validator_account_id
-            }) {
-                return Err(invalid_parameter(
-                    "a prior-epoch reporter checkpoint remains actively placed",
-                ));
-            }
+                state_transaction.block_height(),
+                |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
+            )
+            .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
+            active_reporter_assignments.extend(assignments.into_iter().map(|assignment| {
+                (
+                    service_version.clone(),
+                    assignment.replica_slot,
+                    assignment.validator_account_id,
+                )
+            }));
+        }
+        if lease.egress_reporter_checkpoints.iter().any(|checkpoint| {
+            active_reporter_assignments.contains(&(
+                checkpoint.assignment.service_version.clone(),
+                checkpoint.assignment.placement.replica_slot,
+                checkpoint.assignment.placement.validator_account_id.clone(),
+            ))
+        }) {
+            return Err(invalid_parameter(
+                "a prior-epoch reporter checkpoint remains actively placed",
+            ));
         }
         let settled_egress_bytes_delta = lease
             .egress_reporter_checkpoints
@@ -5579,7 +5700,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
             })?;
         reporting_epoch_rollover = Some(SoraServiceLeaseReportingEpochRolloverV1 {
             schema_version: SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1,
-            lease_started_sequence: lease.lease_started_sequence,
+            lease_started_height: lease.lease_started_height,
             previous_reporting_epoch: lease.reporting_epoch,
             new_reporting_epoch: successor_epoch,
             reporter_account_id: reporter.clone(),
@@ -5595,36 +5716,40 @@ pub(crate) fn write_soracloud_service_lease_usage(
         lease.reporting_epoch = successor_epoch;
         lease.settled_egress_bytes = settled_egress_bytes;
         lease.egress_reporter_checkpoints.clear();
+        accepted_assignment = active_assignment.ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "successor reporter assignment evidence disappeared during rollover".into(),
+            )
+        })?;
         lease
             .egress_reporter_checkpoints
             .push(SoraServiceLeaseEgressCheckpointV1 {
                 reporting_epoch: successor_epoch,
-                active_service_version: active_service_version.clone(),
-                replica_slot,
-                validator_account_id: reporter.clone(),
+                assignment: accepted_assignment.clone(),
                 accounted_egress_bytes: 0,
+                last_updated_height: block_height,
                 finalize_reporter: false,
             });
     }
     lease.egress_reporter_checkpoints.sort_by(|left, right| {
         (
             left.reporting_epoch,
-            left.active_service_version.as_str(),
-            left.replica_slot,
-            &left.validator_account_id,
+            left.assignment.service_version.as_str(),
+            left.assignment.placement.replica_slot,
+            &left.assignment.placement.validator_account_id,
         )
             .cmp(&(
                 right.reporting_epoch,
-                right.active_service_version.as_str(),
-                right.replica_slot,
-                &right.validator_account_id,
+                right.assignment.service_version.as_str(),
+                right.assignment.placement.replica_slot,
+                &right.assignment.placement.validator_account_id,
             ))
     });
     lease
         .refresh_accounted_egress_bytes()
         .map_err(|error| invalid_parameter(error.to_string()))?;
     match lease
-        .status_at(current_sequence, accounted_storage_bytes)
+        .status_at(block_height, accounted_storage_bytes)
         .map_err(|error| {
             invalid_quantity_arithmetic(
                 "failed to calculate hosted-service lease status after usage update",
@@ -5647,62 +5772,78 @@ pub(crate) fn write_soracloud_service_lease_usage(
         }
         SoraServiceLeaseStatusV1::Suspended => {}
     }
-    let audit_event = if let Some(rollover) = reporting_epoch_rollover {
-        let sequence = next_soracloud_audit_sequence(state_transaction)?;
-        Some(SoraServiceAuditEventV1 {
-            schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
-            sequence,
-            action: SoraServiceLifecycleActionV1::LeaseReportingEpochRollover,
-            service_name: service_name.clone(),
-            from_version: Some(deployment.current_service_version.clone()),
-            to_version: deployment.current_service_version.clone(),
-            service_manifest_hash: deployment.current_service_manifest_hash,
-            container_manifest_hash: deployment.current_container_manifest_hash,
-            governance_tx_hash: None,
-            binding_name: None,
-            state_key: None,
-            config_name: None,
-            secret_name: None,
-            rollout_handle: None,
-            policy_name: None,
-            policy_snapshot_hash: None,
-            jurisdiction_tag: None,
-            consent_evidence_hash: None,
-            break_glass: None,
-            break_glass_reason: None,
-            lease_reporting_epoch_rollover: Some(rollover),
-            signer: single_signatory_authority(reporter)?.clone(),
-        })
+    let post_service_lease = lease.clone();
+    let current_sequence = next_soracloud_audit_sequence(state_transaction)?;
+    let action = if reporting_epoch_rollover.is_some() {
+        SoraServiceLifecycleActionV1::LeaseReportingEpochRollover
     } else {
-        None
+        SoraServiceLifecycleActionV1::LeaseUsage
+    };
+    let audit_event = SoraServiceAuditEventV1 {
+        schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
+        sequence: current_sequence,
+        block_height,
+        block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
+        action,
+        service_name: service_name.clone(),
+        from_version: Some(deployment.current_service_version.clone()),
+        to_version: deployment.current_service_version.clone(),
+        service_manifest_hash: deployment.current_service_manifest_hash,
+        container_manifest_hash: deployment.current_container_manifest_hash,
+        process_generation: deployment.process_generation,
+        config_generation: deployment.config_generation,
+        secret_generation: deployment.secret_generation,
+        config_snapshot_hash:
+            iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                &deployment.service_configs,
+            ),
+        secret_snapshot_hash:
+            iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                &deployment.service_secrets,
+            ),
+        governance_tx_hash: None,
+        binding_name: None,
+        state_key: None,
+        config_mutations: Vec::new(),
+        secret_mutations: Vec::new(),
+        rollout_state: None,
+        policy_name: None,
+        policy_snapshot_hash: None,
+        jurisdiction_tag: None,
+        consent_evidence_hash: None,
+        break_glass: None,
+        break_glass_reason: None,
+        lease_usage: Some(SoraServiceLeaseUsageAuditV1 {
+            schema_version: SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
+            reporting_epoch,
+            assignment: accepted_assignment,
+            replica_accounted_egress_bytes,
+            finalize_reporter,
+        }),
+        service_lease_commitment: Some(derive_soracloud_service_lease_commitment_v1(
+            &post_service_lease,
+        )),
+        lease_reporting_epoch_rollover: reporting_epoch_rollover,
+        signer: single_signatory_authority(reporter)?.clone(),
     };
     record_deployment_state(state_transaction, deployment)?;
-    if let Some(audit_event) = audit_event {
-        record_audit_event(state_transaction, audit_event)?;
-    }
-    Ok(())
+    record_audit_event(state_transaction, audit_event)
 }
+fn require_consensus_verified_ordered_mailbox_execution() -> Result<(), InstructionExecutionError> {
+    Err(InstructionExecutionError::InvariantViolation(
+        "ordered mailbox admission and execution are disabled until consensus can re-execute the exact admitted IVM bundle and persist a self-contained effect certificate"
+            .into(),
+    ))
+}
+
 pub(crate) fn write_soracloud_mailbox_message(
     state_transaction: &mut StateTransaction<'_, '_>,
     mut message: SoraServiceMailboxMessageV1,
 ) -> Result<(), InstructionExecutionError> {
+    require_consensus_verified_ordered_mailbox_execution()?;
     message
         .validate_submission()
         .map_err(|err| invalid_parameter(err.to_string()))?;
-    if state_transaction
-        .world
-        .soracloud_mailbox_messages
-        .get(&message.message_id)
-        .is_some()
-    {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "Soracloud mailbox message `{}` has already been recorded",
-                message.message_id
-            )
-            .into(),
-        ));
-    }
     let source_deployment = state_transaction
         .world
         .soracloud_service_deployments
@@ -5817,12 +5958,12 @@ pub(crate) fn write_soracloud_mailbox_message(
             .into(),
         ));
     }
-    let retention_sequences = destination_mailbox.retention_sequences.get();
-    if message.delivery_delay_sequences >= retention_sequences {
+    let retention_blocks = destination_mailbox.retention_blocks.get();
+    if message.delivery_delay_blocks >= retention_blocks {
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
                 "mailbox message `{}` delivery delay {} must be less than destination retention {}",
-                message.message_id, message.delivery_delay_sequences, retention_sequences
+                message.message_id, message.delivery_delay_blocks, retention_blocks
             )
             .into(),
         ));
@@ -5830,22 +5971,39 @@ pub(crate) fn write_soracloud_mailbox_message(
     message.from_service_version = source_deployment.current_service_version;
     message.to_service_version = destination_deployment.current_service_version;
     message.enqueue_sequence = next_soracloud_audit_sequence(state_transaction)?;
-    message.available_after_sequence = message
-        .enqueue_sequence
-        .checked_add(u64::from(message.delivery_delay_sequences))
+    message.enqueue_height = state_transaction.block_height();
+    message.available_after_height = message
+        .enqueue_height
+        .checked_add(u64::from(message.delivery_delay_blocks))
         .ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
-                "Soracloud mailbox availability sequence is exhausted".into(),
+                "Soracloud mailbox availability height is exhausted".into(),
             )
         })?;
-    message.expires_at_sequence = message
-        .enqueue_sequence
-        .checked_add(u64::from(retention_sequences))
+    message.expires_at_height = message
+        .enqueue_height
+        .checked_add(u64::from(retention_blocks))
         .ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
-                "Soracloud mailbox expiry sequence is exhausted".into(),
+                "Soracloud mailbox expiry height is exhausted".into(),
             )
         })?;
+    message.message_id =
+        iroha_data_model::soracloud::derive_soracloud_mailbox_message_id_v1(&message);
+    if state_transaction
+        .world
+        .soracloud_mailbox_messages
+        .get(&message.message_id)
+        .is_some()
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "Soracloud mailbox message `{}` has already been recorded",
+                message.message_id
+            )
+            .into(),
+        ));
+    }
     let pending_count = state_transaction
         .world
         .soracloud_mailbox_messages
@@ -5853,7 +6011,7 @@ pub(crate) fn write_soracloud_mailbox_message(
         .filter(|(message_id, existing)| {
             existing.to_service == message.to_service
                 && existing.to_handler == message.to_handler
-                && existing.expires_at_sequence > message.enqueue_sequence
+                && existing.expires_at_height > message.enqueue_height
                 && !state_transaction
                     .world
                     .soracloud_runtime_receipts
@@ -5888,9 +6046,24 @@ pub(crate) fn write_soracloud_runtime_receipt(
     state_transaction: &mut StateTransaction<'_, '_>,
     mut receipt: SoraRuntimeReceiptV1,
 ) -> Result<(), InstructionExecutionError> {
+    if receipt.mailbox_message_id.is_some() {
+        require_consensus_verified_ordered_mailbox_execution()?;
+    }
     receipt
         .validate_submission()
         .map_err(|err| invalid_parameter(err.to_string()))?;
+    if receipt.mailbox_message_id.is_none() {
+        let expected_receipt_id = derive_soracloud_local_read_receipt_id_v1(&receipt);
+        if receipt.receipt_id != expected_receipt_id {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "runtime receipt `{}` is not the canonical sequence-independent local-read receipt ID `{expected_receipt_id}`",
+                    receipt.receipt_id
+                )
+                .into(),
+            ));
+        }
+    }
     if state_transaction
         .world
         .soracloud_runtime_receipts
@@ -5915,7 +6088,8 @@ pub(crate) fn write_soracloud_runtime_receipt(
                 format!("service `{}` is not deployed", receipt.service_name).into(),
             )
         })?;
-    let revision_is_active = deployment.current_service_version == receipt.service_version
+    let revision_is_active = receipt.mailbox_message_id.is_some()
+        || deployment.current_service_version == receipt.service_version
         || deployment.active_rollout.as_ref().is_some_and(|rollout| {
             rollout.baseline_version == receipt.service_version
                 || rollout.candidate_version == receipt.service_version
@@ -6000,21 +6174,21 @@ pub(crate) fn write_soracloud_runtime_receipt(
                 .into(),
             ));
         }
-        let execution_sequence = next_soracloud_audit_sequence(state_transaction)?;
-        if execution_sequence < message.available_after_sequence {
+        let execution_height = state_transaction.block_height();
+        if execution_height < message.available_after_height {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "mailbox message `{message_id}` is not available until Soracloud sequence `{}`",
-                    message.available_after_sequence
+                    "mailbox message `{message_id}` is not available until consensus height `{}`",
+                    message.available_after_height
                 )
                 .into(),
             ));
         }
-        if execution_sequence >= message.expires_at_sequence {
+        if execution_height >= message.expires_at_height {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "mailbox message `{message_id}` expired at Soracloud sequence `{}`",
-                    message.expires_at_sequence
+                    "mailbox message `{message_id}` expired at consensus height `{}`",
+                    message.expires_at_height
                 )
                 .into(),
             ));
@@ -6032,30 +6206,45 @@ pub(crate) fn write_soracloud_runtime_receipt(
     }
     if let Some(execution_host) = receipt.execution_host.as_ref() {
         match execution_host {
-            SoraRuntimeExecutionHostV1::InrouReplica(host) => {
-                let assignment = resolve_active_inrou_replica_assignment(
-                    state_transaction,
-                    &receipt.service_name,
-                    &receipt.service_version,
-                    host.replica_slot,
-                    state_transaction.block_unix_timestamp_ms().max(1),
-                )?
-                .ok_or_else(|| {
+            SoraRuntimeExecutionHostV1::DeterministicValidator(host) => {
+                let message_id = receipt.mailbox_message_id.ok_or_else(|| {
                     InstructionExecutionError::InvariantViolation(
                         format!(
-                            "runtime receipt `{}` references inactive Inrou replica slot `{}`",
-                            receipt.receipt_id, host.replica_slot
+                            "runtime receipt `{}` carries deterministic-validator attribution without a mailbox message",
+                            receipt.receipt_id
                         )
                         .into(),
                     )
                 })?;
-                if assignment.validator_account_id != host.validator_account_id
-                    || assignment.peer_id != host.peer_id
-                {
+                let message = state_transaction
+                    .world
+                    .soracloud_mailbox_messages
+                    .get(&message_id)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!("mailbox message `{message_id}` has not been recorded").into(),
+                        )
+                    })?;
+                let selected = crate::soracloud_runtime::resolve_ordered_mailbox_executor(
+                    &state_transaction.world,
+                    message,
+                    state_transaction.block_height(),
+                    |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
+                )
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "runtime receipt `{}` has no eligible deterministic mailbox executor",
+                            receipt.receipt_id
+                        )
+                        .into(),
+                    )
+                })?;
+                if selected != *host {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
-                            "runtime receipt `{}` Inrou host attribution does not match replica slot `{}`",
-                            receipt.receipt_id, host.replica_slot
+                            "runtime receipt `{}` deterministic executor does not match the message-bound active validator selection",
+                            receipt.receipt_id
                         )
                         .into(),
                     ));
@@ -6090,10 +6279,14 @@ pub(crate) fn write_soracloud_runtime_receipt(
                         .into(),
                     )
                 })?;
-                if placement.placement_id != host.placement_id {
+                if placement.placement_id != host.placement_id
+                    || placement.source_id != host.source_id
+                    || placement.pool_id != host.pool_id
+                    || placement.selection_seed_hash != host.selection_seed_hash
+                {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
-                            "runtime receipt `{}` HF placement `{}` is not the active placement `{}`",
+                            "runtime receipt `{}` HF placement context for `{}` does not exactly match active placement `{}`",
                             receipt.receipt_id, host.placement_id, placement.placement_id
                         )
                         .into(),
@@ -6138,69 +6331,111 @@ pub(crate) fn write_soracloud_runtime_receipt(
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
     ensure_soracloud_sequence_is_next(state_transaction, receipt.emitted_sequence)?;
-    if let Some(mut runtime_state) = state_transaction
-        .world
-        .soracloud_service_runtime
-        .get(&receipt.service_name)
-        .cloned()
-    {
-        runtime_state.last_receipt_id = Some(receipt.receipt_id);
-        runtime_state
-            .validate()
-            .map_err(|err| invalid_parameter(err.to_string()))?;
-        state_transaction
-            .world
-            .soracloud_service_runtime
-            .insert(runtime_state.service_name.clone(), runtime_state);
-    }
     state_transaction
         .world
         .soracloud_runtime_receipts
         .insert(receipt.receipt_id, receipt);
     Ok(())
 }
+fn validate_soracloud_private_output_manifest_binding(
+    output_manifest_payload: &[u8],
+    output_artifact: &SoraPrivateModelArtifactRefV1,
+) -> Result<(), InstructionExecutionError> {
+    if output_manifest_payload.is_empty()
+        || output_manifest_payload.len() > sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES
+    {
+        return Err(invalid_parameter(format!(
+            "private output manifest payload has {} bytes; expected 1..={}",
+            output_manifest_payload.len(),
+            sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES,
+        )));
+    }
+    let manifest = sorafs_manifest::decode_manifest_v1_canonical(output_manifest_payload).map_err(
+        |error| {
+            invalid_parameter(format!(
+                "invalid canonical private output ManifestV1 payload: {error}"
+            ))
+        },
+    )?;
+    let digest = ManifestDigest::from_manifest(&manifest).map_err(|error| {
+        invalid_parameter(format!(
+            "failed to derive private output manifest digest: {error}"
+        ))
+    })?;
+    let root_cid =
+        iroha_data_model::sorafs::pin_registry::ManifestRootCid::try_from_slice(&manifest.root_cid)
+            .map_err(|error| {
+                invalid_parameter(format!(
+                    "private output manifest root CID is not canonical: {error}"
+                ))
+            })?;
+    if digest != output_artifact.sorafs_manifest_digest
+        || root_cid != output_artifact.sorafs_root_cid
+        || manifest.content_length != output_artifact.ciphertext_bytes
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "private output manifest digest, root CID, or content length does not match the receipt artifact"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
     state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    output_manifest_payload: Vec<u8>,
     mut receipt: SoraPrivateUploadedModelExecutionReceiptV1,
 ) -> Result<(), InstructionExecutionError> {
     receipt
         .validate_submission()
         .map_err(|err| invalid_parameter(err.to_string()))?;
-    receipt.emitted_sequence = next_soracloud_audit_sequence(state_transaction)?;
-    receipt
-        .validate()
-        .map_err(|err| invalid_parameter(err.to_string()))?;
-    if state_transaction
+    validate_soracloud_private_output_manifest_binding(
+        &output_manifest_payload,
+        &receipt.output_artifact,
+    )?;
+
+    // Exact retries are a no-op even if the referenced artifacts were retired after the
+    // original execution. The persisted sequence is ledger-owned and is the only field a
+    // submission cannot reproduce.
+    if let Some(existing) = state_transaction
         .world
         .soracloud_private_uploaded_model_execution_receipts
         .get(&receipt.receipt_id)
-        .is_some()
     {
+        let mut expected = receipt;
+        expected.emitted_sequence = existing.emitted_sequence;
+        expected.emitted_block_height = existing.emitted_block_height;
+        if existing == &expected {
+            return Ok(());
+        }
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
-                "Soracloud private uploaded-model execution receipt `{}` has already been recorded",
-                receipt.receipt_id
+                "private receipt id `{}` is already bound to different execution evidence",
+                existing.receipt_id
             )
             .into(),
         ));
     }
-    let Some(bundle) = state_transaction
+
+    let bundle_key = (
+        receipt.service_name.as_ref().to_owned(),
+        receipt.model_id.clone(),
+        receipt.weight_version.clone(),
+    );
+    let bundle = state_transaction
         .world
         .soracloud_uploaded_model_bundles
-        .get(&(
-            receipt.service_name.as_ref().to_owned(),
-            receipt.model_id.clone(),
-            receipt.weight_version.clone(),
-        ))
-    else {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "uploaded model `{}` version `{}` for service `{}` has not been finalized",
-                receipt.model_id, receipt.weight_version, receipt.service_name
+        .get(&bundle_key)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "uploaded model `{}` version `{}` for service `{}` has not been finalized",
+                    receipt.model_id, receipt.weight_version, receipt.service_name
+                )
+                .into(),
             )
-            .into(),
-        ));
-    };
+        })?;
     if bundle.runtime_format
         != iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1
     {
@@ -6218,11 +6453,261 @@ pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
     {
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
-                "private receipt `{}` does not match finalized uploaded model `{}` version `{}`",
+                "private receipt `{}` does not exactly match finalized uploaded model `{}` version `{}`",
                 receipt.receipt_id, receipt.model_id, receipt.weight_version
             )
             .into(),
         ));
+    }
+
+    require_active_sorafs_uploaded_model_pin(state_transaction, bundle)?;
+    let service_revision_key = (
+        receipt.service_name.as_ref().to_owned(),
+        receipt.service_version.clone(),
+    );
+    let service_revision = state_transaction
+        .world
+        .soracloud_service_revisions
+        .get(&service_revision_key)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "private receipt `{}` references missing service revision `{}`",
+                    receipt.receipt_id, receipt.service_version
+                )
+                .into(),
+            )
+        })?;
+    if service_revision.service.service_name != receipt.service_name
+        || service_revision.service.service_version != receipt.service_version
+        || !service_revision
+            .container
+            .capabilities
+            .allow_model_inference
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` service revision does not admit uploaded-model inference",
+                receipt.receipt_id
+            )
+            .into(),
+        ));
+    }
+    let release_key = (
+        receipt.service_name.as_ref().to_owned(),
+        receipt.decryption_request_id.clone(),
+    );
+    let release = state_transaction
+        .world
+        .soracloud_decryption_request_records
+        .get(&release_key)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "private receipt `{}` references decryption request `{}` that is not authoritative for service `{}`",
+                    receipt.receipt_id, receipt.decryption_request_id, receipt.service_name
+                )
+                .into(),
+            )
+        })?;
+    release.validate().map_err(|err| {
+        InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` references an invalid authoritative decryption request: {err}",
+                receipt.receipt_id
+            )
+            .into(),
+        )
+    })?;
+    if release.service_name != receipt.service_name
+        || release.service_version != receipt.service_version
+        || release.request.request_id != receipt.decryption_request_id
+        || release.request.policy_name.as_ref() != receipt.policy_id
+        || release.request.ciphertext_commitment != receipt.input_artifact.artifact_hash
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` does not exactly match its committed decryption authorization",
+                receipt.receipt_id
+            )
+            .into(),
+        ));
+    }
+
+    let release_event = state_transaction
+        .world
+        .soracloud_service_audit_events
+        .get(&release.sequence)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "private receipt `{}` decryption request is missing its exact audit event",
+                    receipt.receipt_id
+                )
+                .into(),
+            )
+        })?;
+    release_event.validate().map_err(|err| {
+        InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` references an invalid decryption audit event: {err}",
+                receipt.receipt_id
+            )
+            .into(),
+        )
+    })?;
+    if release_event.sequence != release.sequence
+        || release_event.action != SoraServiceLifecycleActionV1::DecryptionRequest
+        || release_event.service_name != release.service_name
+        || release_event.from_version.is_some()
+        || release_event.to_version != release.service_version
+        || release_event.service_manifest_hash != service_revision.service_manifest_hash()
+        || release_event.container_manifest_hash != service_revision.container_manifest_hash()
+        || release_event.governance_tx_hash != Some(release.request.governance_tx_hash)
+        || release_event.binding_name.as_ref() != Some(&release.request.binding_name)
+        || release_event.state_key.as_deref() != Some(release.request.state_key.as_str())
+        || release_event.policy_name.as_ref() != Some(&release.request.policy_name)
+        || release_event.policy_snapshot_hash != Some(release.policy_snapshot_hash())
+        || release_event.jurisdiction_tag.as_deref()
+            != Some(release.request.jurisdiction_tag.as_str())
+        || release_event.consent_evidence_hash != release.request.consent_evidence_hash
+        || release_event.break_glass != Some(release.request.break_glass)
+        || release_event.break_glass_reason.as_deref()
+            != release.request.break_glass_reason.as_deref()
+        || release_event.signer != release.signer
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` decryption request does not match its authoritative audit event",
+                receipt.receipt_id
+            )
+            .into(),
+        ));
+    }
+    let release_expires_at_height = release_event
+        .block_height
+        .checked_add(u64::from(release.request.requested_ttl_blocks.get()))
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "private execution decryption-request expiry height overflowed".into(),
+            )
+        })?;
+    let execution_height = state_transaction.block_height();
+    if execution_height < release_event.block_height
+        || execution_height >= release_expires_at_height
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` decryption authorization is not active at block height {execution_height}",
+                receipt.receipt_id
+            )
+            .into(),
+        ));
+    }
+
+    let require_artifact_pin = |artifact: &SoraPrivateModelArtifactRefV1,
+                                require_approved: bool|
+     -> Result<(), InstructionExecutionError> {
+        let pin = state_transaction
+            .world
+            .pin_manifests
+            .get(&artifact.sorafs_manifest_digest)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "private `{}` artifact SoraFS manifest {:?} is not registered",
+                        artifact.artifact_role, artifact.sorafs_manifest_digest
+                    )
+                    .into(),
+                )
+            })?;
+        match pin.status {
+            PinStatus::Approved(_) => {}
+            PinStatus::Pending if !require_approved => {}
+            PinStatus::Pending => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "private `{}` artifact SoraFS manifest {:?} is not approved",
+                        artifact.artifact_role, artifact.sorafs_manifest_digest
+                    )
+                    .into(),
+                ));
+            }
+            PinStatus::Retired(epoch) => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "private `{}` artifact SoraFS manifest {:?} retired at epoch {epoch}",
+                        artifact.artifact_role, artifact.sorafs_manifest_digest
+                    )
+                    .into(),
+                ));
+            }
+        }
+        if pin.digest != artifact.sorafs_manifest_digest
+            || pin.root_cid != artifact.sorafs_root_cid
+            || pin.content_length != artifact.ciphertext_bytes
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "private `{}` artifact does not exactly match its SoraFS pin record",
+                    artifact.artifact_role
+                )
+                .into(),
+            ));
+        }
+        if artifact.artifact_role == "output"
+            && pin.submitted_by != receipt.attesting_validator.validator_account_id
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "private output artifact pin submitter must equal the attesting validator".into(),
+            ));
+        }
+        Ok(())
+    };
+    require_artifact_pin(&receipt.input_artifact, true)?;
+    // A governed SoraFS policy can leave an output pin pending. An exact existing pin is reused;
+    // otherwise the canonical payload is registered below only after every receipt precondition
+    // and the final ledger-owned sequence have been validated.
+    let output_pin_exists = state_transaction
+        .world
+        .pin_manifests
+        .get(&receipt.output_artifact.sorafs_manifest_digest)
+        .is_some();
+    if output_pin_exists {
+        require_artifact_pin(&receipt.output_artifact, false)?;
+    }
+
+    if state_transaction
+        .world
+        .soracloud_private_uploaded_model_execution_receipts
+        .iter()
+        .any(|(_, existing)| {
+            existing.service_name == receipt.service_name
+                && existing.decryption_request_id == receipt.decryption_request_id
+        })
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "decryption request `{}` for service `{}` already has an authoritative private execution receipt",
+                receipt.decryption_request_id, receipt.service_name
+            )
+            .into(),
+        ));
+    }
+
+    receipt.emitted_sequence = next_soracloud_audit_sequence(state_transaction)?;
+    receipt.emitted_block_height = execution_height;
+    receipt
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+
+    if !output_pin_exists {
+        iroha_data_model::isi::sorafs::RegisterPinManifest::new(
+            output_manifest_payload,
+            None,
+            None,
+        )
+        .execute(authority, state_transaction)?;
     }
     ensure_soracloud_sequence_is_next(state_transaction, receipt.emitted_sequence)?;
     state_transaction
@@ -6485,10 +6970,10 @@ fn record_app_infra_state(
         .insert(state.app_name.clone(), state);
     Ok(())
 }
-fn build_http_service_lease_state(
+pub(crate) fn build_http_service_lease_state(
     bundle: &SoraDeploymentBundleV1,
     existing: Option<&SoraServiceDeploymentStateV1>,
-    sequence: u64,
+    block_height: u64,
     extend_terms: bool,
 ) -> Result<Option<SoraServiceLeaseStateV1>, InstructionExecutionError> {
     if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService {
@@ -6497,8 +6982,8 @@ fn build_http_service_lease_state(
     let economics = &bundle.service.economics;
     let existing_lease = existing.and_then(|deployment| deployment.service_lease.as_ref());
     if let Some(lease) = existing_lease
-        && (lease.runtime_price_per_sequence != economics.runtime_price_per_sequence
-            || lease.storage_price_per_gib_sequence != economics.storage_price_per_gib_sequence
+        && (lease.runtime_price_per_block != economics.runtime_price_per_block
+            || lease.storage_price_per_gib_block != economics.storage_price_per_gib_block
             || lease.egress_price_per_mib != economics.egress_price_per_mib)
     {
         return Err(invalid_parameter(
@@ -6528,26 +7013,26 @@ fn build_http_service_lease_state(
         Some(lease) => lease.prepaid_runtime_balance.clone(),
         None => economics.prepaid_runtime_balance.clone(),
     };
-    let lease_started_sequence =
-        existing_lease.map_or(sequence, |lease| lease.lease_started_sequence);
-    let lease_expires_sequence = match existing_lease {
+    let lease_started_height =
+        existing_lease.map_or(block_height, |lease| lease.lease_started_height);
+    let lease_expires_height = match existing_lease {
         Some(lease) if extend_terms => lease
-            .lease_expires_sequence
-            .max(sequence)
-            .checked_add(economics.lease_duration_sequences.get())
+            .lease_expires_height
+            .max(block_height)
+            .checked_add(economics.lease_duration_blocks.get())
             .ok_or_else(|| {
-                invalid_parameter("hosted-service lease expiry sequence overflow while extending")
+                invalid_parameter("hosted-service lease expiry height overflow while extending")
             })?,
-        Some(lease) => lease.lease_expires_sequence,
-        None => sequence
-            .checked_add(economics.lease_duration_sequences.get())
-            .ok_or_else(|| invalid_parameter("hosted-service lease expiry sequence overflow"))?,
+        Some(lease) => lease.lease_expires_height,
+        None => block_height
+            .checked_add(economics.lease_duration_blocks.get())
+            .ok_or_else(|| invalid_parameter("hosted-service lease expiry height overflow"))?,
     };
     let existing_status =
         existing_lease.map_or(SoraServiceLeaseStatusV1::Active, |lease| lease.status);
     let status = if existing_status == SoraServiceLeaseStatusV1::Suspended {
         SoraServiceLeaseStatusV1::Suspended
-    } else if sequence >= lease_expires_sequence {
+    } else if block_height >= lease_expires_height {
         SoraServiceLeaseStatusV1::Expired
     } else {
         SoraServiceLeaseStatusV1::Active
@@ -6558,20 +7043,20 @@ fn build_http_service_lease_state(
         quota_class,
         deployment_deposit,
         prepaid_runtime_balance,
-        runtime_price_per_sequence: existing_lease.map_or_else(
-            || economics.runtime_price_per_sequence.clone(),
-            |lease| lease.runtime_price_per_sequence.clone(),
+        runtime_price_per_block: existing_lease.map_or_else(
+            || economics.runtime_price_per_block.clone(),
+            |lease| lease.runtime_price_per_block.clone(),
         ),
-        storage_price_per_gib_sequence: existing_lease.map_or_else(
-            || economics.storage_price_per_gib_sequence.clone(),
-            |lease| lease.storage_price_per_gib_sequence.clone(),
+        storage_price_per_gib_block: existing_lease.map_or_else(
+            || economics.storage_price_per_gib_block.clone(),
+            |lease| lease.storage_price_per_gib_block.clone(),
         ),
         egress_price_per_mib: existing_lease.map_or_else(
             || economics.egress_price_per_mib.clone(),
             |lease| lease.egress_price_per_mib.clone(),
         ),
-        lease_started_sequence,
-        lease_expires_sequence,
+        lease_started_height,
+        lease_expires_height,
         reporting_epoch: existing_lease.map_or(1, |lease| lease.reporting_epoch),
         settled_egress_bytes: existing_lease.map_or(0, |lease| lease.settled_egress_bytes),
         egress_reporter_checkpoints: existing_lease
@@ -6624,11 +7109,9 @@ fn build_http_service_lease_volume_states(
                 storage_class: volume.storage_class,
                 mount_path: volume.mount_path.clone(),
                 max_total_bytes: volume.max_total_bytes.get(),
-                lease_started_sequence: lease_state.lease_started_sequence,
-                lease_expires_sequence: lease_state.lease_expires_sequence,
+                lease_started_height: lease_state.lease_started_height,
+                lease_expires_height: lease_state.lease_expires_height,
                 authoritative_generation,
-                last_materialized_sequence: existing_state
-                    .and_then(|state| state.last_materialized_sequence),
             })
         })
         .collect()
@@ -6985,6 +7468,7 @@ fn resolve_active_inrou_replica_assignment(
         service_version,
         replica_slot,
         now_ms,
+        state_transaction.block_height(),
         |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
     )
     .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))
@@ -7144,7 +7628,7 @@ fn select_inrou_replica_placement(
         .iter()
         .filter_map(|(validator_account_id, capability)| {
             if &capability.validator_account_id != validator_account_id
-                || !crate::soracloud_runtime::soracloud_validator_peer_is_active(
+                || !crate::soracloud_runtime::soracloud_validator_has_active_peer_binding(
                     &state_transaction.world,
                     validator_account_id,
                     &capability.peer_id,
@@ -7211,15 +7695,16 @@ fn prune_unavailable_inrou_host_capabilities(
         .soracloud_inrou_host_capabilities
         .iter()
         .filter_map(|(validator_account_id, capability)| {
-            let validator_is_active = crate::soracloud_runtime::soracloud_validator_peer_is_active(
-                &state_transaction.world,
-                validator_account_id,
-                &capability.peer_id,
-                |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
-            );
+            let validator_has_active_peer_binding =
+                crate::soracloud_runtime::soracloud_validator_has_active_peer_binding(
+                    &state_transaction.world,
+                    validator_account_id,
+                    &capability.peer_id,
+                    |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
+                );
             (capability.validate().is_err()
                 || capability.validator_account_id != *validator_account_id
-                || !validator_is_active
+                || !validator_has_active_peer_binding
                 || !capability.can_host_replicas_at(now_ms))
             .then_some(validator_account_id.clone())
         })
@@ -7269,7 +7754,7 @@ fn reconcile_inrou_service_placements(
     now_ms: u64,
 ) -> Result<(), InstructionExecutionError> {
     prune_unavailable_inrou_host_capabilities(state_transaction, now_ms);
-    let current_sequence = next_soracloud_audit_sequence(state_transaction)?;
+    let current_height = state_transaction.block_height();
     let deployment_keys = state_transaction
         .world
         .soracloud_service_deployments
@@ -7290,8 +7775,33 @@ fn reconcile_inrou_service_placements(
         else {
             continue;
         };
+        deployment.validate().map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "cannot reconcile Inrou placement for malformed service deployment `{service_name}`: {error}"
+                )
+                .into(),
+            )
+        })?;
+        let mut active_bundles = Vec::new();
+        for service_version in active_inrou_service_versions(&deployment)? {
+            let bundle = load_admitted_bundle(state_transaction, &service_name, &service_version)?;
+            crate::soracloud_runtime::validate_soracloud_deployment_lease_volume_bindings(
+                &deployment,
+                &bundle,
+            )
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot reconcile Inrou placement for service `{service_name}` revision `{service_version}`: {error}"
+                    )
+                    .into(),
+                )
+            })?;
+            active_bundles.push((service_version, bundle));
+        }
         if !deployment
-            .hosted_service_lease_active_at(current_sequence)
+            .hosted_service_lease_active_at(current_height)
             .map_err(|error| {
                 invalid_quantity_arithmetic(
                     "failed to calculate hosted-service lease status during Inrou reconciliation",
@@ -7301,8 +7811,7 @@ fn reconcile_inrou_service_placements(
         {
             continue;
         }
-        for service_version in active_inrou_service_versions(&deployment)? {
-            let bundle = load_admitted_bundle(state_transaction, &service_name, &service_version)?;
+        for (service_version, bundle) in active_bundles {
             if bundle.container.runtime
                 != iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou
                 || bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
@@ -7316,7 +7825,7 @@ fn reconcile_inrou_service_placements(
                     .iter()
                     .filter(|(validator_account_id, capability)| {
                         &capability.validator_account_id == *validator_account_id
-                            && crate::soracloud_runtime::soracloud_validator_peer_is_active(
+                            && crate::soracloud_runtime::soracloud_validator_has_active_peer_binding(
                                 &state_transaction.world,
                                 validator_account_id,
                                 &capability.peer_id,
@@ -7524,6 +8033,47 @@ fn derive_hf_placement_status(record: &SoraHfPlacementRecordV1) -> SoraHfPlaceme
         SoraHfPlacementStatusV1::Unavailable
     }
 }
+pub(crate) fn validate_hf_placement_economics_and_status(
+    record: &SoraHfPlacementRecordV1,
+) -> Result<(), InstructionExecutionError> {
+    if record.assigned_hosts.len() > usize::from(record.adaptive_target_host_count) {
+        return Err(invalid_parameter(
+            "HF placement assigned host count exceeds adaptive_target_host_count",
+        ));
+    }
+    let mut expected_fee_record = record.clone();
+    recompute_hf_placement_total_reservation_fee(&mut expected_fee_record)?;
+    if record.total_reservation_fee != expected_fee_record.total_reservation_fee {
+        return Err(invalid_parameter(format!(
+            "HF placement total_reservation_fee `{}` does not equal the canonical assigned-host tariff `{}`",
+            record.total_reservation_fee, expected_fee_record.total_reservation_fee
+        )));
+    }
+    if record.status == SoraHfPlacementStatusV1::Retired {
+        if record
+            .assigned_hosts
+            .iter()
+            .any(|assignment| assignment.status != SoraHfPlacementHostStatusV1::Retired)
+            || record
+                .last_error
+                .as_deref()
+                .is_none_or(|reason| reason.trim().is_empty())
+        {
+            return Err(invalid_parameter(
+                "retired HF placements require only retired assignments and a terminal reason",
+            ));
+        }
+    } else {
+        let expected_status = derive_hf_placement_status(record);
+        if record.status != expected_status {
+            return Err(invalid_parameter(format!(
+                "HF placement status {:?} does not equal the canonical assigned-host projection {:?}",
+                record.status, expected_status
+            )));
+        }
+    }
+    Ok(())
+}
 fn record_hf_placement(
     state_transaction: &mut StateTransaction<'_, '_>,
     mut record: SoraHfPlacementRecordV1,
@@ -7532,6 +8082,7 @@ fn record_hf_placement(
     record
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
+    validate_hf_placement_economics_and_status(&record)?;
     state_transaction
         .world
         .soracloud_hf_placements
@@ -7746,7 +8297,7 @@ fn reconcile_administratively_unavailable_model_host(
         else {
             return Ok(false);
         };
-        if crate::soracloud_runtime::soracloud_validator_peer_is_active(
+        if crate::soracloud_runtime::soracloud_validator_has_active_peer_binding(
             &state_transaction.world,
             validator_account_id,
             &capability.peer_id,
@@ -8005,7 +8556,7 @@ fn reconcile_unavailable_model_hosts(
                     validator_account_id.clone(),
                     ModelHostReconciliationCause::ValidatorInactive,
                 ))
-            } else if !crate::soracloud_runtime::soracloud_validator_peer_is_active(
+            } else if !crate::soracloud_runtime::soracloud_validator_has_active_peer_binding(
                 &state_transaction.world,
                 validator_account_id,
                 &capability.peer_id,
@@ -8299,10 +8850,8 @@ fn hf_shared_lease_pool_id(
     storage_class: StorageClass,
     lease_term_ms: u64,
 ) -> Result<Hash, InstructionExecutionError> {
-    let payload = norito::to_bytes(&(source_id, storage_class, lease_term_ms)).map_err(|err| {
-        invalid_parameter(format!("failed to encode hf shared lease pool id: {err}"))
-    })?;
-    Ok(Hash::new(payload))
+    derive_hf_shared_lease_pool_id_v1(source_id, storage_class, lease_term_ms)
+        .map_err(|error| invalid_parameter(error.to_string()))
 }
 fn ensure_hf_shared_lease_settlement_asset_matches(
     pool: &SoraHfSharedLeasePoolV1,
@@ -8558,7 +9107,7 @@ fn ranked_hf_eligible_hosts_by_seed(
         .filter_map(|(validator_account_id, capability)| {
             let stake = active_validator_stakes.get(validator_account_id).copied()?;
             (capability.validator_account_id == *validator_account_id
-                && crate::soracloud_runtime::soracloud_validator_peer_is_active(
+                && crate::soracloud_runtime::soracloud_validator_has_active_peer_binding(
                     &state_transaction.world,
                     validator_account_id,
                     &capability.peer_id,
@@ -8641,13 +9190,11 @@ fn select_hf_placement_for_window(
             },
         )
         .collect::<Vec<_>>();
-    let placement_id_payload =
-        norito::to_bytes(&(pool_id, selection_seed_hash)).map_err(|err| {
-            invalid_parameter(format!("failed to encode hf placement_id payload: {err}"))
-        })?;
+    let placement_id = derive_hf_placement_id_v1(pool_id, selection_seed_hash)
+        .map_err(|err| invalid_parameter(err.to_string()))?;
     let mut placement = SoraHfPlacementRecordV1 {
         schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-        placement_id: Hash::new(placement_id_payload),
+        placement_id,
         source_id,
         pool_id,
         status: SoraHfPlacementStatusV1::Selecting,
@@ -11103,25 +11650,8 @@ fn enforce_service_upgrade_identity(
     current: &SoraDeploymentBundleV1,
     candidate: &SoraDeploymentBundleV1,
 ) -> Result<(), InstructionExecutionError> {
-    if candidate.service.execution_plane != current.service.execution_plane {
-        return Err(InstructionExecutionError::InvariantViolation(
-            "service upgrade cannot change execution_plane; deploy a distinct service identity"
-                .into(),
-        ));
-    }
-    if candidate.container.runtime != current.container.runtime {
-        return Err(InstructionExecutionError::InvariantViolation(
-            "service upgrade cannot change container runtime; deploy a distinct service identity"
-                .into(),
-        ));
-    }
-    if candidate.service.route != current.service.route {
-        return Err(InstructionExecutionError::InvariantViolation(
-            "service upgrade cannot change route identity; deploy a distinct service identity"
-                .into(),
-        ));
-    }
-    Ok(())
+    crate::soracloud_runtime::validate_soracloud_service_revision_identity(current, candidate)
+        .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))
 }
 fn enforce_service_mutation_precondition(
     action: SoraServiceLifecycleActionV1,
@@ -11382,11 +11912,32 @@ fn admit_bundle(
     let service_lease = build_http_service_lease_state(
         &bundle,
         existing.as_ref(),
-        sequence,
+        state_transaction.block_height(),
         action == SoraServiceLifecycleActionV1::Upgrade,
     )?;
     let lease_volume_states =
         build_http_service_lease_volume_states(&bundle, service_lease.as_ref(), existing.as_ref())?;
+    let audit_service_lease = service_lease.clone();
+    let config_snapshot_hash =
+        iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+            &service_configs,
+        );
+    let secret_snapshot_hash =
+        iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+            &service_secrets,
+        );
+    let config_mutations = service_configs
+        .values()
+        .filter(|entry| entry.last_update_sequence == sequence)
+        .cloned()
+        .map(SoraServiceConfigMutationV1::Upsert)
+        .collect();
+    let secret_mutations = service_secrets
+        .values()
+        .filter(|entry| entry.last_update_sequence == sequence)
+        .cloned()
+        .map(SoraServiceSecretMutationV1::Upsert)
+        .collect();
     insert_admitted_bundle(state_transaction, bundle.clone());
     record_deployment_state(
         state_transaction,
@@ -11418,24 +11969,37 @@ fn admit_bundle(
         SoraServiceAuditEventV1 {
             schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
             sequence,
+            block_height: state_transaction.block_height(),
+            block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
             action,
             service_name,
             from_version: previous_version,
             to_version: service_version,
             service_manifest_hash: current_service_manifest_hash,
             container_manifest_hash: current_container_manifest_hash,
+            process_generation,
+            config_generation,
+            secret_generation,
+            config_snapshot_hash,
+            secret_snapshot_hash,
             governance_tx_hash: None,
             binding_name: None,
             state_key: None,
-            config_name: None,
-            secret_name: None,
-            rollout_handle: last_rollout.map(|rollout| rollout.rollout_handle),
+            config_mutations,
+            secret_mutations,
+            rollout_state: last_rollout,
             policy_name: None,
             policy_snapshot_hash: None,
             jurisdiction_tag: None,
             consent_evidence_hash: None,
             break_glass: None,
             break_glass_reason: None,
+            lease_usage: None,
+
+            service_lease_commitment: audit_service_lease
+                .as_ref()
+                .map(derive_soracloud_service_lease_commitment_v1),
+
             lease_reporting_epoch_rollover: None,
             signer: provenance.signer,
         },
@@ -11773,7 +12337,17 @@ impl Execute for isi::RollbackSoracloudService {
                 .into(),
             ));
         }
+        let current_bundle = load_admitted_bundle(
+            state_transaction,
+            &self.service_name,
+            &existing.current_service_version,
+        )?;
         let bundle = load_admitted_bundle(state_transaction, &self.service_name, &target_version)?;
+        crate::soracloud_runtime::validate_soracloud_service_revision_identity(
+            &current_bundle,
+            &bundle,
+        )
+        .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
         bundle
             .validate_required_service_materials(
                 &existing.service_configs,
@@ -11783,13 +12357,23 @@ impl Execute for isi::RollbackSoracloudService {
         let process_generation =
             next_service_process_generation(&self.service_name, existing.process_generation)?;
         let sequence = next_soracloud_audit_sequence(state_transaction)?;
+        let block_height = state_transaction.block_height();
         let service_lease =
-            build_http_service_lease_state(&bundle, Some(&existing), sequence, false)?;
+            build_http_service_lease_state(&bundle, Some(&existing), block_height, false)?;
         let lease_volume_states = build_http_service_lease_volume_states(
             &bundle,
             service_lease.as_ref(),
             Some(&existing),
         )?;
+        let audit_service_lease = service_lease.clone();
+        let config_snapshot_hash =
+            iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                &existing.service_configs,
+            );
+        let secret_snapshot_hash =
+            iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                &existing.service_secrets,
+            );
         record_deployment_state(
             state_transaction,
             SoraServiceDeploymentStateV1 {
@@ -11817,24 +12401,37 @@ impl Execute for isi::RollbackSoracloudService {
             SoraServiceAuditEventV1 {
                 schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraServiceLifecycleActionV1::Rollback,
                 service_name: self.service_name,
                 from_version: Some(existing.current_service_version),
                 to_version: target_version,
                 service_manifest_hash: bundle.service_manifest_hash(),
                 container_manifest_hash: bundle.container_manifest_hash(),
+                process_generation,
+                config_generation: existing.config_generation,
+                secret_generation: existing.secret_generation,
+                config_snapshot_hash,
+                secret_snapshot_hash,
                 governance_tx_hash: None,
                 binding_name: None,
                 state_key: None,
-                config_name: None,
-                secret_name: None,
-                rollout_handle: None,
+                config_mutations: Vec::new(),
+                secret_mutations: Vec::new(),
+                rollout_state: None,
                 policy_name: None,
                 policy_snapshot_hash: None,
                 jurisdiction_tag: None,
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_usage: None,
+
+                service_lease_commitment: audit_service_lease
+                    .as_ref()
+                    .map(derive_soracloud_service_lease_commitment_v1),
+
                 lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
@@ -11863,29 +12460,55 @@ impl Execute for isi::SetSoracloudServiceConfig {
             Some(self.value_json),
             sequence,
         )?;
+        let config_entry = deployment
+            .service_configs
+            .get(&self.config_name)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "config upsert did not retain its authoritative entry".into(),
+                )
+            })?;
         record_audit_event(
             state_transaction,
             SoraServiceAuditEventV1 {
                 schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraServiceLifecycleActionV1::ConfigMutation,
                 service_name: self.service_name,
                 from_version: None,
                 to_version: deployment.current_service_version,
                 service_manifest_hash: bundle.service_manifest_hash(),
                 container_manifest_hash: bundle.container_manifest_hash(),
+                process_generation: deployment.process_generation,
+                config_generation: deployment.config_generation,
+                secret_generation: deployment.secret_generation,
+                config_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                        &deployment.service_configs,
+                    ),
+                secret_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                        &deployment.service_secrets,
+                    ),
                 governance_tx_hash: None,
                 binding_name: None,
                 state_key: None,
-                config_name: Some(self.config_name),
-                secret_name: None,
-                rollout_handle: None,
+                config_mutations: vec![SoraServiceConfigMutationV1::Upsert(config_entry)],
+                secret_mutations: Vec::new(),
+                rollout_state: None,
                 policy_name: None,
                 policy_snapshot_hash: None,
                 jurisdiction_tag: None,
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_usage: None,
+
+                service_lease_commitment: None,
+
                 lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
@@ -11918,24 +12541,41 @@ impl Execute for isi::DeleteSoracloudServiceConfig {
             SoraServiceAuditEventV1 {
                 schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraServiceLifecycleActionV1::ConfigMutation,
                 service_name: self.service_name,
                 from_version: None,
                 to_version: deployment.current_service_version,
                 service_manifest_hash: bundle.service_manifest_hash(),
                 container_manifest_hash: bundle.container_manifest_hash(),
+                process_generation: deployment.process_generation,
+                config_generation: deployment.config_generation,
+                secret_generation: deployment.secret_generation,
+                config_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                        &deployment.service_configs,
+                    ),
+                secret_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                        &deployment.service_secrets,
+                    ),
                 governance_tx_hash: None,
                 binding_name: None,
                 state_key: None,
-                config_name: Some(self.config_name),
-                secret_name: None,
-                rollout_handle: None,
+                config_mutations: vec![SoraServiceConfigMutationV1::Delete(self.config_name)],
+                secret_mutations: Vec::new(),
+                rollout_state: None,
                 policy_name: None,
                 policy_snapshot_hash: None,
                 jurisdiction_tag: None,
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_usage: None,
+
+                service_lease_commitment: None,
+
                 lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
@@ -11964,29 +12604,55 @@ impl Execute for isi::SetSoracloudServiceSecret {
             Some(self.secret),
             sequence,
         )?;
+        let secret_entry = deployment
+            .service_secrets
+            .get(&self.secret_name)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "secret upsert did not retain its authoritative entry".into(),
+                )
+            })?;
         record_audit_event(
             state_transaction,
             SoraServiceAuditEventV1 {
                 schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraServiceLifecycleActionV1::SecretMutation,
                 service_name: self.service_name,
                 from_version: None,
                 to_version: deployment.current_service_version,
                 service_manifest_hash: bundle.service_manifest_hash(),
                 container_manifest_hash: bundle.container_manifest_hash(),
+                process_generation: deployment.process_generation,
+                config_generation: deployment.config_generation,
+                secret_generation: deployment.secret_generation,
+                config_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                        &deployment.service_configs,
+                    ),
+                secret_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                        &deployment.service_secrets,
+                    ),
                 governance_tx_hash: None,
                 binding_name: None,
                 state_key: None,
-                config_name: None,
-                secret_name: Some(self.secret_name),
-                rollout_handle: None,
+                config_mutations: Vec::new(),
+                secret_mutations: vec![SoraServiceSecretMutationV1::Upsert(secret_entry)],
+                rollout_state: None,
                 policy_name: None,
                 policy_snapshot_hash: None,
                 jurisdiction_tag: None,
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_usage: None,
+
+                service_lease_commitment: None,
+
                 lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
@@ -12019,24 +12685,41 @@ impl Execute for isi::DeleteSoracloudServiceSecret {
             SoraServiceAuditEventV1 {
                 schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraServiceLifecycleActionV1::SecretMutation,
                 service_name: self.service_name,
                 from_version: None,
                 to_version: deployment.current_service_version,
                 service_manifest_hash: bundle.service_manifest_hash(),
                 container_manifest_hash: bundle.container_manifest_hash(),
+                process_generation: deployment.process_generation,
+                config_generation: deployment.config_generation,
+                secret_generation: deployment.secret_generation,
+                config_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                        &deployment.service_configs,
+                    ),
+                secret_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                        &deployment.service_secrets,
+                    ),
                 governance_tx_hash: None,
                 binding_name: None,
                 state_key: None,
-                config_name: None,
-                secret_name: Some(self.secret_name),
-                rollout_handle: None,
+                config_mutations: Vec::new(),
+                secret_mutations: vec![SoraServiceSecretMutationV1::Delete(self.secret_name)],
+                rollout_state: None,
                 policy_name: None,
                 policy_snapshot_hash: None,
                 jurisdiction_tag: None,
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_usage: None,
+
+                service_lease_commitment: None,
+
                 lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
@@ -12137,24 +12820,41 @@ impl Execute for isi::MutateSoracloudState {
             SoraServiceAuditEventV1 {
                 schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraServiceLifecycleActionV1::StateMutation,
                 service_name,
                 from_version: None,
                 to_version: deployment.current_service_version,
                 service_manifest_hash: bundle.service_manifest_hash(),
                 container_manifest_hash: bundle.container_manifest_hash(),
+                process_generation: deployment.process_generation,
+                config_generation: deployment.config_generation,
+                secret_generation: deployment.secret_generation,
+                config_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                        &deployment.service_configs,
+                    ),
+                secret_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                        &deployment.service_secrets,
+                    ),
                 governance_tx_hash: Some(governance_tx_hash),
                 binding_name: Some(binding_name),
                 state_key: Some(state_key),
-                config_name: None,
-                secret_name: None,
-                rollout_handle: None,
+                config_mutations: Vec::new(),
+                secret_mutations: Vec::new(),
+                rollout_state: None,
                 policy_name: None,
                 policy_snapshot_hash: None,
                 jurisdiction_tag: None,
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_usage: None,
+
+                service_lease_commitment: None,
+
                 lease_reporting_epoch_rollover: None,
                 signer: provenance.signer,
             },
@@ -12238,24 +12938,41 @@ impl Execute for isi::RegisterSoracloudFhePolicy {
             SoraServiceAuditEventV1 {
                 schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraServiceLifecycleActionV1::FhePolicyRegister,
                 service_name: self.service_name,
                 from_version: None,
                 to_version: deployment.current_service_version,
                 service_manifest_hash: bundle.service_manifest_hash(),
                 container_manifest_hash: bundle.container_manifest_hash(),
+                process_generation: deployment.process_generation,
+                config_generation: deployment.config_generation,
+                secret_generation: deployment.secret_generation,
+                config_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                        &deployment.service_configs,
+                    ),
+                secret_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                        &deployment.service_secrets,
+                    ),
                 governance_tx_hash: Some(transaction_hash),
                 binding_name: None,
                 state_key: None,
-                config_name: None,
-                secret_name: None,
-                rollout_handle: None,
+                config_mutations: Vec::new(),
+                secret_mutations: Vec::new(),
+                rollout_state: None,
                 policy_name: Some(policy_name),
                 policy_snapshot_hash: Some(material_digest),
                 jurisdiction_tag: None,
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_usage: None,
+
+                service_lease_commitment: None,
+
                 lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
@@ -12342,24 +13059,41 @@ impl Execute for isi::RotateSoracloudFhePolicy {
             SoraServiceAuditEventV1 {
                 schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraServiceLifecycleActionV1::FhePolicyRotate,
                 service_name: self.service_name,
                 from_version: None,
                 to_version: deployment.current_service_version,
                 service_manifest_hash: bundle.service_manifest_hash(),
                 container_manifest_hash: bundle.container_manifest_hash(),
+                process_generation: deployment.process_generation,
+                config_generation: deployment.config_generation,
+                secret_generation: deployment.secret_generation,
+                config_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                        &deployment.service_configs,
+                    ),
+                secret_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                        &deployment.service_secrets,
+                    ),
                 governance_tx_hash: Some(transaction_hash),
                 binding_name: None,
                 state_key: None,
-                config_name: None,
-                secret_name: None,
-                rollout_handle: None,
+                config_mutations: Vec::new(),
+                secret_mutations: Vec::new(),
+                rollout_state: None,
                 policy_name: Some(policy_name),
                 policy_snapshot_hash: Some(material_digest),
                 jurisdiction_tag: None,
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_usage: None,
+
+                service_lease_commitment: None,
+
                 lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
@@ -12412,24 +13146,41 @@ impl Execute for isi::RevokeSoracloudFhePolicy {
             SoraServiceAuditEventV1 {
                 schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraServiceLifecycleActionV1::FhePolicyRevoke,
                 service_name: self.service_name,
                 from_version: None,
                 to_version: deployment.current_service_version,
                 service_manifest_hash: bundle.service_manifest_hash(),
                 container_manifest_hash: bundle.container_manifest_hash(),
+                process_generation: deployment.process_generation,
+                config_generation: deployment.config_generation,
+                secret_generation: deployment.secret_generation,
+                config_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                        &deployment.service_configs,
+                    ),
+                secret_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                        &deployment.service_secrets,
+                    ),
                 governance_tx_hash: Some(transaction_hash),
                 binding_name: None,
                 state_key: None,
-                config_name: None,
-                secret_name: None,
-                rollout_handle: None,
+                config_mutations: Vec::new(),
+                secret_mutations: Vec::new(),
+                rollout_state: None,
                 policy_name: Some(policy_name),
                 policy_snapshot_hash: Some(self.expected_active.material_digest),
                 jurisdiction_tag: None,
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_usage: None,
+
+                service_lease_commitment: None,
+
                 lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
@@ -12708,24 +13459,41 @@ impl Execute for isi::RunSoracloudFheJob {
             SoraServiceAuditEventV1 {
                 schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraServiceLifecycleActionV1::FheJobRun,
                 service_name: self.service_name,
                 from_version: None,
                 to_version: deployment.current_service_version,
                 service_manifest_hash: bundle.service_manifest_hash(),
                 container_manifest_hash: bundle.container_manifest_hash(),
+                process_generation: deployment.process_generation,
+                config_generation: deployment.config_generation,
+                secret_generation: deployment.secret_generation,
+                config_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                        &deployment.service_configs,
+                    ),
+                secret_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                        &deployment.service_secrets,
+                    ),
                 governance_tx_hash: Some(governance_tx_hash),
                 binding_name: Some(self.binding_name),
                 state_key: Some(output_state_key),
-                config_name: None,
-                secret_name: None,
-                rollout_handle: None,
+                config_mutations: Vec::new(),
+                secret_mutations: Vec::new(),
+                rollout_state: None,
                 policy_name: Some(policy_name),
                 policy_snapshot_hash: Some(material_digest),
                 jurisdiction_tag: None,
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_usage: None,
+
+                service_lease_commitment: None,
+
                 lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
@@ -12827,24 +13595,41 @@ impl Execute for isi::RecordSoracloudDecryptionRequest {
             SoraServiceAuditEventV1 {
                 schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraServiceLifecycleActionV1::DecryptionRequest,
                 service_name: self.service_name,
                 from_version: None,
                 to_version: deployment.current_service_version,
                 service_manifest_hash: bundle.service_manifest_hash(),
                 container_manifest_hash: bundle.container_manifest_hash(),
+                process_generation: deployment.process_generation,
+                config_generation: deployment.config_generation,
+                secret_generation: deployment.secret_generation,
+                config_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                        &deployment.service_configs,
+                    ),
+                secret_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                        &deployment.service_secrets,
+                    ),
                 governance_tx_hash: Some(self.request.governance_tx_hash),
                 binding_name: Some(self.request.binding_name.clone()),
                 state_key: Some(self.request.state_key.clone()),
-                config_name: None,
-                secret_name: None,
-                rollout_handle: None,
+                config_mutations: Vec::new(),
+                secret_mutations: Vec::new(),
+                rollout_state: None,
                 policy_name: Some(self.request.policy_name.clone()),
                 policy_snapshot_hash: Some(policy_snapshot_hash),
                 jurisdiction_tag: Some(self.request.jurisdiction_tag.clone()),
                 consent_evidence_hash: self.request.consent_evidence_hash,
                 break_glass: Some(self.request.break_glass),
                 break_glass_reason: self.request.break_glass_reason,
+                lease_usage: None,
+
+                service_lease_commitment: None,
+
                 lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
@@ -13796,16 +14581,7 @@ impl Execute for isi::AdvertiseSoracloudModelHost {
         capability
             .validate()
             .map_err(|err| invalid_parameter(err.to_string()))?;
-        if !crate::soracloud_runtime::soracloud_validator_peer_is_active(
-            &state_transaction.world,
-            authority,
-            &capability.peer_id,
-            |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
-        ) {
-            return Err(invalid_parameter(
-                "model host capability peer_id must exactly match the validator's active on-chain peer binding",
-            ));
-        }
+        require_hf_model_host_peer_binding(authority, &capability.peer_id, state_transaction)?;
         verify_model_host_advertise_provenance(authority, &capability, &provenance)?;
         let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
         reconcile_unavailable_model_hosts(state_transaction, now_ms)?;
@@ -14026,15 +14802,15 @@ impl Execute for isi::DeploySoracloudAgentApartment {
     ) -> Result<(), InstructionExecutionError> {
         let isi::DeploySoracloudAgentApartment {
             manifest,
-            lease_ticks,
+            lease_blocks,
             autonomy_budget_units,
             provenance,
         } = self;
         require_soracloud_permission(authority, state_transaction)?;
         let payload = encode_agent_deploy_provenance_payload(
             manifest.clone(),
-            lease_ticks,
-            Some(autonomy_budget_units),
+            lease_blocks,
+            autonomy_budget_units,
         )
         .map_err(|err| {
             invalid_parameter(format!("failed to encode agent deploy provenance: {err}"))
@@ -14049,8 +14825,8 @@ impl Execute for isi::DeploySoracloudAgentApartment {
         manifest
             .validate()
             .map_err(|err| invalid_parameter(err.to_string()))?;
-        if lease_ticks == 0 {
-            return Err(invalid_parameter("lease_ticks must be greater than zero"));
+        if lease_blocks == 0 {
+            return Err(invalid_parameter("lease_blocks must be greater than zero"));
         }
         if autonomy_budget_units == 0 {
             return Err(invalid_parameter(
@@ -14069,17 +14845,20 @@ impl Execute for isi::DeploySoracloudAgentApartment {
                 format!("apartment `{apartment_name}` is already deployed").into(),
             ));
         }
+        let block_height = state_transaction.block_height();
+        let lease_expires_height = block_height
+            .checked_add(lease_blocks)
+            .ok_or_else(|| invalid_parameter("agent apartment lease expiry height overflowed"))?;
         let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let manifest_hash = Hash::new(Encode::encode(&manifest));
         let record = SoraAgentApartmentRecordV1 {
             schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
             manifest,
             manifest_hash,
-            status: SoraAgentRuntimeStatusV1::Running,
             deployed_sequence: sequence,
-            lease_started_sequence: sequence,
-            lease_expires_sequence: sequence.saturating_add(lease_ticks),
-            last_renewed_sequence: sequence,
+            lease_started_height: block_height,
+            lease_expires_height,
+            last_renewed_height: block_height,
             restart_count: 0,
             last_restart_sequence: None,
             last_restart_reason: None,
@@ -14107,10 +14886,12 @@ impl Execute for isi::DeploySoracloudAgentApartment {
             SoraAgentApartmentAuditEventV1 {
                 schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraAgentApartmentActionV1::Deploy,
                 apartment_name,
-                status: agent_runtime_status_for_sequence(&record, sequence.saturating_add(1)),
-                lease_expires_sequence: record.lease_expires_sequence,
+                status: record.runtime_status_at_current_height(state_transaction.block_height()),
+                lease_expires_height: record.lease_expires_height,
                 manifest_hash,
                 restart_count: 0,
                 signer: provenance.signer,
@@ -14148,12 +14929,12 @@ impl Execute for isi::RenewSoracloudAgentLease {
     ) -> Result<(), InstructionExecutionError> {
         let isi::RenewSoracloudAgentLease {
             apartment_name,
-            lease_ticks,
+            lease_blocks,
             provenance,
         } = self;
         require_soracloud_permission(authority, state_transaction)?;
         let payload =
-            encode_agent_lease_renew_provenance_payload(apartment_name.as_ref(), lease_ticks)
+            encode_agent_lease_renew_provenance_payload(apartment_name.as_ref(), lease_blocks)
                 .map_err(|err| {
                     invalid_parameter(format!(
                         "failed to encode agent lease renew provenance: {err}"
@@ -14166,11 +14947,11 @@ impl Execute for isi::RenewSoracloudAgentLease {
             "agent lease renew provenance signer must match the transaction authority",
             "agent lease renew provenance signature verification failed",
         )?;
-        if lease_ticks == 0 {
-            return Err(invalid_parameter("lease_ticks must be greater than zero"));
+        if lease_blocks == 0 {
+            return Err(invalid_parameter("lease_blocks must be greater than zero"));
         }
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction)?;
+        let block_height = state_transaction.block_height();
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -14181,10 +14962,12 @@ impl Execute for isi::RenewSoracloudAgentLease {
                     format!("apartment `{apartment_name}` is not deployed").into(),
                 )
             })?;
-        let base = record.lease_expires_sequence.max(sequence);
-        record.lease_expires_sequence = base.saturating_add(lease_ticks);
-        record.last_renewed_sequence = sequence;
-        record.status = SoraAgentRuntimeStatusV1::Running;
+        let base = record.lease_expires_height.max(block_height);
+        record.lease_expires_height = base.checked_add(lease_blocks).ok_or_else(|| {
+            invalid_parameter("agent apartment lease renewal expiry height overflowed")
+        })?;
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
+        record.last_renewed_height = block_height;
         touch_agent_runtime_activity(&mut record, sequence);
         record_agent_apartment(state_transaction, apartment_key, record.clone())?;
         record_agent_apartment_audit_event(
@@ -14192,10 +14975,12 @@ impl Execute for isi::RenewSoracloudAgentLease {
             SoraAgentApartmentAuditEventV1 {
                 schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraAgentApartmentActionV1::LeaseRenew,
                 apartment_name,
-                status: agent_runtime_status_for_sequence(&record, sequence.saturating_add(1)),
-                lease_expires_sequence: record.lease_expires_sequence,
+                status: record.runtime_status_at_current_height(state_transaction.block_height()),
+                lease_expires_height: record.lease_expires_height,
                 manifest_hash: record.manifest_hash,
                 restart_count: record.restart_count,
                 signer: provenance.signer,
@@ -14267,18 +15052,17 @@ impl Execute for isi::RestartSoracloudAgentApartment {
                     format!("apartment `{apartment_name}` is not deployed").into(),
                 )
             })?;
-        if agent_runtime_status_for_sequence(&record, sequence)
+        if record.runtime_status_at_current_height(state_transaction.block_height())
             == SoraAgentRuntimeStatusV1::LeaseExpired
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "apartment `{apartment_name}` lease expired at sequence {}; renew before restart",
-                    record.lease_expires_sequence
+                    "apartment `{apartment_name}` lease expired at consensus height {}; renew before restart",
+                    record.lease_expires_height
                 )
                 .into(),
             ));
         }
-        record.status = SoraAgentRuntimeStatusV1::Running;
         record.restart_count = record.restart_count.saturating_add(1);
         record.last_restart_sequence = Some(sequence);
         record.last_restart_reason = Some(normalized_reason.clone());
@@ -14291,10 +15075,12 @@ impl Execute for isi::RestartSoracloudAgentApartment {
             SoraAgentApartmentAuditEventV1 {
                 schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraAgentApartmentActionV1::Restart,
                 apartment_name,
-                status: agent_runtime_status_for_sequence(&record, sequence.saturating_add(1)),
-                lease_expires_sequence: record.lease_expires_sequence,
+                status: record.runtime_status_at_current_height(state_transaction.block_height()),
+                lease_expires_height: record.lease_expires_height,
                 manifest_hash: record.manifest_hash,
                 restart_count: record.restart_count,
                 signer: provenance.signer,
@@ -14406,10 +15192,12 @@ impl Execute for isi::RevokeSoracloudAgentPolicy {
             SoraAgentApartmentAuditEventV1 {
                 schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraAgentApartmentActionV1::PolicyRevoked,
                 apartment_name,
-                status: agent_runtime_status_for_sequence(&record, sequence.saturating_add(1)),
-                lease_expires_sequence: record.lease_expires_sequence,
+                status: record.runtime_status_at_current_height(state_transaction.block_height()),
+                lease_expires_height: record.lease_expires_height,
                 manifest_hash: record.manifest_hash,
                 restart_count: record.restart_count,
                 signer: provenance.signer,
@@ -14497,13 +15285,13 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
                     format!("apartment `{apartment_name}` is not deployed").into(),
                 )
             })?;
-        if agent_runtime_status_for_sequence(&record, sequence)
+        if record.runtime_status_at_current_height(state_transaction.block_height())
             == SoraAgentRuntimeStatusV1::LeaseExpired
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "apartment `{apartment_name}` lease expired at sequence {}; renew before wallet actions",
-                    record.lease_expires_sequence
+                    "apartment `{apartment_name}` lease expired at consensus height {}; renew before wallet actions",
+                    record.lease_expires_height
                 )
                 .into(),
             ));
@@ -14532,7 +15320,7 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
                 .into(),
             ));
         }
-        let day_bucket = wallet_day_bucket(sequence);
+        let day_bucket = wallet_day_bucket(state_transaction.block_unix_timestamp_ms());
         let current_day_spent = wallet_day_spent(&record, &canonical_asset_definition, day_bucket);
         let projected_day_spent = current_day_spent.checked_add(&amount).map_err(|error| {
             invalid_quantity_arithmetic(
@@ -14577,10 +15365,12 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
             SoraAgentApartmentAuditEventV1 {
                 schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action,
                 apartment_name,
-                status: agent_runtime_status_for_sequence(&record, sequence.saturating_add(1)),
-                lease_expires_sequence: record.lease_expires_sequence,
+                status: record.runtime_status_at_current_height(state_transaction.block_height()),
+                lease_expires_height: record.lease_expires_height,
                 manifest_hash: record.manifest_hash,
                 restart_count: record.restart_count,
                 signer: provenance.signer,
@@ -14654,13 +15444,13 @@ impl Execute for isi::ApproveSoracloudAgentWalletSpend {
                     format!("apartment `{apartment_name}` is not deployed").into(),
                 )
             })?;
-        if agent_runtime_status_for_sequence(&record, sequence)
+        if record.runtime_status_at_current_height(state_transaction.block_height())
             == SoraAgentRuntimeStatusV1::LeaseExpired
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "apartment `{apartment_name}` lease expired at sequence {}; renew before wallet actions",
-                    record.lease_expires_sequence
+                    "apartment `{apartment_name}` lease expired at consensus height {}; renew before wallet actions",
+                    record.lease_expires_height
                 )
                 .into(),
             ));
@@ -14697,7 +15487,7 @@ impl Execute for isi::ApproveSoracloudAgentWalletSpend {
         )?;
         assert_numeric_spec_with(spend_limit.max_per_tx.as_numeric(), asset_numeric_spec)?;
         assert_numeric_spec_with(spend_limit.max_per_day.as_numeric(), asset_numeric_spec)?;
-        let day_bucket = wallet_day_bucket(sequence);
+        let day_bucket = wallet_day_bucket(state_transaction.block_unix_timestamp_ms());
         let current_day_spent = wallet_day_spent(&record, &pending.asset_definition, day_bucket);
         let projected_day_spent =
             current_day_spent
@@ -14734,10 +15524,12 @@ impl Execute for isi::ApproveSoracloudAgentWalletSpend {
             SoraAgentApartmentAuditEventV1 {
                 schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraAgentApartmentActionV1::WalletSpendApproved,
                 apartment_name,
-                status: agent_runtime_status_for_sequence(&record, sequence.saturating_add(1)),
-                lease_expires_sequence: record.lease_expires_sequence,
+                status: record.runtime_status_at_current_height(state_transaction.block_height()),
+                lease_expires_height: record.lease_expires_height,
                 manifest_hash: record.manifest_hash,
                 restart_count: record.restart_count,
                 signer: provenance.signer,
@@ -14827,13 +15619,13 @@ impl Execute for isi::EnqueueSoracloudAgentMessage {
                     format!("apartment `{from_apartment}` is not deployed").into(),
                 )
             })?;
-        if agent_runtime_status_for_sequence(&sender, sequence)
+        if sender.runtime_status_at_current_height(state_transaction.block_height())
             == SoraAgentRuntimeStatusV1::LeaseExpired
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "sender apartment `{from_apartment}` lease expired at sequence {}; renew before messaging",
-                    sender.lease_expires_sequence
+                    "sender apartment `{from_apartment}` lease expired at consensus height {}; renew before messaging",
+                    sender.lease_expires_height
                 )
                 .into(),
             ));
@@ -14865,8 +15657,8 @@ impl Execute for isi::EnqueueSoracloudAgentMessage {
             });
             touch_agent_runtime_activity(&mut sender, sequence);
             let event_status =
-                agent_runtime_status_for_sequence(&sender, sequence.saturating_add(1));
-            let lease_expires_sequence = sender.lease_expires_sequence;
+                sender.runtime_status_at_current_height(state_transaction.block_height());
+            let lease_expires_height = sender.lease_expires_height;
             let manifest_hash = sender.manifest_hash;
             let restart_count = sender.restart_count;
             record_agent_apartment(state_transaction, from_key.clone(), sender)?;
@@ -14875,10 +15667,12 @@ impl Execute for isi::EnqueueSoracloudAgentMessage {
                 SoraAgentApartmentAuditEventV1 {
                     schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
                     sequence,
+                    block_height: state_transaction.block_height(),
+                    block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                     action: SoraAgentApartmentActionV1::MessageEnqueued,
                     apartment_name: to_apartment,
                     status: event_status,
-                    lease_expires_sequence,
+                    lease_expires_height,
                     manifest_hash,
                     restart_count,
                     signer: provenance.signer,
@@ -14917,13 +15711,13 @@ impl Execute for isi::EnqueueSoracloudAgentMessage {
                     format!("apartment `{to_apartment}` is not deployed").into(),
                 )
             })?;
-        if agent_runtime_status_for_sequence(&recipient, sequence)
+        if recipient.runtime_status_at_current_height(state_transaction.block_height())
             == SoraAgentRuntimeStatusV1::LeaseExpired
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "recipient apartment `{to_apartment}` lease expired at sequence {}; renew before messaging",
-                    recipient.lease_expires_sequence
+                    "recipient apartment `{to_apartment}` lease expired at consensus height {}; renew before messaging",
+                    recipient.lease_expires_height
                 )
                 .into(),
             ));
@@ -14947,8 +15741,8 @@ impl Execute for isi::EnqueueSoracloudAgentMessage {
         touch_agent_runtime_activity(&mut sender, sequence);
         touch_agent_runtime_activity(&mut recipient, sequence);
         let event_status =
-            agent_runtime_status_for_sequence(&recipient, sequence.saturating_add(1));
-        let lease_expires_sequence = recipient.lease_expires_sequence;
+            recipient.runtime_status_at_current_height(state_transaction.block_height());
+        let lease_expires_height = recipient.lease_expires_height;
         let manifest_hash = recipient.manifest_hash;
         let restart_count = recipient.restart_count;
         record_agent_apartment(state_transaction, from_key.clone(), sender)?;
@@ -14958,10 +15752,12 @@ impl Execute for isi::EnqueueSoracloudAgentMessage {
             SoraAgentApartmentAuditEventV1 {
                 schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraAgentApartmentActionV1::MessageEnqueued,
                 apartment_name: to_apartment,
                 status: event_status,
-                lease_expires_sequence,
+                lease_expires_height,
                 manifest_hash,
                 restart_count,
                 signer: provenance.signer,
@@ -15035,13 +15831,13 @@ impl Execute for isi::AcknowledgeSoracloudAgentMessage {
                     format!("apartment `{apartment_name}` is not deployed").into(),
                 )
             })?;
-        if agent_runtime_status_for_sequence(&record, sequence)
+        if record.runtime_status_at_current_height(state_transaction.block_height())
             == SoraAgentRuntimeStatusV1::LeaseExpired
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "apartment `{apartment_name}` lease expired at sequence {}; renew before mailbox actions",
-                    record.lease_expires_sequence
+                    "apartment `{apartment_name}` lease expired at consensus height {}; renew before mailbox actions",
+                    record.lease_expires_height
                 )
                 .into(),
             ));
@@ -15078,10 +15874,12 @@ impl Execute for isi::AcknowledgeSoracloudAgentMessage {
             SoraAgentApartmentAuditEventV1 {
                 schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraAgentApartmentActionV1::MessageAcknowledged,
                 apartment_name,
-                status: agent_runtime_status_for_sequence(&record, sequence.saturating_add(1)),
-                lease_expires_sequence: record.lease_expires_sequence,
+                status: record.runtime_status_at_current_height(state_transaction.block_height()),
+                lease_expires_height: record.lease_expires_height,
                 manifest_hash: record.manifest_hash,
                 restart_count: record.restart_count,
                 signer: provenance.signer,
@@ -15156,13 +15954,13 @@ impl Execute for isi::AllowSoracloudAgentAutonomyArtifact {
                     format!("apartment `{apartment_name}` is not deployed").into(),
                 )
             })?;
-        if agent_runtime_status_for_sequence(&record, sequence)
+        if record.runtime_status_at_current_height(state_transaction.block_height())
             == SoraAgentRuntimeStatusV1::LeaseExpired
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "apartment `{apartment_name}` lease expired at sequence {}; renew before autonomy actions",
-                    record.lease_expires_sequence
+                    "apartment `{apartment_name}` lease expired at consensus height {}; renew before autonomy actions",
+                    record.lease_expires_height
                 )
                 .into(),
             ));
@@ -15204,10 +16002,12 @@ impl Execute for isi::AllowSoracloudAgentAutonomyArtifact {
             SoraAgentApartmentAuditEventV1 {
                 schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraAgentApartmentActionV1::ArtifactAllowed,
                 apartment_name,
-                status: agent_runtime_status_for_sequence(&record, sequence.saturating_add(1)),
-                lease_expires_sequence: record.lease_expires_sequence,
+                status: record.runtime_status_at_current_height(state_transaction.block_height()),
+                lease_expires_height: record.lease_expires_height,
                 manifest_hash: record.manifest_hash,
                 restart_count: record.restart_count,
                 signer: provenance.signer,
@@ -15294,13 +16094,13 @@ impl Execute for isi::RunSoracloudAgentAutonomy {
                     format!("apartment `{apartment_name}` is not deployed").into(),
                 )
             })?;
-        if agent_runtime_status_for_sequence(&record, sequence)
+        if record.runtime_status_at_current_height(state_transaction.block_height())
             == SoraAgentRuntimeStatusV1::LeaseExpired
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "apartment `{apartment_name}` lease expired at sequence {}; renew before autonomy actions",
-                    record.lease_expires_sequence
+                    "apartment `{apartment_name}` lease expired at consensus height {}; renew before autonomy actions",
+                    record.lease_expires_height
                 )
                 .into(),
             ));
@@ -15415,10 +16215,12 @@ impl Execute for isi::RunSoracloudAgentAutonomy {
             SoraAgentApartmentAuditEventV1 {
                 schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action: SoraAgentApartmentActionV1::AutonomyRunApproved,
                 apartment_name,
-                status: agent_runtime_status_for_sequence(&record, sequence.saturating_add(1)),
-                lease_expires_sequence: record.lease_expires_sequence,
+                status: record.runtime_status_at_current_height(state_transaction.block_height()),
+                lease_expires_height: record.lease_expires_height,
                 manifest_hash: record.manifest_hash,
                 restart_count: record.restart_count,
                 signer: provenance.signer,
@@ -15545,44 +16347,109 @@ impl Execute for isi::RecordSoracloudAgentAutonomyExecution {
                 .into(),
             ));
         }
+        if state_transaction
+            .world
+            .soracloud_agent_apartment_audit_events
+            .iter()
+            .any(|(_sequence, event)| {
+                event.action == SoraAgentApartmentActionV1::AutonomyRunExecuted
+                    && event.apartment_name == apartment_name
+                    && event.run_id.as_deref() == Some(normalized_run_id)
+            })
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "run `{normalized_run_id}` for apartment `{apartment_name}` already has an authoritative execution outcome"
+                )
+                .into(),
+            ));
+        }
+        let runtime_receipt = runtime_receipt_id
+            .map(|receipt_id| {
+                state_transaction
+                    .world
+                    .soracloud_runtime_receipts
+                    .get(&receipt_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "autonomy execution references missing runtime receipt `{receipt_id}`"
+                            )
+                            .into(),
+                        )
+                    })
+            })
+            .transpose()?;
+        if let Some(receipt) = runtime_receipt.as_ref() {
+            if !succeeded
+                || receipt.mailbox_message_id.is_some()
+                || receipt.emitted_sequence >= sequence
+                || service_name.as_ref() != Some(&receipt.service_name)
+                || service_version.as_deref() != Some(receipt.service_version.as_str())
+                || handler_name.as_ref() != Some(&receipt.handler_name)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "successful autonomy execution must exactly bind a prior local-read runtime receipt and its service revision/handler"
+                        .into(),
+                ));
+            }
+            if state_transaction
+                .world
+                .soracloud_agent_apartment_audit_events
+                .iter()
+                .any(|(_sequence, event)| event.runtime_receipt_id == Some(receipt.receipt_id))
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "runtime receipt `{}` is already bound to an autonomy execution",
+                        receipt.receipt_id
+                    )
+                    .into(),
+                ));
+            }
+        }
+        let event = SoraAgentApartmentAuditEventV1 {
+            schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
+            sequence,
+            block_height: state_transaction.block_height(),
+            block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
+            action: SoraAgentApartmentActionV1::AutonomyRunExecuted,
+            apartment_name,
+            status: record.runtime_status_at_current_height(state_transaction.block_height()),
+            lease_expires_height: record.lease_expires_height,
+            manifest_hash: record.manifest_hash,
+            restart_count: record.restart_count,
+            signer: single_signatory_authority(authority)?.clone(),
+            request_id: Some(normalized_run_id.to_owned()),
+            asset_definition: None,
+            amount: None,
+            capability: None,
+            reason: error,
+            from_apartment: None,
+            to_apartment: None,
+            channel: None,
+            payload_hash: None,
+            artifact_hash: Some(run.artifact_hash),
+            provenance_hash: run.provenance_hash,
+            run_id: Some(normalized_run_id.to_owned()),
+            run_label: Some(run.run_label),
+            budget_units: Some(run.budget_units),
+            service_name: service_name.map(|value| value.to_string()),
+            service_version,
+            handler_name: handler_name.map(|value| value.to_string()),
+            result_commitment: Some(result_commitment),
+            runtime_receipt_id,
+            journal_artifact_hash,
+            checkpoint_artifact_hash,
+            succeeded: Some(succeeded),
+        };
+        event
+            .validate()
+            .map_err(|error| invalid_parameter(error.to_string()))?;
         touch_agent_runtime_activity(&mut record, sequence);
-        record_agent_apartment(state_transaction, apartment_key, record.clone())?;
-        record_agent_apartment_audit_event(
-            state_transaction,
-            SoraAgentApartmentAuditEventV1 {
-                schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
-                sequence,
-                action: SoraAgentApartmentActionV1::AutonomyRunExecuted,
-                apartment_name,
-                status: agent_runtime_status_for_sequence(&record, sequence.saturating_add(1)),
-                lease_expires_sequence: record.lease_expires_sequence,
-                manifest_hash: record.manifest_hash,
-                restart_count: record.restart_count,
-                signer: single_signatory_authority(authority)?.clone(),
-                request_id: Some(normalized_run_id.to_owned()),
-                asset_definition: None,
-                amount: None,
-                capability: None,
-                reason: error,
-                from_apartment: None,
-                to_apartment: None,
-                channel: None,
-                payload_hash: None,
-                artifact_hash: Some(run.artifact_hash),
-                provenance_hash: run.provenance_hash,
-                run_id: Some(normalized_run_id.to_owned()),
-                run_label: Some(run.run_label),
-                budget_units: Some(run.budget_units),
-                service_name: service_name.map(|value| value.to_string()),
-                service_version,
-                handler_name: handler_name.map(|value| value.to_string()),
-                result_commitment: Some(result_commitment),
-                runtime_receipt_id,
-                journal_artifact_hash,
-                checkpoint_artifact_hash,
-                succeeded: Some(succeeded),
-            },
-        )
+        record_agent_apartment(state_transaction, apartment_key, record)?;
+        record_agent_apartment_audit_event(state_transaction, event)
     }
 }
 impl Execute for isi::StartSoracloudTrainingJob {
@@ -16709,7 +17576,13 @@ impl Execute for isi::FinalizeSoracloudUploadedModelBundle {
             provenance_attestation_hash,
             &provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction)?;
+        ensure_soracloud_audit_sequence_capacity(state_transaction, 2)?;
+        let weight_sequence = next_soracloud_audit_sequence(state_transaction)?;
+        let artifact_sequence = weight_sequence.checked_add(1).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "Soracloud audit sequence is exhausted".into(),
+            )
+        })?;
         let (deployment, service_bundle) = load_active_bundle(state_transaction, &service_name)?;
         if !service_allows_uploaded_model_plane(&service_bundle) {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -16767,7 +17640,7 @@ impl Execute for isi::FinalizeSoracloudUploadedModelBundle {
                 service_version: deployment.current_service_version.clone(),
                 model_name: model_name.clone(),
                 current_version: None,
-                updated_sequence: sequence,
+                updated_sequence: weight_sequence,
             });
         let existing_versions = state_transaction
             .world
@@ -16805,7 +17678,7 @@ impl Execute for isi::FinalizeSoracloudUploadedModelBundle {
         };
         registry_record.service_version = deployment.current_service_version.clone();
         registry_record.current_version = Some(weight_version.clone());
-        registry_record.updated_sequence = sequence;
+        registry_record.updated_sequence = weight_sequence;
         record_model_weight_version(
             state_transaction,
             SoraModelWeightVersionRecordV1 {
@@ -16825,7 +17698,7 @@ impl Execute for isi::FinalizeSoracloudUploadedModelBundle {
                 training_config_hash,
                 reproducibility_hash,
                 provenance_attestation_hash,
-                registered_sequence: sequence,
+                registered_sequence: weight_sequence,
                 promoted_sequence: None,
                 gate_report_hash: None,
                 promoted_by: None,
@@ -16851,7 +17724,7 @@ impl Execute for isi::FinalizeSoracloudUploadedModelBundle {
                 training_config_hash,
                 reproducibility_hash,
                 provenance_attestation_hash,
-                registered_sequence: sequence,
+                registered_sequence: artifact_sequence,
                 consumed_by_version: Some(weight_version.clone()),
                 chunk_manifest_root: Some(bundle_record.chunk_manifest_root),
             },
@@ -16860,7 +17733,7 @@ impl Execute for isi::FinalizeSoracloudUploadedModelBundle {
             state_transaction,
             SoraModelWeightAuditEventV1 {
                 schema_version: SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1,
-                sequence,
+                sequence: weight_sequence,
                 action: SoraModelWeightActionV1::Register,
                 service_name: service_name.clone(),
                 service_version: deployment.current_service_version.clone(),
@@ -16877,7 +17750,7 @@ impl Execute for isi::FinalizeSoracloudUploadedModelBundle {
             state_transaction,
             SoraModelArtifactAuditEventV1 {
                 schema_version: SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1,
-                sequence,
+                sequence: artifact_sequence,
                 action: SoraModelArtifactActionV1::Register,
                 service_name,
                 service_version: deployment.current_service_version,
@@ -17020,30 +17893,52 @@ impl Execute for isi::AdvanceSoracloudRollout {
                 deployment.last_rollout = Some(rollout.clone());
             }
         }
+        let process_generation = deployment.process_generation;
+        let config_generation = deployment.config_generation;
+        let secret_generation = deployment.secret_generation;
+        let config_snapshot_hash =
+            iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                &deployment.service_configs,
+            );
+        let secret_snapshot_hash =
+            iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                &deployment.service_secrets,
+            );
         record_deployment_state(state_transaction, deployment)?;
         record_audit_event(
             state_transaction,
             SoraServiceAuditEventV1 {
                 schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
                 sequence,
+                block_height: state_transaction.block_height(),
+                block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
                 action,
                 service_name: self.service_name,
                 from_version: Some(current_version),
                 to_version,
                 service_manifest_hash,
                 container_manifest_hash,
+                process_generation,
+                config_generation,
+                secret_generation,
+                config_snapshot_hash,
+                secret_snapshot_hash,
                 governance_tx_hash: Some(self.governance_tx_hash),
                 binding_name: None,
                 state_key: None,
-                config_name: None,
-                secret_name: None,
-                rollout_handle: Some(self.rollout_handle),
+                config_mutations: Vec::new(),
+                secret_mutations: Vec::new(),
+                rollout_state: Some(rollout),
                 policy_name: None,
                 policy_snapshot_hash: None,
                 jurisdiction_tag: None,
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_usage: None,
+
+                service_lease_commitment: None,
+
                 lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
@@ -17132,9 +18027,9 @@ impl Execute for isi::SetSoracloudInrouReplicaRuntimeState {
         }
         let checkpoint = lease.egress_reporter_checkpoints.iter().find(|checkpoint| {
             checkpoint.reporting_epoch == state.reporting_epoch
-                && checkpoint.active_service_version == state.service_version
-                && checkpoint.replica_slot == state.replica_slot
-                && checkpoint.validator_account_id == *authority
+                && checkpoint.assignment.service_version == state.service_version
+                && checkpoint.assignment.placement.replica_slot == state.replica_slot
+                && checkpoint.assignment.placement.validator_account_id == *authority
         });
         if matches!(
             state.health_status,
@@ -17242,17 +18137,17 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
                 "reporting_epoch must be greater than zero".to_string(),
             ));
         }
-        if self.lease_started_sequence == 0 {
+        if self.lease_started_height == 0 {
             return Err(invalid_parameter(
-                "lease_started_sequence must be greater than zero".to_string(),
+                "lease_started_height must be greater than zero".to_string(),
             ));
         }
-        let (current_lease_started_sequence, current_reporting_epoch) = state_transaction
+        let (current_lease_started_height, current_reporting_epoch) = state_transaction
             .world
             .soracloud_service_deployments
             .get(&self.service_name)
             .and_then(|deployment| deployment.service_lease.as_ref())
-            .map(|lease| (lease.lease_started_sequence, lease.reporting_epoch))
+            .map(|lease| (lease.lease_started_height, lease.reporting_epoch))
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
@@ -17262,10 +18157,10 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
                     .into(),
                 )
             })?;
-        if self.lease_started_sequence != current_lease_started_sequence {
+        if self.lease_started_height != current_lease_started_height {
             return Err(invalid_parameter(format!(
-                "service `{}` lease-incarnation CAS expected {current_lease_started_sequence}, got {}",
-                self.service_name, self.lease_started_sequence
+                "service `{}` lease-incarnation CAS expected height {current_lease_started_height}, got {}",
+                self.service_name, self.lease_started_height
             )));
         }
         let assignment = resolve_active_inrou_replica_assignment(
@@ -17303,9 +18198,9 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
                 .is_some_and(|lease| {
                     lease.egress_reporter_checkpoints.iter().any(|checkpoint| {
                         checkpoint.reporting_epoch == self.reporting_epoch
-                            && checkpoint.active_service_version == self.active_service_version
-                            && checkpoint.replica_slot == self.replica_slot
-                            && checkpoint.validator_account_id == *authority
+                            && checkpoint.assignment.service_version == self.active_service_version
+                            && checkpoint.assignment.placement.replica_slot == self.replica_slot
+                            && checkpoint.assignment.placement.validator_account_id == *authority
                     })
                 });
             if !admitted_former_reporter {
@@ -17327,7 +18222,7 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
             state_transaction,
             authority,
             self.service_name,
-            self.lease_started_sequence,
+            self.lease_started_height,
             self.reporting_epoch,
             self.active_service_version,
             self.replica_slot,
@@ -17366,28 +18261,343 @@ impl Execute for isi::RecordSoracloudMailboxMessage {
         write_soracloud_mailbox_message(state_transaction, self.message)
     }
 }
+impl Execute for isi::ApplySoracloudOrderedMailboxResult {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        require_consensus_verified_ordered_mailbox_execution()?;
+        let result = self.result;
+        result
+            .validate_submission()
+            .map_err(|error| invalid_parameter(error.to_string()))?;
+        let receipt = result.runtime_receipt.clone();
+        let message_id = receipt
+            .mailbox_message_id
+            .expect("validated ordered mailbox result must name its source message");
+        let message = state_transaction
+            .world
+            .soracloud_mailbox_messages
+            .get(&message_id)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("mailbox message `{message_id}` has not been recorded").into(),
+                )
+            })?;
+        let selected = crate::soracloud_runtime::resolve_ordered_mailbox_executor(
+            &state_transaction.world,
+            &message,
+            state_transaction.block_height(),
+            |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
+        )
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!("mailbox message `{message_id}` has no eligible runtime executor").into(),
+            )
+        })?;
+        if selected.validator_account_id != *authority {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "validator `{authority}` is not the selected executor for mailbox message `{message_id}`"
+                )
+                .into(),
+            ));
+        }
+        require_active_public_lane_validator(authority, state_transaction)?;
+        let Some(SoraRuntimeExecutionHostV1::DeterministicValidator(attributed_host)) =
+            receipt.execution_host.as_ref()
+        else {
+            return Err(invalid_parameter(
+                "ordered mailbox result must carry deterministic-validator execution_host attribution",
+            ));
+        };
+        if *attributed_host != selected {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "mailbox message `{message_id}` execution_host does not match its exact selected validator record"
+                )
+                .into(),
+            ));
+        }
+        let observed_height =
+            u64::try_from(StateReadOnly::height(state_transaction)).unwrap_or(u64::MAX);
+        let observed_block_hash =
+            StateReadOnly::latest_block_hash(state_transaction).map(Hash::from);
+        if result.observed_height != observed_height
+            || result.observed_block_hash != observed_block_hash
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "mailbox message `{message_id}` result was executed against a stale committed tip"
+                )
+                .into(),
+            ));
+        }
+        let current_sequence = next_soracloud_audit_sequence(state_transaction)?;
+        if result.observed_sequence != current_sequence {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "mailbox message `{message_id}` observed Soracloud sequence {} but the next authoritative sequence is {current_sequence}",
+                    result.observed_sequence
+                )
+                .into(),
+            ));
+        }
+        let execution_height = state_transaction.block_height();
+        if execution_height < message.available_after_height
+            || execution_height >= message.expires_at_height
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "mailbox message `{message_id}` is not executable at consensus height {execution_height}"
+                )
+                .into(),
+            ));
+        }
+        if state_transaction
+            .world
+            .soracloud_runtime_receipts
+            .iter()
+            .any(|(_receipt_id, existing)| existing.mailbox_message_id == Some(message_id))
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("mailbox message `{message_id}` has already been consumed").into(),
+            ));
+        }
+        let observed_runtime_state = state_transaction
+            .world
+            .soracloud_service_runtime
+            .get(&message.to_service)
+            .cloned();
+        if result.observed_runtime_state != observed_runtime_state {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "mailbox message `{message_id}` result carries a stale runtime-state precondition"
+                )
+                .into(),
+            ));
+        }
+        let _deployment = state_transaction
+            .world
+            .soracloud_service_deployments
+            .get(&message.to_service)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "destination service `{}` is not deployed",
+                        message.to_service
+                    )
+                    .into(),
+                )
+            })?;
+        let bundle = load_admitted_bundle(
+            state_transaction,
+            &message.to_service,
+            &message.to_service_version,
+        )?;
+        if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::DeterministicService
+            || bundle.container.runtime != iroha_data_model::soracloud::SoraContainerRuntimeV1::Ivm
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "mailbox message `{message_id}` does not target a deterministic IVM service"
+                )
+                .into(),
+            ));
+        }
+        let handler = bundle
+            .service
+            .handlers
+            .iter()
+            .find(|handler| handler.handler_name == message.to_handler)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "mailbox message `{message_id}` targets an undeclared handler `{}`",
+                        message.to_handler
+                    )
+                    .into(),
+                )
+            })?;
+        if !matches!(
+            handler.class,
+            SoraServiceHandlerClassV1::Update | SoraServiceHandlerClassV1::PrivateUpdate
+        ) || handler.mailbox.is_none()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "mailbox message `{message_id}` target is not an update/private_update mailbox handler"
+                )
+                .into(),
+            ));
+        }
+        if receipt.service_name != message.to_service
+            || receipt.service_version != message.to_service_version
+            || receipt.handler_name != message.to_handler
+            || receipt.handler_class != handler.class
+            || receipt.certified_by != handler.certified_response
+            || receipt.request_commitment != message.payload_commitment
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "mailbox message `{message_id}` result receipt does not match its admitted destination handler"
+                )
+                .into(),
+            ));
+        }
+        if result
+            .state_mutations
+            .iter()
+            .any(|mutation| mutation.encryption == SoraStateEncryptionV1::FheCiphertext)
+        {
+            return Err(invalid_parameter(
+                "ordered mailbox execution cannot bypass governed FHE input-admission proofs",
+            ));
+        }
+        for outbound in &result.outbound_mailbox_messages {
+            if outbound.from_service != receipt.service_name
+                || outbound.from_handler != receipt.handler_name
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "mailbox message `{message_id}` emitted an outbound message with substituted source identity"
+                    )
+                    .into(),
+                ));
+            }
+        }
+        if let Some(runtime_state) = result.runtime_state.as_ref()
+            && (runtime_state.service_name != receipt.service_name
+                || runtime_state.active_service_version != receipt.service_version
+                || runtime_state.materialized_bundle_hash != bundle.container.bundle_hash)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "mailbox message `{message_id}` runtime-state result does not match the executed revision"
+                )
+                .into(),
+            ));
+        }
+        let expected_result_commitment =
+            crate::soracloud_runtime::ordered_mailbox_result_commitment(&result);
+        if receipt.result_commitment != expected_result_commitment {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "mailbox message `{message_id}` result commitment does not bind its exact atomic effects"
+                )
+                .into(),
+            ));
+        }
+        let expected_receipt_id = crate::soracloud_runtime::ordered_mailbox_receipt_id(&result);
+        if receipt.receipt_id != expected_receipt_id {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "mailbox message `{message_id}` receipt id is not the canonical sequence-independent id"
+                )
+                .into(),
+            ));
+        }
+
+        // Record consumption first so availability is evaluated at the current height. Every
+        // following effect remains atomic because the instruction executes inside one transaction.
+        write_soracloud_runtime_receipt(state_transaction, receipt.clone())?;
+        let signer = single_signatory_authority(authority)?.clone();
+        for mutation in result.state_mutations {
+            let sequence = next_soracloud_audit_sequence(state_transaction)?;
+            let (deployment, bundle) = apply_soracloud_state_mutation(
+                state_transaction,
+                &receipt.service_name,
+                &mutation.binding_name,
+                &mutation.state_key,
+                mutation.operation,
+                mutation.value_payload,
+                mutation.encryption,
+                None,
+                None,
+                None,
+                receipt.receipt_id,
+                sequence,
+            )?;
+            record_audit_event(
+                state_transaction,
+                SoraServiceAuditEventV1 {
+                    schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
+                    sequence,
+                    block_height: state_transaction.block_height(),
+block_timestamp_ms: state_transaction.block_unix_timestamp_ms().max(1),
+action: SoraServiceLifecycleActionV1::StateMutation,
+                    service_name: receipt.service_name.clone(),
+                    from_version: None,
+                    to_version: deployment.current_service_version,
+                    service_manifest_hash: bundle.service_manifest_hash(),
+                    container_manifest_hash: bundle.container_manifest_hash(),
+                    process_generation: deployment.process_generation,
+                    config_generation: deployment.config_generation,
+                    secret_generation: deployment.secret_generation,
+                    config_snapshot_hash:
+                        iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                            &deployment.service_configs,
+                        ),
+                    secret_snapshot_hash:
+                        iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                            &deployment.service_secrets,
+                        ),
+                    governance_tx_hash: Some(receipt.receipt_id),
+                    binding_name: Some(mutation.binding_name),
+                    state_key: Some(mutation.state_key),
+                    config_mutations: Vec::new(),
+                    secret_mutations: Vec::new(),
+                    rollout_state: None,
+                    policy_name: None,
+                    policy_snapshot_hash: None,
+                    jurisdiction_tag: None,
+                    consent_evidence_hash: None,
+                    break_glass: None,
+                    break_glass_reason: None,
+                    lease_usage: None,
+
+                    service_lease_commitment: None,
+
+                    lease_reporting_epoch_rollover: None,
+                    signer: signer.clone(),
+                },
+            )?;
+        }
+        for outbound in result.outbound_mailbox_messages {
+            write_soracloud_mailbox_message(state_transaction, outbound)?;
+        }
+        if let Some(runtime_state) = result.runtime_state {
+            write_soracloud_runtime_state(state_transaction, runtime_state)?;
+        }
+        Ok(())
+    }
+}
 impl Execute for isi::RecordSoracloudRuntimeReceipt {
     fn execute(
         self,
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        let runtime_authority = require_soracloud_service_runtime_authority(
-            authority,
-            &self.receipt.service_name,
-            &self.receipt.service_version,
-            state_transaction,
-        )?;
-        if runtime_authority == SoracloudServiceRuntimeAuthority::AssignedValidator {
-            let Some(execution_host) = self.receipt.execution_host.as_ref() else {
-                return Err(InstructionExecutionError::InvariantViolation(
+        if self.receipt.mailbox_message_id.is_some() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "ordered-mailbox runtime receipts must use ApplySoracloudOrderedMailboxResult"
+                    .into(),
+            ));
+        }
+        if require_soracloud_permission(authority, state_transaction).is_err() {
+            require_active_public_lane_validator(authority, state_transaction)?;
+            let execution_host = self.receipt.execution_host.as_ref().ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
                     format!(
-                        "runtime receipt `{}` from assigned validator `{authority}` must carry exact execution_host attribution",
+                        "runtime receipt `{}` from validator `{authority}` must carry exact execution_host attribution",
                         self.receipt.receipt_id
                     )
                     .into(),
-                ));
-            };
+                )
+            })?;
             if execution_host.validator_account_id() != authority {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -17396,6 +18606,72 @@ impl Execute for isi::RecordSoracloudRuntimeReceipt {
                     )
                     .into(),
                 ));
+            }
+            match execution_host {
+                SoraRuntimeExecutionHostV1::HfModelHost(host) => {
+                    let bundle = load_admitted_bundle(
+                        state_transaction,
+                        &self.receipt.service_name,
+                        &self.receipt.service_version,
+                    )?;
+                    let binding =
+                        soracloud_hf_generated_source_binding(&bundle).ok_or_else(|| {
+                            InstructionExecutionError::InvariantViolation(
+                                "HF model-host attribution requires an HF-generated service".into(),
+                            )
+                        })?;
+                    let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
+                    let placement =
+                        crate::soracloud_runtime::resolve_generated_hf_active_placement(
+                            &state_transaction.world,
+                            self.receipt.service_name.as_ref(),
+                            binding.source_id.as_str(),
+                            now_ms,
+                        )
+                        .map_err(|message| {
+                            InstructionExecutionError::InvariantViolation(message.into())
+                        })?
+                        .ok_or_else(|| {
+                            InstructionExecutionError::InvariantViolation(
+                                "HF-generated service has no active placement".into(),
+                            )
+                        })?;
+                    let assignment = placement
+                        .assigned_hosts
+                        .iter()
+                        .find(|assignment| {
+                            placement.placement_id == host.placement_id
+                                && placement.source_id == host.source_id
+                                && placement.pool_id == host.pool_id
+                                && placement.selection_seed_hash == host.selection_seed_hash
+                                && assignment.validator_account_id == *authority
+                                && assignment.peer_id == host.peer_id
+                        })
+                        .ok_or_else(|| {
+                            InstructionExecutionError::InvariantViolation(
+                                "submitting validator is not the exact attributed HF placement host"
+                                    .into(),
+                            )
+                        })?;
+                    if !crate::soracloud_runtime::soracloud_hf_placement_assignment_has_active_capability(
+                        &state_transaction.world,
+                        &placement,
+                        assignment,
+                        now_ms,
+                        |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
+                    ) {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "submitting HF placement host lacks its exact active capability"
+                                .into(),
+                        ));
+                    }
+                }
+                SoraRuntimeExecutionHostV1::DeterministicValidator(_) => {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "deterministic mailbox receipts must use ApplySoracloudOrderedMailboxResult"
+                            .into(),
+                    ));
+                }
             }
         }
         write_soracloud_runtime_receipt(state_transaction, self.receipt)
@@ -17407,8 +18683,59 @@ impl Execute for isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        require_soracloud_permission(authority, state_transaction)?;
-        write_soracloud_private_uploaded_model_execution_receipt(state_transaction, self.receipt)
+        let Self {
+            output_manifest_payload,
+            receipt,
+        } = self;
+        if receipt.network_id != *state_transaction.network_id() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "private uploaded-model receipt belongs to another network".into(),
+            ));
+        }
+        let attester = &receipt.attesting_validator;
+        if attester.validator_account_id != *authority {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "private uploaded-model receipt attesting_validator must equal the transaction authority"
+                .into(),
+            ));
+        }
+        if state_transaction
+            .world
+            .soracloud_private_uploaded_model_execution_receipts
+            .get(&receipt.receipt_id)
+            .is_some()
+        {
+            return write_soracloud_private_uploaded_model_execution_receipt(
+                state_transaction,
+                authority,
+                output_manifest_payload,
+                receipt,
+            );
+        }
+        require_active_public_lane_validator(authority, state_transaction)?;
+        let validator_key = (attester.lane_id, authority.clone());
+        let exact_active_attester = state_transaction
+            .world
+            .public_lane_validators
+            .get(&validator_key)
+            .is_some_and(|record| {
+                crate::state::public_lane_validator_record_matches_key(&validator_key, record)
+                    && record.status == PublicLaneValidatorStatus::Active
+                    && record.peer_id.to_string() == attester.peer_id
+                    && state_transaction.is_lane_active_for_authority(attester.lane_id)
+            });
+        if !exact_active_attester {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "private uploaded-model receipt attesting_validator must exactly match the authority's active public-lane validator record"
+                    .into(),
+            ));
+        }
+        write_soracloud_private_uploaded_model_execution_receipt(
+            state_transaction,
+            authority,
+            output_manifest_payload,
+            receipt,
+        )
     }
 }
 #[cfg(all(test, feature = "zk-stark"))]

@@ -1,3 +1,5 @@
+import { strictDecodeBase64 } from "./toriiClientEncoding.js";
+
 const BASE58_PATTERN = /^[1-9A-HJ-NP-Za-km-z]+$/;
 const HF_COMMIT_OID_PATTERN_V1 = /^[0-9a-f]{40}$/;
 const REJECTED_SIGNING_SECRET_FIELDS = [
@@ -19,8 +21,6 @@ const HF_DEPLOY_PAYLOAD_FIELDS = new Set([
   "lease_asset_definition_id",
   "base_fee_nanos",
 ]);
-const PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID =
-  "iroha_data_model::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt";
 export const SORACLOUD_APP_INFRA_DEPLOY_WIRE_ID =
   "iroha_data_model::isi::soracloud::DeploySoracloudAppInfra";
 export const SORACLOUD_APP_INFRA_UPGRADE_WIRE_ID =
@@ -190,20 +190,6 @@ export async function requestSoracloudAppInfraStatus(
   return client._maybeJson(response);
 }
 
-function normalizeSignedI32(value, field) {
-  if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
-    throw new TypeError(`${field} must be a signed 32-bit integer`);
-  }
-  return value;
-}
-
-function normalizeSignedI8(value, field) {
-  if (!Number.isInteger(value) || value < -128 || value > 127) {
-    throw new TypeError(`${field} must be a signed 8-bit integer`);
-  }
-  return value;
-}
-
 function normalizeArray(input, field) {
   const value = input?.[field];
   if (!Array.isArray(value)) {
@@ -255,11 +241,15 @@ function normalizePrivateArtifactRef(input, field, expectedRole) {
   if (role !== expectedRole) {
     throw new TypeError(`${field}.artifactRole must be ${expectedRole}`);
   }
+  const schemaVersion = normalizeSafePositiveIntegerValue(
+    artifact.schemaVersion,
+    `${field}.schemaVersion`,
+  );
+  if (schemaVersion !== 1) {
+    throw new TypeError(`${field}.schemaVersion must be 1`);
+  }
   return {
-    schema_version: normalizeSafePositiveIntegerValue(
-      artifact.schemaVersion,
-      `${field}.schemaVersion`,
-    ),
+    schema_version: schemaVersion,
     sorafs_manifest_digest: normalizeHashLikeValue(
       artifact.sorafsManifestDigest,
       `${field}.sorafsManifestDigest`,
@@ -276,67 +266,63 @@ function normalizePrivateArtifactRef(input, field, expectedRole) {
   };
 }
 
-function normalizeQuantizedCpuModel(input) {
-  const model = input?.model;
-  if (model == null || typeof model !== "object" || Array.isArray(model)) {
-    throw new TypeError("model must be an object");
+function normalizePrivateOutputRecipient(input) {
+  const recipient = input?.outputRecipient;
+  if (recipient == null || typeof recipient !== "object" || Array.isArray(recipient)) {
+    throw new TypeError("outputRecipient must be an object");
   }
-  rejectSoracloudSigningSecrets(model);
-  requireExactObject(model, "model", [
-    "inputLen",
-    "outputLen",
-    "weightsI8",
-    "biasI32",
-    "outputShift",
-    "outputMin",
-    "outputMax",
+  rejectSoracloudSigningSecrets(recipient);
+  requireExactObject(recipient, "outputRecipient", [
+    "schemaVersion",
+    "keyId",
+    "keyVersion",
+    "kem",
+    "aead",
+    "publicKeyBytes",
+    "publicKeyFingerprint",
   ]);
-  const inputLen = normalizeSafePositiveIntegerValue(
-    model.inputLen,
-    "model.inputLen",
-  );
-  const outputLen = normalizeSafePositiveIntegerValue(
-    model.outputLen,
-    "model.outputLen",
-  );
-  const weights = normalizeArray({ value: model.weightsI8 }, "value").map(
-    (value, index) => normalizeSignedI8(value, `model.weightsI8[${index}]`),
-  );
-  const bias = normalizeArray({ value: model.biasI32 }, "value").map(
-    (value, index) => normalizeSignedI32(value, `model.biasI32[${index}]`),
-  );
-  if (weights.length !== inputLen * outputLen) {
-    throw new TypeError("model.weightsI8 length must equal inputLen * outputLen");
+  if (recipient.kem !== "X25519HkdfSha256") {
+    throw new TypeError("outputRecipient.kem must be X25519HkdfSha256");
   }
-  if (bias.length !== outputLen) {
-    throw new TypeError("model.biasI32 length must equal outputLen");
+  if (recipient.aead !== "Aes256Gcm") {
+    throw new TypeError("outputRecipient.aead must be Aes256Gcm");
   }
-  const outputShift = normalizeSafeIntegerValue(
-    model.outputShift,
-    "model.outputShift",
+  const schemaVersion = normalizeSafePositiveIntegerValue(
+    recipient.schemaVersion,
+    "outputRecipient.schemaVersion",
   );
-  if (outputShift > 30) {
-    throw new TypeError("model.outputShift must be <= 30");
+  if (schemaVersion !== 1) {
+    throw new TypeError("outputRecipient.schemaVersion must be 1");
   }
-  const outputMin = normalizeSignedI32(
-    model.outputMin,
-    "model.outputMin",
-  );
-  const outputMax = normalizeSignedI32(
-    model.outputMax,
-    "model.outputMax",
-  );
-  if (outputMin > outputMax) {
-    throw new TypeError("model.outputMin must be <= model.outputMax");
+  const publicKeyBytes = requireString(recipient, "publicKeyBytes");
+  if (!/^[A-Za-z0-9+/]{43}=$/u.test(publicKeyBytes)) {
+    throw new TypeError("outputRecipient.publicKeyBytes must be canonical padded base64");
+  }
+  let decodedPublicKey;
+  try {
+    decodedPublicKey = strictDecodeBase64(publicKeyBytes);
+  } catch (error) {
+    throw new TypeError("outputRecipient.publicKeyBytes must be canonical padded base64", {
+      cause: error,
+    });
+  }
+  if (decodedPublicKey.length !== 32) {
+    throw new TypeError("outputRecipient.publicKeyBytes must encode exactly 32 bytes");
   }
   return {
-    input_len: inputLen,
-    output_len: outputLen,
-    weights_i8: weights,
-    bias_i32: bias,
-    output_shift: outputShift,
-    output_min: outputMin,
-    output_max: outputMax,
+    schema_version: schemaVersion,
+    key_id: requireString(recipient, "keyId"),
+    key_version: normalizeSafePositiveIntegerValue(
+      recipient.keyVersion,
+      "outputRecipient.keyVersion",
+    ),
+    kem: { kem: "X25519HkdfSha256", value: null },
+    aead: { aead: "Aes256Gcm", value: null },
+    public_key_bytes: publicKeyBytes,
+    public_key_fingerprint: normalizeHashLikeValue(
+      recipient.publicKeyFingerprint,
+      "outputRecipient.publicKeyFingerprint",
+    ),
   };
 }
 
@@ -992,26 +978,24 @@ export function assembleSoracloudHfDeployRequest(draft, provenances = {}) {
  * Build a deterministic private uploaded-model execution request.
  *
  * The helper only normalizes client-side request shape. It never accepts raw
- * signing secrets and does not submit the returned receipt instruction.
+ * signing secrets. Model and input plaintext stay inside client-created encrypted SoraFS
+ * artifacts; receipt persistence is submitted atomically by the qualified validator runtime.
  *
- * @param {{ serviceName: string, weightVersion: string, modelId: string | null, modelName: string | null, bundleRoot: string | null, policyId: string, decryptionRequestId: string | null, model: { inputLen: number, outputLen: number, weightsI8: number[], biasI32: number[], outputShift: number, outputMin: number, outputMax: number }, plaintextInputI32: number[], inputArtifact: Record<string, unknown>, outputArtifact: Record<string, unknown>, emittedSequence: number | bigint | string }} input
+ * @param {{ serviceName: string, serviceVersion: string, weightVersion: string, modelId: string | null, modelName: string | null, bundleRoot: string | null, decryptionRequestId: string, inputArtifact: Record<string, unknown>, outputRecipient: Record<string, unknown> }} input
  * @returns {Record<string, unknown>}
  */
 export function buildSoracloudPrivateUploadedModelExecuteRequest(input = {}) {
   rejectSoracloudSigningSecrets(input);
   requireExactObject(input, "input", [
     "serviceName",
+    "serviceVersion",
     "weightVersion",
     "modelId",
     "modelName",
     "bundleRoot",
-    "policyId",
     "decryptionRequestId",
-    "model",
-    "plaintextInputI32",
     "inputArtifact",
-    "outputArtifact",
-    "emittedSequence",
+    "outputRecipient",
   ]);
   const modelId = nullableString(input, "modelId");
   const modelName = nullableString(input, "modelName");
@@ -1019,23 +1003,16 @@ export function buildSoracloudPrivateUploadedModelExecuteRequest(input = {}) {
     throw new TypeError("exactly one of modelId or modelName must be provided");
   }
   const bundleRoot = nullableString(input, "bundleRoot");
-  const decryptionRequestId = nullableString(input, "decryptionRequestId");
-  const plaintextInput = normalizeArray(input, "plaintextInputI32").map((value, index) =>
-    normalizeSignedI32(value, `plaintextInputI32[${index}]`),
-  );
   const request = {
     service_name: requireString(input, "serviceName"),
+    service_version: requireString(input, "serviceVersion"),
     weight_version: requireString(input, "weightVersion"),
     model_id: modelId,
     model_name: modelName,
     bundle_root: bundleRoot,
-    policy_id: requireString(input, "policyId"),
-    decryption_request_id: decryptionRequestId,
-    model: normalizeQuantizedCpuModel(input),
-    plaintext_input_i32: plaintextInput,
+    decryption_request_id: requireString(input, "decryptionRequestId"),
     input_artifact: normalizePrivateArtifactRef(input, "inputArtifact", "input"),
-    output_artifact: normalizePrivateArtifactRef(input, "outputArtifact", "output"),
-    emitted_sequence: normalizeSafePositiveInteger(input, "emittedSequence"),
+    output_recipient: normalizePrivateOutputRecipient(input),
   };
   return request;
 }
@@ -1082,40 +1059,4 @@ export function buildSoracloudPrivateUploadedModelReceiptQuery(input = {}) {
     query.count_mode = countMode;
   }
   return query;
-}
-
-/**
- * Validate and extract the receipt-recording instruction from a private execute response.
- *
- * @param {Record<string, unknown>} response
- * @returns {{ wire_id: string, payload_hex: string }}
- */
-export function privateUploadedModelReceiptInstruction(response) {
-  if (response == null || typeof response !== "object" || Array.isArray(response)) {
-    throw new TypeError("response must be an object");
-  }
-  const instructions = response.tx_instructions;
-  if (!Array.isArray(instructions) || instructions.length !== 1) {
-    throw new TypeError("response.tx_instructions must contain exactly one instruction");
-  }
-  const instruction = instructions[0];
-  if (instruction == null || typeof instruction !== "object" || Array.isArray(instruction)) {
-    throw new TypeError("response.tx_instructions[0] must be an object");
-  }
-  if (instruction.wire_id !== PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID) {
-    throw new TypeError(
-      `response.tx_instructions[0].wire_id must be ${PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID}`,
-    );
-  }
-  if (
-    typeof instruction.payload_hex !== "string" ||
-    instruction.payload_hex.length === 0 ||
-    !/^[0-9a-fA-F]+$/.test(instruction.payload_hex)
-  ) {
-    throw new TypeError("response.tx_instructions[0].payload_hex must be non-empty hex");
-  }
-  return {
-    wire_id: instruction.wire_id,
-    payload_hex: instruction.payload_hex,
-  };
 }

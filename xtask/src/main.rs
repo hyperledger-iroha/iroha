@@ -102,6 +102,7 @@ mod nexus;
 mod nexus_lane_maintenance;
 mod norito_rpc;
 mod openapi_git;
+mod openapi_validation;
 mod poseidon_bench;
 mod sm;
 mod sns;
@@ -9596,67 +9597,17 @@ fn require_release_router_openapi(
     let spec_bytes = generated
         .map_err(|err| format!("failed to generate OpenAPI from Torii router: {err}"))?
         .ok_or("Torii OpenAPI generation failed closed: the router exposed no authority")?;
-    validate_release_openapi_bytes(&spec_bytes)?;
-    Ok(spec_bytes)
-}
-fn validate_release_openapi_spec(spec: &Value) -> Result<(), Box<dyn Error>> {
-    let document = spec
-        .as_object()
-        .ok_or("release OpenAPI document must be a JSON object")?;
-    let version = document
-        .get("openapi")
-        .and_then(Value::as_str)
-        .ok_or("release OpenAPI document is missing the openapi version")?;
-    if !version.starts_with("3.") {
-        return Err(format!(
-            "release OpenAPI document uses unsupported version `{version}`; expected OpenAPI 3.x"
-        )
-        .into());
-    }
-    let info = document
-        .get("info")
-        .and_then(Value::as_object)
-        .ok_or("release OpenAPI document is missing the info object")?;
-    for field in ["title", "version"] {
-        if info
-            .get(field)
-            .and_then(Value::as_str)
-            .is_none_or(|value| value.trim().is_empty())
-        {
-            return Err(format!(
-                "release OpenAPI document info.{field} must be a non-empty string"
-            )
-            .into());
-        }
-    }
-    let paths = document
-        .get("paths")
-        .and_then(Value::as_object)
-        .ok_or("release OpenAPI document is missing the paths object")?;
-    if paths.is_empty() {
-        return Err(
-            "release OpenAPI document must define at least one path; empty/stub specifications are forbidden"
-                .into(),
-        );
-    }
-    let schemas = document
-        .get("components")
-        .and_then(Value::as_object)
-        .and_then(|components| components.get("schemas"))
-        .and_then(Value::as_object)
-        .ok_or("release OpenAPI document is missing components.schemas")?;
-    if schemas.is_empty() {
-        return Err(
-            "release OpenAPI document must define at least one component schema; empty/stub specifications are forbidden"
-                .into(),
-        );
-    }
-    Ok(())
+    let spec = validated_release_openapi_value(&spec_bytes)?;
+    Ok(norito::json::to_vec_pretty(&spec)?)
 }
 fn validate_release_openapi_bytes(spec_bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+    validated_release_openapi_value(spec_bytes).map(|_| ())
+}
+fn validated_release_openapi_value(spec_bytes: &[u8]) -> Result<Value, Box<dyn Error>> {
     let spec = norito::json::from_slice::<Value>(spec_bytes)
         .map_err(|err| format!("failed to parse release OpenAPI document as JSON: {err}"))?;
-    validate_release_openapi_spec(&spec)
+    openapi_validation::validate_release_openapi_spec(&spec)?;
+    Ok(spec)
 }
 const OPENAPI_MANIFEST_VERSION: u32 = 2;
 const OPENAPI_MANIFEST_SIGNATURE_DOMAIN_V2: &[u8] = b"iroha.openapi.manifest.signature.v2";
@@ -12057,7 +12008,7 @@ mod openapi_tests {
         );
     }
     #[test]
-    fn router_generation_preserves_exact_json_integer_bytes() {
+    fn router_generation_canonicalizes_json_without_losing_exact_integers() {
         let exact = br#"{
   "openapi": "3.1.0",
   "info": {"title": "Torii fixture", "version": "1.0.0"},
@@ -12068,8 +12019,17 @@ mod openapi_tests {
 
         let emitted = require_release_router_openapi(Ok(Some(exact.clone())))
             .expect("exact router document must be accepted");
+        let parsed = norito::json::from_slice::<Value>(&exact).expect("parse router fixture");
+        let canonical = norito::json::to_vec_pretty(&parsed).expect("render canonical fixture");
 
-        assert_eq!(emitted, exact);
+        assert_eq!(emitted, canonical);
+        assert!(
+            std::str::from_utf8(&emitted)
+                .expect("canonical OpenAPI is UTF-8")
+                .contains("18446744073709551615"),
+            "canonicalization must preserve exact u64 JSON integers"
+        );
+        assert!(!emitted.ends_with(b"\n"));
     }
     #[test]
     fn router_state_uses_configured_genesis_identity() {

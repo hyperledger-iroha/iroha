@@ -1942,12 +1942,14 @@ async fn resolve_incoming_soracloud_proxy_forward_target_rejects_unavailable_rec
         seed_generated_hf_public_world(&primary_peer_id);
     let local_peer_id =
         active_generated_hf_replica_peer_id(&world, &service_name, &service_version);
-    let (pool_id, mut placement) = world
-        .soracloud_hf_placements()
-        .iter()
-        .next()
-        .map(|(pool_id, placement)| (*pool_id, placement.clone()))
-        .expect("generated-HF placement fixture");
+    let (pool_id, mut placement) = {
+        let view = world.view();
+        view.soracloud_hf_placements()
+            .iter()
+            .next()
+            .map(|(pool_id, placement)| (*pool_id, placement.clone()))
+            .expect("generated-HF placement fixture")
+    };
     placement
         .assigned_hosts
         .iter_mut()

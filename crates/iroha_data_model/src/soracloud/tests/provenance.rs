@@ -849,7 +849,7 @@ fn sample_update_handler() -> SoraServiceHandlerV1 {
             queue_name: "updates".parse().expect("valid name"),
             max_pending_messages: NonZeroU32::new(1_024).expect("nonzero"),
             max_message_bytes: NonZeroU64::new(65_536).expect("nonzero"),
-            retention_sequences: NonZeroU32::new(1_440).expect("nonzero"),
+            retention_blocks: NonZeroU32::new(1_440).expect("nonzero"),
         }),
     }
 }
@@ -864,7 +864,7 @@ fn sample_private_update_handler() -> SoraServiceHandlerV1 {
             queue_name: "private_updates".parse().expect("valid name"),
             max_pending_messages: NonZeroU32::new(256).expect("nonzero"),
             max_message_bytes: NonZeroU64::new(131_072).expect("nonzero"),
-            retention_sequences: NonZeroU32::new(2_880).expect("nonzero"),
+            retention_blocks: NonZeroU32::new(2_880).expect("nonzero"),
         }),
     }
 }
@@ -944,11 +944,10 @@ fn sample_agent_apartment_record() -> SoraAgentApartmentRecordV1 {
         schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
         manifest_hash: manifest.manifest_hash(),
         manifest,
-        status: SoraAgentRuntimeStatusV1::Running,
         deployed_sequence: 10,
-        lease_started_sequence: 10,
-        lease_expires_sequence: 110,
-        last_renewed_sequence: 10,
+        lease_started_height: 10,
+        lease_expires_height: 110,
+        last_renewed_height: 10,
         restart_count: 1,
         last_restart_sequence: Some(30),
         last_restart_reason: Some("policy refresh".to_string()),
@@ -1014,10 +1013,12 @@ fn sample_agent_apartment_audit_event() -> SoraAgentApartmentAuditEventV1 {
     SoraAgentApartmentAuditEventV1 {
         schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
         sequence: 40,
+        block_height: 40,
+        block_timestamp_ms: 86_400_000,
         action: SoraAgentApartmentActionV1::Restart,
         apartment_name: sample_name("ops_agent"),
         status: SoraAgentRuntimeStatusV1::Running,
-        lease_expires_sequence: 140,
+        lease_expires_height: 140,
         manifest_hash: sample_hash(44),
         restart_count: 2,
         signer: sample_signer(),
@@ -1653,41 +1654,47 @@ fn sample_service_runtime_state() -> SoraServiceRuntimeStateV1 {
         health_status: SoraServiceHealthStatusV1::Healthy,
         load_factor_bps: 750,
         materialized_bundle_hash: sample_hash(160),
-        rollout_handle: Some("rollout-1".to_string()),
-        pending_mailbox_message_count: 2,
-        last_receipt_id: Some(sample_hash(161)),
     }
 }
 fn sample_service_audit_event() -> SoraServiceAuditEventV1 {
     SoraServiceAuditEventV1 {
         schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
         sequence: 1,
+        block_height: 1,
+        block_timestamp_ms: 1,
         action: SoraServiceLifecycleActionV1::DecryptionRequest,
         service_name: "portal".parse().expect("valid name"),
         from_version: None,
         to_version: "1.0.0".to_string(),
         service_manifest_hash: sample_hash(172),
         container_manifest_hash: sample_hash(173),
+        process_generation: 1,
+        config_generation: 0,
+        secret_generation: 0,
+        config_snapshot_hash: derive_soracloud_service_config_snapshot_hash_v1(&BTreeMap::new()),
+        secret_snapshot_hash: derive_soracloud_service_secret_snapshot_hash_v1(&BTreeMap::new()),
         governance_tx_hash: Some(sample_hash(176)),
         binding_name: Some("private_state".parse().expect("valid name")),
         state_key: Some("/state/private/patient-1".to_string()),
-        config_name: None,
-        secret_name: None,
-        rollout_handle: None,
+        config_mutations: Vec::new(),
+        secret_mutations: Vec::new(),
+        rollout_state: None,
         policy_name: Some("phi_threshold_policy".parse().expect("valid name")),
         policy_snapshot_hash: Some(sample_hash(177)),
         jurisdiction_tag: Some("us_hipaa".to_string()),
         consent_evidence_hash: Some(sample_hash(178)),
         break_glass: Some(true),
         break_glass_reason: Some("emergency review".to_string()),
+        lease_usage: None,
+        service_lease_commitment: None,
         lease_reporting_epoch_rollover: None,
         signer: sample_signer(),
     }
 }
 fn sample_service_mailbox_message() -> SoraServiceMailboxMessageV1 {
-    SoraServiceMailboxMessageV1 {
+    let mut message = SoraServiceMailboxMessageV1 {
         schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
-        message_id: sample_hash(162),
+        message_id: Hash::prehashed([0; Hash::LENGTH]),
         from_service: "portal".parse().expect("valid name"),
         from_service_version: "2026.1".to_string(),
         from_handler: "update".parse().expect("valid name"),
@@ -1696,13 +1703,18 @@ fn sample_service_mailbox_message() -> SoraServiceMailboxMessageV1 {
         to_handler: "private_update".parse().expect("valid name"),
         payload_bytes: b"ciphertext".to_vec(),
         payload_commitment: Hash::new(b"ciphertext"),
-        delivery_delay_sequences: 0,
+        delivery_delay_blocks: 0,
         enqueue_sequence: 10,
-        available_after_sequence: 10,
-        expires_at_sequence: 12,
-    }
+        enqueue_height: 10,
+        available_after_height: 10,
+        expires_at_height: 12,
+    };
+    message.message_id = derive_soracloud_mailbox_message_id_v1(&message);
+    message
 }
 fn sample_runtime_receipt() -> SoraRuntimeReceiptV1 {
+    let pool_id = sample_hash(170);
+    let selection_seed_hash = sample_hash(172);
     SoraRuntimeReceiptV1 {
         schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
         receipt_id: sample_hash(164),
@@ -1716,9 +1728,13 @@ fn sample_runtime_receipt() -> SoraRuntimeReceiptV1 {
         emitted_sequence: 44,
         execution_host: Some(SoraRuntimeExecutionHostV1::HfModelHost(
             SoraRuntimeHfModelHostV1 {
-            placement_id: sample_hash(170),
-            validator_account_id: sample_account_id(171),
-            peer_id: "12D3KooWRuntimePrimary".to_string(),
+                placement_id: derive_hf_placement_id_v1(pool_id, selection_seed_hash)
+                    .expect("canonical sample placement id"),
+                source_id: sample_hash(173),
+                pool_id,
+                selection_seed_hash,
+                validator_account_id: sample_account_id(171),
+                peer_id: sample_peer_id(171),
             },
         )),
         mailbox_message_id: Some(sample_hash(163)),
@@ -1787,7 +1803,7 @@ fn service_world_records_are_closed_and_require_explicit_nullable_keys() {
             "state_key",
             "config_name",
             "secret_name",
-            "rollout_handle",
+            "rollout_state",
             "policy_name",
             "policy_snapshot_hash",
             "jurisdiction_tag",
@@ -1797,16 +1813,25 @@ fn service_world_records_are_closed_and_require_explicit_nullable_keys() {
         ],
         "service audit event"
     );
-    assert_closed_and_required_nullable!(
-        sample_service_runtime_state(),
-        SoraServiceRuntimeStateV1,
-        ["rollout_handle", "last_receipt_id"],
-        "service runtime state"
+    let mut service_runtime_unknown =
+        norito::json::to_value(&sample_service_runtime_state()).expect("serialize runtime state");
+    service_runtime_unknown
+        .as_object_mut()
+        .expect("service runtime state JSON object")
+        .insert("retired_v0".to_owned(), norito::json::Value::from(true));
+    let error = norito::json::from_value::<SoraServiceRuntimeStateV1>(service_runtime_unknown)
+        .expect_err("service runtime state must reject unknown fields");
+    assert!(
+        matches!(
+            error,
+            norito::json::Error::UnknownField { ref field } if field == "retired_v0"
+        ),
+        "service runtime state reported the wrong unknown-field error: {error}"
     );
     assert_closed_and_required_nullable!(
         sample_service_mailbox_message(),
         SoraServiceMailboxMessageV1,
-        ["expires_at_sequence"],
+        ["expires_at_height"],
         "service mailbox message"
     );
     assert_closed_and_required_nullable!(
@@ -1907,7 +1932,7 @@ fn host_protocol_v1_json_rejects_unknown_fields_across_the_direct_graph() {
         to_service: "audit".parse().expect("valid name"),
         to_handler: "update".parse().expect("valid name"),
         payload_bytes: Vec::new(),
-        delivery_delay_sequences: 1,
+        delivery_delay_blocks: 1,
     };
     let egress_response = SoracloudEgressFetchResponseV1 {
         status_code: 204,
@@ -2165,10 +2190,10 @@ fn host_protocol_v1_json_requires_explicit_null_and_empty_keys() {
             to_service: "audit".parse().expect("valid name"),
             to_handler: "update".parse().expect("valid name"),
             payload_bytes: Vec::new(),
-            delivery_delay_sequences: 1,
+            delivery_delay_blocks: 1,
         },
         SoracloudEmitMailboxMessageRequestV1,
-        ["payload_bytes", "delivery_delay_sequences"],
+        ["payload_bytes", "delivery_delay_blocks"],
         "emit mailbox message request"
     );
     assert_required_fields!(

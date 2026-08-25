@@ -2709,7 +2709,7 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
         "retired payload must be hidden from autonomous recovery",
     );
     assert!(
-        kura.latest_autonomous_lane_block_artifacts_snapshot(network_id, 1, |_| epoch)
+        kura.latest_autonomous_lane_block_artifacts_snapshot(network_id, 1, |_| Ok(epoch))
             .expect("load bounded route-latest snapshot")
             .is_empty(),
         "retired payload must be ineligible for startup merge recovery",

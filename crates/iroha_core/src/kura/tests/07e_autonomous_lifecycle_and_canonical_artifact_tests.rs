@@ -271,7 +271,7 @@ fn autonomous_route_latest_snapshot_rejects_runtime_index_corruption() {
     fs::write(&route_latest_path, [0xFF, 0x00, 0xAA])
         .expect("corrupt the live route-latest pointer");
     assert!(
-        kura.latest_autonomous_lane_block_artifacts_snapshot(network_id, 1, |_| epoch)
+        kura.latest_autonomous_lane_block_artifacts_snapshot(network_id, 1, |_| Ok(epoch))
             .is_err(),
         "runtime hydration must fail closed instead of hiding durable queue ownership",
     );

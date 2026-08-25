@@ -1020,7 +1020,8 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
     let mut context = successor_context_for_parent(&adapter, &block);
     context.epoch = {
         let world = adapter.state.world_view();
-        crate::sumeragi::epoch_for_height_from_world(&world, context.height)
+        crate::sumeragi::epoch_for_height_from_world(&world, context.height, context.mode)
+            .expect("fixture has a valid committed epoch schedule")
     };
     context.epoch_end_height = context.height.saturating_add(1);
     assert_eq!(

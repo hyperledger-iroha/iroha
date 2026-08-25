@@ -2182,6 +2182,7 @@ fn candidate_attachments(
                 round_header,
                 expected_merge_epoch,
                 merge_selection,
+                context.mode,
             )
             .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
     } else {

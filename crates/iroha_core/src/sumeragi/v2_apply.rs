@@ -136,6 +136,14 @@ pub(crate) enum V2ReservationLifecycleError {
         /// Authoritative committed WSV height.
         state_height: u64,
     },
+    /// The authenticated consensus mode could not resolve an epoch from committed state.
+    #[error("cannot resolve consensus epoch for proposal height {height}: {detail}")]
+    EpochResolution {
+        /// Proposal height whose epoch was required.
+        height: u64,
+        /// Fail-closed committed-schedule diagnostic.
+        detail: String,
+    },
     /// A replayed reservation names a proposal height beyond the verified startup context.
     #[error(
         "autonomous reservation proposal height {proposal_height} is newer than verified active height {active_height}"
@@ -1506,9 +1514,17 @@ pub(crate) fn plan_lane_reservation_ownership(
     let evidence_epochs = evidence_inputs
         .iter()
         .map(|group| {
-            crate::sumeragi::epoch_for_height_from_world(&world, group.identity.proposal_height)
+            crate::sumeragi::epoch_for_height_from_world(
+                &world,
+                group.identity.proposal_height,
+                active_context.mode,
+            )
+            .map_err(|error| V2ReservationLifecycleError::EpochResolution {
+                height: group.identity.proposal_height,
+                detail: error.to_string(),
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     let evidence = kura.classify_autonomous_lane_reservation_groups(
         &evidence_inputs,
         network_id,
@@ -1542,7 +1558,12 @@ pub(crate) fn plan_lane_reservation_ownership(
         let epoch = crate::sumeragi::epoch_for_height_from_world(
             &world,
             input.group.identity.proposal_height,
-        );
+            active_context.mode,
+        )
+        .map_err(|error| V2ReservationLifecycleError::EpochResolution {
+            height: input.group.identity.proposal_height,
+            detail: error.to_string(),
+        })?;
         let pending_merge =
             exact_pending_merge_for_group(&input.group, &pending_by_entrypoint, &pending_by_entry)?;
         let group_evidence = evidence

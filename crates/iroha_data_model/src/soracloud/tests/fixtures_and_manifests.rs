@@ -89,6 +89,14 @@ fn sample_peer_id(seed: u8) -> String {
         .expect("fixture seed derives Ed25519 peer keypair");
     PeerId::from(keypair.public_key().clone()).to_string()
 }
+fn sample_validator_execution_host(seed: u8) -> SoraRuntimeDeterministicValidatorHostV1 {
+    let validator_account_id = sample_account_id(seed);
+    SoraRuntimeDeterministicValidatorHostV1 {
+        lane_id: LaneId::SINGLE,
+        peer_id: PeerId::from(validator_account_id.expect_single_signatory().clone()).to_string(),
+        validator_account_id,
+    }
+}
 fn sample_ed25519_keypair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("fixture seed derives Ed25519 keypair")
@@ -406,30 +414,48 @@ fn sample_private_model_artifact_ref(role: &str, seed: u8) -> SoraPrivateModelAr
     SoraPrivateModelArtifactRefV1 {
         schema_version: SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
         sorafs_manifest_digest: ManifestDigest::new([seed; 32]),
+        sorafs_root_cid: crate::sorafs::pin_registry::ManifestRootCid::from_blake3_digest(
+            [seed; 32],
+        )
+        .expect("fixture root CID"),
         artifact_hash: sample_hash(seed.wrapping_add(1)),
         ciphertext_bytes: 128,
         artifact_role: role.to_string(),
     }
 }
 fn sample_private_uploaded_model_execution_receipt() -> SoraPrivateUploadedModelExecutionReceiptV1 {
-    SoraPrivateUploadedModelExecutionReceiptV1 {
+    let mut receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
         schema_version: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
-        receipt_id: sample_hash(1),
+        network_id: crate::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0x92; Hash::LENGTH]),
+            ),
+        ),
+        receipt_id: Hash::prehashed([0; 32]),
         service_name: sample_name("private_model_host"),
+        service_version: "2026.1".to_string(),
         model_id: "upload-1".to_string(),
         weight_version: "v1".to_string(),
-        runtime_version: "soracloud.quantized-cpu.v1".to_string(),
+        runtime_version: SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1.to_string(),
         model_manifest_digest: ManifestDigest::new([0xA5; 32]),
         model_bundle_root: sample_hash(31),
         policy_id: "policy/v1".to_string(),
+        decryption_request_id: "decrypt-upload-1".to_string(),
+        attesting_validator: sample_validator_execution_host(0x30),
         input_artifact: sample_private_model_artifact_ref("input", 0x11),
         output_artifact: sample_private_model_artifact_ref("output", 0x22),
         input_commitment: sample_hash(0x41),
         output_commitment: sample_hash(0x42),
-        request_commitment: sample_hash(0x43),
-        result_commitment: sample_hash(0x44),
+        output_recipient: sample_uploaded_model_encryption_recipient(),
+        request_commitment: Hash::prehashed([0; 32]),
+        result_commitment: Hash::prehashed([0; 32]),
         emitted_sequence: 7,
-    }
+        emitted_block_height: 3,
+    };
+    receipt.request_commitment = derive_soracloud_private_model_request_commitment_v1(&receipt);
+    receipt.result_commitment = derive_soracloud_private_model_result_commitment_v1(&receipt);
+    receipt.receipt_id = derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&receipt);
+    receipt
 }
 fn sample_hf_resource_profile() -> SoraHfResourceProfileV1 {
     SoraHfResourceProfileV1 {
@@ -712,7 +738,7 @@ fn sample_model_host_capability_record() -> SoraModelHostCapabilityRecordV1 {
     SoraModelHostCapabilityRecordV1 {
         schema_version: SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
         validator_account_id: sample_account_id(0xC3),
-        peer_id: "12D3KooWExamplePeerId".to_string(),
+        peer_id: sample_peer_id(0xC3),
         supported_backends: BTreeSet::from([
             SoraHfBackendFamilyV1::Transformers,
             SoraHfBackendFamilyV1::Gguf,
@@ -808,22 +834,13 @@ fn inrou_service_placement_requires_one_distinct_eligible_host_per_slot() {
     duplicate_validator.placements[1].validator_account_id = duplicate_validator.placements[0]
         .validator_account_id
         .clone();
+    duplicate_validator.placements[1].peer_id = duplicate_validator.placements[0].peer_id.clone();
     let error = duplicate_validator
         .validate()
         .expect_err("duplicate Inrou placement validators must be rejected");
     assert!(
         error.to_string().contains("distinct validator account"),
         "unexpected duplicate-validator error: {error}"
-    );
-
-    let mut duplicate_peer = sample_inrou_service_placement_record();
-    duplicate_peer.placements[1].peer_id = duplicate_peer.placements[0].peer_id.clone();
-    let error = duplicate_peer
-        .validate()
-        .expect_err("duplicate Inrou placement peer IDs must be rejected");
-    assert!(
-        error.to_string().contains("distinct peer ID"),
-        "unexpected duplicate-peer error: {error}"
     );
 
     let mut overcommitted = sample_inrou_service_placement_record();
@@ -837,27 +854,30 @@ fn inrou_service_placement_requires_one_distinct_eligible_host_per_slot() {
     );
 }
 fn sample_hf_placement_record() -> SoraHfPlacementRecordV1 {
+    let pool_id = sample_hash(23);
+    let selection_seed_hash = sample_hash(25);
     SoraHfPlacementRecordV1 {
         schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-        placement_id: sample_hash(24),
+        placement_id: derive_hf_placement_id_v1(pool_id, selection_seed_hash)
+            .expect("canonical HF placement id"),
         source_id: sample_hash(21),
-        pool_id: sample_hash(23),
+        pool_id,
         status: SoraHfPlacementStatusV1::Degraded,
-        selection_seed_hash: sample_hash(25),
+        selection_seed_hash,
         resource_profile: sample_hf_resource_profile(),
         eligible_validator_count: 3,
         adaptive_target_host_count: 2,
         assigned_hosts: vec![
             SoraHfPlacementHostAssignmentV1 {
                 validator_account_id: sample_account_id(0xC3),
-                peer_id: "12D3KooWPrimary".to_string(),
+                peer_id: sample_peer_id(0xC3),
                 role: SoraHfPlacementHostRoleV1::Primary,
                 status: SoraHfPlacementHostStatusV1::Warm,
                 host_class: "gpu.large".to_string(),
             },
             SoraHfPlacementHostAssignmentV1 {
                 validator_account_id: sample_account_id(0xC4),
-                peer_id: "12D3KooWReplica".to_string(),
+                peer_id: sample_peer_id(0xC4),
                 role: SoraHfPlacementHostRoleV1::Replica,
                 status: SoraHfPlacementHostStatusV1::Warming,
                 host_class: "gpu.large".to_string(),
@@ -882,8 +902,6 @@ fn sample_inrou_replica_runtime_state() -> SoraInrouReplicaRuntimeStateV1 {
         materialized_bundle_hash: sample_hash(28),
         reporting_epoch: 1,
         accounted_egress_bytes: 4_096,
-        pending_mailbox_message_count: 2,
-        last_receipt_id: Some(sample_hash(29)),
         updated_at_ms: 130_000,
         last_error: None,
     }
@@ -1172,6 +1190,15 @@ fn canonical_deployment_and_hosting_json_graph_rejects_unknown_fields() {
         "Inrou replica runtime state"
     );
     assert_unknown_rejected!(SoraServiceMailboxMessageV1, "service mailbox message");
+    assert_unknown_rejected!(
+        SoraRuntimeDeterministicValidatorHostV1,
+        "deterministic validator execution host"
+    );
+    assert_unknown_rejected!(
+        SoraOrderedMailboxStateMutationV1,
+        "ordered mailbox state mutation"
+    );
+    assert_unknown_rejected!(SoraOrderedMailboxResultV1, "ordered mailbox result");
     assert_unknown_rejected!(SoraRuntimeReceiptV1, "runtime receipt");
 }
 #[cfg(feature = "json")]
@@ -1400,7 +1427,11 @@ fn canonical_deployment_and_hosting_json_graph_requires_explicit_keys() {
     assert_required_keys!(
         queued_window,
         SoraHfSharedLeaseQueuedWindowV1,
-        ["compute_reservation_cap", "resource_profile", "apartment_name"],
+        [
+            "compute_reservation_cap",
+            "resource_profile",
+            "apartment_name"
+        ],
         ["apartment_name"],
         "HF queued lease window"
     );
@@ -1554,7 +1585,7 @@ fn inrou_v1_wire_records_require_every_canonical_field() {
     );
     assert_missing_rejected!(
         runtime,
-        "last_receipt_id",
+        "reporting_epoch",
         SoraInrouReplicaRuntimeStateV1,
         "replica runtime state"
     );
@@ -1661,8 +1692,8 @@ fn inrou_v1_norito_records_reject_retired_backend_selector_layouts() {
         load_factor_bps: runtime.load_factor_bps,
         materialized_bundle_hash: runtime.materialized_bundle_hash,
         accounted_egress_bytes: runtime.accounted_egress_bytes,
-        pending_mailbox_message_count: runtime.pending_mailbox_message_count,
-        last_receipt_id: runtime.last_receipt_id,
+        pending_mailbox_message_count: 2,
+        last_receipt_id: Some(sample_hash(29)),
         updated_at_ms: runtime.updated_at_ms,
         last_error: runtime.last_error,
     };

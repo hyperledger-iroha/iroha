@@ -4,7 +4,8 @@ fn autonomy_workflow_json_is_exact_and_requires_explicit_nullable_step_id() -> R
         "workflow_version": 1,
         "steps": [{"step_id": null, "request": {"inputs": "alpha"}}],
     });
-    let parsed = parse_apartment_autonomy_workflow_spec(&canonical)?
+    let parsed = parse_apartment_autonomy_workflow_spec(&canonical)
+        .map_err(|error| eyre::eyre!("{error:?}"))?
         .expect("canonical workflow must be recognized");
     assert_eq!(parsed.len(), 1);
     assert_eq!(parsed[0].step_id, None);
@@ -55,7 +56,7 @@ fn autonomy_workflow_json_is_exact_and_requires_explicit_nullable_step_id() -> R
 
 #[test]
 fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure() -> Result<()> {
-    let mut state = test_state();
+    let mut state = test_state_at_height_one()?;
     let fixture = insert_generated_hf_service_fixture(
         &mut state,
         "hf_agent_service",
@@ -85,11 +86,10 @@ fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure(
     let apartment = SoraAgentApartmentRecordV1 {
         schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
         manifest_hash: Hash::new(Encode::encode(&manifest)),
-        status: SoraAgentRuntimeStatusV1::Running,
         deployed_sequence: 1,
-        lease_started_sequence: 1,
-        lease_expires_sequence: 400,
-        last_renewed_sequence: 1,
+        lease_started_height: 1,
+        lease_expires_height: 400,
+        last_renewed_height: 1,
         restart_count: 0,
         last_restart_sequence: None,
         last_restart_reason: None,
@@ -149,8 +149,8 @@ fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure(
     manager.reconcile_once()?;
     let handle = test_runtime_handle(&manager, Arc::clone(&state));
     let request = SoracloudApartmentExecutionRequest {
-        observed_height: 0,
-        observed_block_hash: None,
+        observed_height: 1,
+        observed_block_hash: committed_block_hash(&state.view()),
         apartment_name: apartment_name.to_string(),
         process_generation: apartment.process_generation,
         operation: format!("autonomy-run:{}", run.run_id),
@@ -198,7 +198,7 @@ fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure(
 }
 #[test]
 fn execute_apartment_generated_hf_autonomy_workflow_stays_inert_before_first_step() -> Result<()> {
-    let mut state = test_state();
+    let mut state = test_state_at_height_one()?;
     let fixture = insert_generated_hf_service_fixture(
         &mut state,
         "hf_agent_workflow_service",
@@ -229,11 +229,10 @@ fn execute_apartment_generated_hf_autonomy_workflow_stays_inert_before_first_ste
     let apartment = SoraAgentApartmentRecordV1 {
         schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
         manifest_hash: Hash::new(Encode::encode(&manifest)),
-        status: SoraAgentRuntimeStatusV1::Running,
         deployed_sequence: 1,
-        lease_started_sequence: 1,
-        lease_expires_sequence: 400,
-        last_renewed_sequence: 1,
+        lease_started_height: 1,
+        lease_expires_height: 400,
+        last_renewed_height: 1,
         restart_count: 0,
         last_restart_sequence: None,
         last_restart_reason: None,
@@ -293,13 +292,13 @@ fn execute_apartment_generated_hf_autonomy_workflow_stays_inert_before_first_ste
     manager.reconcile_once()?;
     let handle = test_runtime_handle(&manager, Arc::clone(&state));
     let result = handle.execute_apartment(SoracloudApartmentExecutionRequest {
-            observed_height: 0,
-            observed_block_hash: None,
-            apartment_name: apartment_name.to_string(),
-            process_generation: apartment.process_generation,
-            operation: format!("autonomy-run:{}", run.run_id),
-            request_commitment: run.request_commitment,
-        })?;
+        observed_height: 1,
+        observed_block_hash: committed_block_hash(&state.view()),
+        apartment_name: apartment_name.to_string(),
+        process_generation: apartment.process_generation,
+        operation: format!("autonomy-run:{}", run.run_id),
+        request_commitment: run.request_commitment,
+    })?;
     let (summary, _journal_hash) = read_apartment_autonomy_execution_summary(
         temp_dir.path(),
         apartment_name.as_ref(),

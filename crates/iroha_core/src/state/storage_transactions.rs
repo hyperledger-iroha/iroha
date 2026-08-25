@@ -257,7 +257,7 @@ mod block {
             self.current_block.is_some()
         }
         /// Return whether the staged canonical carrier has the exact height and
-        /// no ordinary transaction membership.
+        /// no canonical entrypoint membership.
         pub(crate) fn has_exact_empty_staged_block(&self, height: NonZeroUsize) -> bool {
             self.current_block
                 .as_ref()

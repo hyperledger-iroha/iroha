@@ -296,6 +296,13 @@ pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 pub enum Error {
     /// Production Kura store root resolved to an empty path
     EmptyStoreRoot,
+    /// Autonomous payload epoch resolution failed at proposal height `{proposal_height}`: {reason}
+    AutonomousEpochResolution {
+        /// Proposal height whose authenticated consensus epoch could not be resolved.
+        proposal_height: u64,
+        /// Fail-closed epoch-schedule diagnostic.
+        reason: String,
+    },
     /// Invalid or unrecoverable Kura rollback intent at `{path:?}`: {reason}
     RollbackIntentInvalid {
         /// Durable intent path whose transaction cannot be trusted or completed.

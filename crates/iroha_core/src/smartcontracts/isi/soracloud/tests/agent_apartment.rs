@@ -1,5 +1,103 @@
 //! Authoritative SoraCloud agent-apartment ledger transition tests.
 use super::*;
+
+#[test]
+fn agent_apartment_deploy_rejects_lease_height_overflow_without_state() -> Result<(), eyre::Report>
+{
+    let kura = Kura::blank_kura_for_testing();
+    let state = state_with_soracloud_permission(&kura)?;
+    let manifest = sample_agent_manifest_with_capabilities("overflow_agent", &[]);
+    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+        .as_ref()
+        .header();
+    let mut state_block = state.block(block_header);
+    let mut stx = state_block.transaction();
+    let error = iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {
+        manifest: manifest.clone(),
+        lease_blocks: u64::MAX,
+        autonomy_budget_units: 1,
+        provenance: agent_deploy_provenance(manifest, u64::MAX, 1),
+    })
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("an exact lease term must not be truncated at u64::MAX");
+    assert_invalid_parameter_contains(error, "lease expiry height overflowed");
+    assert!(
+        stx.world
+            .soracloud_agent_apartments
+            .get("overflow_agent")
+            .is_none()
+    );
+    assert_eq!(
+        stx.world
+            .soracloud_agent_apartment_audit_events
+            .iter()
+            .count(),
+        0,
+        "a rejected deployment must not consume authoritative audit state"
+    );
+    Ok(())
+}
+
+#[test]
+fn agent_apartment_renew_rejects_lease_height_overflow_without_mutation() -> Result<(), eyre::Report>
+{
+    let kura = Kura::blank_kura_for_testing();
+    let state = state_with_soracloud_permission(&kura)?;
+    let manifest = sample_agent_manifest_with_capabilities("overflow_agent", &[]);
+    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+        .as_ref()
+        .header();
+    let mut state_block = state.block(block_header);
+    let mut stx = state_block.transaction();
+    iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {
+        manifest: manifest.clone(),
+        lease_blocks: 120,
+        autonomy_budget_units: 1,
+        provenance: agent_deploy_provenance(manifest, 120, 1),
+    })
+    .execute(&ALICE_ID, &mut stx)?;
+
+    let apartment_name: iroha_data_model::name::Name =
+        "overflow_agent".parse().expect("valid apartment name");
+    let before = stx
+        .world
+        .soracloud_agent_apartments
+        .get("overflow_agent")
+        .cloned()
+        .expect("deployed apartment");
+    let audit_count_before = stx
+        .world
+        .soracloud_agent_apartment_audit_events
+        .iter()
+        .count();
+    let payload = encode_agent_lease_renew_provenance_payload(apartment_name.as_ref(), u64::MAX)?;
+    let error = iroha_data_model::isi::InstructionBox::from(isi::RenewSoracloudAgentLease {
+        apartment_name,
+        lease_blocks: u64::MAX,
+        provenance: ManifestProvenance {
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
+        },
+    })
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("an exact renewal term must not be truncated at u64::MAX");
+    assert_invalid_parameter_contains(error, "lease renewal expiry height overflowed");
+    assert_eq!(
+        stx.world.soracloud_agent_apartments.get("overflow_agent"),
+        Some(&before),
+        "a rejected renewal must leave the apartment record unchanged"
+    );
+    assert_eq!(
+        stx.world
+            .soracloud_agent_apartment_audit_events
+            .iter()
+            .count(),
+        audit_count_before,
+        "a rejected renewal must not append an audit event"
+    );
+    Ok(())
+}
+
 #[test]
 fn agent_apartment_lifecycle_instructions_record_authoritative_state() -> Result<(), eyre::Report> {
     let kura = Kura::blank_kura_for_testing();
@@ -12,7 +110,7 @@ fn agent_apartment_lifecycle_instructions_record_authoritative_state() -> Result
     let mut stx = state_block.transaction();
     iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {
         manifest: manifest.clone(),
-        lease_ticks: 120,
+        lease_blocks: 120,
         autonomy_budget_units: 500,
         provenance: agent_deploy_provenance(manifest, 120, 500),
     })
@@ -22,7 +120,7 @@ fn agent_apartment_lifecycle_instructions_record_authoritative_state() -> Result
         .expect("renew payload");
     iroha_data_model::isi::InstructionBox::from(isi::RenewSoracloudAgentLease {
         apartment_name: apartment_name.clone(),
-        lease_ticks: 60,
+        lease_blocks: 60,
         provenance: ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
             signature: checked_signature(ALICE_KEYPAIR.private_key(), &renew_payload),
@@ -126,14 +224,14 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
     .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
     iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {
         manifest: ops_manifest.clone(),
-        lease_ticks: 120,
+        lease_blocks: 120,
         autonomy_budget_units: 500,
         provenance: agent_deploy_provenance(ops_manifest, 120, 500),
     })
     .execute(&ALICE_ID, &mut stx)?;
     iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {
         manifest: worker_manifest.clone(),
-        lease_ticks: 120,
+        lease_blocks: 120,
         autonomy_budget_units: 250,
         provenance: agent_deploy_provenance(worker_manifest, 120, 250),
     })
@@ -293,7 +391,7 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
     Ok(())
 }
 #[test]
-fn record_agent_autonomy_execution_records_authoritative_audit_state() -> Result<(), eyre::Report> {
+fn record_agent_autonomy_execution_is_exactly_once_and_audited() -> Result<(), eyre::Report> {
     let kura = Kura::blank_kura_for_testing();
     let state = state_with_soracloud_permission(&kura)?;
     let ops_manifest = sample_agent_manifest_with_capabilities(
@@ -307,7 +405,7 @@ fn record_agent_autonomy_execution_records_authoritative_audit_state() -> Result
     let mut stx = state_block.transaction();
     iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {
         manifest: ops_manifest.clone(),
-        lease_ticks: 120,
+        lease_blocks: 120,
         autonomy_budget_units: 500,
         provenance: agent_deploy_provenance(ops_manifest, 120, 500),
     })
@@ -362,27 +460,30 @@ fn record_agent_autonomy_execution_records_authoritative_audit_state() -> Result
         .cloned()
         .expect("approved run");
     let result_commitment = Hash::new(b"ops-agent-runtime-result");
-    let runtime_receipt_id = Hash::new(b"ops-agent-runtime-receipt");
     let journal_artifact_hash = Hash::new(b"ops-agent-runtime-journal");
-    let checkpoint_artifact_hash = Hash::new(b"ops-agent-runtime-checkpoint");
-    let service_name: iroha_data_model::name::Name =
-        "hf_agent_service".parse().expect("valid service name");
-    let handler_name: iroha_data_model::name::Name = "infer".parse().expect("valid handler");
-    iroha_data_model::isi::InstructionBox::from(isi::RecordSoracloudAgentAutonomyExecution {
-        apartment_name,
+    let execution = isi::RecordSoracloudAgentAutonomyExecution {
+        apartment_name: apartment_name.clone(),
         run_id: approved_run.run_id.clone(),
         process_generation: approved_run.approved_process_generation,
-        succeeded: true,
+        succeeded: false,
         result_commitment,
-        service_name: Some(service_name),
-        service_version: Some("hf.generated.v1".to_string()),
-        handler_name: Some(handler_name),
-        runtime_receipt_id: Some(runtime_receipt_id),
+        service_name: None,
+        service_version: None,
+        handler_name: None,
+        runtime_receipt_id: None,
         journal_artifact_hash: Some(journal_artifact_hash),
-        checkpoint_artifact_hash: Some(checkpoint_artifact_hash),
-        error: None,
-    })
-    .execute(&ALICE_ID, &mut stx)?;
+        checkpoint_artifact_hash: None,
+        error: Some("runtime materialization failed".to_owned()),
+    };
+    iroha_data_model::isi::InstructionBox::from(execution.clone()).execute(&ALICE_ID, &mut stx)?;
+    let duplicate_error = iroha_data_model::isi::InstructionBox::from(execution)
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("one approved autonomy run cannot record a second outcome");
+    assert!(
+        duplicate_error
+            .to_string()
+            .contains("already has an authoritative execution")
+    );
     stx.apply();
     state_block.commit()?;
     let view = state.view();
@@ -409,16 +510,17 @@ fn record_agent_autonomy_execution_records_authoritative_audit_state() -> Result
         Some(approved_run.run_id.as_str())
     );
     assert_eq!(event.result_commitment, Some(result_commitment));
-    assert_eq!(event.runtime_receipt_id, Some(runtime_receipt_id));
+    assert_eq!(event.runtime_receipt_id, None);
     assert_eq!(event.journal_artifact_hash, Some(journal_artifact_hash));
+    assert_eq!(event.checkpoint_artifact_hash, None);
+    assert_eq!(event.succeeded, Some(false));
+    assert_eq!(event.service_name, None);
+    assert_eq!(event.service_version, None);
+    assert_eq!(event.handler_name, None);
     assert_eq!(
-        event.checkpoint_artifact_hash,
-        Some(checkpoint_artifact_hash)
+        event.reason.as_deref(),
+        Some("runtime materialization failed")
     );
-    assert_eq!(event.succeeded, Some(true));
-    assert_eq!(event.service_name.as_deref(), Some("hf_agent_service"));
-    assert_eq!(event.service_version.as_deref(), Some("hf.generated.v1"));
-    assert_eq!(event.handler_name.as_deref(), Some("infer"));
     assert_eq!(
         world
             .soracloud_agent_apartment_audit_events()

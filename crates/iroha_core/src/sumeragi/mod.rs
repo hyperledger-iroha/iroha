@@ -12,13 +12,11 @@ use iroha_config::parameters::{
         concurrency as concurrency_defaults,
         sumeragi::{
             BODY_ENVELOPE_HEADROOM_BYTES, CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-            TIMEOUT_VOTE_RESERVE_BYTES, npos::EPOCH_LENGTH_BLOCKS,
+            TIMEOUT_VOTE_RESERVE_BYTES,
         },
     },
 };
 use iroha_crypto::{Algorithm, Hash as CryptoHash, HashOf, PublicKey};
-#[cfg(test)]
-use iroha_data_model::consensus::VrfEpochRecord;
 use iroha_data_model::{
     NetworkId,
     block::consensus_v2::{
@@ -377,104 +375,6 @@ pub fn effective_consensus_mode(view: &StateView<'_>, frozen_mode: ConsensusMode
     let height = u64::try_from(view.height()).unwrap_or(0);
     effective_consensus_mode_for_height(view, height, frozen_mode)
 }
-/// Snapshot of epoch boundaries derived from finalized VRF records.
-#[derive(Clone, Debug)]
-pub(crate) struct EpochScheduleSnapshot {
-    finalized: Vec<(u64, u64)>,
-    last_finalized_epoch: Option<u64>,
-    last_finalized_end: u64,
-    fallback_epoch_length: u64,
-}
-impl EpochScheduleSnapshot {
-    #[cfg(not(test))]
-    pub(crate) fn from_world_with_fallback(
-        world: &impl WorldReadOnly,
-        fallback_epoch_length: u64,
-    ) -> Self {
-        let fallback_epoch_length = world
-            .sumeragi_npos_parameters()
-            .map(|params| params.epoch_length_blocks().get())
-            .unwrap_or(fallback_epoch_length)
-            .max(1);
-        Self {
-            finalized: Vec::new(),
-            last_finalized_epoch: None,
-            last_finalized_end: 0,
-            fallback_epoch_length,
-        }
-    }
-    /// Preserve historical VRF-boundary fixtures without a release consumer.
-    #[cfg(test)]
-    pub(crate) fn from_world_with_fallback(
-        world: &impl WorldReadOnly,
-        fallback_epoch_length: u64,
-    ) -> Self {
-        let mut finalized = Vec::new();
-        let mut last_end = 0;
-        for (epoch, record) in world.vrf_epochs().iter() {
-            if !record.finalized || record.updated_at_height == 0 {
-                continue;
-            }
-            if record.updated_at_height < last_end {
-                iroha_logger::warn!(
-                    epoch = record.epoch,
-                    observed = record.updated_at_height,
-                    expected = last_end,
-                    "ignoring non-monotonic VRF epoch end height"
-                );
-                break;
-            }
-            finalized.push((*epoch, record.updated_at_height));
-            last_end = record.updated_at_height;
-        }
-        let fallback_epoch_length = world
-            .sumeragi_npos_parameters()
-            .map(|params| params.epoch_length_blocks().get())
-            .or_else(|| {
-                world
-                    .vrf_epochs()
-                    .iter()
-                    .last()
-                    .map(|(_, record)| record.epoch_length)
-            })
-            .unwrap_or(fallback_epoch_length)
-            .max(1);
-        let last_finalized_epoch = finalized.last().map(|(epoch, _)| *epoch);
-        let last_finalized_end = finalized.last().map_or(0, |(_, end)| *end);
-        Self {
-            finalized,
-            last_finalized_epoch,
-            last_finalized_end,
-            fallback_epoch_length,
-        }
-    }
-    pub(crate) fn from_world(world: &impl WorldReadOnly) -> Self {
-        Self::from_world_with_fallback(world, EPOCH_LENGTH_BLOCKS)
-    }
-    pub(crate) fn epoch_for_height(&self, height: u64) -> u64 {
-        if height == 0 {
-            return 0;
-        }
-        for (epoch, end_height) in &self.finalized {
-            if height <= *end_height {
-                return *epoch;
-            }
-        }
-        let fallback_len = self.fallback_epoch_length.max(1);
-        self.last_finalized_epoch.map_or_else(
-            || height.saturating_sub(1) / fallback_len,
-            |last_epoch| {
-                let start = self.last_finalized_end.saturating_add(1);
-                if height < start {
-                    last_epoch
-                } else {
-                    let offset = height.saturating_sub(start);
-                    last_epoch.saturating_add(1 + offset / fallback_len)
-                }
-            },
-        )
-    }
-}
 /// Resolve the signed on-chain delay before consensus-evidence penalties apply.
 pub(crate) fn resolve_npos_slashing_delay_blocks_from_world(
     world: &impl WorldReadOnly,
@@ -483,192 +383,102 @@ pub(crate) fn resolve_npos_slashing_delay_blocks_from_world(
         .sumeragi_npos_parameters()
         .map(|params| params.slashing_delay_blocks())
 }
-#[cfg(test)]
-fn network_epoch_seed(network_id: &NetworkId) -> [u8; 32] {
-    *network_id.as_bytes()
-}
-#[cfg(test)]
-fn npos_base_epoch_seed(world: &impl WorldReadOnly, network_id: &NetworkId) -> [u8; 32] {
-    world
-        .sumeragi_npos_parameters()
-        .map(|params| params.epoch_seed())
-        .unwrap_or_else(|| network_epoch_seed(network_id))
-}
-#[cfg(test)]
-fn next_epoch_seed_from_seed_and_reveals(
-    seed: [u8; 32],
-    reveals: impl IntoIterator<Item = (u32, [u8; 32])>,
-) -> [u8; 32] {
-    use iroha_crypto::blake2::{Blake2b512, Digest as _};
-    let mut h = Blake2b512::new();
-    iroha_crypto::blake2::digest::Update::update(&mut h, &seed);
-    for (signer, reveal) in reveals {
-        iroha_crypto::blake2::digest::Update::update(&mut h, &signer.to_be_bytes());
-        iroha_crypto::blake2::digest::Update::update(&mut h, &reveal);
-    }
-    let digest = iroha_crypto::blake2::Digest::finalize(h);
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&digest[..32]);
-    out
-}
-#[cfg(test)]
-fn next_epoch_seed_from_seed(seed: [u8; 32]) -> [u8; 32] {
-    next_epoch_seed_from_seed_and_reveals(seed, [])
-}
-#[cfg(test)]
-fn next_epoch_seed_from_record(record: &VrfEpochRecord) -> [u8; 32] {
-    let mut reveals: Vec<(u32, [u8; 32])> = record
-        .participants
-        .iter()
-        .filter_map(|p| p.reveal.map(|reveal| (p.signer, reveal)))
-        .collect();
-    reveals.sort_by_key(|(signer, _)| *signer);
-    next_epoch_seed_from_seed_and_reveals(record.seed, reveals)
-}
-#[cfg(test)]
-pub(crate) fn deterministic_npos_seed_for_epoch_from_world(
-    world: &impl WorldReadOnly,
-    network_id: &NetworkId,
-    epoch: u64,
-) -> [u8; 32] {
-    let mut seed = npos_base_epoch_seed(world, network_id);
-    for _ in 0..epoch {
-        seed = next_epoch_seed_from_seed(seed);
-    }
-    seed
-}
-#[cfg(test)]
-fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, network_id: &NetworkId) -> [u8; 32] {
-    if let Some((_epoch, record)) = world.vrf_epochs().iter().last() {
-        return if record.finalized {
-            next_epoch_seed_from_record(record)
-        } else {
-            record.seed
-        };
-    }
-    npos_base_epoch_seed(world, network_id)
-}
-/// Resolve the epoch index for a height using finalized VRF epoch boundaries when available.
-pub(crate) fn epoch_for_height_from_world(world: &impl WorldReadOnly, height: u64) -> u64 {
-    EpochScheduleSnapshot::from_world(world).epoch_for_height(height)
-}
-/// Resolve the `NPoS` PRF seed for the epoch containing `height`.
-#[cfg(test)]
-pub fn npos_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
-    npos_seed_for_height_from_world(&view.world, view.network_id(), height)
-}
-/// Resolve the PRF seed for the epoch containing `height`.
-#[cfg(test)]
-pub fn prf_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
-    prf_seed_for_height_from_world(&view.world, view.network_id(), height)
-}
-/// Resolve the `NPoS` PRF seed for the epoch containing `height` from any world snapshot.
-#[cfg(test)]
-pub fn npos_seed_for_height_from_world(
-    world: &impl WorldReadOnly,
-    network_id: &NetworkId,
-    height: u64,
-) -> [u8; 32] {
-    let epoch = epoch_for_height_from_world(world, height);
-    npos_seed_for_epoch_from_world(world, network_id, epoch)
-}
-/// Resolve the `NPoS` PRF seed for one exact authenticated epoch.
+/// Resolve the epoch index for a height under an authenticated frozen mode.
 ///
-/// Callers that already carry a finalized epoch number must use this rather
-/// than re-deriving an epoch from a possibly different height schedule.
-#[cfg(test)]
-pub(crate) fn npos_seed_for_epoch_from_world(
+/// Permissioned consensus has one unbounded epoch and does not require NPoS
+/// parameters. NPoS must derive its schedule from committed parameters; their
+/// absence or invalidity is a consensus error rather than a default schedule.
+pub(crate) fn epoch_for_height_from_world(
     world: &impl WorldReadOnly,
-    network_id: &NetworkId,
-    epoch: u64,
-) -> [u8; 32] {
-    if let Some(record) = world.vrf_epochs().get(&epoch) {
-        return record.seed;
-    }
-    if let Some((last_epoch, record)) = world
-        .vrf_epochs()
-        .iter()
-        .filter(|(record_epoch, record)| **record_epoch < epoch && record.finalized)
-        .last()
-    {
-        // Crash recovery: derive missing epoch seeds if in-progress seed-only snapshots
-        // were not persisted before restart.
-        let mut seed = next_epoch_seed_from_record(record);
-        for _ in last_epoch.saturating_add(1)..epoch {
-            seed = next_epoch_seed_from_seed(seed);
-        }
-        return seed;
-    }
-    if world.sumeragi_npos_parameters().is_some() {
-        deterministic_npos_seed_for_epoch_from_world(world, network_id, epoch)
-    } else {
-        latest_epoch_seed_from_world(world, network_id)
-    }
-}
-/// Resolve the PRF seed for the epoch containing `height` from any world snapshot.
-#[cfg(test)]
-pub(crate) fn prf_seed_for_height_from_world(
-    world: &impl WorldReadOnly,
-    network_id: &NetworkId,
     height: u64,
-) -> [u8; 32] {
-    npos_seed_for_height_from_world(world, network_id, height)
+    frozen_mode: ConsensusMode,
+) -> Result<u64, v2_npos::V2NposError> {
+    match frozen_mode {
+        ConsensusMode::Permissioned => Ok(0),
+        ConsensusMode::Npos => {
+            let epoch_length = v2_npos::committed_epoch_params(world)?.epoch_length_blocks;
+            Ok(height.saturating_sub(1) / epoch_length)
+        }
+    }
 }
 #[cfg(test)]
-mod exact_epoch_seed_tests {
+mod epoch_schedule_tests {
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
     use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
+    use std::num::NonZeroU64;
+
     #[test]
-    fn exact_authenticated_epoch_seed_is_not_rederived_from_height() {
+    fn npos_epoch_schedule_uses_committed_epoch_length() {
         let state = State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let authenticated_seed = [0xA7; 32];
+        let mut parameters = SumeragiNposParameters::default();
+        parameters.epoch_length_blocks = NonZeroU64::new(7).expect("non-zero epoch length");
+        parameters.vrf_commit_window_blocks = 2;
+        parameters.vrf_reveal_window_blocks = 2;
+        parameters
+            .validate()
+            .expect("test NPoS parameters must be internally consistent");
         {
-            let mut parameters = state.world.parameters.block();
-            parameters.set_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            ));
-            parameters.commit();
+            let mut block = state.world.parameters.block();
+            block.set_parameter(Parameter::Custom(parameters.into_custom_parameter()));
+            block.commit();
         }
-        {
-            let mut world = state.world.block();
-            world.vrf_epochs.insert(
-                7,
-                VrfEpochRecord {
-                    epoch: 7,
-                    seed: authenticated_seed,
-                    epoch_length: 100,
-                    commit_deadline_offset: 1,
-                    reveal_deadline_offset: 2,
-                    roster_len: 0,
-                    finalized: false,
-                    updated_at_height: 0,
-                    participants: Vec::new(),
-                    late_reveals: Vec::new(),
-                    committed_no_reveal: Vec::new(),
-                    no_participation: Vec::new(),
-                    penalties_applied: false,
-                    penalties_applied_at_height: None,
-                    validator_election: None,
-                },
-            );
-            world.commit();
-        }
-        let view = state.world_view();
-        assert_eq!(epoch_for_height_from_world(&view, 2), 0);
-        assert_ne!(
-            npos_seed_for_height_from_world(&view, state.network_id_ref(), 2),
-            authenticated_seed
+        let world = state.world_view();
+        assert_eq!(
+            epoch_for_height_from_world(&world, 0, ConsensusMode::Npos).expect("valid schedule"),
+            0
         );
         assert_eq!(
-            npos_seed_for_epoch_from_world(&view, state.network_id_ref(), 7),
-            authenticated_seed,
-            "a parent-authenticated epoch number is authoritative"
+            epoch_for_height_from_world(&world, 1, ConsensusMode::Npos).expect("valid schedule"),
+            0
         );
+        assert_eq!(
+            epoch_for_height_from_world(&world, 7, ConsensusMode::Npos).expect("valid schedule"),
+            0
+        );
+        assert_eq!(
+            epoch_for_height_from_world(&world, 8, ConsensusMode::Npos).expect("valid schedule"),
+            1
+        );
+        assert_eq!(
+            epoch_for_height_from_world(&world, 15, ConsensusMode::Npos).expect("valid schedule"),
+            2
+        );
+    }
+
+    #[test]
+    fn permissioned_epoch_is_zero_without_npos_parameters_at_all_boundaries() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let world = state.world_view();
+        for height in [0, 1, 3_600, 3_601, u64::MAX] {
+            assert_eq!(
+                epoch_for_height_from_world(&world, height, ConsensusMode::Permissioned)
+                    .expect("permissioned mode does not require an NPoS schedule"),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn npos_epoch_rejects_missing_committed_parameters() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let world = state.world_view();
+        assert!(matches!(
+            epoch_for_height_from_world(&world, 1, ConsensusMode::Npos),
+            Err(v2_npos::V2NposError::MissingCommittedParameters)
+        ));
     }
 }
 /// QC-based consensus message types and helpers (single-chain).
@@ -4295,7 +4105,7 @@ impl FairV2Ingress {
     /// Queued messages belong to the preceding immutable height and are
     /// discarded while the public ingress gate is closed. The caller may open
     /// the queue only after context and safety-WAL recovery complete.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(any(test, feature = "sumeragi-main-loop-tests"))]
     pub(crate) fn configure_roster(
         &self,
         roster: impl IntoIterator<Item = PeerId>,
@@ -6030,7 +5840,7 @@ impl FairV2Ingress {
     /// becomes admissible, the head-first search selects it before later
     /// entries. When every entry is rejected, the source order and total length
     /// remain unchanged.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(any(test, feature = "sumeragi-main-loop-tests"))]
     pub(crate) fn try_recv_if(
         &self,
         predicate: impl FnMut(&InboundBlockMessage) -> bool,
@@ -6879,7 +6689,7 @@ impl SumeragiHandle {
         self.output_guard.restart_required()
     }
 }
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(any(test, feature = "sumeragi-main-loop-tests"))]
 fn test_sumeragi_handle(
     block_capacity: usize,
 ) -> (
@@ -6889,7 +6699,7 @@ fn test_sumeragi_handle(
 ) {
     test_sumeragi_handle_with_source_geometry(block_capacity, None)
 }
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(any(test, feature = "sumeragi-main-loop-tests"))]
 fn test_sumeragi_handle_with_source_geometry(
     block_capacity: usize,
     authenticated_non_validator_source_capacity: Option<usize>,

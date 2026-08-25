@@ -13,7 +13,7 @@ fn queue_plan_pending_resolution_decrements_only_exact_bound_route_counts() {
         &state,
         native_plan,
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         0x6C,
     );
     let single_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
@@ -24,7 +24,7 @@ fn queue_plan_pending_resolution_decrements_only_exact_bound_route_counts() {
         &state,
         single_plan,
         &validator_keypairs,
-        1,
+        queue_plan_authority_height_for_state_test(&state),
         0x6D,
     );
     let native_obligation = queue_plan_pending_obligation_for_test(&state, &native_certificate);
