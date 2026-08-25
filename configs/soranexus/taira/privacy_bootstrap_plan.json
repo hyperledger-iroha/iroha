@@ -14,7 +14,7 @@
     "notice_interval_blocks": 300,
     "observation_interval_blocks": 300,
     "rollout_plan_path": "configs/soranexus/taira/privacy_rollout_plan_v1.json",
-    "rollout_plan_sha256": "22924ed74daaa2fc6e0712ccc30e998d662886e60a4dc709a74eed61331ca9f1"
+    "rollout_plan_sha256": "0ebbd90983ae656f302e12bb3271a32b80fe4c72e02ef762a503cf9e664f0824"
   },
   "privacy_catalog": {
     "matrix_version": 1,

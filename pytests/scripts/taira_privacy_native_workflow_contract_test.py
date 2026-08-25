@@ -18,6 +18,16 @@ INSTALLER = ROOT / "scripts" / "install_taira_privacy_native_expectations.py"
 PROFILE = ROOT / "crates" / "iroha_core" / "src" / "privacy_engines" / "zk_x509" / "profile.rs"
 READINESS = PROFILE.parent / "profile" / "readiness_certificates.rs"
 ROLLOUT = ROOT / "configs" / "soranexus" / "taira" / "privacy_rollout_plan_v1.json"
+CORE_PROFILES = ROOT / "crates" / "iroha_core" / "src" / "privacy_profiles.rs"
+ZK_AMS_MISSING_EVIDENCE = [
+    "MissingZkAmsResourceEvidence",
+    "MissingZkAmsWireEvidence",
+    "MissingZkAmsMaliciousPartyEvidence",
+    "MissingZkAmsDecryptionShareEvidence",
+    "MissingZkAmsPhase23Evidence",
+    "MissingZkAmsReceiptCapabilityEvidence",
+    "MissingZkAmsReleaseKatEvidence",
+]
 
 
 def test_capture_corridor_is_registered_and_open_state_is_reported_honestly() -> None:
@@ -68,6 +78,22 @@ def test_capture_corridor_is_registered_and_open_state_is_reported_honestly() ->
             "zk_x509_native_resource_v1.json",
         ):
             assert not (ROOT / "fixtures" / "privacy" / fixture).exists()
+
+
+def test_zk_ams_rollout_stays_unavailable_until_every_mkhe_gate_closes() -> None:
+    profiles = CORE_PROFILES.read_text(encoding="utf-8")
+    assert "let readiness = zk_ams_mkhe_readiness_v1()" in profiles
+    assert "if !readiness.is_ready()" in profiles
+    assert "CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id }" in profiles
+
+    rollout = json.loads(ROLLOUT.read_text(encoding="utf-8"))
+    entry = next(
+        protocol
+        for protocol in rollout["protocols"]
+        if protocol["label"] == "iroha-zk-ams-v1"
+    )
+    assert entry["assurance"] == "unavailable"
+    assert entry["missing_evidence"] == ZK_AMS_MISSING_EVIDENCE
 
 
 def _workflow() -> str:
