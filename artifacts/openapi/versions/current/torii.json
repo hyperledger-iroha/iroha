@@ -13404,7 +13404,7 @@
       },
       "OfflineAuthenticatedArtifactSet": {
         "additionalProperties": false,
-        "description": "Exact authenticated ABI-21 V4 release identity selected at the readiness snapshot after Core authenticates its policy, attestation, evidence, manifest, verifier records, and verifier-side artifact bytes. The three non-zero SHA-256 digests identify distinct artifacts.",
+        "description": "Exact authenticated Kagemusha V4 release identity selected at the readiness snapshot after Core authenticates its policy, attestation, evidence, manifest, verifier records, and verifier-side artifact bytes. The three non-zero SHA-256 digests identify distinct artifacts.",
         "properties": {
           "activation_height": {
             "description": "First height at which this authenticated release may issue notes.",
@@ -13427,7 +13427,7 @@
             "type": "string"
           },
           "manifest_sha256": {
-            "description": "Lowercase hexadecimal SHA-256 digest of the canonical ABI-21 V4 release manifest.",
+            "description": "Lowercase hexadecimal SHA-256 digest of the canonical Kagemusha V4 release manifest.",
             "maxLength": 64,
             "minLength": 64,
             "not": {
@@ -13437,14 +13437,14 @@
             "type": "string"
           },
           "max_proof_bytes": {
-            "description": "Authenticated upper bound for one canonical ABI-21 V4 proof-pair payload.",
+            "description": "Authenticated upper bound for one canonical Kagemusha V4 proof-pair payload.",
             "format": "uint32",
             "maximum": 393216,
             "minimum": 1,
             "type": "integer"
           },
           "release_attestation_sha256": {
-            "description": "Lowercase hexadecimal SHA-256 digest of the canonical signed ABI-21 V4 release attestation.",
+            "description": "Lowercase hexadecimal SHA-256 digest of the canonical signed Kagemusha V4 release attestation.",
             "maxLength": 64,
             "minLength": 64,
             "not": {
@@ -13454,7 +13454,7 @@
             "type": "string"
           },
           "release_policy_sha256": {
-            "description": "Lowercase hexadecimal SHA-256 digest of the locally trusted ABI-21 V4 release policy.",
+            "description": "Lowercase hexadecimal SHA-256 digest of the locally trusted Kagemusha V4 release policy.",
             "maxLength": 64,
             "minLength": 64,
             "not": {
@@ -13537,7 +13537,7 @@
       },
       "OfflineCapabilityStatus": {
         "additionalProperties": false,
-        "description": "Universal, asset-neutral offline-wallet application interface capability.",
+        "description": "Asset-neutral offline-wallet interface contract with fail-closed production activation status.",
         "properties": {
           "assets": {
             "description": "Always empty; universal capability discovery never enrolls or attests any asset.",
@@ -13545,8 +13545,66 @@
             "type": "array"
           },
           "blockers": {
-            "description": "Always empty; application feature capability never blocks node health or readiness.",
-            "maxItems": 0,
+            "description": "Exact ordered asset-neutral release, eligible-asset, and proof-backend blockers retained until deployment-specific evidence is evaluated.",
+            "items": false,
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "const": "offline_cash_authenticated_release_unavailable",
+                    "type": "string"
+                  },
+                  "message": {
+                    "const": "No authenticated Offline Cash V1 release is selected by this asset-neutral response.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "const": "offline_cash_eligible_asset_unavailable",
+                    "type": "string"
+                  },
+                  "message": {
+                    "const": "No eligible Offline Cash V1 asset is selected by this asset-neutral response.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "const": "offline_cash_proof_backend_unavailable",
+                    "type": "string"
+                  },
+                  "message": {
+                    "const": "No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message"
+                ],
+                "type": "object"
+              }
+            ],
             "type": "array"
           },
           "cash_handoff_capability": {
@@ -13565,8 +13623,8 @@
             "type": "integer"
           },
           "ready": {
-            "const": true,
-            "description": "Always true because this reports interface availability, not per-asset backend material.",
+            "const": false,
+            "description": "Always false because asset-neutral discovery cannot authenticate production backend, release, and eligible-asset evidence.",
             "type": "boolean"
           },
           "required_bridge_abi_version": {
@@ -13993,7 +14051,7 @@
       },
       "OfflinePastaCycleProofEnvelope": {
         "additionalProperties": false,
-        "description": "Authenticated ABI-21/V4 Eq/Ep proof-pair envelope.",
+        "description": "Authenticated bridge ABI-22 / Kagemusha V4 Eq/Ep proof-pair envelope.",
         "properties": {
           "artifact_generation": {
             "maxLength": 128,
@@ -14188,7 +14246,7 @@
                 "type": "null"
               }
             ],
-            "description": "Authoritative active ABI-21 V4 recursive StepEp verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
+            "description": "Authoritative active Kagemusha V4 recursive StepEp verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
           },
           "active_recursive_step_eq_verifier": {
             "anyOf": [
@@ -14199,7 +14257,7 @@
                 "type": "null"
               }
             ],
-            "description": "Authoritative active ABI-21 V4 recursive StepEq verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
+            "description": "Authoritative active Kagemusha V4 recursive StepEq verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
           },
           "active_topup_shield_verifier": {
             "anyOf": [
@@ -14243,7 +14301,7 @@
                 "type": "null"
               }
             ],
-            "description": "Exact authenticated ABI-21 V4 release identity selected atomically with the recursive verifiers, or null with an authenticated V4 registry blocker."
+            "description": "Exact authenticated Kagemusha V4 release identity selected atomically with the recursive verifiers, or null with an authenticated V4 registry blocker."
           },
           "asset_definition_id": {
             "description": "Resolved canonical unprefixed Base58 asset-definition address; an alias selector is never echoed here.",
@@ -14295,7 +14353,7 @@
             "type": "integer"
           },
           "proof_backend_available": {
-            "description": "Whether the exact authenticated ABI-21 V4 artifacts constructed the production recursive verifier backend at this snapshot.",
+            "description": "Whether the exact authenticated Kagemusha V4 artifacts constructed the production recursive verifier backend at this snapshot.",
             "type": "boolean"
           },
           "ready": {
@@ -14303,11 +14361,11 @@
             "type": "boolean"
           },
           "recursive_lineage_supported": {
-            "description": "Whether the exact authenticated ABI-21 V4 artifact set, distinct active Eq/Ep records, and constructed backend support chain admission, parent/change recursive verification, and redemption at this snapshot.",
+            "description": "Whether the exact authenticated Kagemusha V4 artifact set, distinct active Eq/Ep records, and constructed backend support chain admission, parent/change recursive verification, and redemption at this snapshot.",
             "type": "boolean"
           },
           "required_bridge_abi_version": {
-            "description": "Exact native bridge ABI required by the authenticated ABI-21 V4 recursive release.",
+            "description": "Exact native bridge ABI required by the authenticated Kagemusha V4 recursive release.",
             "format": "uint32",
             "maximum": 22,
             "minimum": 22,
@@ -14361,7 +14419,7 @@
       },
       "OfflineRecursiveOperationVector": {
         "additionalProperties": false,
-        "description": "Exact canonical ABI-21 operation row independently carried by the bundle.",
+        "description": "Exact canonical Kagemusha V4 operation row independently carried by the bundle.",
         "properties": {
           "limbs": {
             "items": {
@@ -14492,7 +14550,7 @@
             "$ref": "#/components/schemas/OfflineRedemptionIntent"
           },
           "version": {
-            "description": "Exact ABI-21/V4 chain-request wire version.",
+            "description": "Exact bridge ABI-22 / Kagemusha V4 chain-request wire version.",
             "format": "uint16",
             "maximum": 4,
             "minimum": 4,
@@ -15266,7 +15324,7 @@
             "description": "Typed public-to-confidential proof that appends exactly the first spendable note without consuming a confidential input."
           },
           "version": {
-            "description": "Exact ABI-21/V4 chain-request wire version.",
+            "description": "Exact bridge ABI-22 / Kagemusha V4 chain-request wire version.",
             "format": "uint16",
             "maximum": 4,
             "minimum": 4,
@@ -49537,7 +49595,7 @@
     },
     "/v1/offline/readiness": {
       "get": {
-        "description": "Report the offline-wallet protocol interface implemented by every Iroha app-api deployment. cash_handoff_v1 and native bridge ABI 22 are universally available to applications and do not require settlement flags, escrow catalogs, asset metadata, or dataspace enrollment. This capability response is deliberately asset-neutral: mandatory is false, ready is true, and assets and blockers are empty. Wallets must not gate offline UI or peer handoff on this discovery call; those flows continue without network connectivity. It does not claim that any particular asset has server-managed top-up, redemption, proof, or escrow material.",
+        "description": "Report the offline-wallet protocol interface implemented by every Iroha app-api deployment. cash_handoff_v1 and native bridge ABI 22 advertise the application wire contract, but this asset-neutral response does not evaluate an authenticated production proof backend, release, or eligible asset. It therefore reports mandatory as false, ready as false, an empty assets array, and three canonical blockers. Wallets may discover the interface here but must not treat this response as production proof authority.",
         "operationId": "offlineReadiness",
         "parameters": [
           {
