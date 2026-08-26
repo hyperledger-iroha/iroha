@@ -696,6 +696,16 @@ def test_tvm_tooling_is_integrity_locked_and_audit_is_mandatory() -> None:
     assert runner.count("$SNAPSHOT_MANIFEST\" \"$SNAPSHOT_VECTORS") == 2
     assert 'contract_tvm_smoke.mjs\" "$MANIFEST"' not in runner
 
+    automatic_smoke = (ROOT / "scripts" / "sccp_evm_contract_smoke.sh").read_text(
+        encoding="utf-8"
+    )
+    assert automatic_smoke.count("audit --omit=dev --audit-level=low") == 2
+    assert "SCCP_TVM_STATIC_ONLY=1" in automatic_smoke
+    assert '"$NODE_BIN" scripts/contract_tvm_smoke.mjs' in automatic_smoke
+    assert '"$RUNTIME_MANIFEST"' in automatic_smoke
+    assert "fixtures/sccp/native_transfer_event_v1.json" in automatic_smoke
+    assert "SCCP_TVM_ENDPOINT" not in automatic_smoke
+
 
 def test_evm_tooling_is_locked_audited_hardhat_without_ganache() -> None:
     tooling = ROOT / "scripts" / "contract_tooling" / "evm-runtime"
