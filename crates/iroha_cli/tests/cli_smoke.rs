@@ -993,6 +993,7 @@ fn gov_propose_deploy_against_mock() {
     let payload = iroha_data_model::isi::Instruction::dyn_encode(&*instruction);
     let framed = iroha_data_model::isi::frame_instruction_payload(&wire_id, &payload)
         .expect("frame deploy proposal instruction");
+    let payload_hex = hex::encode(framed);
     let mut config_payload_map = json::Map::new();
     config_payload_map.insert("referenda".to_string(), json::Value::Array(Vec::new()));
     let mut response_map = json::Map::new();
@@ -1004,7 +1005,7 @@ fn gov_propose_deploy_against_mock() {
         "tx_instructions".to_string(),
         norito::json!([{
             "wire_id": wire_id,
-            "payload_hex": hex::encode(framed),
+            "payload_hex": payload_hex,
         }]),
     );
     config_payload_map.insert(
@@ -4795,6 +4796,7 @@ mod torii_mock_support {
         let torii_url = format!("{}/", base_url.trim_end_matches('/'));
         let contents = format!(
             "chain = \"00000000-0000-0000-0000-000000000000\"\n\
+network_id = \"hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0\"\n\
 torii_url = \"{torii_url}\"\n\
 \n\
 [basic_auth]\n\

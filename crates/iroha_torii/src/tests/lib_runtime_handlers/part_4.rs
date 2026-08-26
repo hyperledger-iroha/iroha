@@ -1123,6 +1123,29 @@ fn sample_privacy_share_dto(app: &SharedAppState) -> RecordSoranetPrivacyShareDt
         forwarded_by: None,
     }
 }
+#[test]
+#[cfg(feature = "telemetry")]
+fn privacy_event_dto_native_norito_roundtrip() {
+    let mut expected = sample_privacy_event_dto();
+    expected.source = Some("relay-a".to_owned());
+    let encoded = norito::to_bytes(&expected).expect("encode privacy event request as Norito");
+    let decoded: RecordSoranetPrivacyEventDto =
+        norito::decode_from_bytes(&encoded).expect("decode privacy event request from Norito");
+    assert_eq!(decoded.event, expected.event);
+    assert_eq!(decoded.source, expected.source);
+}
+#[test]
+#[cfg(feature = "telemetry")]
+fn privacy_share_dto_native_norito_roundtrip() {
+    let app = mk_app_state_for_tests();
+    let mut expected = sample_privacy_share_dto(&app);
+    expected.forwarded_by = Some("collector-a".to_owned());
+    let encoded = norito::to_bytes(&expected).expect("encode privacy share request as Norito");
+    let decoded: RecordSoranetPrivacyShareDto =
+        norito::decode_from_bytes(&encoded).expect("decode privacy share request from Norito");
+    assert_eq!(decoded.share, expected.share);
+    assert_eq!(decoded.forwarded_by, expected.forwarded_by);
+}
 #[cfg(feature = "telemetry")]
 fn privacy_operator(
     app: &SharedAppState,
