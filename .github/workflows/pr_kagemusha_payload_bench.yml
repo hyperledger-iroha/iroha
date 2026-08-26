@@ -925,7 +925,7 @@ jobs:
 
   swift:
     name: Swift lifecycle surface
-    runs-on: macos-15
+    runs-on: macos-14
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
