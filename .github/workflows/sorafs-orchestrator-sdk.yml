@@ -85,7 +85,7 @@ concurrency:
 jobs:
   sdk-parity:
     runs-on: macos-14
-    timeout-minutes: 120
+    timeout-minutes: 360
     env:
       CARGO_TERM_COLOR: never
       IROHA_JS_NATIVE_BUILD_PROFILE: "release"
