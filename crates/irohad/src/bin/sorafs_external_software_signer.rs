@@ -12,8 +12,9 @@ mod unix_main {
         ExternalSoftwareSignerEvidenceViewerAdapterV1,
         ExternalSoftwareSignerGovernanceDagAdapterV1, ExternalSoftwareSignerNativeAdapterV1,
         ExternalSoftwareSignerPotrGatewayAdapterV1, ExternalSoftwareSignerPotrProviderAdapterV1,
-        ExternalSoftwareSignerStreamTokenAdapterV1, SoftwareSignerAdministratorClientV1,
-        SoftwareSignerClientV1, SoftwareSignerEndpointPolicyV1, SoftwareSignerKeyAlgorithmV1,
+        ExternalSoftwareSignerStreamTokenAdapterV1, RuntimeConsensusThresholdSignerBackendsV1,
+        SoftwareSignerAdministratorClientV1, SoftwareSignerClientV1,
+        SoftwareSignerEndpointPolicyV1, SoftwareSignerKeyAlgorithmV1,
         SoftwareSignerLiveProvenanceV1, SoftwareSignerProvisioningV1,
         SoftwareSignerPublicBindingV1, SoftwareSignerPurposeBindingV1, SoftwareSignerRoleV1,
         SoftwareSignerRotationRequestV1, SoftwareSignerServerV1, SoftwareSignerServiceV1,
@@ -354,7 +355,7 @@ mod unix_main {
     impl CliError {
         const fn message(self) -> &'static str {
             match self {
-                Self::Credential => "runtime wrapping-key credential was rejected",
+                Self::Credential => "runtime secret credential was rejected",
                 Self::Binding => "public software-signer binding was rejected",
                 Self::Input => "bounded canonical input was rejected",
                 Self::Output => "new output artifact could not be committed",
@@ -587,8 +588,23 @@ mod unix_main {
         let args = RuntimeProviderBrokerExecutableArgsV1::parse();
         let catalog = load_runtime_provider_broker_catalog_file_v1(args.catalog_path())
             .map_err(|_| CliError::Binding)?;
-        let mut signers = ExternalSoftwareSignerBackendsV1::new();
+        let credential_directory = env::var_os("CREDENTIALS_DIRECTORY").map(PathBuf::from);
+        let threshold_signers =
+            RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
+                &catalog,
+                credential_directory.as_deref(),
+            )
+            .map_err(|_| CliError::Credential)?;
+        let mut signers =
+            ExternalSoftwareSignerBackendsV1::new().with_base_registry(Arc::new(threshold_signers));
         for configured in catalog.iter() {
+            if matches!(
+                configured.slot(),
+                IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner
+                    | IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner
+            ) {
+                continue;
+            }
             let role_name = fixed_catalog_signer_role_name(configured)?;
             let (binding_path, request_socket, administrator_socket) =
                 fixed_signer_paths(role_name);

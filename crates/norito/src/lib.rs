@@ -242,11 +242,11 @@ pub mod codec {
             eprintln!("norito.codec.encode_adaptive: flags=0x{flags:02x}");
         }
         let _flags = core::DecodeFlagsGuard::enter(flags);
-        let (payload, final_flags) =
+        let (payload, _final_flags) =
             core::encode_bare_with_flags(value).expect("bare Norito encoding should succeed");
         #[cfg(debug_assertions)]
         if crate::debug_trace_enabled() {
-            eprintln!("norito.codec.encode_adaptive: final_flags=0x{final_flags:02x}");
+            eprintln!("norito.codec.encode_adaptive: final_flags=0x{_final_flags:02x}");
         }
         payload
     }

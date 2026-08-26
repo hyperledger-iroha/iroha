@@ -41,6 +41,17 @@ fail() {
   exit 1
 }
 
+TEST_RUSTUP_BINARY="$(command -v rustup)" \
+  || fail "rustup is required"
+TEST_RUSTUP_BINARY="$("$TEST_PYTHON_BINARY" -I -S -B -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$TEST_RUSTUP_BINARY")" \
+  || fail "rustup must resolve to a canonical executable"
+[[ "$TEST_RUSTUP_BINARY" == /* && -f "$TEST_RUSTUP_BINARY" \
+  && ! -L "$TEST_RUSTUP_BINARY" && -x "$TEST_RUSTUP_BINARY" ]] \
+  || fail "rustup must be an absolute canonical non-symbolic executable"
+export MOBILE_SDK_RUSTUP_BINARY="$TEST_RUSTUP_BINARY"
+
 command -v zip >/dev/null 2>&1 || fail "zip command is required"
 
 # shellcheck source=tests/mobile_sdk_build_source_seal_test.sh
@@ -483,6 +494,26 @@ run_expect_fail() {
   esac
 }
 
+run_expect_rustup_override_fail() {
+  local root="$1"
+  local candidate="$2"
+  local output
+  if output="$(PATH="$INSPECTION_TOOLS:$PATH" \
+      MOBILE_SDK_RUSTUP_BINARY="$candidate" \
+      MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
+      bash "$CHECK_SCRIPT" "$root" --apple-only 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "expected checker to reject rustup override: $candidate"
+  fi
+  case "$output" in
+    *"MOBILE_SDK_RUSTUP_BINARY must be an absolute canonical non-symbolic executable"*) ;;
+    *)
+      printf '%s\n' "$output" >&2
+      fail "checker rustup override rejection was not explicit"
+      ;;
+  esac
+}
+
 make_apple_inspection_tools() {
   local tools="$1"
   mkdir -p "$tools"
@@ -526,6 +557,7 @@ def shell_array(name):
 
 for name in (
     "REQUIRED_BRIDGE_SYMBOLS",
+    "PARLIAMENT_TIMED_OVN_C_SYMBOLS",
     "SORAFS_APPEAL_FINANCE_C_SYMBOLS",
     "PRIVACY_COMPILED_PROFILE_C_SYMBOLS",
     "KAGEMUSHA_C_SYMBOLS",
@@ -581,6 +613,8 @@ def emit(symbol):
 emit("connect_norito_bridge_abi_version")
 for symbol in shell_array("KAGEMUSHA_C_SYMBOLS"):
     emit(symbol)
+for symbol in shell_array("PARLIAMENT_TIMED_OVN_C_SYMBOLS"):
+    emit(symbol)
 for symbol in shell_array("SORAFS_APPEAL_FINANCE_C_SYMBOLS"):
     emit(symbol)
 for symbol in shell_array("PRIVACY_COMPILED_PROFILE_C_SYMBOLS"):
@@ -592,6 +626,8 @@ for namespace in (
     for method in shell_array("KAGEMUSHA_JNI_METHODS"):
         emit(f"Java_{namespace}_KagemushaRecursiveSpendProver_{method}")
 for symbol in shell_array("VALIDATION_FEE_JNI_SYMBOLS"):
+    emit(symbol)
+for symbol in shell_array("PARLIAMENT_TIMED_OVN_JNI_SYMBOLS"):
     emit(symbol)
 for symbol in shell_array("SORAFS_APPEAL_FINANCE_JNI_SYMBOLS"):
     emit(symbol)
@@ -792,6 +828,15 @@ fixture="$TMP_DIR/valid"
 make_fixture "$fixture"
 run_expect_pass "$fixture"
 run_expect_single_apple_nm_projection "$fixture"
+
+checker_rustup_link="$TMP_DIR/checker-rustup-link"
+ln -s "$TEST_RUSTUP_BINARY" "$checker_rustup_link"
+checker_rustup_dir="${TEST_RUSTUP_BINARY%/*}"
+checker_rustup_noncanonical="$checker_rustup_dir/../${checker_rustup_dir##*/}/${TEST_RUSTUP_BINARY##*/}"
+run_expect_rustup_override_fail "$fixture" rustup
+run_expect_rustup_override_fail "$fixture" ""
+run_expect_rustup_override_fail "$fixture" "$checker_rustup_link"
+run_expect_rustup_override_fail "$fixture" "$checker_rustup_noncanonical"
 
 retired_binary_bypass_output="$(
   MOBILE_SDK_SKIP_BINARY_INSPECTION=1 \
@@ -1827,6 +1872,15 @@ run_expect_reference_only_binary_fail \
   "$extra_binary_symbol" \
   "connect_norito_bridge_abi_version" \
   "$inspection_tools"
+for parliament_c_symbol in \
+  connect_norito_parliament_timed_ovn_verify_casting_proof_v1 \
+  connect_norito_parliament_timed_ovn_registration_from_proof_v1 \
+  connect_norito_parliament_timed_ovn_ballot_from_proof_v1; do
+  run_expect_reference_only_binary_fail \
+    "$extra_binary_symbol" \
+    "$parliament_c_symbol" \
+    "$inspection_tools"
+done
 run_expect_binary_fail \
   "$extra_binary_symbol" \
   "Kagemusha export inventory is not exact" \
@@ -2452,6 +2506,25 @@ run_expect_android_missing_symbol_fail \
   "$with_android_outputs" \
   "Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignerContractRevision" \
   "$android_inspection_tools"
+for parliament_c_symbol in \
+  connect_norito_parliament_timed_ovn_verify_casting_proof_v1 \
+  connect_norito_parliament_timed_ovn_registration_from_proof_v1 \
+  connect_norito_parliament_timed_ovn_ballot_from_proof_v1; do
+  run_expect_android_missing_symbol_fail \
+    "$with_android_outputs" \
+    "$parliament_c_symbol" \
+    "$android_inspection_tools"
+done
+for parliament_jni_symbol in \
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBridgeAbiVersion \
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofV1 \
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeRegistrationFromProofV1 \
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBallotFromProofV1; do
+  run_expect_android_missing_symbol_fail \
+    "$with_android_outputs" \
+    "$parliament_jni_symbol" \
+    "$android_inspection_tools"
+done
 run_expect_android_missing_symbol_fail \
   "$with_android_outputs" \
   "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json" \

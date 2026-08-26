@@ -43,6 +43,8 @@ Source authentication requires Python 3.12, exact Rust 1.93.1 RUSTC/RUSTDOC,
 and an explicit canonical writable CARGO_TARGET_DIR outside the Iroha source
 tree. The reviewed envelope uses CARGO_BUILD_JOBS=1, CARGO_INCREMENTAL=0,
 CARGO_NET_OFFLINE=true, and RUSTC_BOOTSTRAP=1.
+MOBILE_SDK_RUSTUP_BINARY may select an absolute canonical, non-symbolic rustup
+executable when the canonical home-local proxy is unavailable.
 The builder alone may set MOBILE_SDK_STAGED_BUILD_VALIDATION=1 together with a
 private prospective-loader path. Final certification always checks the tracked
 Swift loader.
@@ -274,13 +276,32 @@ SOURCE_SEAL_RUSTUP_BINARY=""
 SOURCE_SEAL_CARGO_HOME="$CHECK_USER_HOME_DIR/.cargo"
 SOURCE_SEAL_RUSTUP_HOME="$CHECK_USER_HOME_DIR/.rustup"
 SOURCE_SEAL_CARGO_TARGET_DIR=""
+CHECK_RUSTUP_OVERRIDE=""
+
+if [[ -n "${MOBILE_SDK_RUSTUP_BINARY+x}" ]]; then
+  CHECK_RUSTUP_OVERRIDE="$MOBILE_SDK_RUSTUP_BINARY"
+  if [[ -z "$CHECK_RUSTUP_OVERRIDE" || "$CHECK_RUSTUP_OVERRIDE" != /* ]] \
+    || ! canonical_rustup_binary="$(run_isolated_checker_python -c \
+      'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+      "$CHECK_RUSTUP_OVERRIDE")" \
+    || [[ "$canonical_rustup_binary" != "$CHECK_RUSTUP_OVERRIDE" ]] \
+    || [[ ! -f "$CHECK_RUSTUP_OVERRIDE" || -L "$CHECK_RUSTUP_OVERRIDE" \
+      || ! -x "$CHECK_RUSTUP_OVERRIDE" ]]; then
+    echo "[mobile-sdk-artifacts] ERROR: MOBILE_SDK_RUSTUP_BINARY must be an absolute canonical non-symbolic executable" >&2
+    exit 69
+  fi
+fi
 
 initialize_source_seal_tools() {
   local actual_toolchain
   if [[ "$SOURCE_SEAL_TOOLS_INITIALIZED" == "1" ]]; then
     return
   fi
-  SOURCE_SEAL_RUSTUP_BINARY="$CHECK_USER_HOME_DIR/.cargo/bin/rustup"
+  if [[ -n "${MOBILE_SDK_RUSTUP_BINARY+x}" ]]; then
+    SOURCE_SEAL_RUSTUP_BINARY="$CHECK_RUSTUP_OVERRIDE"
+  else
+    SOURCE_SEAL_RUSTUP_BINARY="$CHECK_USER_HOME_DIR/.cargo/bin/rustup"
+  fi
   if [[ ! -f "$SOURCE_SEAL_RUSTUP_BINARY" || -L "$SOURCE_SEAL_RUSTUP_BINARY" \
     || ! -x "$SOURCE_SEAL_RUSTUP_BINARY" || ! -x /usr/bin/git ]]; then
     echo "[mobile-sdk-artifacts] ERROR: pinned rustup and Git are required for source authentication" >&2
@@ -538,6 +559,12 @@ PRIVACY_COMPILED_PROFILE_C_SYMBOLS=(
   iroha_privacy_free_buffer
 )
 
+PARLIAMENT_TIMED_OVN_C_SYMBOLS=(
+  connect_norito_parliament_timed_ovn_verify_casting_proof_v1
+  connect_norito_parliament_timed_ovn_registration_from_proof_v1
+  connect_norito_parliament_timed_ovn_ballot_from_proof_v1
+)
+
 REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_bridge_abi_version
   connect_norito_free
@@ -550,6 +577,7 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_canonical_json_blake3_v1
   connect_norito_encode_account_onboarding_plan_body_v1
   connect_norito_alias_instruction_round_trip_v1
+  "${PARLIAMENT_TIMED_OVN_C_SYMBOLS[@]}"
   "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}"
   connect_norito_sorafs_reference_validate_bundle_json
   connect_norito_sorafs_reference_validate_governance_json
@@ -640,6 +668,13 @@ VALIDATION_FEE_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeBridgeAbiVersion
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeEncodeCurrentPolicyProofRequestV1
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeVerifyCurrentPolicyProofV1
+)
+
+PARLIAMENT_TIMED_OVN_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofV1
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeRegistrationFromProofV1
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBallotFromProofV1
 )
 
 SORAFS_APPEAL_FINANCE_JNI_SYMBOLS=(
@@ -2804,6 +2839,7 @@ check_android_native_symbols() {
   local namespace
   local expected_jni=(
     "${VALIDATION_FEE_JNI_SYMBOLS[@]}"
+    "${PARLIAMENT_TIMED_OVN_JNI_SYMBOLS[@]}"
     "${SORAFS_APPEAL_FINANCE_JNI_SYMBOLS[@]}"
     "${PRIVACY_COMPILED_PROFILE_JNI_SYMBOLS[@]}"
     "${NATIVE_SIGNER_JNI_CONTRACT_SYMBOLS[@]}"
@@ -2837,6 +2873,7 @@ check_android_native_symbols() {
   done
   if ! run_isolated_checker_python - "$abi" \
     "${KAGEMUSHA_C_SYMBOLS[@]}" \
+    "${PARLIAMENT_TIMED_OVN_C_SYMBOLS[@]}" \
     "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}" \
     "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}" \
     -- "${expected_jni[@]}" 3<<<"$symbols" <<'PY'

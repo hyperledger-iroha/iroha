@@ -150,6 +150,7 @@ impl ConcreteLifecycleWorkRegistry {
                 effect: validate.effect.clone(),
                 durable_receipt: validate.durable_receipt.clone(),
                 binding,
+                lifecycle_ordinal: address.ordinal,
             };
             if owners.insert(key, owner).is_some() {
                 return Err(RecoveredDurableValidateRetryOwnerErrorV1::MultipleCarriers);
@@ -3011,7 +3012,6 @@ impl ConcreteLifecycleWorkRegistry {
             Some(lease),
         )
     }
-
 }
 include!("v2_lifecycle_work_registry_validate_recovery_census_impl.rs");
 impl ConcreteLifecycleWorkRegistry {

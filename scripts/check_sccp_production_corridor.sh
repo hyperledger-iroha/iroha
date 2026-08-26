@@ -57,6 +57,13 @@ Environment:
                                The swift-sdk phase requires an existing
                                canonical absolute directory outside the Iroha
                                source tree and never reuses packaged bridge bytes.
+  MOBILE_SDK_APPLE_ARTIFACT_DIR
+                               External Swift bridge artifact directory.
+  MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT
+                               Must be 1 for the swift-sdk phase.
+  MOBILE_SDK_RUSTUP_BINARY     Canonical rustup executable for the swift-sdk phase.
+  NORITO_BRIDGE_OUT_DIR        Must equal MOBILE_SDK_APPLE_ARTIFACT_DIR.
+  NORITO_BRIDGE_BUILD_DIR      External Swift bridge build directory.
   NORITO_SKIP_BINDINGS_SYNC    Defaults to 1 for focused Rust validation.
   JAVA_HOME                    JDK 21 for Gradle phases. Falls back to
                                target/java/jdk-21/Contents/Home, then
@@ -1305,9 +1312,11 @@ PY
 }
 
 ensure_swift_bridge_artifact() {
-  local bridge_dir="$ROOT/dist/NoritoBridge.xcframework"
+  local artifact_dir="${MOBILE_SDK_APPLE_ARTIFACT_DIR:-}"
+  local bridge_dir="$artifact_dir/NoritoBridge.xcframework"
   local bridge_manifest="$bridge_dir/NoritoBridge.artifacts.json"
-  local canonical_target installed_targets target
+  local canonical_artifact canonical_rustup canonical_target installed_targets rustup_binary target
+  rustup_binary="${MOBILE_SDK_RUSTUP_BINARY:-rustup}"
   local rust_targets=(
     aarch64-apple-ios
     aarch64-apple-ios-sim
@@ -1317,7 +1326,7 @@ ensure_swift_bridge_artifact() {
   )
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    run_cmd rustup target list --toolchain 1.93.1 --installed
+    run_cmd "$rustup_binary" target list --toolchain 1.93.1 --installed
     run_cmd bash "$ROOT/scripts/build_norito_xcframework.sh"
     return 0
   fi
@@ -1339,7 +1348,39 @@ ensure_swift_bridge_artifact() {
       ;;
   esac
 
-  if ! installed_targets="$(rustup target list --toolchain 1.93.1 --installed)"; then
+  if [[ "$artifact_dir" != /* || ! -d "$artifact_dir" || -L "$artifact_dir" ]]; then
+    echo "swift-sdk requires MOBILE_SDK_APPLE_ARTIFACT_DIR to name an existing canonical non-symbolic absolute directory." >&2
+    return 1
+  fi
+  canonical_artifact="$(cd "$artifact_dir" && pwd -P)"
+  if [[ "$canonical_artifact" != "$artifact_dir" ]]; then
+    echo "swift-sdk requires MOBILE_SDK_APPLE_ARTIFACT_DIR to be canonical and free of symbolic traversal." >&2
+    return 1
+  fi
+  case "$canonical_artifact/" in
+    "$ROOT/"*)
+      echo "swift-sdk requires MOBILE_SDK_APPLE_ARTIFACT_DIR outside the Iroha source tree." >&2
+      return 1
+      ;;
+  esac
+  if [[ "${MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" != "1" \
+    || "${NORITO_BRIDGE_OUT_DIR:-}" != "$canonical_artifact" ]]; then
+    echo "swift-sdk requires the external artifact directory to bind both Swift and NoritoBridge output." >&2
+    return 1
+  fi
+
+  if [[ "$rustup_binary" != /* || ! -f "$rustup_binary" \
+    || -L "$rustup_binary" || ! -x "$rustup_binary" ]]; then
+    echo "swift-sdk requires MOBILE_SDK_RUSTUP_BINARY to name a canonical non-symbolic executable." >&2
+    return 1
+  fi
+  canonical_rustup="$(cd "${rustup_binary%/*}" && pwd -P)/${rustup_binary##*/}"
+  if [[ "$canonical_rustup" != "$rustup_binary" ]]; then
+    echo "swift-sdk requires MOBILE_SDK_RUSTUP_BINARY to be canonical and free of symbolic traversal." >&2
+    return 1
+  fi
+
+  if ! installed_targets="$("$rustup_binary" target list --toolchain 1.93.1 --installed)"; then
     echo "Unable to verify the exact Rust 1.93.1 Apple targets." >&2
     return 1
   fi

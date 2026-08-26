@@ -40,6 +40,7 @@ use std::{
     },
     time::Duration,
 };
+use zeroize::Zeroizing;
 const SOCKET_MODE_V1: u32 = 0o666;
 const RUNTIME_DIRECTORY_MODE_V1: u32 = 0o711;
 const IO_TIMEOUT_V1: Duration = Duration::from_secs(10);
@@ -1305,10 +1306,34 @@ pub fn load_software_signer_wrapping_key_from_fd_v1(
 pub fn load_software_signer_wrapping_key_from_credential_v1(
     path: &Path,
 ) -> Result<SoftwareSignerWrappingKeyV1, SoftwareSignerCredentialErrorV1> {
+    let bytes = load_bounded_software_signer_credential_v1(path, 32, 32)?;
+    let mut key = [0_u8; 32];
+    key.copy_from_slice(&bytes);
+    let result = SoftwareSignerWrappingKeyV1::try_from_bytes(key)
+        .map_err(|_| SoftwareSignerCredentialErrorV1::InvalidSource);
+    scrub(&mut key);
+    result
+}
+
+/// Read one bounded secret credential through the software-signer hardened path.
+///
+/// The returned allocation is zeroized on every exit path. Callers must decode
+/// it immediately into secret-owning types whose `Drop` implementation also
+/// scrubs private fields.
+pub(super) fn load_bounded_software_signer_credential_v1(
+    path: &Path,
+    minimum_bytes: usize,
+    maximum_bytes: usize,
+) -> Result<Zeroizing<Vec<u8>>, SoftwareSignerCredentialErrorV1> {
+    if minimum_bytes == 0 || minimum_bytes > maximum_bytes {
+        return Err(SoftwareSignerCredentialErrorV1::InvalidLength);
+    }
     let expected_identity = validate_credential_path(path)?;
+    let named_before =
+        fs::symlink_metadata(path).map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
     let mut options = OpenOptions::new();
     options.read(true).custom_flags(
-        rustix::fs::OFlags::NOFOLLOW
+        (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC)
             .bits()
             .try_into()
             .map_err(|_| SoftwareSignerCredentialErrorV1::InvalidSource)?,
@@ -1319,26 +1344,53 @@ pub fn load_software_signer_wrapping_key_from_credential_v1(
     let opened = descriptor
         .metadata()
         .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
-    if (opened.dev(), opened.ino()) != expected_identity {
+    if (opened.dev(), opened.ino()) != expected_identity
+        || !same_credential_metadata_v1(&named_before, &opened)
+    {
         return Err(SoftwareSignerCredentialErrorV1::InvalidSource);
     }
-    let mut bytes = Vec::with_capacity(33);
-    descriptor
-        .take(33)
+    let read_limit = u64::try_from(maximum_bytes)
+        .ok()
+        .and_then(|maximum| maximum.checked_add(1))
+        .ok_or(SoftwareSignerCredentialErrorV1::InvalidLength)?;
+    let mut bytes = Zeroizing::new(Vec::with_capacity(maximum_bytes.min(4_096)));
+    (&descriptor)
+        .take(read_limit)
         .read_to_end(&mut bytes)
         .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
-    if bytes.len() != 32 {
-        scrub(&mut bytes);
+    if bytes.len() < minimum_bytes || bytes.len() > maximum_bytes {
         return Err(SoftwareSignerCredentialErrorV1::InvalidLength);
     }
-    let mut key = [0_u8; 32];
-    key.copy_from_slice(&bytes);
-    scrub(&mut bytes);
-    let result = SoftwareSignerWrappingKeyV1::try_from_bytes(key)
-        .map_err(|_| SoftwareSignerCredentialErrorV1::InvalidSource);
-    scrub(&mut key);
-    result
+    let opened_after = descriptor
+        .metadata()
+        .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
+    let named_after =
+        fs::symlink_metadata(path).map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
+    if (opened_after.dev(), opened_after.ino()) != expected_identity
+        || !same_credential_metadata_v1(&opened, &opened_after)
+        || !same_credential_metadata_v1(&opened_after, &named_after)
+    {
+        return Err(SoftwareSignerCredentialErrorV1::InvalidSource);
+    }
+    Ok(bytes)
 }
+
+fn same_credential_metadata_v1(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.is_file()
+        && right.is_file()
+        && left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.uid() == right.uid()
+        && left.gid() == right.gid()
+        && left.mode() == right.mode()
+        && left.nlink() == right.nlink()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
 fn validate_credential_path(path: &Path) -> Result<(u64, u64), SoftwareSignerCredentialErrorV1> {
     if !path.is_absolute()
         || path.components().any(|component| {
@@ -1356,7 +1408,8 @@ fn validate_credential_path(path: &Path) -> Result<(u64, u64), SoftwareSignerCre
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || (metadata.uid() != 0 && metadata.uid() != euid)
-        || metadata.mode() & 0o077 != 0
+        || metadata.mode() & 0o7077 != 0
+        || metadata.mode() & 0o400 == 0
         || metadata.nlink() != 1
     {
         return Err(SoftwareSignerCredentialErrorV1::InvalidSource);

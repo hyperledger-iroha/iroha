@@ -392,13 +392,20 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
         "test_consumer_drop_in_hardlink_is_rejected",
     ),
     "crates/irohad/src/runtime_provider_broker.rs": (
+        'include!("runtime_provider_broker/protocol.rs");',
+    ),
+    "crates/irohad/src/runtime_provider_broker/platform.rs": (
         "/run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock",
         "/private/var/iroha/run/runtime-provider-broker-v1.sock",
+        'include!("pop_recipient_client.rs");',
+    ),
+    "crates/irohad/src/runtime_provider_broker/platform_server_transport.rs": (
         "endpoint_recovery::prepare_endpoint",
+    ),
+    "crates/irohad/src/runtime_provider_broker/platform_operation_dispatch.rs": (
         "OPERATION_POP_RUNTIME_OPEN_V1",
         "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1",
         "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1",
-        'include!("runtime_provider_broker/pop_recipient_client.rs");',
     ),
     "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs": (
         "OPERATION_POP_RUNTIME_OPEN_V1: u16 = 118",

@@ -504,6 +504,29 @@ def test_runtime_provider_deployment_asset_removal_fails_closed(
         automation.validate_release_automation(tmp_path)
 
 
+def test_runtime_provider_deployment_markers_track_split_broker_modules() -> None:
+    markers = automation.RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS
+
+    assert markers["crates/irohad/src/runtime_provider_broker.rs"] == (
+        'include!("runtime_provider_broker/protocol.rs");',
+    )
+    assert markers["crates/irohad/src/runtime_provider_broker/platform.rs"] == (
+        "/run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock",
+        "/private/var/iroha/run/runtime-provider-broker-v1.sock",
+        'include!("pop_recipient_client.rs");',
+    )
+    assert markers[
+        "crates/irohad/src/runtime_provider_broker/platform_server_transport.rs"
+    ] == ("endpoint_recovery::prepare_endpoint",)
+    assert markers[
+        "crates/irohad/src/runtime_provider_broker/platform_operation_dispatch.rs"
+    ] == (
+        "OPERATION_POP_RUNTIME_OPEN_V1",
+        "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1",
+        "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1",
+    )
+
+
 @pytest.mark.parametrize(
     ("relative", "marker"),
     [

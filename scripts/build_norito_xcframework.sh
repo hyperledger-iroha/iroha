@@ -103,6 +103,8 @@ run_python312_clean() {
 #   externally selected Cargo target/rustc/rustdoc build envelope.
 # - MOBILE_SDK_PYTHON_BINARY may select an absolute canonical Python 3.12
 #   executable when the fixed Homebrew/system locators are unavailable.
+# - MOBILE_SDK_RUSTUP_BINARY may select an absolute canonical, non-symbolic
+#   rustup executable when the canonical home-local proxy is unavailable.
 #
 # Usage:
 #   scripts/build_norito_xcframework.sh
@@ -457,7 +459,22 @@ USER_HOME_DIR="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
   "$USER_HOME_DIR")"
 GIT_BINARY="/usr/bin/git"
-RUSTUP_BINARY="$USER_HOME_DIR/.cargo/bin/rustup"
+if [[ -n "${MOBILE_SDK_RUSTUP_BINARY+x}" ]]; then
+  RUSTUP_BINARY="$MOBILE_SDK_RUSTUP_BINARY"
+  if [[ -z "$RUSTUP_BINARY" || "$RUSTUP_BINARY" != /* ]]; then
+    echo "[-] MOBILE_SDK_RUSTUP_BINARY must be an absolute canonical non-symbolic executable" >&2
+    exit 1
+  fi
+  if ! canonical_rustup_binary="$(run_python312_clean -c \
+      'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+      "$RUSTUP_BINARY")" \
+      || [[ "$canonical_rustup_binary" != "$RUSTUP_BINARY" ]]; then
+    echo "[-] MOBILE_SDK_RUSTUP_BINARY must be an absolute canonical non-symbolic executable" >&2
+    exit 1
+  fi
+else
+  RUSTUP_BINARY="$USER_HOME_DIR/.cargo/bin/rustup"
+fi
 for tool_path in "$PYTHON_BINARY" "$GIT_BINARY" "$RUSTUP_BINARY"; do
   [[ -f "$tool_path" && ! -L "$tool_path" && -x "$tool_path" ]] || {
     echo "[-] Pinned Python, Git, and rustup executables are required: $tool_path" >&2
@@ -1290,6 +1307,9 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
+    "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
+    "connect_norito_parliament_timed_ovn_ballot_from_proof_v1",
     "iroha_privacy_compiled_profile_catalog_v1",
     "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",
@@ -1731,11 +1751,13 @@ assert_bridge_source_seal "staged artifact validation"
 if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
   MOBILE_SDK_ALLOW_DIRTY_SOURCE=1 \
     MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
+    MOBILE_SDK_RUSTUP_BINARY="$RUSTUP_BINARY" \
     MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
     MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
     bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
 else
   MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
+    MOBILE_SDK_RUSTUP_BINARY="$RUSTUP_BINARY" \
     MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
     MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
     bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only

@@ -870,8 +870,6 @@ impl RuntimeProviderBrokerBackendsV1 {
             || self.potr_gateway_signer.is_some()
             || self.potr_provider_signer.is_some()
             || self.evidence_viewer_receipt_signer.is_some()
-            || self.global_beacon_partial_signer.is_some()
-            || self.parliament_tle_partial_release_signer.is_some()
     }
 }
 /// Payload-free stock broker-server startup or transport failure.

@@ -174,6 +174,7 @@ pub(in crate::sumeragi) struct RecoveredDurableValidateRetryOwnerV1 {
     effect: AdapterEffect,
     durable_receipt: DurableBodyReceipt,
     binding: RecoveredDurableValidateRetryBindingV1,
+    lifecycle_ordinal: u128,
 }
 
 impl RecoveredDurableValidateRetryOwnerV1 {
@@ -186,6 +187,7 @@ impl RecoveredDurableValidateRetryOwnerV1 {
         effect: AdapterEffect,
         durable_receipt: DurableBodyReceipt,
         pending: PendingRuntimeEffectBinding,
+        lifecycle_ordinal: u128,
         expected_decision: Option<(
             wire::ConsensusRound,
             wire::ConsensusRound,
@@ -193,6 +195,9 @@ impl RecoveredDurableValidateRetryOwnerV1 {
             wire::ExecutionCommitment,
         )>,
     ) -> Option<Self> {
+        if lifecycle_ordinal == 0 {
+            return None;
+        }
         let binding =
             pending.project_recovered_durable_validate_retry_binding(&effect, expected_decision)?;
         Some(Self {
@@ -200,7 +205,13 @@ impl RecoveredDurableValidateRetryOwnerV1 {
             effect,
             durable_receipt,
             binding,
+            lifecycle_ordinal,
         })
+    }
+
+    /// Return the exact recovered logical row retained by the registry.
+    pub(in crate::sumeragi) const fn lifecycle_ordinal(&self) -> u128 {
+        self.lifecycle_ordinal
     }
 
     /// Return the exact replayed Decision which bounds authority refinement.

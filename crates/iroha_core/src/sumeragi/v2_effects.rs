@@ -3481,6 +3481,20 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 "non-Apply Validate successor found a full live Apply owner".to_owned(),
             ));
         }
+        let key = (owner.round, owner.subject);
+        match self.release_validate_retry_lifecycle_ordinal(key, ordinal) {
+            Ok(true) => {}
+            Ok(false) => {
+                self.live_lifecycle_validate_successor = Some(owner);
+                return Err(EffectExecutorError::Contract(
+                    "resolved Validate lost its exact retry authority".to_owned(),
+                ));
+            }
+            Err(error) => {
+                self.live_lifecycle_validate_successor = Some(owner);
+                return Err(error);
+            }
+        }
         Ok(true)
     }
 
@@ -3597,8 +3611,12 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                     services,
                 ));
             }
+            if let Err(error) =
+                self.release_live_lifecycle_validate_successor(dispatch_key.lifecycle_ordinal())
+            {
+                return Err(self.close(error, services));
+            }
             self.retained_effect_batch = None;
-            self.live_lifecycle_validate_successor = None;
         }
         if self.protected_decision != Some(decision)
             || !self.decision_body_drained
@@ -5166,10 +5184,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .retain(|key, _| !superseded_keys.contains(key));
         self.authenticated_genesis_replay
             .retain(|key, _| !superseded_keys.contains(key));
-        self.durable_validate_retry_seals
-            .retain(|key, _| !superseded_keys.contains(key));
+        self.durable_validate_retry_seals.retain(|key, seal| {
+            seal.lifecycle_ordinal().is_some() || !superseded_keys.contains(key)
+        });
         self.published_lifecycle_validate_retry_markers
-            .retain(|key, _| !superseded_keys.contains(key));
+            .retain(|key, marker| {
+                marker.owns_live_lifecycle_row() || !superseded_keys.contains(key)
+            });
         if retire_retained {
             self.retained_locked_body = None;
         }
@@ -9283,8 +9304,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         &self,
         key: (wire::ConsensusRound, wire::BlockSubject),
     ) -> Option<RecoveredDurableValidateRetrySnapshotV1> {
-        let DurableValidateRetrySealV1::Recovered { owner, frontier } =
-            self.durable_validate_retry_seals.get(&key)?
+        let DurableValidateRetrySealV1::Recovered {
+            owner, frontier, ..
+        } = self.durable_validate_retry_seals.get(&key)?
         else {
             return None;
         };
@@ -12167,18 +12189,24 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 && *key == decision_body
                 && matches!(stage, AuthenticatedGenesisReplayStageV1::Stored { .. })
         });
-        // A consumed Validate owner leaves an inert idempotence tombstone, not
-        // live work. Decision makes every competing body permanently stale;
-        // keep only the selected body's tombstone until rollover, and none
-        // once terminal body cleanup begins.
-        if !drain_decision_body && let Some(seal) = projected_recovered_decision_seal {
+        // A resolved Validate owner may leave an inert idempotence tombstone,
+        // while an ordinal-bound seal still denotes a live registry row.
+        // Preserve every live row across Decision cleanup; exact lifecycle
+        // settlement releases it later and discards losing or drained rows.
+        // Only the selected ordinary-body tombstone may survive unbound.
+        if let Some(seal) = projected_recovered_decision_seal
+            && (!drain_decision_body || seal.lifecycle_ordinal().is_some())
+        {
             self.durable_validate_retry_seals
                 .insert(decision_body, seal);
         }
-        self.durable_validate_retry_seals
-            .retain(|key, _| !drain_decision_body && *key == decision_body);
+        self.durable_validate_retry_seals.retain(|key, seal| {
+            seal.lifecycle_ordinal().is_some() || (!drain_decision_body && *key == decision_body)
+        });
         self.published_lifecycle_validate_retry_markers
-            .retain(|key, _| !drain_decision_body && *key == decision_body);
+            .retain(|key, marker| {
+                marker.owns_live_lifecycle_row() || (!drain_decision_body && *key == decision_body)
+            });
         self.body_pipeline_owners.retain(|key, _| !retire_key(*key));
         self.ready_bodies.retain(|key, _| !retire_key(*key));
         if retire_retained {
@@ -12784,13 +12812,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             Some(*key) == protected_body
                 && matches!(stage, AuthenticatedGenesisReplayStageV1::Stored { .. })
         });
-        // Retry seals are post-admission tombstones, so they own neither
-        // lifecycle capacity nor service work. Once the view advances, only
-        // the exact protected body can still emit a legitimate duplicate.
+        // Retry authorities own no service work. Ordinal-bound entries still
+        // represent live registry rows and survive view cleanup; among
+        // resolved tombstones, only the exact protected body can still emit a
+        // legitimate duplicate.
         self.durable_validate_retry_seals
-            .retain(|key, _| Some(*key) == protected_body);
+            .retain(|key, seal| seal.lifecycle_ordinal().is_some() || Some(*key) == protected_body);
         self.published_lifecycle_validate_retry_markers
-            .retain(|key, _| Some(*key) == protected_body);
+            .retain(|key, marker| marker.owns_live_lifecycle_row() || Some(*key) == protected_body);
         let retain_local_producer = self.local_validator == Some(self.context.leader(tag.view()));
         self.runtime
             .reconcile_active_view_producer(tag, retain_local_producer)

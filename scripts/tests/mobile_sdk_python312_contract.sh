@@ -130,6 +130,14 @@ grep -Fq 'resolve_trusted_python312()' "$MOBILE_CHECKER" \
   || fail "mobile checker does not authenticate Python 3.12"
 grep -Fq 'MOBILE_SDK_PYTHON_BINARY' "$MOBILE_CHECKER" \
   || fail "mobile checker does not expose the canonical Python override"
+for script in "$APPLE_BUILDER" "$MOBILE_CHECKER" "$MOBILE_PACKAGER"; do
+  grep -Fq 'MOBILE_SDK_RUSTUP_BINARY' "$script" \
+    || fail "$script does not expose the canonical rustup override"
+done
+grep -Fq 'MOBILE_SDK_RUSTUP_BINARY="$RUSTUP_BINARY"' "$APPLE_BUILDER" \
+  || fail "Apple builder does not forward its selected rustup to staged validation"
+grep -Fq 'MOBILE_SDK_RUSTUP_BINARY="$ARCHIVE_SEAL_RUSTUP"' "$MOBILE_PACKAGER" \
+  || fail "mobile packager does not forward its authenticated rustup to validation"
 grep -Fq '"$CHECK_PYTHON_BINARY" -I -S -B "$@"' "$MOBILE_CHECKER" \
   || fail "mobile checker does not isolate Python helpers from site packages"
 grep -Fq 'NORITO_BRIDGE_BUILD_LOCK_FDS' "$APPLE_BUILDER" \
@@ -142,6 +150,8 @@ if grep -Fq 'MOBILE_SDK_SKIP_BINARY_INSPECTION' "$MOBILE_CHECKER"; then
 fi
 grep -Fq 'export MOBILE_SDK_PYTHON_BINARY="$TEST_PYTHON_BINARY"' "$MOBILE_CHECKER_TEST" \
   || fail "mobile checker self-test does not bind its authenticated Python"
+grep -Fq 'export MOBILE_SDK_RUSTUP_BINARY="$TEST_RUSTUP_BINARY"' "$MOBILE_CHECKER_TEST" \
+  || fail "mobile checker self-test does not bind its authenticated rustup"
 grep -Fq 'System.getenv("MOBILE_SDK_PYTHON_BINARY")' "$ANDROID_BUILDER" \
   || fail "Android native build logic does not honor the canonical Python override"
 grep -Fq 'const val pinnedPythonSeries = "3.12"' "$ANDROID_BUILDER" \
@@ -163,6 +173,8 @@ grep -Fq '"$PYTHON_BINARY" -I -S' "$JVM_NATIVE_GATE" \
   || fail "mobile workflow must pin Python 3.12 in exactly three jobs"
 [[ "$(grep -Fc 'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python"' "$MOBILE_WORKFLOW")" -eq 3 ]] \
   || fail "mobile workflow must bind the canonical Python in exactly three jobs"
+[[ "$(grep -Fc 'echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path"' "$MOBILE_WORKFLOW")" -eq 1 ]] \
+  || fail "mobile workflow must bind the canonical rustup in its Apple job"
 grep -Fq 'bash scripts/tests/mobile_sdk_python312_contract.sh' "$MOBILE_WORKFLOW" \
   || fail "mobile workflow does not run the Python 3.12 contract"
 grep -Fq '"scripts/tests/mobile_sdk_python312_contract.sh"' "$MOBILE_WORKFLOW" \
@@ -251,6 +263,11 @@ APPLE_OUT_DIR="$TEST_ROOT/apple-out"
 APPLE_USER_HOME="$("$PYTHON312" -I -S -c 'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
 APPLE_RUSTUP="$APPLE_USER_HOME/.cargo/bin/rustup"
 [[ -x "$APPLE_RUSTUP" ]] || fail "pinned rustup is unavailable"
+APPLE_RUSTUP="$("$PYTHON312" -I -S -B -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$APPLE_RUSTUP")"
+[[ "$APPLE_RUSTUP" == /* && -f "$APPLE_RUSTUP" && ! -L "$APPLE_RUSTUP" \
+  && -x "$APPLE_RUSTUP" ]] || fail "pinned rustup is not canonical"
 APPLE_RUSTC="$("$APPLE_RUSTUP" which --toolchain 1.93.1 rustc)"
 APPLE_RUSTDOC="$("$APPLE_RUSTUP" which --toolchain 1.93.1 rustdoc)"
 mkdir -p "$APPLE_CARGO_TARGET" "$APPLE_BUILD_DIR" "$APPLE_OUT_DIR"

@@ -481,6 +481,60 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
             {archive.name, versioned_manifest.name, podspec.name, package_manifest.name},
         )
 
+    def test_apple_package_accepts_canonical_mobile_rustup_fallback(self) -> None:
+        seal_environment = self._write_fake_apple_owner()
+        rustup = seal_environment.pop("NORITO_BRIDGE_SEAL_RUSTUP")
+        result = self._package(
+            mode="apple",
+            version="pr-7-rustup",
+            SOURCE_DATE_EPOCH="1700000000",
+            MOBILE_SDK_RUSTUP_BINARY=rustup,
+            **seal_environment,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_apple_package_rejects_empty_mobile_rustup_override(self) -> None:
+        self._assert_invalid_mobile_rustup("")
+
+    def test_apple_package_rejects_relative_mobile_rustup_override(self) -> None:
+        self._assert_invalid_mobile_rustup("rustup")
+
+    def test_apple_package_rejects_symlinked_mobile_rustup_override(self) -> None:
+        seal_environment = self._write_fake_apple_owner()
+        rustup = Path(seal_environment.pop("NORITO_BRIDGE_SEAL_RUSTUP"))
+        rustup_link = rustup.with_name("rustup-link")
+        rustup_link.symlink_to(rustup)
+        self._assert_invalid_mobile_rustup(str(rustup_link), seal_environment)
+
+    def test_apple_package_rejects_noncanonical_mobile_rustup_override(self) -> None:
+        seal_environment = self._write_fake_apple_owner()
+        rustup = Path(seal_environment.pop("NORITO_BRIDGE_SEAL_RUSTUP"))
+        noncanonical = rustup.parent / ".." / rustup.parent.name / rustup.name
+        self._assert_invalid_mobile_rustup(str(noncanonical), seal_environment)
+
+    def _assert_invalid_mobile_rustup(
+        self,
+        rustup: str,
+        seal_environment: dict[str, str] | None = None,
+    ) -> None:
+        if seal_environment is None:
+            seal_environment = self._write_fake_apple_owner()
+            seal_environment.pop("NORITO_BRIDGE_SEAL_RUSTUP")
+        result = self._package(
+            mode="apple",
+            version="pr-7-invalid-rustup",
+            SOURCE_DATE_EPOCH="1700000000",
+            MOBILE_SDK_RUSTUP_BINARY=rustup,
+            **seal_environment,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "MOBILE_SDK_RUSTUP_BINARY must be an absolute canonical "
+            "non-symbolic executable",
+            result.stderr,
+        )
+        self.assertFalse(self.output.exists())
+
     def test_apple_manifest_version_must_match_pod_version(self) -> None:
         seal_environment = self._write_fake_apple_owner()
         artifact_root = Path(seal_environment["MOBILE_SDK_APPLE_ARTIFACT_DIR"])

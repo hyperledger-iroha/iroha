@@ -2042,7 +2042,7 @@ impl ProductionLifecycleOwnerV1 {
             return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
         }
         transition.commit_after_publication();
-        executor.commit_published_lifecycle_validate_retry_marker(retry_marker);
+        executor.commit_published_lifecycle_validate_retry_marker(retry_marker, child_ordinal);
         operation.complete();
         Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
             parent_ordinal: ordinal,
