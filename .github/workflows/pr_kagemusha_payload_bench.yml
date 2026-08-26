@@ -926,8 +926,59 @@ jobs:
   swift:
     name: Swift lifecycle surface
     runs-on: macos-15
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        shell: bash
+        run: |
+          mobile_python="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          cache-on-failure: "true"
+      - name: Prepare external Apple build and artifact roots
+        shell: bash
+        run: |
+          artifact_dir="$RUNNER_TEMP/iroha-kagemusha-apple-artifacts"
+          build_dir="$RUNNER_TEMP/iroha-kagemusha-apple-build"
+          cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-cargo"
+          swift_scratch="$RUNNER_TEMP/iroha-kagemusha-apple-swift"
+          mkdir -p "$artifact_dir" "$build_dir" "$cargo_target" "$swift_scratch"
+          echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
+          echo "KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH=$swift_scratch" >> "$GITHUB_ENV"
+      - name: Install Apple Rust targets
+        run: |
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
+          cargo fetch --locked
+      - name: Bind the first-release Apple Cargo envelope
+        shell: bash
+        run: |
+          cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-cargo"
+          cargo_target="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
+          rustc_path="$(rustup which --toolchain 1.93.1 rustc)"
+          rustdoc_path="$(rustup which --toolchain 1.93.1 rustdoc)"
+          echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+          echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
+          echo "RUSTC=$rustc_path" >> "$GITHUB_ENV"
+          echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
+          echo "RUSTDOC=$rustdoc_path" >> "$GITHUB_ENV"
+      - name: Build exact ABI-23 NoritoBridge XCFramework
+        run: scripts/build_norito_xcframework.sh
+      - name: Authenticate Apple native artifact
+        run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
       - run: ci/check_kagemusha_recursive_spend_swift_sdk.sh
 
   kotlin-java:
@@ -946,6 +997,9 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Prefetch locked Rust dependency graph
         run: cargo fetch --locked
+      - name: Warm exact Android compile dependencies
+        working-directory: kotlin
+        run: ./gradlew --no-daemon --max-workers=2 :offline-wallet-android:compileDebugAndroidTestKotlin
       - run: ci/check_kagemusha_candidate_android_lab_compile.sh
       - name: Require fresh ABI-23 JNI bridge in complete Kotlin and Java suites
         run: >-
