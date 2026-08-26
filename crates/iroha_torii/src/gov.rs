@@ -815,7 +815,10 @@ pub async fn handle_gov_capabilities(
             "/v1/gov/citizens/draft".to_owned(),
             "/v1/gov/parliament/attempts/draft".to_owned(),
             "/v1/gov/parliament/attempts/{governance_attempt_id}".to_owned(),
+            "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context".to_owned(),
             "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof".to_owned(),
+            "/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context".to_owned(),
+            "/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release".to_owned(),
             "/v1/gov/parliament/transitions/draft".to_owned(),
             "/v1/gov/ballots/plain".to_owned(),
             "/v1/gov/ballots/zk-v1".to_owned(),
@@ -2670,14 +2673,30 @@ mod tests {
             .expect("capability route projection end")];
         assert!(capabilities.contains("/v1/gov/ballots/plain"));
         assert!(capabilities.contains("/v1/gov/ballots/zk-v1"));
-        assert!(
-            capabilities.contains("/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof")
+        let advertised_parliament_routes = capabilities
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix('"')?
+                    .strip_suffix("\".to_owned(),")
+            })
+            .filter(|route| route.starts_with("/v1/gov/parliament/"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            advertised_parliament_routes,
+            [
+                "/v1/gov/parliament/attempts/draft",
+                "/v1/gov/parliament/attempts/{governance_attempt_id}",
+                "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context",
+                "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof",
+                "/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context",
+                "/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release",
+                "/v1/gov/parliament/transitions/draft",
+            ]
         );
         assert!(!capabilities.contains("\"/v1/gov/parliament/ballots\".to_owned()"));
         assert!(!capabilities.contains("/v1/gov/finalize"));
         assert!(!capabilities.contains("/v1/gov/enact"));
-        assert!(capabilities.contains("/v1/gov/parliament/attempts/draft"));
-        assert!(capabilities.contains("/v1/gov/parliament/transitions/draft"));
     }
     #[tokio::test]
     async fn parliament_draft_handlers_frame_exact_native_instructions() {

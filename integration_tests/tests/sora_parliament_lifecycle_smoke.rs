@@ -95,7 +95,7 @@ use iroha_executor_data_model::permission::{
     governance::{CanManageParliament, CanProposeContractDeployment},
     smart_contract::CanRegisterSmartContractCode,
 };
-use iroha_test_network::NetworkBuilder;
+use iroha_test_network::{NetworkBuilder, ParliamentBeaconSignerMode};
 use iroha_test_samples::ALICE_ID;
 use norito::codec::Encode as _;
 use rand::{SeedableRng as _, rngs::StdRng};
@@ -112,6 +112,19 @@ const OPENING_PHASE_BLOCKS: u64 = 8;
 const MIN_ENACTMENT_DELAY: u64 = 3;
 const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
+const FAIL_CLOSED_BEACON_OBSERVATION_WINDOW: Duration = Duration::from_secs(8);
+const POSITIVE_BEACON_SIGNER_MODES: [ParliamentBeaconSignerMode; VALIDATOR_COUNT] = [
+    ParliamentBeaconSignerMode::Valid,
+    ParliamentBeaconSignerMode::Valid,
+    ParliamentBeaconSignerMode::Absent,
+    ParliamentBeaconSignerMode::Invalid,
+];
+const FAIL_CLOSED_BEACON_SIGNER_MODES: [ParliamentBeaconSignerMode; VALIDATOR_COUNT] = [
+    ParliamentBeaconSignerMode::Valid,
+    ParliamentBeaconSignerMode::Absent,
+    ParliamentBeaconSignerMode::Absent,
+    ParliamentBeaconSignerMode::Invalid,
+];
 const CONTRACT_ADDRESS: &str = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
 
 fn fee() -> FeePaymentIntent {
@@ -562,7 +575,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn()
         .with_peers(VALIDATOR_COUNT)
         .with_auto_populated_trusted_peers()
         .with_npos_consensus()
-        .with_parliament_test_signers()
+        .with_parliament_beacon_signer_modes(POSITIVE_BEACON_SIGNER_MODES)
         .with_block_cadence(Duration::from_secs(1))
         .with_config_layer(|layer| {
             layer
@@ -800,11 +813,12 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn()
     submit_transitions(&client, attempt_id, request_transitions)?;
     assert_eq!(current_height(&client)?, request_height);
     advance_to_predecessor(&client, sortition_pulse_height, "sortition pulse")?;
-    assert_eq!(
-        tick(&client, "finalize the demanded sortition pulse")?,
-        sortition_pulse_height,
-    );
     network.ensure_blocks(sortition_pulse_height).await?;
+    assert_eq!(
+        current_height(&client)?,
+        sortition_pulse_height,
+        "the demanded sortition threshold-beacon effect must autonomously finalize its exact height",
+    );
     let sortition_pulses = network
         .peers()
         .iter()
@@ -1315,11 +1329,12 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn()
     )?;
 
     advance_to_predecessor(&client, release_height, "timed-OVN release pulse")?;
-    assert_eq!(
-        tick(&client, "finalize the demanded ballot-release pulse")?,
-        release_height,
-    );
     network.ensure_blocks(release_height).await?;
+    assert_eq!(
+        current_height(&client)?,
+        release_height,
+        "the demanded ballot-release threshold-beacon effect must autonomously finalize its exact height",
+    );
     let release_pulses = network
         .peers()
         .iter()
@@ -1683,7 +1698,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         .with_peers(VALIDATOR_COUNT)
         .with_auto_populated_trusted_peers()
         .with_npos_consensus()
-        .with_parliament_test_signers()
+        .with_parliament_beacon_signer_modes(POSITIVE_BEACON_SIGNER_MODES)
         .with_block_cadence(Duration::from_secs(1))
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos.into_custom_parameter(),
@@ -1706,6 +1721,8 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let beacon_record =
         deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive mandatory NPoS beacon fixture")?;
+    assert_eq!(beacon_record.session.committee_size, 4);
+    assert_eq!(beacon_record.session.threshold, 2);
     let beacon_binding = GlobalThresholdBeaconSessionBindingV1 {
         network_id: beacon_record.session.network_id,
         session_id: beacon_record.session.session_id,
@@ -1741,11 +1758,12 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         pulse_at(&client, pulse_height - 1).is_err(),
         "an unrequested non-boundary height must not emit a global pulse"
     );
-    assert_eq!(
-        tick(&client, "commit mandatory pre-boundary pulse")?,
-        pulse_height
-    );
     network.ensure_blocks(pulse_height).await?;
+    assert_eq!(
+        current_height(&client)?,
+        pulse_height,
+        "the mandatory threshold-beacon effect must autonomously finalize its exact pre-boundary height",
+    );
 
     let pulses = network
         .peers()
@@ -1803,6 +1821,111 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold() -> Result<()> {
+    assert_eq!(
+        FAIL_CLOSED_BEACON_SIGNER_MODES
+            .iter()
+            .filter(|mode| **mode == ParliamentBeaconSignerMode::Valid)
+            .count(),
+        1,
+        "the negative corridor must retain exactly one proof-valid beacon share",
+    );
+    let mut npos = SumeragiNposParameters::default();
+    npos.epoch_length_blocks = NonZeroU64::new(MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS)
+        .expect("mandatory NPoS epoch length is non-zero");
+    npos.vrf_commit_window_blocks = 2;
+    npos.vrf_reveal_window_blocks = 2;
+    npos.validate()
+        .map_err(|error| eyre!("invalid fail-closed NPoS fixture: {error}"))?;
+
+    let builder = NetworkBuilder::new()
+        .with_peers(VALIDATOR_COUNT)
+        .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
+        .with_parliament_beacon_signer_modes(FAIL_CLOSED_BEACON_SIGNER_MODES)
+        .with_block_cadence(Duration::from_secs(1))
+        .with_genesis_instruction(SetParameter::new(Parameter::Custom(
+            npos.into_custom_parameter(),
+        )))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanManageParliament),
+            ALICE_ID.clone(),
+        ));
+    let context = stringify!(four_validator_mandatory_npos_beacon_fails_closed_below_threshold);
+    let network = sandbox::start_network_async_or_skip(builder, context).await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
+        return Ok(());
+    };
+    assert_eq!(network.peers().len(), VALIDATOR_COUNT);
+    network.ensure_blocks(1).await?;
+
+    let client = network.client();
+    let ordered_roster = ordered_validator_roster(&network)?;
+    let beacon_record =
+        deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
+            .wrap_err("derive fail-closed NPoS beacon fixture")?;
+    assert_eq!(beacon_record.session.committee_size, 4);
+    assert_eq!(beacon_record.session.threshold, 2);
+    let install_height =
+        (current_height(&client)? + 1).max(beacon_record.session.adaptive_dkg.finalized_at_height);
+    advance_to_predecessor(
+        &client,
+        install_height,
+        "fail-closed beacon-key installation",
+    )?;
+    client.submit_blocking(
+        lifecycle_certificate(
+            &network,
+            &ordered_roster,
+            ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+            beacon_record.session.session_id,
+            beacon_record.session.transcript_hash,
+            norito::encode_canonical(&beacon_record)?,
+            install_height,
+        )?,
+        fee(),
+    )?;
+    assert_eq!(current_height(&client)?, install_height);
+    tick(&client, "activate fail-closed NPoS beacon session")?;
+
+    let pulse_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS - 1;
+    advance_to_predecessor(&client, pulse_height, "fail-closed pre-boundary pulse")?;
+    let predecessor_height = pulse_height - 1;
+    assert_eq!(current_height(&client)?, predecessor_height);
+    let unexpected_pulse_height = tokio::time::timeout(
+        FAIL_CLOSED_BEACON_OBSERVATION_WINDOW,
+        network.peers()[0].once_block(pulse_height),
+    )
+    .await;
+    assert!(
+        unexpected_pulse_height.is_err(),
+        "one valid share plus one proof-invalid share must not satisfy the exact threshold of two",
+    );
+
+    for peer in network.peers() {
+        assert!(
+            peer.is_running(),
+            "the beacon-share fault must not stop a consensus validator",
+        );
+        let peer_client = peer.client();
+        assert_eq!(
+            current_height(&peer_client)?,
+            predecessor_height,
+            "the mandatory pre-boundary height must remain uncommitted below threshold",
+        );
+        let status = peer_client.get_sumeragi_status()?;
+        status
+            .validate()
+            .map_err(|error| eyre!("invalid fail-closed NPoS status: {error}"))?;
+        assert_eq!(status.last_committed_height, predecessor_height);
+        assert_eq!(status.height_context.height, pulse_height);
+    }
+
+    network.shutdown().await;
+    Ok(())
+}
+
 #[test]
 fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
     let source = include_str!("sora_parliament_lifecycle_smoke.rs");
@@ -1832,7 +1955,14 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
     }
     assert!(source.contains(concat!("with_peers(", "VALIDATOR_COUNT)")));
     assert!(source.contains(concat!("with_npos_", "consensus()")));
-    assert!(source.contains(concat!("with_parliament_", "test_signers()")));
+    assert!(source.contains(concat!(
+        "with_parliament_beacon_",
+        "signer_modes(POSITIVE_BEACON_SIGNER_MODES)"
+    )));
+    assert!(source.contains(concat!(
+        "with_parliament_beacon_",
+        "signer_modes(FAIL_CLOSED_BEACON_SIGNER_MODES)"
+    )));
     assert!(source.contains(concat!(
         "SumeragiV2GenesisContextParameters::recommended()",
         ".da_layout"

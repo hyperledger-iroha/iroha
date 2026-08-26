@@ -32,6 +32,11 @@ pub use adapter::{
     ExternalSoftwareSignerAdapterErrorV1, ExternalSoftwareSignerNativeAdapterV1,
     ExternalSoftwareSignerNativeBackendsV1,
 };
+#[cfg(all(test, unix))]
+pub(crate) use consensus_threshold::tests::{
+    consensus_threshold_beacon_broker_test_fixture_v1,
+    consensus_threshold_tle_broker_test_fixture_v1,
+};
 #[cfg(unix)]
 pub use consensus_threshold::{
     GLOBAL_BEACON_PARTIAL_SIGNER_CREDENTIAL_NAME_V1,

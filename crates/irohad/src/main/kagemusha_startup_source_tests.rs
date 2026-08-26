@@ -12,6 +12,8 @@ fn config_test_args(config_path: PathBuf, genesis_manifest_json: Option<PathBuf>
         terminal_colors: false,
         language: None,
         sora: false,
+        #[cfg(feature = "test-network-parliament-signers")]
+        test_network_parliament_beacon_signer_mode: TestNetworkParliamentBeaconSignerMode::Valid,
         fastpq_execution_mode: None,
         fastpq_poseidon_mode: None,
         fastpq_device_class: None,
@@ -113,6 +115,8 @@ fn relative_file_paths_resolution() -> eyre::Result<()> {
         terminal_colors: false,
         language: None,
         sora: false,
+        #[cfg(feature = "test-network-parliament-signers")]
+        test_network_parliament_beacon_signer_mode: TestNetworkParliamentBeaconSignerMode::Valid,
         fastpq_execution_mode: None,
         fastpq_poseidon_mode: None,
         fastpq_device_class: None,

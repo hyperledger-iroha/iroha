@@ -2381,7 +2381,7 @@ region|drive|launch|after|pub(in crate::sumeragi) fn drive_lifecycle_decision_ap
 region|sidecar|lane_work|begin|-|end|-
 region|pending_owner_join|coordinator_support|begin|-|before|\n#[cfg(test)]
 region|pending_registry_ordinal|registry_recovery_impl|at|pub(super) fn exact_recovered_decision_apply_ready_ordinal(|before|/// Verify WAL-authority startup coverage beside authenticated cold outputs.
-region|pending_replay|pending_kura_recovery|begin|-|end|-
+region|pending_replay|pending_kura|begin|-|end|-
 region|pending_verify|effects|at|pub(in crate::sumeragi) fn verify_pending_kura_recovered_apply_replay(|before|/// Authenticate and enqueue one reducer-directed v2 network message
 region|pending_dispatch|effects|at|pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_executor_dispatch|before|/// Install the distinct preliminary retransmit exclusion
 region|pending_completion_exact|adapter|at|pub(in crate::sumeragi) fn exactly_matches_pending_kura_recovery(|before|impl SumeragiV2Adapter {

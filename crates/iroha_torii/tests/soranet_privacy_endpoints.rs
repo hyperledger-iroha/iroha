@@ -60,6 +60,38 @@ fn privacy_ingress_dtos_reject_unknown_fields() {
         "share DTO must reject unknown fields"
     );
 }
+
+#[test]
+fn privacy_ingress_dtos_roundtrip_canonical_norito() {
+    let event = RecordSoranetPrivacyEventDto {
+        event: SoranetPrivacyEventV1 {
+            timestamp_unix: 1_720_000_060,
+            mode: SoranetPrivacyModeV1::Middle,
+            kind: SoranetPrivacyEventKindV1::HandshakeSuccess(
+                SoranetPrivacyEventHandshakeSuccessV1 {
+                    rtt_ms: Some(120),
+                    active_circuits_after: Some(42),
+                },
+            ),
+        },
+        source: Some("norito-roundtrip".to_owned()),
+    };
+    let event_bytes = norito::to_bytes(&event).expect("encode privacy event DTO");
+    let decoded_event: RecordSoranetPrivacyEventDto =
+        norito::decode_from_bytes(&event_bytes).expect("decode privacy event DTO");
+    assert_eq!(decoded_event.event, event.event);
+    assert_eq!(decoded_event.source, event.source);
+
+    let share = RecordSoranetPrivacyShareDto {
+        share: SoranetPrivacyPrioShareV1::new([0x5a; 32], 1_720_000_020, 60),
+        forwarded_by: Some("norito-roundtrip".to_owned()),
+    };
+    let share_bytes = norito::to_bytes(&share).expect("encode privacy share DTO");
+    let decoded_share: RecordSoranetPrivacyShareDto =
+        norito::decode_from_bytes(&share_bytes).expect("decode privacy share DTO");
+    assert_eq!(decoded_share.share, share.share);
+    assert_eq!(decoded_share.forwarded_by, share.forwarded_by);
+}
 #[tokio::test]
 async fn privacy_event_endpoint_rejects_when_disabled() {
     let telemetry = MaybeTelemetry::disabled();

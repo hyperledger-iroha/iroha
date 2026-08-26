@@ -35,6 +35,8 @@ fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode() -> e
         terminal_colors: false,
         language: None,
         sora: true,
+        #[cfg(feature = "test-network-parliament-signers")]
+        test_network_parliament_beacon_signer_mode: TestNetworkParliamentBeaconSignerMode::Valid,
         fastpq_execution_mode: None,
         fastpq_poseidon_mode: None,
         fastpq_device_class: None,

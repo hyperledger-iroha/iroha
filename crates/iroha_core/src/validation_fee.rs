@@ -15,6 +15,7 @@ use iroha_data_model::{
     ValidationFail,
     account::AccountId,
     asset::AssetDefinitionId,
+    governance::types::ProposalKind,
     isi::{
         InstructionBox, TransferAssetBatch, TransferBox,
         governance::{
@@ -62,6 +63,138 @@ const VALIDATION_FEE_CREDIT_LIFECYCLE_STATE_PREFIX: &str = "ValidationFeeCreditL
 pub(crate) const VALIDATION_FEE_PAYOUT_WRAPPER_ENTRYPOINT_PERMISSION: &str =
     "CanInvokeContractEntrypoint";
 pub(crate) const VALIDATION_FEE_POOL_SWAP_ENTRYPOINT: &str = "swap_exact_in_quote_public";
+
+fn retained_enacted_validation_fee_proposals<'a, 'block, 'world>(
+    state_transaction: &'a StateTransaction<'block, 'world>,
+) -> impl Iterator<Item = ([u8; 32], &'a ProposalKind)> + 'a {
+    let world = &state_transaction.world;
+    world
+        .validation_fee_proposal_index
+        .iter()
+        .filter_map(move |((_, proposal_id), ())| {
+            let proposal = world.governance_proposals.get(proposal_id)?;
+            (proposal.status == crate::state::GovernanceProposalStatus::Enacted)
+                .then_some((*proposal_id, &proposal.kind))
+        })
+}
+
+/// Return the retained enacted validation-fee proposal that pins an account.
+///
+/// The retained proposal kinds, rather than the currently active policy projection, are the
+/// append-only authorization source. Consequently this guard also covers the mandatory activation
+/// delay before the first enabled policy can make account unregistration fail closed at admission.
+pub(crate) fn retained_enacted_validation_fee_account_reference(
+    state_transaction: &StateTransaction<'_, '_>,
+    account_id: &AccountId,
+) -> Option<([u8; 32], &'static str)> {
+    retained_enacted_validation_fee_proposals(state_transaction).find_map(
+        |(proposal_id, proposal_kind)| {
+            let payout_reference = |binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1| {
+                if &binding.treasury_account_id == account_id {
+                    Some("payout treasury")
+                } else if &binding.pool_vault_account_id == account_id {
+                    Some("payout pool vault")
+                } else if binding
+                    .recipients
+                    .iter()
+                    .any(|recipient| &recipient.account_id == account_id)
+                {
+                    Some("payout recipient")
+                } else {
+                    None
+                }
+            };
+            let reference_kind = match proposal_kind {
+                ProposalKind::ValidationFeePolicy(payload) => {
+                    if &payload.policy.treasury_account_id == account_id {
+                        Some("policy treasury")
+                    } else {
+                        payload
+                            .policy
+                            .treasury_payout_binding
+                            .as_ref()
+                            .and_then(payout_reference)
+                    }
+                }
+                ProposalKind::ValidationFeePayoutLifecycle(payload) => {
+                    payout_reference(&payload.payout_binding)
+                }
+                _ => None,
+            }?;
+            Some((proposal_id, reference_kind))
+        },
+    )
+}
+
+fn retained_enacted_validation_fee_asset_reference_matching(
+    state_transaction: &StateTransaction<'_, '_>,
+    mut matches: impl FnMut(&AssetDefinitionId) -> bool,
+) -> Option<([u8; 32], &'static str, AssetDefinitionId)> {
+    retained_enacted_validation_fee_proposals(state_transaction).find_map(
+        |(proposal_id, proposal_kind)| {
+            let matched = match proposal_kind {
+                ProposalKind::ValidationFeePolicy(payload) => {
+                    if matches(&payload.policy.ds_asset_id) {
+                        Some((
+                            "policy DS asset definition",
+                            payload.policy.ds_asset_id.clone(),
+                        ))
+                    } else if let Some(binding) = payload.policy.treasury_payout_binding.as_ref() {
+                        if matches(&binding.ds_asset_id) {
+                            Some(("payout DS asset definition", binding.ds_asset_id.clone()))
+                        } else if matches(&binding.xor_asset_id) {
+                            Some(("payout XOR asset definition", binding.xor_asset_id.clone()))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                ProposalKind::ValidationFeePayoutLifecycle(payload) => {
+                    let binding = &payload.payout_binding;
+                    if matches(&binding.ds_asset_id) {
+                        Some(("payout DS asset definition", binding.ds_asset_id.clone()))
+                    } else if matches(&binding.xor_asset_id) {
+                        Some(("payout XOR asset definition", binding.xor_asset_id.clone()))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }?;
+            Some((proposal_id, matched.0, matched.1))
+        },
+    )
+}
+
+/// Return the retained enacted validation-fee proposal that pins an asset definition.
+///
+/// Every enacted policy DS and payout-lifecycle DS/XOR definition remains referenced even before
+/// activation and after its balance drains.
+pub(crate) fn retained_enacted_validation_fee_asset_reference(
+    state_transaction: &StateTransaction<'_, '_>,
+    asset_definition_id: &AssetDefinitionId,
+) -> Option<([u8; 32], &'static str)> {
+    retained_enacted_validation_fee_asset_reference_matching(state_transaction, |candidate| {
+        candidate == asset_definition_id
+    })
+    .map(|(proposal_id, reference_kind, _)| (proposal_id, reference_kind))
+}
+
+/// Return one retained enacted validation-fee reference to any definition in `candidates`.
+///
+/// The typed proposal index is traversed once, so containing-domain teardown is `O(P + D)` rather
+/// than rescanning `P` retained validation-fee proposals for each of its `D` definitions.
+pub(crate) fn retained_enacted_validation_fee_asset_reference_in(
+    state_transaction: &StateTransaction<'_, '_>,
+    candidates: &std::collections::BTreeSet<AssetDefinitionId>,
+) -> Option<([u8; 32], &'static str, AssetDefinitionId)> {
+    retained_enacted_validation_fee_asset_reference_matching(state_transaction, |candidate| {
+        candidates.contains(candidate)
+    })
+}
+
 fn enacted_payout_binding_for_contract<'a>(
     state_transaction: &'a StateTransaction<'_, '_>,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,

@@ -92,8 +92,7 @@ impl<'a> SnapshotJsonField<'a> {
                     )));
                 }
                 let mut count = 0_usize;
-                let mut terminal = None;
-                loop {
+                let terminal = loop {
                     let start = parser.position();
                     parser.skip_value().map_err(&invalid)?;
                     let end = parser.position();
@@ -102,29 +101,27 @@ impl<'a> SnapshotJsonField<'a> {
                             "block hash count exceeds platform limits".to_owned(),
                         ))
                     })?;
-                    terminal = Some(&raw[start..end]);
                     parser.skip_ws();
                     match parser.bump() {
                         Some(b',') => {
                             parser.skip_ws();
                         }
-                        Some(b']') => break,
+                        Some(b']') => break &raw[start..end],
                         _ => {
                             return Err(invalid(json::Error::Message(
                                 "expected comma or block hash array end".to_owned(),
                             )));
                         }
                     }
-                }
+                };
                 parser.skip_ws();
                 if !parser.eof() {
                     return Err(invalid(json::Error::Message(
                         "trailing bytes after block hash array".to_owned(),
                     )));
                 }
-                let terminal = terminal
-                    .map(json::from_str::<HashOf<BlockHeader>>)
-                    .transpose()
+                let terminal = json::from_str::<HashOf<BlockHeader>>(terminal)
+                    .map(Some)
                     .map_err(&invalid)?;
                 Ok((count, terminal))
             }
@@ -164,6 +161,30 @@ impl<'a> SnapshotJsonField<'a> {
         })
     }
 }
+
+#[cfg(test)]
+mod snapshot_json_field_tests {
+    use super::*;
+
+    #[test]
+    fn borrowed_block_hash_boundary_counts_untyped_prefix_and_decodes_terminal_hash() {
+        let terminal = HashOf::<BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0xA5; Hash::LENGTH]),
+        );
+        let terminal_json = json::to_json(&terminal).expect("serialize terminal block hash");
+        let raw = format!(r#"[null,{{"historical":"untyped"}},{terminal_json}]"#);
+
+        let boundary = SnapshotJsonField::Borrowed {
+            raw: &raw,
+            emergency_fast: true,
+        }
+        .block_hash_boundary("block_hashes")
+        .expect("count the historical prefix and decode its terminal hash");
+
+        assert_eq!(boundary, (3, Some(terminal)));
+    }
+}
+
 struct SnapshotJsonMap<'a> {
     fields: BTreeMap<String, SnapshotJsonField<'a>>,
     source_order: Option<Vec<String>>,

@@ -1489,3 +1489,570 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
     .expect_err("restricted fee asset allocation must fail");
     assert!(is_restricted_asset_error(&allocation_error));
 }
+
+#[derive(Clone)]
+struct RetainedValidationFeeUnregisterFixture {
+    policy_treasury: AccountId,
+    payout_binding: iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
+    embedded_policy_proposal_id: [u8; 32],
+    lifecycle_proposal_id: [u8; 32],
+    unrelated_account: AccountId,
+}
+
+fn validation_fee_unregister_account(seed: u8) -> AccountId {
+    AccountId::new(
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("validation-fee unregister fixture key")
+            .public_key()
+            .clone(),
+    )
+}
+
+fn install_retained_validation_fee_unregister_fixture(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    policy_ds_asset_id: AssetDefinitionId,
+    payout_ds_asset_id: AssetDefinitionId,
+    payout_xor_asset_id: AssetDefinitionId,
+) -> RetainedValidationFeeUnregisterFixture {
+    use iroha_data_model::{
+        governance::types::{
+            ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+        },
+        validation_fee::{
+            VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+            VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
+            ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
+            ValidationFeeTreasuryPayoutRecipientV1, initial_validation_fee_amount,
+            validation_fee_payout_batch_ds, validation_fee_payout_max_xor,
+            validation_fee_payout_min_xor, validation_fee_payout_recipient_share,
+        },
+    };
+
+    let network_id: NetworkId =
+        "hash:00000000000000000000000000000000000000000000000000000000000000D1#C50E"
+            .parse()
+            .expect("validation-fee unregister fixture network id");
+    let contract_address =
+        ContractAddress::derive(&network_id, &ALICE_ID, 369, DataSpaceId::UNIVERSAL)
+            .expect("validation-fee unregister fixture contract address");
+    let payout_binding = ValidationFeeTreasuryPayoutBindingV1 {
+        treasury_account_id: contract_address.subject_id(),
+        contract_address,
+        code_hash: [0xD1; 32],
+        entrypoint: "autonomous_validation_fee_tick"
+            .parse()
+            .expect("validation-fee payout entrypoint"),
+        ds_asset_id: payout_ds_asset_id,
+        xor_asset_id: payout_xor_asset_id,
+        pool_vault_account_id: validation_fee_unregister_account(0xD2),
+        batch_ds: validation_fee_payout_batch_ds(),
+        min_xor_out: validation_fee_payout_min_xor(),
+        max_xor_out: validation_fee_payout_max_xor(),
+        recipients: (0xD3..=0xD6)
+            .map(|seed| ValidationFeeTreasuryPayoutRecipientV1 {
+                account_id: validation_fee_unregister_account(seed),
+                share: validation_fee_payout_recipient_share(),
+            })
+            .collect(),
+    };
+    assert_eq!(
+        payout_binding.invariant_error(),
+        None,
+        "unregister fixture must carry the exact V1 payout binding"
+    );
+
+    let policy_treasury = validation_fee_unregister_account(0xD0);
+    let lifecycle_kind =
+        ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+            proposal_operator: ALICE_ID.clone(),
+            payout_binding: payout_binding.clone(),
+        });
+    let lifecycle_proposal_id = lifecycle_kind.fingerprint();
+    let policy_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+        proposal_operator: ALICE_ID.clone(),
+        policy: ValidationFeePolicyV1 {
+            schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+            network_id: network_id.clone(),
+            policy_version: 1,
+            previous_policy_hash: None,
+            ds_asset_id: policy_ds_asset_id,
+            ds_scale: VALIDATION_FEE_DS_SCALE,
+            fee: Quantity::from(0_u32),
+            treasury_account_id: policy_treasury.clone(),
+            charging_mode: ValidationFeeChargingMode::Disabled,
+            effective_from_height: 10,
+            expires_after_height: None,
+            exemption_classes: Vec::new(),
+            treasury_payout_binding: None,
+        },
+        payout_lifecycle_proposal_id: None,
+    });
+    let policy_proposal_id = policy_kind.fingerprint();
+    state_transaction
+        .world
+        .put_governance_proposal(
+            policy_proposal_id,
+            crate::state::GovernanceProposalRecord {
+                proposer: ALICE_ID.clone(),
+                kind: policy_kind,
+                created_height: 1,
+                status: crate::state::GovernanceProposalStatus::Enacted,
+            },
+        )
+        .expect("retain enacted validation-fee policy fixture");
+
+    state_transaction
+        .world
+        .put_governance_proposal(
+            lifecycle_proposal_id,
+            crate::state::GovernanceProposalRecord {
+                proposer: ALICE_ID.clone(),
+                kind: lifecycle_kind,
+                created_height: 2,
+                status: crate::state::GovernanceProposalStatus::Enacted,
+            },
+        )
+        .expect("retain enacted validation-fee payout lifecycle fixture");
+
+    let embedded_policy = ValidationFeePolicyV1 {
+        schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+        network_id,
+        policy_version: 1,
+        previous_policy_hash: None,
+        ds_asset_id: payout_binding.ds_asset_id.clone(),
+        ds_scale: VALIDATION_FEE_DS_SCALE,
+        fee: initial_validation_fee_amount(),
+        treasury_account_id: payout_binding.treasury_account_id.clone(),
+        charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
+        effective_from_height: 10,
+        expires_after_height: None,
+        exemption_classes: vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()],
+        treasury_payout_binding: Some(payout_binding.clone()),
+    };
+    assert_eq!(
+        embedded_policy.policy_invariant_error(),
+        None,
+        "the embedded payout policy fixture must satisfy every first-release invariant",
+    );
+    let embedded_policy_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+        proposal_operator: ALICE_ID.clone(),
+        policy: embedded_policy,
+        payout_lifecycle_proposal_id: Some(lifecycle_proposal_id),
+    });
+    let embedded_policy_proposal_id = embedded_policy_kind.fingerprint();
+    state_transaction
+        .world
+        .put_governance_proposal(
+            embedded_policy_proposal_id,
+            crate::state::GovernanceProposalRecord {
+                proposer: ALICE_ID.clone(),
+                kind: embedded_policy_kind,
+                created_height: 3,
+                status: crate::state::GovernanceProposalStatus::Proposed,
+            },
+        )
+        .expect("retain validation-fee policy with embedded payout fixture");
+
+    RetainedValidationFeeUnregisterFixture {
+        policy_treasury,
+        payout_binding,
+        embedded_policy_proposal_id,
+        lifecycle_proposal_id,
+        unrelated_account: validation_fee_unregister_account(0xDF),
+    }
+}
+
+fn register_validation_fee_fixture_asset(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    asset_definition_id: AssetDefinitionId,
+    domain_id: Option<DomainId>,
+) -> AssetId {
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_definition_id.clone(),
+        "validation fee unregister fixture asset".to_owned(),
+        AssetBalancePolicy::Global,
+        domain_id,
+    ))
+    .execute(&ALICE_ID, state_transaction)
+    .expect("register validation-fee unregister fixture asset definition");
+    let asset_id = AssetId::new(asset_definition_id, ALICE_ID.clone());
+    Mint::asset_quantity(Quantity::from(7_u32), asset_id.clone())
+        .execute(&ALICE_ID, state_transaction)
+        .expect("mint validation-fee unregister fixture balance");
+    asset_id
+}
+
+#[test]
+fn enacted_policy_embedded_payout_references_are_pinned_without_lifecycle_projection() {
+    blank_test_state_transaction!(state, block, stx);
+    bootstrap_alice_account(&mut stx);
+    let fixture_domain = DomainId::try_new("vfembedded", "universal").expect("fixture domain");
+    let policy_ds = AssetDefinitionId::derive_from_components(
+        fixture_domain.clone(),
+        "policy_ds".parse().expect("policy DS name"),
+    );
+    let payout_ds = AssetDefinitionId::derive_from_components(
+        fixture_domain.clone(),
+        "payout_ds".parse().expect("payout DS name"),
+    );
+    let payout_xor = AssetDefinitionId::derive_from_components(
+        fixture_domain,
+        "payout_xor".parse().expect("payout XOR name"),
+    );
+    let fixture = install_retained_validation_fee_unregister_fixture(
+        &mut stx,
+        policy_ds,
+        payout_ds,
+        payout_xor.clone(),
+    );
+    {
+        let mut proposals = stx.world.governance_proposals_mut();
+        proposals
+            .get_mut(&fixture.lifecycle_proposal_id)
+            .expect("retained lifecycle proposal")
+            .status = crate::state::GovernanceProposalStatus::Proposed;
+        proposals
+            .get_mut(&fixture.embedded_policy_proposal_id)
+            .expect("retained embedded policy proposal")
+            .status = crate::state::GovernanceProposalStatus::Enacted;
+    }
+
+    let pool_vault = fixture.payout_binding.pool_vault_account_id.clone();
+    Register::account(Account::new(pool_vault.clone()))
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register embedded payout pool vault");
+    register_validation_fee_fixture_asset(&mut stx, payout_xor.clone(), None);
+
+    let account_error = Unregister::account(pool_vault)
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("the enacted policy must independently pin its embedded payout pool vault");
+    assert!(account_error.to_string().contains("payout pool vault"));
+    let asset_error = Unregister::asset_definition(payout_xor)
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("the enacted policy must independently pin its embedded payout XOR asset");
+    assert!(
+        asset_error
+            .to_string()
+            .contains("payout XOR asset definition")
+    );
+}
+
+#[test]
+fn non_enacted_validation_fee_proposal_statuses_do_not_pin_payout_references() {
+    for status in [
+        crate::state::GovernanceProposalStatus::Proposed,
+        crate::state::GovernanceProposalStatus::Rejected,
+        crate::state::GovernanceProposalStatus::Superseded,
+        crate::state::GovernanceProposalStatus::ExecutionFailed,
+    ] {
+        blank_test_state_transaction!(state, block, stx);
+        bootstrap_alice_account(&mut stx);
+        let fixture_domain = DomainId::try_new("vfunpinned", "universal").expect("fixture domain");
+        let policy_ds = AssetDefinitionId::derive_from_components(
+            fixture_domain.clone(),
+            "policy_ds".parse().expect("policy DS name"),
+        );
+        let payout_ds = AssetDefinitionId::derive_from_components(
+            fixture_domain.clone(),
+            "payout_ds".parse().expect("payout DS name"),
+        );
+        let payout_xor = AssetDefinitionId::derive_from_components(
+            fixture_domain,
+            "payout_xor".parse().expect("payout XOR name"),
+        );
+        let fixture = install_retained_validation_fee_unregister_fixture(
+            &mut stx,
+            policy_ds,
+            payout_ds,
+            payout_xor.clone(),
+        );
+        {
+            let mut proposals = stx.world.governance_proposals_mut();
+            proposals
+                .get_mut(&fixture.lifecycle_proposal_id)
+                .expect("retained lifecycle proposal")
+                .status = status;
+            proposals
+                .get_mut(&fixture.embedded_policy_proposal_id)
+                .expect("retained embedded policy proposal")
+                .status = status;
+        }
+
+        let pool_vault = fixture.payout_binding.pool_vault_account_id.clone();
+        Register::account(Account::new(pool_vault.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register non-enacted payout pool vault");
+        let payout_asset =
+            register_validation_fee_fixture_asset(&mut stx, payout_xor.clone(), None);
+        Unregister::account(pool_vault.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap_or_else(|error| panic!("status {status:?} pinned an account: {error}"));
+        Unregister::asset_definition(payout_xor.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap_or_else(|error| {
+                panic!("status {status:?} pinned an asset definition: {error}")
+            });
+        assert!(stx.world.account(&pool_vault).is_err());
+        assert!(stx.world.asset_definition(&payout_xor).is_err());
+        assert!(stx.world.asset(&payout_asset).is_err());
+    }
+}
+
+#[test]
+fn enacted_validation_fee_account_references_reject_unregister_atomically() {
+    blank_test_state_transaction!(state, block, stx);
+    bootstrap_alice_account(&mut stx);
+    let fixture_domain = DomainId::try_new("vfaccount", "universal").expect("fixture domain");
+    let fixture = install_retained_validation_fee_unregister_fixture(
+        &mut stx,
+        AssetDefinitionId::derive_from_components(
+            fixture_domain.clone(),
+            "policy_ds".parse().expect("policy DS name"),
+        ),
+        AssetDefinitionId::derive_from_components(
+            fixture_domain.clone(),
+            "payout_ds".parse().expect("payout DS name"),
+        ),
+        AssetDefinitionId::derive_from_components(
+            fixture_domain,
+            "payout_xor".parse().expect("payout XOR name"),
+        ),
+    );
+    let mut references = vec![
+        ("policy treasury", fixture.policy_treasury.clone()),
+        (
+            "payout treasury",
+            fixture.payout_binding.treasury_account_id.clone(),
+        ),
+        (
+            "payout pool vault",
+            fixture.payout_binding.pool_vault_account_id.clone(),
+        ),
+    ];
+    references.extend(
+        fixture
+            .payout_binding
+            .recipients
+            .iter()
+            .map(|recipient| ("payout recipient", recipient.account_id.clone())),
+    );
+    for (_, account_id) in references.iter().chain(std::iter::once(&(
+        "unrelated",
+        fixture.unrelated_account.clone(),
+    ))) {
+        Register::account(Account::new(account_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register validation-fee account reference fixture");
+    }
+
+    let account_ids_before: BTreeSet<_> = stx
+        .world
+        .accounts
+        .iter()
+        .map(|(account_id, _)| account_id.clone())
+        .collect();
+    for (reference_kind, account_id) in &references {
+        let error = Unregister::account(account_id.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("retained enacted validation-fee account reference must reject");
+        assert!(
+            error.to_string().contains(reference_kind),
+            "unexpected {reference_kind} rejection: {error}"
+        );
+        assert_eq!(
+            stx.world
+                .accounts
+                .iter()
+                .map(|(account_id, _)| account_id.clone())
+                .collect::<BTreeSet<_>>(),
+            account_ids_before,
+            "rejected {reference_kind} unregister must not mutate accounts"
+        );
+    }
+
+    Unregister::account(fixture.unrelated_account.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("an unrelated account remains unregisterable");
+    assert!(
+        stx.world.account(&fixture.unrelated_account).is_err(),
+        "unrelated account must actually be removed"
+    );
+}
+
+#[test]
+fn enacted_validation_fee_asset_references_reject_unregister_atomically() {
+    blank_test_state_transaction!(state, block, stx);
+    bootstrap_alice_account(&mut stx);
+    let fixture_domain = DomainId::try_new("vfasset", "universal").expect("fixture domain");
+    let policy_ds = AssetDefinitionId::derive_from_components(
+        fixture_domain.clone(),
+        "policy_ds".parse().expect("policy DS name"),
+    );
+    let payout_ds = AssetDefinitionId::derive_from_components(
+        fixture_domain.clone(),
+        "payout_ds".parse().expect("payout DS name"),
+    );
+    let payout_xor = AssetDefinitionId::derive_from_components(
+        fixture_domain.clone(),
+        "payout_xor".parse().expect("payout XOR name"),
+    );
+    let unrelated = AssetDefinitionId::derive_from_components(
+        fixture_domain,
+        "unrelated".parse().expect("unrelated asset name"),
+    );
+    let fixture = install_retained_validation_fee_unregister_fixture(
+        &mut stx,
+        policy_ds.clone(),
+        payout_ds.clone(),
+        payout_xor.clone(),
+    );
+    let _ = fixture;
+    let references = [
+        ("policy DS asset definition", policy_ds),
+        ("payout DS asset definition", payout_ds),
+        ("payout XOR asset definition", payout_xor),
+    ];
+    let mut reference_assets = Vec::new();
+    for (_, asset_definition_id) in &references {
+        reference_assets.push(register_validation_fee_fixture_asset(
+            &mut stx,
+            asset_definition_id.clone(),
+            None,
+        ));
+    }
+    let unrelated_asset = register_validation_fee_fixture_asset(&mut stx, unrelated.clone(), None);
+
+    for ((reference_kind, asset_definition_id), asset_id) in
+        references.iter().zip(&reference_assets)
+    {
+        let balance_before = stx
+            .world
+            .asset(asset_id)
+            .expect("referenced asset exists")
+            .as_ref()
+            .clone();
+        let error = Unregister::asset_definition(asset_definition_id.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("retained enacted validation-fee asset reference must reject");
+        assert!(
+            error.to_string().contains(reference_kind),
+            "unexpected {reference_kind} rejection: {error}"
+        );
+        assert!(
+            stx.world.asset_definition(asset_definition_id).is_ok(),
+            "rejected {reference_kind} unregister must retain the definition"
+        );
+        assert_eq!(
+            stx.world
+                .asset(asset_id)
+                .expect("rejected unregister retains balance")
+                .as_ref(),
+            &balance_before,
+            "rejected {reference_kind} unregister must retain balances"
+        );
+    }
+
+    Unregister::asset_definition(unrelated.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("an unrelated asset definition remains unregisterable");
+    assert!(stx.world.asset_definition(&unrelated).is_err());
+    assert!(stx.world.asset(&unrelated_asset).is_err());
+}
+
+#[test]
+fn enacted_validation_fee_asset_references_reject_containing_domain_unregister_atomically() {
+    blank_test_state_transaction!(state, block, stx);
+    bootstrap_alice_account(&mut stx);
+    let policy_domain = DomainId::try_new("vfpolicy", "universal").expect("policy domain");
+    let payout_ds_domain = DomainId::try_new("vfpayoutds", "universal").expect("payout DS domain");
+    let payout_xor_domain =
+        DomainId::try_new("vfpayoutxor", "universal").expect("payout XOR domain");
+    let unrelated_domain = DomainId::try_new("vfunrelated", "universal").expect("unrelated domain");
+    for domain_id in [
+        &policy_domain,
+        &payout_ds_domain,
+        &payout_xor_domain,
+        &unrelated_domain,
+    ] {
+        seed_domain_name_lease_tx(&mut stx.world, &ALICE_ID, domain_id);
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register validation-fee unregister fixture domain");
+    }
+    let policy_ds = AssetDefinitionId::derive_from_components(
+        policy_domain.clone(),
+        "policy_ds".parse().expect("policy DS name"),
+    );
+    let payout_ds = AssetDefinitionId::derive_from_components(
+        payout_ds_domain.clone(),
+        "payout_ds".parse().expect("payout DS name"),
+    );
+    let payout_xor = AssetDefinitionId::derive_from_components(
+        payout_xor_domain.clone(),
+        "payout_xor".parse().expect("payout XOR name"),
+    );
+    let unrelated = AssetDefinitionId::derive_from_components(
+        unrelated_domain.clone(),
+        "unrelated".parse().expect("unrelated asset name"),
+    );
+    let fixture = install_retained_validation_fee_unregister_fixture(
+        &mut stx,
+        policy_ds.clone(),
+        payout_ds.clone(),
+        payout_xor.clone(),
+    );
+    let _ = fixture;
+    let references = [
+        ("policy DS asset definition", policy_domain, policy_ds),
+        ("payout DS asset definition", payout_ds_domain, payout_ds),
+        ("payout XOR asset definition", payout_xor_domain, payout_xor),
+    ];
+    let mut reference_assets = Vec::new();
+    for (_, domain_id, asset_definition_id) in &references {
+        reference_assets.push(register_validation_fee_fixture_asset(
+            &mut stx,
+            asset_definition_id.clone(),
+            Some(domain_id.clone()),
+        ));
+    }
+    let unrelated_asset = register_validation_fee_fixture_asset(
+        &mut stx,
+        unrelated.clone(),
+        Some(unrelated_domain.clone()),
+    );
+
+    for ((reference_kind, domain_id, asset_definition_id), asset_id) in
+        references.iter().zip(&reference_assets)
+    {
+        let balance_before = stx
+            .world
+            .asset(asset_id)
+            .expect("referenced domain asset exists")
+            .as_ref()
+            .clone();
+        let error = Unregister::domain(domain_id.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("domain containing retained validation-fee asset must reject");
+        assert!(
+            error.to_string().contains(reference_kind),
+            "unexpected {reference_kind} domain rejection: {error}"
+        );
+        assert!(stx.world.domain(domain_id).is_ok());
+        assert!(stx.world.asset_definition(asset_definition_id).is_ok());
+        assert_eq!(
+            stx.world
+                .asset(asset_id)
+                .expect("rejected domain unregister retains balance")
+                .as_ref(),
+            &balance_before,
+            "rejected {reference_kind} domain unregister must be atomic"
+        );
+    }
+
+    Unregister::domain(unrelated_domain.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("an unrelated containing domain remains unregisterable");
+    assert!(stx.world.domain(&unrelated_domain).is_err());
+    assert!(stx.world.asset_definition(&unrelated).is_err());
+    assert!(stx.world.asset(&unrelated_asset).is_err());
+}

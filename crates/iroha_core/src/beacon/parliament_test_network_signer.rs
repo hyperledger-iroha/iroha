@@ -198,6 +198,7 @@ pub struct TestNetworkParliamentBeaconPartialSignerV1 {
     network_id: NetworkId,
     ordered_roster: Vec<PeerId>,
     local_signer_index: u16,
+    emit_invalid_outbound: bool,
 }
 
 impl TestNetworkParliamentBeaconPartialSignerV1 {
@@ -223,7 +224,20 @@ impl TestNetworkParliamentBeaconPartialSignerV1 {
             network_id,
             ordered_roster,
             local_signer_index,
+            emit_invalid_outbound: false,
         })
+    }
+
+    /// Mark this feature-only provider as an adversarial outbound signer.
+    ///
+    /// The provider still derives a proof-valid share. The Sumeragi test hook
+    /// corrupts that share only after signing, omits it from the local reducer,
+    /// and broadcasts it so every receiving validator must reject it through
+    /// the ordinary ingress verifier.
+    #[must_use]
+    pub fn with_deliberately_invalid_outbound(mut self) -> Self {
+        self.emit_invalid_outbound = true;
+        self
     }
 }
 
@@ -258,6 +272,10 @@ impl GlobalThresholdBeaconPartialSignerV1 for TestNetworkParliamentBeaconPartial
         )
         .map_err(|_| "test Parliament beacon signer import failed".to_owned())?;
         signer.sign_partial(session, payload)
+    }
+
+    fn test_network_emit_invalid_outbound_partial_v1(&self) -> bool {
+        self.emit_invalid_outbound
     }
 }
 
@@ -331,5 +349,38 @@ mod tests {
         )
         .expect("bind exact seat to a different network");
         assert!(signer.sign_partial(&validated, payload).is_err());
+    }
+
+    #[test]
+    fn invalid_outbound_mode_preserves_valid_signing_and_sets_only_the_test_hook() {
+        let roster = roster();
+        let record = deterministic_parliament_beacon_key_record_v1(network_id(), &roster)
+            .expect("derive public fixture");
+        let binding = GlobalThresholdBeaconSessionBindingV1 {
+            network_id: record.session.network_id,
+            session_id: record.session.session_id,
+            roster_hash: record.session.roster_hash,
+            transcript_hash: record.session.transcript_hash,
+        };
+        let validated = validate_global_threshold_beacon_session_v1(record.session, &binding)
+            .expect("validate public fixture");
+        let signer = TestNetworkParliamentBeaconPartialSignerV1::try_new(
+            network_id(),
+            roster.clone(),
+            &roster[0],
+        )
+        .expect("bind exact test seat")
+        .with_deliberately_invalid_outbound();
+        let payload = b"feature-isolated invalid-outbound fixture";
+        let partial = signer
+            .sign_partial(&validated, payload)
+            .expect("the provider itself must still produce a valid share");
+        let decoded = super::super::adaptive_partial_signature_from_dto_v1(&partial)
+            .expect("decode proof-valid provider output");
+        validated
+            .transcript
+            .verify_partial_signature(payload, &decoded)
+            .expect("the corruption belongs to the outbound lifecycle hook");
+        assert!(signer.test_network_emit_invalid_outbound_partial_v1());
     }
 }
