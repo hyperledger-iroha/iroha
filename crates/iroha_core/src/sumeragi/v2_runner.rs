@@ -1832,32 +1832,124 @@ fn commit_certificate_admission_completed(
         }
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum AdvanceExecutorYieldCheckpointV1 {
+    BeforeStep,
+    AfterStep,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum AdvanceExecutorYieldCauseV1 {
+    RecoveredLifecycleOutputCompleted,
+    RecoveredLifecycleOutputSourceRetained,
+    SettledLiveWalSign,
+    PendingLiveWalSign,
+    SettledLifecycleOutput,
+    PendingLifecycleOutput,
+    SettledDurableValidate,
+    PendingDurableValidate,
+}
+
+/// Exact short-circuit owner which made one serialized executor slice yield.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) struct AdvanceExecutorYieldV1 {
+    checkpoint: AdvanceExecutorYieldCheckpointV1,
+    cause: AdvanceExecutorYieldCauseV1,
+}
+
+impl AdvanceExecutorYieldV1 {
+    const fn new(
+        checkpoint: AdvanceExecutorYieldCheckpointV1,
+        cause: AdvanceExecutorYieldCauseV1,
+    ) -> Self {
+        Self { checkpoint, cause }
+    }
+}
+
+/// Exhaustive result of one bounded serialized executor slice.
+///
+/// `AdvancedAtSliceBoundary` records observed progress without claiming that
+/// the runtime is drained. Callers must therefore make an explicit fairness
+/// decision instead of treating budget exhaustion as `Idle`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum AdvanceExecutorSliceOutcomeV1 {
+    Idle,
+    AdvancedAtSliceBoundary,
+    Yielded(AdvanceExecutorYieldV1),
+}
+
 fn advance_executor(
     receiver: &FairV2Ingress,
     lifecycle_owner: &mut super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
     limit: usize,
-) -> Result<bool, V2RunnerError> {
+) -> Result<AdvanceExecutorSliceOutcomeV1, V2RunnerError> {
     for _ in 0..limit.max(1) {
-        if recovered_lifecycle_output_requires_yield(
-            super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
-                lifecycle_owner,
-                executor,
-                services,
-            )?,
-        ) || executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0
-            || executor.has_pending_live_wal_sign_admission()
-            || executor.settle_pending_lifecycle_output_admissions(lifecycle_owner, services)? > 0
-            || executor.has_pending_lifecycle_output_admissions()
-            || executor.settle_pending_durable_validate_admissions(lifecycle_owner, services)? > 0
-            || executor.has_pending_durable_validate_admissions()
+        let recovered = super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
+            lifecycle_owner,
+            executor,
+            services,
+        )?;
+        if let Some(cause) = recovered_lifecycle_output_yield_cause(recovered) {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(AdvanceExecutorYieldCheckpointV1::BeforeStep, cause),
+            ));
+        }
+        if executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0 {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::SettledLiveWalSign,
+                ),
+            ));
+        }
+        if executor.has_pending_live_wal_sign_admission() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::PendingLiveWalSign,
+                ),
+            ));
+        }
+        if executor
+            .settle_pending_lifecycle_output_admissions(lifecycle_owner, services)?
+            .requires_outer_executor_yield()
         {
-            return Ok(true);
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::SettledLifecycleOutput,
+                ),
+            ));
+        }
+        if executor.has_pending_lifecycle_output_admissions() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::PendingLifecycleOutput,
+                ),
+            ));
+        }
+        if executor.settle_pending_durable_validate_admissions(lifecycle_owner, services)? > 0 {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::SettledDurableValidate,
+                ),
+            ));
+        }
+        if executor.has_pending_durable_validate_admissions() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::PendingDurableValidate,
+                ),
+            ));
         }
         executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
         match executor.step(Instant::now(), services)? {
-            EffectExecutorStep::Idle => break,
+            EffectExecutorStep::Idle => return Ok(AdvanceExecutorSliceOutcomeV1::Idle),
             EffectExecutorStep::Advanced { .. } => {
                 // A PrepareQC can replace the protected lock without changing
                 // the EventTag. Reconcile immediately after every serialized
@@ -1866,23 +1958,89 @@ fn advance_executor(
                 let _ = reconcile_executor_locked_body(executor, services)?;
             }
         }
-        if recovered_lifecycle_output_requires_yield(
-            super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
-                lifecycle_owner,
-                executor,
-                services,
-            )?,
-        ) || executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0
-            || executor.has_pending_live_wal_sign_admission()
-            || executor.settle_pending_lifecycle_output_admissions(lifecycle_owner, services)? > 0
-            || executor.has_pending_lifecycle_output_admissions()
-            || executor.settle_pending_durable_validate_admissions(lifecycle_owner, services)? > 0
-            || executor.has_pending_durable_validate_admissions()
+        let recovered = super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
+            lifecycle_owner,
+            executor,
+            services,
+        )?;
+        if let Some(cause) = recovered_lifecycle_output_yield_cause(recovered) {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(AdvanceExecutorYieldCheckpointV1::AfterStep, cause),
+            ));
+        }
+        if executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0 {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::SettledLiveWalSign,
+                ),
+            ));
+        }
+        if executor.has_pending_live_wal_sign_admission() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::PendingLiveWalSign,
+                ),
+            ));
+        }
+        if executor
+            .settle_pending_lifecycle_output_admissions(lifecycle_owner, services)?
+            .requires_outer_executor_yield()
         {
-            return Ok(true);
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::SettledLifecycleOutput,
+                ),
+            ));
+        }
+        if executor.has_pending_lifecycle_output_admissions() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::PendingLifecycleOutput,
+                ),
+            ));
+        }
+        if executor.settle_pending_durable_validate_admissions(lifecycle_owner, services)? > 0 {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::SettledDurableValidate,
+                ),
+            ));
+        }
+        if executor.has_pending_durable_validate_admissions() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::PendingDurableValidate,
+                ),
+            ));
         }
     }
-    Ok(false)
+    Ok(AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary)
+}
+
+fn recovered_lifecycle_output_yield_cause(
+    settlement: super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1,
+) -> Option<AdvanceExecutorYieldCauseV1> {
+    if !recovered_lifecycle_output_requires_yield(settlement) {
+        return None;
+    }
+    match settlement {
+        super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed => {
+            Some(AdvanceExecutorYieldCauseV1::RecoveredLifecycleOutputCompleted)
+        }
+        super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::SourceRetained => {
+            Some(AdvanceExecutorYieldCauseV1::RecoveredLifecycleOutputSourceRetained)
+        }
+        super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty
+        | super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Deferred => {
+            unreachable!("non-yielding recovered output passed the exhaustive classifier")
+        }
+    }
 }
 fn recovered_lifecycle_output_requires_yield(
     settlement: super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1,

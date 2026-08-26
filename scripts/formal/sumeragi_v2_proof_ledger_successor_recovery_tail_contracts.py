@@ -243,6 +243,35 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
             paths[source_name], sources[source_name], name, errors
         )
 
+    def qualified_item(
+        source_name: str,
+        name: str,
+        brace_context: tuple[str, ...],
+        label: str,
+    ) -> RustItem | None:
+        expected_context = (brace_context,)
+        matching = [
+            rust_item
+            for rust_item in rust_items(sources[source_name], name)
+            if rust_item.brace_context == expected_context
+        ]
+        if len(matching) != 1:
+            errors.append(
+                f"{paths[source_name]}: require exactly one real Rust/Verus "
+                f"function item named {name} in {brace_context!r}; "
+                f"found {len(matching)}"
+            )
+            return None
+        rust_item = matching[0]
+        _require_rust_item_context(
+            paths[source_name],
+            rust_item,
+            expected_context,
+            label,
+            errors,
+        )
+        return rust_item
+
     def require_tokens(
         source_name: str,
         rust_item: RustItem | None,
@@ -933,16 +962,31 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "LifecycleCompletionTakeV1::CertifiedServe(completion)",
         ),
     )
+    require_order(
+        "driver",
+        completion_pre_gate,
+        "lifecycle Completion unchanged-Validate-fence ordinary bypass",
+        (
+            "current_validate_fence_wait",
+            "self.executor.lifecycle_reducer_fence_observation()",
+            "fence.source() == wait.source()",
+            "fence.generation() <= wait.observed_generation()",
+            "prepare_ordinary_completion_behind_validate_fence()",
+            "Ok(true)",
+            "ProductionLifecycleCompletionPreGateV1::Ordinary(runner)",
+        ),
+    )
     if completion_pre_gate is not None:
         ordinary_returns = _token_sequence_count(
             rust_code_tokens(completion_pre_gate.source),
             rust_code_tokens("ProductionLifecycleCompletionPreGateV1::Ordinary(runner)"),
         )
-        if ordinary_returns != 2:
+        if ordinary_returns != 3:
             errors.append(
                 f"{paths['driver']}:{completion_pre_gate.line}: lifecycle Completion "
-                "pre-gate must return the exact ordinary cursor for both a foreign "
-                f"runner rank and an ordinary physical head; found {ordinary_returns} sites"
+                "pre-gate must return the exact ordinary cursor for a foreign runner "
+                "rank, the unchanged-Validate-fence ordinary bypass, and an ordinary "
+                f"physical head; found {ordinary_returns} sites"
             )
     require_order(
         "driver",
@@ -1322,15 +1366,84 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         ),
     )
 
-    capture = item("ingress", "capture_next_ingress_turn_cut")
+    ordinary_capture = item("ingress", "capture_next_ingress_turn_cut")
+    require_tokens(
+        "ingress",
+        ordinary_capture,
+        "ordinary queue-owned fair winner capture wrapper",
+        (
+            """
+self.capture_next_ingress_turn_cut_at(
+    None,
+    FairIngressTurnSelectionPolicy::OrdinaryRetireObsolete,
+    predicate,
+)
+""",
+        ),
+    )
+
+    bounded_capture = item("ingress", "capture_next_ingress_turn_cut_before")
+    require_tokens(
+        "ingress",
+        bounded_capture,
+        "explicit-cut exact-predicate fair winner capture wrapper",
+        (
+            """
+self.capture_next_ingress_turn_cut_at(
+    Some(physical_cut),
+    FairIngressTurnSelectionPolicy::PredicateOnly,
+    predicate,
+)
+""",
+        ),
+    )
+
+    retiring_bounded_capture = item(
+        "ingress",
+        "capture_next_ingress_turn_cut_before_with_obsolete_retirement",
+    )
+    require_tokens(
+        "ingress",
+        retiring_bounded_capture,
+        "explicit-cut obsolete-predecessor retirement capture wrapper",
+        (
+            """
+self.capture_next_ingress_turn_cut_at(
+    Some(physical_cut),
+    FairIngressTurnSelectionPolicy::OrdinaryRetireObsolete,
+    predicate,
+)
+""",
+        ),
+    )
+
+    capture = item("ingress", "capture_next_ingress_turn_cut_at")
     require_tokens(
         "ingress",
         capture,
-        "queue-owned fair winner capture",
+        "shared queue-owned fair winner capture",
         (
             "let service_guard = self.service_lock.lock()",
             "let mut state = self.state.lock()",
+            """
+let live_physical_cut = u128::from(state.last_admission_ordinal)
+    .checked_add(1)
+    .ok_or(FairIngressQueueCutError::PositionOverflow)?;
+let physical_cut = requested_physical_cut.unwrap_or(live_physical_cut);
+if physical_cut == 0 || physical_cut > live_physical_cut {
+    return Err(FairIngressQueueCutError::InvalidPhysicalCut);
+}
+""",
+            """
+FairIngressTurnSelectionPolicy::PredicateOnly => !selector_occurrences.is_empty(),
+""",
             "select_fair_v2_ingress_candidate(",
+            """
+matches!(
+    selection_policy,
+    FairIngressTurnSelectionPolicy::OrdinaryRetireObsolete
+) && occurrence.is_obsolete()
+""",
             "Ok(Some(FairIngressTurnCut {",
             "_service_guard: service_guard",
         ),
@@ -1338,7 +1451,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
     if capture is not None:
         capture_tokens = rust_code_tokens(capture.source)
         for token, count in (
-            ("selected_physical_ordinal", 3),
+            ("selected_physical_ordinal", 4),
             ("selected_disposition", 2),
         ):
             observed = _token_sequence_count(capture_tokens, rust_code_tokens(token))
@@ -1351,15 +1464,33 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
     require_order(
         "ingress",
         capture,
-        "queue-owned fair winner lock and selection order",
+        "shared queue-owned fair winner lock, cut, and selection order",
         (
             "self.service_lock.lock()",
             "self.state.lock()",
+            "let live_physical_cut = u128::from(state.last_admission_ordinal)",
+            "let physical_cut = requested_physical_cut.unwrap_or(live_physical_cut)",
+            "if physical_cut == 0 || physical_cut > live_physical_cut",
+            "fair_v2_ingress_leader_wire_selector_projection(&state, true, Some(physical_cut))",
             "freeze_live_geometry(",
             "drop(state)",
             "validate_frozen_ownership_outside_state(",
             "select_fair_v2_ingress_candidate(",
             "FairIngressTurnCut {",
+        ),
+    )
+
+    frozen_geometry = item("ingress", "freeze_live_geometry")
+    require_order(
+        "ingress",
+        frozen_geometry,
+        "fair-ingress geometry strictly excludes the supplied physical cut",
+        (
+            "physical_cut: u128",
+            "for (index, entry) in lane.entries.iter().enumerate()",
+            "if u128::from(entry.admission_ordinal) >= physical_cut",
+            "continue",
+            "freeze_geometry(&ready_prefix, lanes, physical_cut)",
         ),
     )
 
@@ -3093,6 +3224,76 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
         ("self.terminal_settlement_stops_runtime",),
     )
 
+    pre_timeout_ingress_results = rust_enum_items(
+        sources["driver"], "ProductionPreTimeoutLockedPrepareQcIngressTurnV1"
+    )
+    if len(pre_timeout_ingress_results) != 1:
+        errors.append(
+            f"{paths['driver']}: fixed-cut pre-timeout ingress result must have "
+            "exactly one enum declaration; found "
+            f"{len(pre_timeout_ingress_results)}"
+        )
+        pre_timeout_ingress_result = None
+    else:
+        pre_timeout_ingress_result = pre_timeout_ingress_results[0]
+    require_tokens(
+        "driver",
+        pre_timeout_ingress_result,
+        "closed fixed-cut pre-timeout ingress result",
+        (
+            "Empty",
+            "ObsoletePredecessor(ProductionPreparedOrdinaryIngressTurnV1)",
+            "ExactPrepareQc(ProductionPreparedOrdinaryIngressTurnV1)",
+            "RestartRequired",
+        ),
+    )
+    launched_pre_timeout_ingress = _require_qualified_rust_item(
+        paths["driver"],
+        sources["driver"],
+        "LaunchedProductionLifecycleV1",
+        "prepare_pre_timeout_locked_prepare_qc_ingress_turn",
+        errors,
+        "launched fixed-cut pre-timeout PrepareQC fair-ingress preparation",
+    )
+    require_order(
+        "driver",
+        launched_pre_timeout_ingress,
+        "fixed-cut pre-timeout ingress preserves exact preview, ordinary gate, and dequeue tail",
+        (
+            "self.executor.lifecycle_terminal_subject()",
+            "Arc::clone(&self.leader_wire_ingress_binding.ingress)",
+            "capture_next_ingress_turn_cut_before_with_obsolete_retirement(",
+            "cut.physical_cut()",
+            "BlockMessage::V2(message)",
+            "ConsensusMessageV2Payload::QuorumCertificate(_)",
+            "executor.wire_previews_pre_timeout_locked_prepare_qc(",
+            "captured.selected_disposition() == FairV2IngressDequeueDisposition::RetireObsolete",
+            "prepare_ordinary_ingress_dequeue(",
+            "PreparedOrdinaryIngressDequeueV1::Prepared(turn) if obsolete",
+            "ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ObsoletePredecessor(turn)",
+            "PreparedOrdinaryIngressDequeueV1::Prepared(turn)",
+            "ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ExactPrepareQc(turn)",
+            "PreparedOrdinaryIngressDequeueV1::RestartRequired",
+            "ProductionPreTimeoutLockedPrepareQcIngressTurnV1::RestartRequired",
+        ),
+    )
+    activated_pre_timeout_ingress = _require_qualified_rust_item(
+        paths["driver"],
+        sources["driver"],
+        "ActivatedProductionLifecycleV1",
+        "prepare_pre_timeout_locked_prepare_qc_ingress_turn",
+        errors,
+        "activated fixed-cut pre-timeout PrepareQC forwarding preparation",
+    )
+    require_tokens(
+        "driver",
+        activated_pre_timeout_ingress,
+        "activated fixed-cut pre-timeout forwarding remains sealed",
+        (
+            "self.launched.prepare_pre_timeout_locked_prepare_qc_ingress_turn(cut)",
+        ),
+    )
+
     lifecycle_height_driver = item("height_driver", "drain_lifecycle_v2_ingress")
     require_order(
         "height_driver",
@@ -3150,6 +3351,396 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
             "let (context_id, height, output_guard)",
         ),
     )
+
+    pre_timeout_target = item("adapter", "pre_timeout_locked_prepare_qc_target")
+    require_order(
+        "adapter",
+        pre_timeout_target,
+        "unchanged-lock pre-timeout target is current, durable, validated, and unfenced",
+        (
+            "let current_tag = self.reducer.current_tag()",
+            "let current_round = reducer::Round::new(current_tag.height(), current_tag.view())",
+            "let durable = self.reducer.durable_state()",
+            "let locked = durable.locked()?",
+            "self.fail_closed",
+            "!self.replay_complete",
+            "durable.decision().is_some()",
+            "locked.round().view() >= current_round.view()",
+            "durable.timeout_intent(current_round).is_some()",
+            "durable.commit_intent(current_round).is_some()",
+            "self.reducer.local_validator().is_none()",
+            "self.reducer.pending_persistence_record().is_some()",
+            "self.reducer.awaiting_signature().is_some()",
+            "self.reducer.body_state(current_round, locked.subject())",
+            "reducer::BodyState::Validated",
+            "let subject = self.registry.subject(locked.subject()).ok()?",
+            "execution_commitment(locked.round(), locked.subject())",
+            "execution_commitment(current_round, locked.subject())",
+            "(locked_commitment == current_commitment).then_some(",
+            "PreTimeoutLockedPrepareQcTargetV1 {",
+            "round: self.registry.round_to_wire(current_round)",
+            "subject",
+            "execution_commitment: current_commitment",
+        ),
+    )
+    pre_timeout_preview = item(
+        "adapter", "pre_timeout_locked_prepare_qc_stages_lock_and_commit"
+    )
+    require_order(
+        "adapter",
+        pre_timeout_preview,
+        "pre-timeout PrepareQC preview uses the ordinary conversion and one cloned LockAndCommit",
+        (
+            "certificate.phase != wire::GlobalPhase::Prepare",
+            "certificate.round != target.round",
+            "certificate.proposal_round != target.round",
+            "certificate.subject != target.subject",
+            "certificate.execution_commitment != target.execution_commitment",
+            "self.pre_timeout_locked_prepare_qc_target() != Some(target)",
+            "let mut registry = self.registry.clone()",
+            "registry.qc_to_core(certificate, &self.wire_context)",
+            "let mut reducer = self.reducer.clone()",
+            "reducer.step(reducer::Event::QuorumCertificateReceived {",
+            "tag: reducer.current_tag()",
+            "certificate: core_certificate.clone()",
+            "let [reducer::Effect::Persist { entry, .. }] = outcome.effects()",
+            "reducer::WalRecord::LockAndCommit { prepare, vote }",
+            "prepare == &core_certificate",
+            "vote.phase() == reducer::Phase::Commit",
+            "vote.subject() == core_certificate.subject()",
+        ),
+    )
+
+    runtime_driver_context = (
+        "impl",
+        "RuntimeDriver",
+        "for",
+        "SumeragiV2Adapter",
+    )
+    runtime_target_binding = qualified_item(
+        "runtime",
+        "pre_timeout_locked_prepare_qc_target",
+        runtime_driver_context,
+        "production runtime pre-timeout target binding",
+    )
+    require_tokens(
+        "runtime",
+        runtime_target_binding,
+        "production runtime target delegates to the adapter",
+        ("SumeragiV2Adapter::pre_timeout_locked_prepare_qc_target(self)",),
+    )
+    runtime_wire_preview_binding = qualified_item(
+        "runtime",
+        "wire_previews_pre_timeout_locked_prepare_qc",
+        runtime_driver_context,
+        "production runtime wire preview binding",
+    )
+    require_tokens(
+        "runtime",
+        runtime_wire_preview_binding,
+        "production runtime wire preview delegates to cloned LockAndCommit",
+        (
+            "self.pre_timeout_locked_prepare_qc_stages_lock_and_commit(certificate, target)",
+        ),
+    )
+    runtime_command_preview_binding = qualified_item(
+        "runtime",
+        "command_previews_pre_timeout_locked_prepare_qc",
+        runtime_driver_context,
+        "production runtime authenticated-command preview binding",
+    )
+    require_order(
+        "runtime",
+        runtime_command_preview_binding,
+        "runtime command preview admits only an authenticated QC with cloned LockAndCommit",
+        (
+            "AdapterCommand::Authenticated(authenticated)",
+            "authenticated.payload()",
+            "wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)",
+            "self.pre_timeout_locked_prepare_qc_stages_lock_and_commit(",
+            "certificate",
+            "target",
+        ),
+    )
+
+    runtime_generic_context = (
+        "impl",
+        "<",
+        "D",
+        ":",
+        "RuntimeDriver",
+        ">",
+        "SerializedV2Runtime",
+        "<",
+        "D",
+        ">",
+    )
+    freeze_pre_timeout_cut = qualified_item(
+        "runtime",
+        "freeze_pre_timeout_locked_prepare_qc_cut",
+        runtime_generic_context,
+        "serialized runtime fixed pre-timeout cut mint",
+    )
+    require_order(
+        "runtime",
+        freeze_pre_timeout_cut,
+        "fixed pre-timeout cut freezes the due timeout owner before target mint",
+        (
+            "self.last_scheduler_ownership.is_some()",
+            "self.pending_effect_ownership.is_some()",
+            "!self.pending_leader_wire_terminals.is_empty()",
+            "self.freeze_due_clock_owners(now)",
+            "self.scheduler_arbitration_inputs(now)",
+            "if !arbitration.timeout_due",
+            "self.driver.pre_timeout_locked_prepare_qc_target()",
+            "self.timeout_owner.clone()",
+            "self.timeout_owner_physical_cut",
+            "target.validate_exact(self.round_tag)",
+            "physical_cut > self.ingress_physical_cut",
+            "PreTimeoutLockedPrepareQcCutV1 {",
+            "tag: self.round_tag",
+            "physical_cut",
+            "timeout_owner",
+            "target",
+        ),
+    )
+    current_pre_timeout_cut = qualified_item(
+        "runtime",
+        "pre_timeout_locked_prepare_qc_cut_is_current",
+        runtime_generic_context,
+        "serialized runtime fixed-cut revalidation",
+    )
+    require_tokens(
+        "runtime",
+        current_pre_timeout_cut,
+        "every pre-timeout use revalidates tag, timeout owner, cut, and target",
+        (
+            "!self.timeout_emitted",
+            "cut.tag == self.round_tag",
+            "cut.physical_cut <= self.ingress_physical_cut",
+            "self.timeout_owner.as_ref() == Some(&cut.timeout_owner)",
+            "self.timeout_owner_physical_cut == Some(cut.physical_cut)",
+            "cut.target.validate_exact(cut.tag)",
+            "self.driver.pre_timeout_locked_prepare_qc_target() == Some(cut.target)",
+        ),
+    )
+    runtime_wire_preview = qualified_item(
+        "runtime",
+        "wire_previews_pre_timeout_locked_prepare_qc",
+        runtime_generic_context,
+        "serialized runtime fair-ingress wire preview",
+    )
+    require_order(
+        "runtime",
+        runtime_wire_preview,
+        "fair-ingress preview is current-cut and exact-QC only",
+        (
+            "self.pre_timeout_locked_prepare_qc_cut_is_current(cut)",
+            "wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)",
+            "self.driver.wire_previews_pre_timeout_locked_prepare_qc(",
+            "certificate",
+            "cut.target",
+        ),
+    )
+    runtime_pre_timeout_step = qualified_item(
+        "runtime",
+        "try_step_pre_timeout_locked_prepare_qc",
+        runtime_generic_context,
+        "serialized runtime exact pre-timeout dispatch",
+    )
+    require_order(
+        "runtime",
+        runtime_pre_timeout_step,
+        "pre-timeout dispatch is authenticated Progress, strictly pre-cut, and nonretrying",
+        (
+            "self.reconcile_fence_retry_blocked_fifo_owners()",
+            "self.pre_timeout_locked_prepare_qc_cut_is_current(cut)",
+            "self.scheduler_arbitration_inputs(now)",
+            "if !timeout_due",
+            "self.ingress.pop_pacemaker_progress_with_ownership(",
+            "queued.class == CommandClass::Progress",
+            "queued.identity.kind == RuntimeCommandKind::Authenticated",
+            "queued.ingress_ownership.is_some()",
+            "u128::from(physical.source_ordinal) < physical_cut",
+            "driver.command_previews_pre_timeout_locked_prepare_qc(",
+            "|_| false",
+            "Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc)",
+            "candidate.selection_seal.kind",
+            "RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc",
+            "command.lifecycle_owner()",
+            "owner.causal_origin().root_class == SERVICE_CLASS_PROGRESS",
+            "self.driver.dispatch(command)",
+            "RuntimeDispatchIngress::DirectAuthenticated",
+            "if retry_unadmitted || retained_deferred_ingress",
+            "if !arbitration.timeout_due",
+            "arbitration.periodic_timer_due = false",
+            "arbitration.fifo_ready = false",
+            "arbitration.completion_ready = false",
+            "arbitration.progress_ready = false",
+            "arbitration.normal_ready = false",
+            "arbitration.pre_timeout_locked_prepare_qc_physical_cut = Some(physical_cut)",
+            "RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc",
+            "RuntimeSelectedCandidateOwnership::Exact(candidate)",
+            "self.finish_dispatched_step(",
+        ),
+    )
+
+    scheduler_evidence = qualified_item(
+        "runtime",
+        "validate_exact",
+        ("impl", "RuntimeSchedulerOwnershipEvidence"),
+        "pre-timeout scheduler evidence validator",
+    )
+    require_order(
+        "runtime",
+        scheduler_evidence,
+        "scheduler evidence binds the due timeout to one exact authenticated pre-cut owner",
+        (
+            "self.pre_timeout_locked_prepare_qc_physical_cut",
+            "self.selected == RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc",
+            "RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc",
+            "RuntimeSelectedCandidateOwnership::Exact(candidate)",
+            "let candidate_is_pre_cut",
+            "u128::from(physical.source_ordinal) < physical_cut",
+            "self.clocks_armed",
+            "self.timeout_due",
+            "!self.periodic_timer_due",
+            "!self.fifo_ready",
+            "!self.completion_ready",
+            "!self.progress_ready",
+            "!self.normal_ready",
+            "candidate.kind == RuntimeCommandKind::Authenticated",
+            "candidate.class == SERVICE_CLASS_PROGRESS",
+            "candidate_is_pre_cut",
+            "RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc",
+        ),
+    )
+
+    effect_runtime_context = (
+        "impl",
+        "EffectRuntime",
+        "for",
+        "SerializedV2Runtime",
+    )
+    effect_runtime_freeze = qualified_item(
+        "effects",
+        "freeze_pre_timeout_locked_prepare_qc_cut",
+        effect_runtime_context,
+        "effect-runtime fixed-cut forwarding",
+    )
+    require_tokens(
+        "effects",
+        effect_runtime_freeze,
+        "effect runtime forwards the exact due-timeout cut mint",
+        ("SerializedV2Runtime::freeze_pre_timeout_locked_prepare_qc_cut(self, now)",),
+    )
+    effect_runtime_preview = qualified_item(
+        "effects",
+        "wire_previews_pre_timeout_locked_prepare_qc",
+        effect_runtime_context,
+        "effect-runtime wire-preview forwarding",
+    )
+    require_tokens(
+        "effects",
+        effect_runtime_preview,
+        "effect runtime forwards the exact fixed-cut wire preview",
+        (
+            "SerializedV2Runtime::wire_previews_pre_timeout_locked_prepare_qc(self, cut, payload)",
+        ),
+    )
+    effect_runtime_step = qualified_item(
+        "effects",
+        "step_pre_timeout_locked_prepare_qc_effects",
+        effect_runtime_context,
+        "effect-runtime special-step forwarding",
+    )
+    require_order(
+        "effects",
+        effect_runtime_step,
+        "effect runtime forwards only the exact special scheduler step",
+        (
+            "self.try_step_pre_timeout_locked_prepare_qc(now, cut)",
+            ".map_err(|error| error.to_string())",
+        ),
+    )
+
+    effect_executor_context = (
+        "impl",
+        "<",
+        "R",
+        ":",
+        "EffectRuntime",
+        ">",
+        "V2EffectExecutor",
+        "<",
+        "R",
+        ">",
+    )
+    executor_pre_timeout_freeze = qualified_item(
+        "effects",
+        "freeze_pre_timeout_locked_prepare_qc_cut",
+        effect_executor_context,
+        "effect executor fixed-cut mint",
+    )
+    require_order(
+        "effects",
+        executor_pre_timeout_freeze,
+        "executor publishes owners and receiver cut before freezing timeout authority",
+        (
+            "self.ensure_open()?",
+            "self.retained_effect_batch.is_some()",
+            "self.parked_effect_batch.is_some()",
+            "self.pending_runner_decision_cleanup.is_some()",
+            "self.publish_external_lifecycle_owners()?",
+            "self.runtime.set_ingress_physical_cut(physical_cut)",
+            "self.runtime.freeze_pre_timeout_locked_prepare_qc_cut(now)",
+        ),
+    )
+    executor_pre_timeout_preview = qualified_item(
+        "effects",
+        "wire_previews_pre_timeout_locked_prepare_qc",
+        effect_executor_context,
+        "effect executor fixed-cut wire preview",
+    )
+    require_tokens(
+        "effects",
+        executor_pre_timeout_preview,
+        "executor wire preview is a read-only runtime forwarding",
+        ("self.runtime.wire_previews_pre_timeout_locked_prepare_qc(cut, payload)",),
+    )
+    executor_pre_timeout_step = qualified_item(
+        "effects",
+        "step_pre_timeout_locked_prepare_qc_once",
+        effect_executor_context,
+        "effect executor special pre-timeout turn",
+    )
+    require_order(
+        "effects",
+        executor_pre_timeout_step,
+        "special executor turn owns WAL, scheduler evidence, reconciliation, and effects",
+        (
+            "self.ensure_open()?",
+            "self.retained_effect_batch.is_some()",
+            "self.parked_effect_batch.is_some()",
+            "self.pending_runner_decision_cleanup.is_some()",
+            "self.publish_external_lifecycle_owners()",
+            "let decision_before_step",
+            "self.output_guard.begin_fail_stop_operation()",
+            "self.runtime.step_pre_timeout_locked_prepare_qc_effects(now, cut)",
+            "if step.is_some()",
+            "self.runtime.take_scheduler_ownership()",
+            "wal_step.complete()",
+            "self.finish_runtime_step_reconciliation(services)",
+            "let decision_after_step",
+            "self.plan_runner_decision_cleanup(decision_before_step, decision_after_step)",
+            "None | Some(RuntimeStep::Idle)",
+            "self.publish_external_lifecycle_owners()",
+            "self.publish_status(services)",
+            "Some(RuntimeStep::Advanced(effects))",
+            "self.consume_pacemaker_effects_with_runner_decision_cleanup(",
+        ),
+    )
+
     require_order(
         "height_driver",
         lifecycle_height_driver,
@@ -3180,6 +3771,34 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
             "LifecycleRunnerRankTarget::Ingress",
             "activated.drive_ingress_turn(current_turn)",
             "activated.consume_prepared_ordinary_ingress_turn(",
+        ),
+    )
+    require_order(
+        "height_driver",
+        lifecycle_height_driver,
+        "bounded exact PrepareQC service precedes the owned timeout in one Runtime turn",
+        (
+            "LifecycleRunnerRankTarget::Runtime =>",
+            "if producer_claim.blocks_runtime()",
+            "executor.freeze_pre_timeout_locked_prepare_qc_cut(",
+            "receiver.next_physical_admission_ordinal()",
+            "executor.step_pre_timeout_locked_prepare_qc_once(now, &cut, services)",
+            "if pre_timeout_advanced",
+            "if let Some(pre_timeout_cut) = pre_timeout_cut",
+            "prepare_pre_timeout_locked_prepare_qc_ingress_turn(&pre_timeout_cut)",
+            "PreTimeoutIngress::Empty => {}",
+            "PreTimeoutIngress::RestartRequired",
+            "PreTimeoutIngress::ObsoletePredecessor(prepared)",
+            "activated.consume_prepared_ordinary_ingress_turn(",
+            "ProductionPreparedOrdinaryIngressConsumptionV1::Continue",
+            "LifecycleV2IngressDrainDispositionV1::retry_before_producer(",
+            "PreTimeoutIngress::ExactPrepareQc(prepared)",
+            "activated.consume_prepared_ordinary_ingress_turn(",
+            "ProductionPreparedOrdinaryIngressConsumptionV1::Continue",
+            "executor.step_pre_timeout_locked_prepare_qc_once(",
+            "if advanced",
+            "LifecycleV2IngressDrainDispositionV1::retry_before_producer(",
+            "advance_executor(receiver, owner, executor, services, 1)",
         ),
     )
     executor_advance = item("runner", "advance_executor")
@@ -3406,10 +4025,15 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
             "if drain_disposition.requires_yield()",
             "if drain_disposition.terminal_settlement_stops_runtime()",
             "executor.ready_to_finish()",
-            "false",
+            "AdvanceExecutorSliceOutcomeV1::Idle",
             "else",
             "retry_exact_output_and_apply_sidecar_admissions(",
-            "advance_executor(",
+            "let executor_slice = advance_executor(",
+            "if let AdvanceExecutorSliceOutcomeV1::Yielded(_) = executor_slice",
+            "retry_exact_output_and_apply_sidecar_admissions(",
+            "let directive = reconcile_executor_locked_body(executor, services)",
+            "match executor_slice",
+            "AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary => {}",
             "let apply_terminal_settled = producer_claim.apply_terminal_settled()",
             "if apply_terminal_settled && !ready_to_finish",
             "close_admission_for_restart()",
@@ -3841,7 +4465,7 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
         lifecycle_active,
         "coordinator ProducerTurn claim, attempt, and durable settlement",
         (
-            "let (ready_to_finish, lifecycle_yield) = if drain_disposition.terminal_settlement_stops_runtime()",
+            "let (ready_to_finish, executor_slice) = if drain_disposition.terminal_settlement_stops_runtime()",
             "let apply_terminal_settled = producer_claim.apply_terminal_settled()",
             "if apply_terminal_settled && !ready_to_finish",
             "let producer_turn = if apply_terminal_settled",

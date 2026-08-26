@@ -14,6 +14,9 @@ fn recovered_decision_fetch_store_settlement_is_restart_closed_and_tail_infallib
     let request = settlement
         .find("prepare_recovered_decision_fetch_owner_retirement(")
         .expect("request/response retirement preflight exists");
+    let marker_prepare = settlement
+        .find("prepare_published_lifecycle_store_retry_marker(body.durable())")
+        .expect("active Store marker catalog is preflighted");
     let ingress = settlement
         .find("into_locked_recovered_decision_fetch_dequeue(")
         .expect("exact ingress occurrence is locked");
@@ -26,6 +29,9 @@ fn recovered_decision_fetch_store_settlement_is_restart_closed_and_tail_infallib
     let registry = settlement
         .find("prepare_recovered_decision_fetch_store_successor(")
         .expect("dedicated Store carrier preflight exists");
+    let marker_bind = settlement
+        .find(".bind_store_successor(")
+        .expect("active Store marker is bound to the sealed successor");
     let transition = settlement
         .find("prepare_recovered_decision_fetch_store_transition(")
         .expect("Fetch-to-Store coordinator successor is staged");
@@ -38,6 +44,9 @@ fn recovered_decision_fetch_store_settlement_is_restart_closed_and_tail_infallib
     let coordinator_commit = settlement
         .find("transition.commit_after_publication();")
         .expect("coordinator/registry/adapter tail exists");
+    let marker_commit = settlement
+        .find("commit_published_lifecycle_store_retry_marker(retry_marker);")
+        .expect("active Store marker commits after durable publication");
     let request_commit = settlement
         .find("commit_recovered_decision_fetch_owner_retirement(retirement);")
         .expect("dedicated request owner retires after publication");
@@ -51,16 +60,19 @@ fn recovered_decision_fetch_store_settlement_is_restart_closed_and_tail_infallib
         .find("operation.complete();")
         .expect("output fail-stop cut closes last");
     assert!(
-        selector < request
+        marker_prepare < selector
+            && selector < request
             && request < ingress
             && ingress < carrier
             && carrier < adapter
             && adapter < registry
-            && registry < transition
+            && registry < marker_bind
+            && marker_bind < transition
             && transition < output
             && output < fsync
             && fsync < coordinator_commit
-            && coordinator_commit < request_commit
+            && coordinator_commit < marker_commit
+            && marker_commit < request_commit
             && request_commit < ingress_commit
             && ingress_commit < worker_commit
             && worker_commit < output_commit

@@ -472,6 +472,165 @@ fn durable_view_cut_drains_live_obsolete_carrier_despite_downstream_backpressure
     assert!(replacement.token.admission_ordinal() > runtime.token().admission_ordinal());
     assert!(replacement.token.scheduler_ordinal() > runtime.token().scheduler_ordinal());
 }
+
+#[test]
+fn fixed_cut_retires_obsolete_predecessor_before_exact_blocked_target() {
+    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+    let predecessor_validator = PeerId::new(KeyPair::random().public_key().clone());
+    let target_validator = PeerId::new(KeyPair::random().public_key().clone());
+    let predecessor = v2_maximum_structural_proposal_wire(minimal_rs16_layout(), 1);
+    let BlockMessage::V2(predecessor_envelope) = &predecessor else {
+        unreachable!("fixed-cut predecessor fixture is a v2 envelope");
+    };
+    let wire::ConsensusMessageV2Payload::Proposal(predecessor_proposal) =
+        &predecessor_envelope.payload
+    else {
+        unreachable!("fixed-cut predecessor fixture carries Proposal");
+    };
+    let predecessor_round = predecessor_proposal.round;
+    let _directory = bind_test_leader_wire_gate_with_roster(
+        &ingress,
+        &[predecessor_validator.clone(), target_validator.clone()],
+        predecessor_round,
+        2,
+    );
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            predecessor,
+            predecessor_validator,
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let predecessor_ordinal = ingress.state.lock().last_admission_ordinal;
+
+    let target_view = predecessor_round
+        .view
+        .checked_add(1)
+        .expect("fixture view has a successor");
+    let recovery =
+        super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            predecessor_round.context_id,
+            predecessor_round.height,
+            [0xA6; 32],
+            target_view,
+            false,
+        );
+    assert_eq!(
+        ingress
+            .advance_leader_wire_recovery_cut(recovery)
+            .expect("publish the durable successor-view cut"),
+        0,
+        "the obsolete predecessor remains an Ingress carrier"
+    );
+
+    let mut target = v2_quorum_certificate(wire::GlobalPhase::Prepare);
+    let BlockMessage::V2(target_envelope) = &mut target else {
+        unreachable!("fixed-cut target fixture is a v2 envelope");
+    };
+    let wire::ConsensusMessageV2Payload::QuorumCertificate(target_qc) =
+        &mut target_envelope.payload
+    else {
+        unreachable!("fixed-cut target fixture carries PrepareQC");
+    };
+    target_qc.round = wire::ConsensusRound {
+        view: target_view,
+        ..predecessor_round
+    };
+    target_qc.proposal_round = target_qc.round;
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            target,
+            target_validator.clone(),
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let target_ordinal = ingress.state.lock().last_admission_ordinal;
+    let physical_cut = ingress.next_physical_admission_ordinal();
+
+    let post_cut = BlockMessage::V2(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::CommitCertificateRequest(wire::CommitCertificateRequest {
+            protocol_version: wire::PROTOCOL_VERSION,
+            network_id: crate::sumeragi::synthetic_network_id("fair-v2-ingress-test"),
+            context_id: predecessor_round.context_id,
+            height: predecessor_round.height,
+            requester: target_validator.clone(),
+            signature: vec![0x7A],
+        }),
+    ));
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            post_cut,
+            target_validator,
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let post_cut_ordinal = ingress.state.lock().last_admission_ordinal;
+    assert_eq!(u128::from(post_cut_ordinal), physical_cut);
+
+    assert!(
+        ingress
+            .capture_next_ingress_turn_cut_before(physical_cut, |occurrence| {
+                occurrence.physical_admission_ordinal() == target_ordinal
+            })
+            .expect("scan the exact fixed-cut target")
+            .is_none(),
+        "the exact target cannot bypass its obsolete predecessor"
+    );
+    let predecessor = ingress
+        .capture_next_ingress_turn_cut_before_with_obsolete_retirement(physical_cut, |occurrence| {
+            occurrence.physical_admission_ordinal() == target_ordinal
+        })
+        .expect("scan the bounded obsolete-predecessor episode")
+        .expect("the obsolete predecessor owns the next exact turn");
+    assert_eq!(
+        predecessor
+            .selected_occurrence()
+            .physical_admission_ordinal(),
+        predecessor_ordinal
+    );
+    assert_eq!(
+        predecessor.selected_disposition(),
+        super::FairV2IngressDequeueDisposition::RetireObsolete
+    );
+    let (mut retired, disposition) = predecessor
+        .dequeue_exact_retaining()
+        .unwrap_or_else(|_| panic!("retire the exact obsolete predecessor"));
+    assert_eq!(
+        disposition,
+        super::FairV2IngressDequeueDisposition::RetireObsolete
+    );
+    let ownership = retired
+        .take_ingress_ownership()
+        .expect("retired predecessor retains exact ownership");
+    let runtime = ownership
+        .leader_wire_runtime_receipt()
+        .expect("retired predecessor crosses the ordinary runtime handoff");
+    ingress
+        .mark_obsolete_leader_wire_volatile_terminal(runtime)
+        .expect("publish the WAL-authorized obsolete terminal");
+
+    let target = ingress
+        .capture_next_ingress_turn_cut_before(physical_cut, |occurrence| {
+            occurrence.physical_admission_ordinal() == target_ordinal
+        })
+        .expect("rescan the unchanged fixed cut after predecessor retirement")
+        .expect("the exact target becomes selectable");
+    assert_eq!(
+        target.selected_occurrence().physical_admission_ordinal(),
+        target_ordinal
+    );
+    drop(target);
+    assert!(
+        ingress
+            .capture_next_ingress_turn_cut_before(physical_cut, |occurrence| {
+                occurrence.physical_admission_ordinal() == post_cut_ordinal
+            })
+            .expect("rescan the fixed cut for post-cut traffic")
+            .is_none(),
+        "the same cut excludes a later physical append throughout the episode"
+    );
+}
+
 #[test]
 fn certified_body_response_survives_view_and_decision_cuts_at_fair_ingress() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);

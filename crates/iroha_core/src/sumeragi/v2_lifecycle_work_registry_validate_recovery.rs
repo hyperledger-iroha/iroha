@@ -1546,7 +1546,10 @@ enum ReadyValidateSuccessorIdentityV1 {
 ///
 /// The launched Completion owner retains this token ahead of physical queue
 /// classification so the same-address successor is freshly authenticated and
-/// reduced before any Runtime turn can rediscover Apply.
+/// reduced before any Runtime turn can rediscover Apply. While the token is
+/// parked on an unchanged reducer fence, one ordinary physical completion may
+/// pass through so the exact causal callback can advance that fence; dedicated
+/// lifecycle completions remain behind this owner.
 #[must_use = "the exact Ready Validate successor must be synchronously resolved"]
 pub(in crate::sumeragi) struct ReadyValidateSuccessorV1 {
     identity: ReadyValidateSuccessorIdentityV1,
@@ -2295,6 +2298,14 @@ fn sealed_successor_candidate_has_exact_geometry(
         })
 }
 impl<'adapter> PreparedCertifiedFetchStoreSuccessor<'_, 'adapter> {
+    /// Borrow the exact Store effect emitted by the direct adapter preview.
+    pub(super) const fn store_effect(&self) -> &AdapterEffect {
+        &self.store_effect
+    }
+    /// Borrow the ordinal-free pending binding projected from the Fetch row.
+    pub(super) const fn pending_effect_binding(&self) -> &PendingRuntimeEffectBinding {
+        &self.store_pending
+    }
     /// Project the exact Store candidate while retaining its Fetch registry cut.
     ///
     /// The lease supplies only coordinator ownership coordinates. Effect,

@@ -509,6 +509,7 @@ fn refined_proposal_validate_joins_complete_qc_replay_authority() {
         Some(execution_commitment(certificate.execution_commitment))
     );
 }
+include!("v2_lifecycle_protected_lock_reseed_cases.rs");
 #[test]
 fn recovered_decision_body_lineage_is_stage_closed_and_predecessor_bound() {
     let fixture = Fixture::new();

@@ -255,12 +255,10 @@ jobs:
       - name: Require fresh ABI-23 JNI bridge in complete Kotlin and Java suites
         env:
           KAGEMUSHA_JVM_NATIVE_EVIDENCE_DIR: ${{ runner.temp }}/iroha-kotlin-zk-asset-localnet-evidence
-        run: |
-          canonical_java_home="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$JAVA_HOME")"
-          [[ "$canonical_java_home" == /* && -d "$canonical_java_home" && ! -L "$canonical_java_home" ]]
-          NORITO_MOBILE_JAVA_HOME="$canonical_java_home" \
-          NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME" \
-            bash ci/check_kagemusha_jvm_native_bridge.sh
+        run: >-
+          NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"
+          NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"
+          bash ci/check_kagemusha_jvm_native_bridge.sh
       - name: Upload Kotlin four-peer localnet evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

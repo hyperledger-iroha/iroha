@@ -1187,7 +1187,7 @@ def test_exact_removal_and_protected_slot_geometry_theorems_are_pinned(
             1,
         )
         + source[universe:].replace(
-            "Cardinality(ProtectedProgressSlotUniverse) = 2 * N + 3",
+            "Cardinality(ProtectedProgressSlotUniverse) = 3 * N + 3",
             "Cardinality(ProtectedProgressSlotUniverse) = N + 3",
             1,
         )
@@ -1522,7 +1522,8 @@ def test_async_source_fidelity_pins_dual_progress_ingress_geometry(
             1,
         ).replace(
             "  \\/ ~IngressLaneHasTransportCompletionIn(\n"
-            "       asyncIngressLanes, item.envelope.recipient, item.source)\n",
+            "       asyncIngressLanes, item.envelope.recipient,\n"
+            "       IngressResourceSource(item))\n",
             "  \\/ TRUE\n",
             1,
         ).replace(
@@ -1635,7 +1636,7 @@ def test_async_source_fidelity_pins_timeout_signer_partition_without_displacemen
     path = formal_dir / "SumeragiV2AsyncNetwork.tla"
     path.write_text(
         source.replace(
-            "AsyncDeferredProgressCapacity >= 2 * N + 3",
+            "AsyncDeferredProgressCapacity >= 3 * N + 3",
             "AsyncDeferredProgressCapacity >= N + 3",
             1,
         ).replace(
@@ -1740,13 +1741,24 @@ def reviewed_rust_item_provider(
 ) -> Path:
     """Resolve one item through its authenticated parent/include closure."""
 
-    parent = repo_root / relative
-    candidates = (parent,) + tuple(
-        parent.parent / component
+    pending = [relative.as_posix()]
+    reviewed_relatives: list[str] = []
+    visited: set[str] = set()
+    while pending:
+        parent_relative = pending.pop()
+        if parent_relative in visited:
+            continue
+        visited.add(parent_relative)
+        reviewed_relatives.append(parent_relative)
         for component in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(
-            relative.as_posix(), ()
-        )
-    )
+            parent_relative, ()
+        ):
+            pending.append(
+                os.path.normpath(
+                    str(Path(parent_relative).parent / component)
+                ).replace(os.sep, "/")
+            )
+    candidates = tuple(repo_root / candidate for candidate in reviewed_relatives)
     providers = tuple(
         path for path in candidates
         if path.is_file() and module.rust_items(path.read_text(encoding="utf-8"), item_name)
@@ -1802,10 +1814,15 @@ def test_async_source_fidelity_pins_timeout_vote_semantic_capacity_bypass(
         (
             "admit_authenticated_payload",
             (
-                "locked_commit_progress || matches!(key, "
+                "locked_commit_progress\n"
+                "            || locked_reproposal_prepare_progress\n"
+                "            || matches!(key, "
                 "IngressSemanticKey::TimeoutVote { .. })"
             ),
-            "locked_commit_progress",
+            (
+                "locked_commit_progress\n"
+                "            || locked_reproposal_prepare_progress"
+            ),
             "bypass only ordinary semantic capacity",
         ),
         (
@@ -1822,11 +1839,17 @@ def test_async_source_fidelity_pins_timeout_vote_semantic_capacity_bypass(
         (
             "prune_ingress_records",
             (
-                "matches_current_lock(*key, record.fingerprint) "
-                "|| matches_retained_timeout(*key)"
+                "matches_current_lock(*key, record.fingerprint)\n"
+                "                    || matches_current_locked_reproposal("
+                "*key, record.fingerprint)\n"
+                "                    || matches_retained_timeout(*key)"
             ),
-            "matches_current_lock(*key, record.fingerprint)",
-            "preserve either the exact lock or retained TimeoutVote",
+            (
+                "matches_current_lock(*key, record.fingerprint)\n"
+                "                    || matches_current_locked_reproposal("
+                "*key, record.fingerprint)"
+            ),
+            "preserve the exact Commit lock, current locked reproposal, or retained TimeoutVote",
         ),
     ),
 )
@@ -1860,10 +1883,10 @@ def test_timeout_vote_semantic_capacity_rejects_real_source_mutations(
     assert any(expected_error in error for error in errors), errors
 
 
-def test_timeout_vote_semantic_capacity_rejects_two_roster_sets(
+def test_timeout_vote_semantic_capacity_rejects_three_roster_sets(
     tmp_path: Path,
 ) -> None:
-    """The semantic table reserves lock plus both bounded timeout rounds."""
+    """The table reserves Commit, locked-reproposal Prepare, and both timeout rounds."""
 
     module = load_checker()
     copy_timeout_vote_window_fixture(tmp_path, module)
@@ -1875,8 +1898,8 @@ def test_timeout_vote_semantic_capacity_rejects_two_roster_sets(
         module,
         rust_path,
         "semantic_ingress_capacity",
+        "roster_len.saturating_mul(4)",
         "roster_len.saturating_mul(3)",
-        "roster_len.saturating_mul(2)",
     )
 
     errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
@@ -1884,7 +1907,7 @@ def test_timeout_vote_semantic_capacity_rejects_two_roster_sets(
     )
 
     assert any(
-        "three roster-bounded protected sets" in error for error in errors
+        "four roster-bounded protected sets" in error for error in errors
     ), errors
 
 
@@ -2062,10 +2085,10 @@ def test_timeout_vote_semantic_capacity_regressions_cannot_be_deleted(
             "crates/iroha_core/src/sumeragi/tests/"
             "v2_adapter_02_view_and_lock_progress.rs",
             "capacity_bypass_records_follow_current_lock_and_timeout_view",
+            "roster_len * 4",
             "roster_len * 3",
-            "roster_len * 2",
             "_TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256",
-            "exactly one lock plus current and adjacent TimeoutVote rosters",
+            "exactly one locked Commit, one current locked-reproposal Prepare, and current and adjacent TimeoutVote rosters",
         ),
         (
             "crates/iroha_core/src/sumeragi/tests/"
@@ -2191,7 +2214,7 @@ def test_frontier_preflight_semantics_survive_item_digest_refresh(
     errors = module._effect_capacity_production_source_fidelity_errors(tmp_path)
 
     assert any(
-        "frontier preflight must require the unique EnterView at the batch head"
+        "frontier preflight must validate the cleanup-only highest Prepare"
         in error
         for error in errors
     ), errors

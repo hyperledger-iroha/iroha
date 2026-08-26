@@ -175,10 +175,6 @@ grep -Fq '"$PYTHON_BINARY" -I -S' "$JVM_NATIVE_GATE" \
   || fail "mobile workflow must bind the canonical Python in exactly three jobs"
 [[ "$(grep -Fc 'echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path"' "$MOBILE_WORKFLOW")" -eq 1 ]] \
   || fail "mobile workflow must bind the canonical rustup in its Apple job"
-[[ "$(grep -Fc 'canonical_java_home="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c' "$MOBILE_WORKFLOW")" -eq 1 ]] \
-  || fail "mobile workflow must canonicalize the setup-java JDK before the JNI gate"
-grep -Fq 'NORITO_MOBILE_JAVA_HOME="$canonical_java_home"' "$MOBILE_WORKFLOW" \
-  || fail "mobile workflow does not pass the canonical setup-java JDK to the JNI gate"
 grep -Fq 'bash scripts/tests/mobile_sdk_python312_contract.sh' "$MOBILE_WORKFLOW" \
   || fail "mobile workflow does not run the Python 3.12 contract"
 grep -Fq '"scripts/tests/mobile_sdk_python312_contract.sh"' "$MOBILE_WORKFLOW" \

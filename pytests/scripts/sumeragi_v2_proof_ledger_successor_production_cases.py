@@ -73,7 +73,6 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
     "crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs",
     "crates/iroha_core/src/sumeragi/tests/v2_worker_lifecycle_capacity_cases.rs",
     "crates/iroha_core/src/sumeragi/tests/v2_worker_recovered_lifecycle_output_cases.rs",
-    "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
     "crates/iroha_core/src/snapshot.rs",
     "crates/iroha_core/src/state.rs",
     "crates/iroha_core/src/kura.rs",
@@ -266,7 +265,7 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
 )
 assert len(LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS) == len(
     set(LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS)
-) == 22
+) == 23
 
 
 @pytest.mark.parametrize(
@@ -3615,7 +3614,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 403
+) == 430
 
 
 @pytest.mark.parametrize(

@@ -214,7 +214,7 @@ fn blocked_ordinary_lifecycle_owner_services_only_lane_local_fair_ingress_before
     let post_drain = source_region(
         run_inner,
         "producer_claim = drain_disposition.producer_claim();",
-        "let (ready_to_finish, lifecycle_yield)",
+        "let (ready_to_finish, executor_slice)",
     );
     assert_source_tokens_in_order(
         post_drain,
@@ -222,6 +222,92 @@ fn blocked_ordinary_lifecycle_owner_services_only_lane_local_fair_ingress_before
             "if drain_disposition.requires_yield()",
             "wake_rx.recv_timeout(IDLE_POLL)",
             "continue;",
+        ],
+    );
+}
+
+#[test]
+fn active_height_tail_bounds_executor_work_before_the_producer_point() {
+    let run_inner = include_str!("v2_runner/lifecycle_run_inner.rs");
+    let runner = include_str!("v2_runner.rs");
+    let height_driver = include_str!("v2_runner/lifecycle_height_driver.rs");
+    let post_drain_runtime = source_region(
+        run_inner,
+        "let (ready_to_finish, executor_slice)",
+        "let apply_terminal_settled",
+    );
+    let executor_slice = source_region(
+        post_drain_runtime,
+        "let executor_slice = advance_executor(",
+        ")?;",
+    );
+
+    let compact_executor_slice: String = executor_slice
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    assert_eq!(compact_executor_slice, "receiver,owner,executor,services,1");
+    let post_slice_suffix = source_region(
+        post_drain_runtime,
+        "let executor_slice = advance_executor(",
+        "if directive.decided_subject().is_none()",
+    );
+    assert_source_tokens_in_order(
+        post_slice_suffix,
+        &[
+            "if let AdvanceExecutorSliceOutcomeV1::Yielded(_) = executor_slice",
+            "return Ok::<_, V2RunnerError>((false, executor_slice));",
+            "retry_exact_output_and_apply_sidecar_admissions(",
+            "let directive = reconcile_executor_locked_body(executor, services)?",
+        ],
+    );
+    assert!(
+        !post_slice_suffix.contains(
+            "if executor_slice == AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary"
+        )
+    );
+
+    let producer_suffix =
+        source_region(run_inner, "match executor_slice", "let finalization_ready");
+    assert_source_tokens_in_order(
+        producer_suffix,
+        &[
+            "AdvanceExecutorSliceOutcomeV1::Idle",
+            "AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary => {}",
+            "AdvanceExecutorSliceOutcomeV1::Yielded(reason)",
+            "continue;",
+            "claim_producer_turn_for_local_proposal(&mut active_runner)",
+        ],
+    );
+
+    let bounded_executor = source_region(
+        runner,
+        "fn advance_executor(",
+        "fn recovered_lifecycle_output_yield_cause(",
+    );
+    assert!(
+        bounded_executor
+            .contains("EffectExecutorStep::Idle => return Ok(AdvanceExecutorSliceOutcomeV1::Idle)")
+    );
+    assert!(
+        bounded_executor
+            .trim_end()
+            .ends_with("Ok(AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary)\n}")
+    );
+
+    let runtime_turn = source_region(
+        height_driver,
+        "LifecycleRunnerRankTarget::Runtime =>",
+        "LifecycleRunnerRankTarget::Ingress =>",
+    );
+    assert_source_tokens_in_order(
+        runtime_turn,
+        &[
+            "advance_executor(receiver, owner, executor, services, 1)?",
+            "match executor_slice",
+            "AdvanceExecutorSliceOutcomeV1::Idle",
+            "AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary => {}",
+            "AdvanceExecutorSliceOutcomeV1::Yielded(advance_executor_yield)",
         ],
     );
 }

@@ -2211,6 +2211,127 @@ fn certified_store_and_validate_inherit_authority_but_require_receipt_bound_stag
     assert!(coordinator.records.is_empty());
 }
 #[test]
+fn future_view_commit_decision_retains_the_lagging_reducer_owner_through_application() {
+    let fixture = Fixture::new();
+    let future_round = wire::ConsensusRound {
+        view: fixture
+            .round
+            .view
+            .checked_add(3)
+            .expect("small future Decision view"),
+        ..fixture.round
+    };
+    let future_commit = wire::QuorumCertificate {
+        round: future_round,
+        proposal_round: future_round,
+        ..fixture.commit_qc.clone()
+    };
+    let fetch = AdapterEffect::FetchBody {
+        tag: fixture.tag,
+        round: future_round,
+        subject: fixture.subject,
+        manifest: None,
+        certified_sources: fixture
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect(),
+        certificate: Some(future_commit.clone()),
+    };
+    let fetch_owner = bound_ownership(&fetch, fixture.tag, 21);
+    let store = AdapterEffect::StoreBody {
+        tag: fixture.tag,
+        round: future_round,
+        subject: fixture.subject,
+    };
+    let store_owner = fetch_owner
+        .rebind_as_inherited_adapter_effect(&store)
+        .expect("future Decision Fetch authorizes its Store successor");
+    let validate = AdapterEffect::ValidateBody {
+        tag: fixture.tag,
+        round: future_round,
+        subject: fixture.subject,
+    };
+    let validate_owner = store_owner
+        .rebind_as_inherited_adapter_effect(&validate)
+        .expect("future Decision Store authorizes its Validate successor");
+    let apply = AdapterEffect::Apply {
+        tag: fixture.tag,
+        subject: fixture.subject,
+        certificate: future_commit.clone(),
+    };
+    let apply_owner = validate_owner
+        .rebind_as_inherited_adapter_effect(&apply)
+        .expect("future Decision Validate authorizes its Apply successor");
+
+    for (effect, ownership) in [
+        (&fetch, &fetch_owner),
+        (&store, &store_owner),
+        (&validate, &validate_owner),
+        (&apply, &apply_owner),
+    ] {
+        let projected = candidate(&fixture, effect, ownership);
+        assert_eq!(projected.key.round().height(), future_round.height);
+        assert_eq!(projected.key.round().view(), future_round.view);
+    }
+
+    let future_prepare = AdapterEffect::FetchBody {
+        tag: fixture.tag,
+        round: future_round,
+        subject: fixture.subject,
+        manifest: None,
+        certified_sources: fixture
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect(),
+        certificate: Some(wire::QuorumCertificate {
+            phase: wire::GlobalPhase::Prepare,
+            ..future_commit
+        }),
+    };
+    let prepare_owner = bound_ownership(&future_prepare, fixture.tag, 22);
+    let prepare_store = AdapterEffect::StoreBody {
+        tag: fixture.tag,
+        round: future_round,
+        subject: fixture.subject,
+    };
+    let prepare_store_owner = prepare_owner
+        .rebind_as_inherited_adapter_effect(&prepare_store)
+        .expect("future Prepare Fetch retains its strict Store successor");
+    let prepare_validate = AdapterEffect::ValidateBody {
+        tag: fixture.tag,
+        round: future_round,
+        subject: fixture.subject,
+    };
+    let prepare_validate_owner = prepare_store_owner
+        .rebind_as_inherited_adapter_effect(&prepare_validate)
+        .expect("future Prepare Store retains its strict Validate successor");
+    for (effect, ownership) in [
+        (&future_prepare, &prepare_owner),
+        (&prepare_store, &prepare_store_owner),
+        (&prepare_validate, &prepare_validate_owner),
+    ] {
+        let pending = ownership
+            .exact_pending_adapter_effect_binding(effect)
+            .expect("mint exact future Prepare pending owner");
+        assert!(
+            matches!(
+                authority_free_admission_projection(
+                    lifecycle_context(&fixture.context),
+                    &fixture.verified,
+                    effect,
+                    &pending,
+                ),
+                Err(AdapterEffectAdmissionError::InvalidCarrier)
+            ),
+            "ordinary Prepare authority must not bypass reducer-view ordering"
+        );
+    }
+}
+#[test]
 fn recovery_cut_consumes_exact_terminal_validate_body_outcome() {
     let temporary = TempDir::new().expect("temporary lifecycle recovery roots");
     let fixture = Fixture::new();

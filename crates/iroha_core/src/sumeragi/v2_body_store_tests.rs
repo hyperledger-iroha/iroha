@@ -843,13 +843,15 @@ mod tests {
                 later_receipt.manifest_hash(),
                 |_| {
                     callback_ran.set(true);
-                    Ok::<_, FixtureValidationError>(execution_commitment)
+                    Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
+                        "an unchanged body must reuse its authenticated semantic result",
+                    ))
                 },
             )
-            .expect("revalidate the unchanged body under its new proposal round");
+            .expect("bind the unchanged validation result to its new proposal round");
         assert!(
-            callback_ran.get(),
-            "validation markers never promote across rounds"
+            !callback_ran.get(),
+            "an exact locked-body reproposal must not repeat deterministic execution"
         );
         assert_eq!(
             later_validation
@@ -862,6 +864,19 @@ mod tests {
                 .validated_path_for(later_round, origin_manifest.subject)
                 .exists()
         );
+        let later_marker = super::read_validation_outcome_marker(
+            &store.validated_path_for(later_round, origin_manifest.subject),
+        )
+        .expect("decode the fresh later-round validation marker");
+        assert_eq!(later_marker.context_id, later_receipt.context_id());
+        assert_eq!(later_marker.round, later_receipt.round());
+        assert_eq!(later_marker.subject, later_receipt.subject());
+        assert_eq!(later_marker.manifest_hash, later_receipt.manifest_hash());
+        assert_eq!(later_marker.body_frame_hash, later_receipt.frame_hash);
+        assert_eq!(
+            later_marker.outcome,
+            ValidationOutcomeMarkerKind::Validated(execution_commitment)
+        );
         assert_eq!(
             store
                 .validated_recovery_catalog()
@@ -869,6 +884,18 @@ mod tests {
                 .map(ValidatedBodyReceipt::durable),
             Some(&origin_receipt)
         );
+        drop(store);
+        let mut reopened = V2BodyStore::open(directory.path(), context)
+            .expect("reopen both exact round-local validation markers");
+        let replay_count = Cell::new(0_u8);
+        reopened
+            .revalidate_recovered_markers(|_| {
+                replay_count.set(replay_count.get().saturating_add(1));
+                Ok::<wire::ExecutionCommitment, String>(execution_commitment)
+            })
+            .expect("one semantic replay authenticates both exact-body markers");
+        assert_eq!(replay_count.get(), 1);
+        assert_eq!(reopened.validated_recovery_catalog().len(), 2);
     }
     #[test]
     fn locked_body_reproposal_cannot_change_rejection_into_success() {
@@ -931,7 +958,7 @@ mod tests {
         );
     }
     #[test]
-    fn genesis_cross_view_validation_is_reexecuted_and_conflicts_fail_closed() {
+    fn genesis_cross_view_validation_is_reused_and_conflicts_fail_closed() {
         let directory = TempDir::new().expect("temporary directory");
         let (context, _keys) = context_and_keys();
         let genesis = KeyPair::try_from_seed(vec![0xC4; 32], Algorithm::Ed25519)
@@ -968,7 +995,7 @@ mod tests {
             ValidatedBodyReceipt::for_test(later_receipt.clone()).execution_commitment();
         assert_ne!(origin_commitment, conflicting_commitment);
         let callback_ran = Cell::new(false);
-        let error = store
+        let later_validation = store
             .execute_durable_validation(
                 later_receipt.clone(),
                 later_receipt.manifest_hash(),
@@ -977,17 +1004,20 @@ mod tests {
                     Ok::<_, FixtureValidationError>(conflicting_commitment)
                 },
             )
-            .expect_err("a prior-view marker must not bypass exact-round validation");
+            .expect("an unchanged genesis body reuses its authenticated semantic result");
         assert!(
-            callback_ran.get(),
-            "the later proposal round must be revalidated"
+            !callback_ran.get(),
+            "an unchanged genesis body must not repeat deterministic execution"
         );
-        assert!(matches!(
-            error,
-            V2BodyStoreError::ConflictingValidationCommitment
-        ));
+        assert_eq!(
+            later_validation
+                .validated_receipt()
+                .map(ValidatedBodyReceipt::execution_commitment),
+            Some(origin_commitment)
+        );
         let marker_path = store.validated_path_for(later_round, origin_manifest.subject);
-        assert!(!marker_path.exists());
+        assert!(marker_path.exists());
+        fs::remove_file(&marker_path).expect("remove the valid later-round marker fixture");
         let conflicting_marker = ValidationOutcomeMarker {
             version: VALIDATION_OUTCOME_MARKER_VERSION,
             context_id: later_receipt.context_id,

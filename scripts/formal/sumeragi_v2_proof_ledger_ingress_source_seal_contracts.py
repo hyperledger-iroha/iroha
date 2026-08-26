@@ -6,10 +6,10 @@
 # and comments or test-only lookalikes cannot satisfy this contract.
 _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
     "fair_v2_ingress_leader_wire_selector_projection": (
-        "08ce0575f38ec671cff556b343d981536dd24fb5bc6c49874b76508cd9cd8104"
+        "76784616876c15608e352a93941912c2002d252ceda70ebefedf4a10495a8730"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
-        "73b744b27b3cc5ffe642fec4a017aeca5bb4fb314205afa0b66531d9fdbf776d"
+        "f36657087882729316031bc2d321b625ee4eba01b742645757a20d31f4001fa8"
     ),
     "fair_v2_ingress_required_capacity": (
         "8ad1236ac1728e777706855b7fe53bdaf43e85bfe1e613d2fd0efd18ff9eac50"
@@ -732,7 +732,7 @@ _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
 }
 _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
     "new_with_source_geometry_and_transport_frame_caps": (
-        "a41b4736d1aa01919dcbccf0b5c71378682e9ad5fd2c64909972f17f6d6c2be8"
+        "cb0a4afccddb9b23417de8471d44d9e82bdecf6931c5af21e2d15ead8a3a68d9"
     ),
     "configure_roster_for_context": (
         "19c00b3b692c6dba9ada1003dff9483ea7a90a47263a506dd6c764f1d24fc68c"

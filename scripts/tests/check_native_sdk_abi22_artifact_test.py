@@ -1260,11 +1260,6 @@ def test_kotlin_localnet_release_lane_is_mandatory_and_payload_free() -> None:
     assert "if: always()" in mobile
     assert "if-no-files-found: error" in mobile
     assert '"scripts/deploy_localnet.sh"' in mobile
-    assert (
-        'canonical_java_home="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c'
-        in mobile
-    )
-    assert 'NORITO_MOBILE_JAVA_HOME="$canonical_java_home"' in mobile
 
     for required in (
         'rustup_source="$(command -v rustup)"',
@@ -1665,10 +1660,23 @@ def test_repository_wires_exact_abi23_release_contract() -> None:
         jni_lane.index('if [[ -n "${NORITO_MOBILE_JAVA_HOME:-}" ]]; then')
         < jni_lane.index("/usr/libexec/java_home -v 21")
     )
+    java_locator_check = '[[ "$JAVA_HOME_DIR" == /* && -d "$JAVA_HOME_DIR" ]]'
+    java_canonicalize = (
+        'JAVA_HOME_DIR="$("$PYTHON_BINARY" -I -S -c '
+        "'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "
+        '"$JAVA_HOME_DIR")"'
+    )
+    java_canonical_check = '[[ -d "$JAVA_HOME_DIR" && ! -L "$JAVA_HOME_DIR" ]]'
+    assert java_locator_check in jni_lane
+    assert java_canonicalize in jni_lane
+    assert java_canonical_check in jni_lane
     assert (
-        "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must provide an "
-        "absolute regular JDK directory"
-    ) in jni_lane
+        jni_lane.index(java_locator_check)
+        < jni_lane.index(java_canonicalize)
+        < jni_lane.index(java_canonical_check)
+        < jni_lane.index('JAVA_BINARY="$JAVA_HOME_DIR/bin/java"')
+    )
+    assert "resolved Java home must be a canonical non-symlink JDK directory" in jni_lane
     assert '"$PYTHON_BINARY" -I -S' in jni_lane
     assert '--set "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION=1"' in jni_lane
     assert "--sdk c-jni" in jni_lane

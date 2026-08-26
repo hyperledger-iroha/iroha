@@ -374,6 +374,105 @@ fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
     assert!(runtime.fail_closed);
 }
 #[test]
+fn sealed_same_owner_stale_store_authority_coalesces_with_stronger_terminal() {
+    let directory = TempDir::new().expect("temporary sealed stale-store owner directory");
+    let (mut runtime, context, keys) =
+        authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+    let tag = runtime.round_tag();
+    let manifest = runtime_manifest(&context, 0xAE);
+    let store_effect = AdapterEffect::StoreBody {
+        tag,
+        round: manifest.round,
+        subject: manifest.subject,
+    };
+    let ordinary_ordinal = runtime
+        .ingress
+        .mint_non_fifo_lifecycle_ordinal()
+        .expect("mint the sealed ordinary Store lifecycle");
+    let ordinary_store = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&store_effect),
+        vec![RuntimeEffectOwnership::fresh_for_test(
+            tag,
+            ordinary_ordinal,
+        )],
+    )
+    .expect("bind the sealed ordinary Store carrier")
+    .pop()
+    .expect("one ordinary Store owner");
+    let mut prepare = signed_runtime_quorum_certificate(&context, &keys, 0xAF);
+    prepare.phase = wire::GlobalPhase::Prepare;
+    prepare.round = manifest.round;
+    prepare.proposal_round = manifest.round;
+    prepare.subject = manifest.subject;
+    let certified_fetch = AdapterEffect::FetchBody {
+        tag,
+        round: manifest.round,
+        subject: manifest.subject,
+        manifest: Some(manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: Some(prepare),
+    };
+    let certified_ordinal = runtime
+        .ingress
+        .mint_non_fifo_lifecycle_ordinal()
+        .expect("mint the foreign Prepare Store lifecycle");
+    let certified_fetch_owner = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&certified_fetch),
+        vec![RuntimeEffectOwnership::fresh_for_test(
+            tag,
+            certified_ordinal,
+        )],
+    )
+    .expect("bind the foreign Prepare Fetch carrier")
+    .pop()
+    .expect("one Prepare Fetch owner");
+    let certified_store = certified_fetch_owner
+        .rebind_as_inherited_adapter_effect(&store_effect)
+        .expect("Prepare Fetch authorizes the exact Store terminal");
+    let strengthened_terminal = ordinary_store
+        .adopt_incumbent_body_stage_for_retry_or_authority(&certified_store, &store_effect)
+        .expect("the sealed Store owner adopts Prepare authority");
+    assert_eq!(strengthened_terminal.owner(), ordinary_store.owner());
+    assert_eq!(
+        strengthened_terminal
+            .candidate_semantic_statement()
+            .zip(ordinary_store.candidate_semantic_statement())
+            .and_then(|(incumbent, incoming)| incumbent.fetch_authority_relation_to(incoming)),
+        Some(RuntimeFetchAuthorityRelation::Stale),
+        "the later ordinary Store must be stale to the strengthened terminal"
+    );
+    let durable = DurableBodyReceipt::for_test(
+        context.id(),
+        manifest.round,
+        manifest.subject,
+        HashOf::new(&manifest),
+    );
+    stage_owned_completion_for_queue_test(
+        &mut runtime,
+        tag,
+        AdapterCommand::BodyStored {
+            round: manifest.round,
+            subject: manifest.subject,
+            receipt: durable,
+        },
+        &strengthened_terminal,
+    );
+    let retained_statement = runtime.ingress.commands[0].candidate_semantic_statement;
+    assert!(
+        runtime
+            .body_pipeline_candidate_has_terminal(&store_effect, &ordinary_store)
+            .expect("same-owner stale Store observes the strengthened terminal"),
+        "the sealed physical owner may stutter without authority downgrade"
+    );
+    assert_eq!(runtime.queued_commands(), 1);
+    assert_eq!(
+        runtime.ingress.commands[0].candidate_semantic_statement, retained_statement,
+        "same-owner stale retry must not downgrade the terminal statement"
+    );
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
 fn foreign_stale_store_authority_cannot_take_a_queued_terminal() {
     let directory = TempDir::new().expect("temporary stale-store owner directory");
     let (mut runtime, context, keys) =
@@ -1263,6 +1362,15 @@ fn network_admission_uses_exact_normal_and_progress_reservations() {
         _ => unreachable!("fixture is a vote"),
     };
     runtime.driver.protected_commit = Some((round, subject, execution_commitment));
+    runtime.driver.protected_prepare = Some((round, subject, execution_commitment));
+    let mismatched_prepare_vote = match &vote {
+        wire::ConsensusMessageV2Payload::Vote(vote) => {
+            let mut vote = vote.clone();
+            vote.subject.payload_hash = Hash::new(b"mismatched runtime Prepare vote");
+            wire::ConsensusMessageV2Payload::Vote(vote)
+        }
+        _ => unreachable!("fixture is a vote"),
+    };
     let mismatched_commit_vote = match &locked_commit_vote {
         wire::ConsensusMessageV2Payload::Vote(vote) => {
             let mut vote = vote.clone();
@@ -1318,7 +1426,32 @@ fn network_admission_uses_exact_normal_and_progress_reservations() {
         network_admission_class(&commit_response),
         Some(CommandClass::Progress)
     );
+    assert!(runtime.wire_ingress_may_use_pacemaker_progress(&prepare_qc));
+    assert!(runtime.wire_ingress_may_use_pacemaker_progress(&commit_qc));
+    assert!(runtime.wire_ingress_may_use_pacemaker_progress(&timeout_vote));
+    assert!(runtime.wire_ingress_may_use_pacemaker_progress(&timeout_certificate));
+    assert!(
+        runtime.wire_ingress_may_use_pacemaker_progress(&locked_commit_vote),
+        "the exact active-lock CommitVote is a protected pacemaker root"
+    );
+    assert!(
+        runtime.wire_ingress_may_use_pacemaker_progress(&vote),
+        "the exact current locked-reproposal PrepareVote is a protected pacemaker root"
+    );
+    assert!(
+        !runtime.wire_ingress_may_use_pacemaker_progress(&mismatched_prepare_vote),
+        "an unrelated PrepareVote remains ordinary before authentication"
+    );
+    assert!(
+        !runtime.wire_ingress_may_use_pacemaker_progress(&mismatched_commit_vote),
+        "a merely Commit-shaped vote remains ordinary before authentication"
+    );
+    assert!(
+        !runtime.wire_ingress_may_use_pacemaker_progress(&commit_response),
+        "the discovery wrapper uses its separate certified CommitQC path"
+    );
     assert!(runtime.can_admit_network_payload(&vote));
+    assert!(runtime.can_admit_network_payload(&mismatched_prepare_vote));
     assert!(runtime.can_admit_network_payload(&prepare_qc));
     assert!(runtime.can_admit_network_payload(&commit_qc));
     assert!(runtime.can_admit_network_payload(&timeout_vote));
@@ -1331,7 +1464,11 @@ fn network_admission_uses_exact_normal_and_progress_reservations() {
         FakeCommand::record(1),
     )
     .expect("fill the normal prefix while preserving every reserved class");
-    assert!(!runtime.can_admit_network_payload(&vote));
+    assert!(
+        runtime.can_admit_network_payload(&vote),
+        "the exact current locked-reproposal Prepare can use the Progress reserve"
+    );
+    assert!(!runtime.can_admit_network_payload(&mismatched_prepare_vote));
     assert!(
         !runtime.can_admit_network_payload(&mismatched_commit_vote),
         "a merely Commit-shaped vote must stop at pre-authentication backpressure"
@@ -1357,6 +1494,7 @@ fn network_admission_uses_exact_normal_and_progress_reservations() {
     )
     .expect("fill the progress prefix");
     assert!(!runtime.can_admit_network_payload(&vote));
+    assert!(!runtime.can_admit_network_payload(&mismatched_prepare_vote));
     assert!(!runtime.can_admit_network_payload(&mismatched_commit_vote));
     assert!(!runtime.can_admit_network_payload(&locked_commit_vote));
     assert!(

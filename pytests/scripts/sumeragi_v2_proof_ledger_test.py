@@ -557,7 +557,11 @@ def copy_flat_async_architecture_fixture(tmp_path: Path, module) -> Path:
         module._async_liveness_source(module.FORMAL_DIR),
         encoding="utf-8",
     )
-    for name in ("SumeragiV2LivenessProofs.tla", "SumeragiV2Proofs.tla"):
+    for name in (
+        "SumeragiV2LivenessProofs.tla",
+        "SumeragiV2Proofs.tla",
+        "SumeragiV2AsyncProtectedSlotProofs.tla",
+    ):
         shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
     (formal_dir / "proof_coverage.json").write_text("{}\n", encoding="utf-8")
     return formal_dir

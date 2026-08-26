@@ -352,19 +352,6 @@ fn sm2_distid_arg(distid: Option<&str>) -> String {
         .map(str::to_owned)
         .unwrap_or_else(Sm2PublicKey::default_distid)
 }
-trait IntoSm2Result {
-    fn into_sm2_result(self) -> Result<Sm2PrivateKey, ParseError>;
-}
-impl IntoSm2Result for Sm2PrivateKey {
-    fn into_sm2_result(self) -> Result<Sm2PrivateKey, ParseError> {
-        Ok(self)
-    }
-}
-impl IntoSm2Result for Result<Sm2PrivateKey, ParseError> {
-    fn into_sm2_result(self) -> Result<Sm2PrivateKey, ParseError> {
-        self
-    }
-}
 fn parse_sm2_private_key(distid: Option<&str>, bytes: &[u8]) -> PyResult<Sm2PrivateKey> {
     if bytes.len() != SM2_PRIVATE_KEY_LENGTH {
         return Err(PyValueError::new_err(format!(
@@ -5854,6 +5841,18 @@ mod tests {
         );
         let envelope_json = envelope.to_json().expect("envelope JSON");
         Python::attach(|py| {
+            let envelope_dict = envelope.as_dict(py).expect("envelope dictionary");
+            let dictionary_network_id = envelope_dict
+                .bind(py)
+                .get_item("network_id")
+                .expect("read envelope network ID")
+                .expect("envelope network ID is present")
+                .extract::<String>()
+                .expect("envelope network ID is a string");
+            assert_eq!(
+                dictionary_network_id,
+                canonical_network_id_literal(&envelope.network_id)
+            );
             let envelope_type = py.get_type::<SignedTransactionEnvelope>();
             let restored = SignedTransactionEnvelope::from_json(&envelope_type, &envelope_json)
                 .expect("exact envelope JSON roundtrip");
@@ -5895,6 +5894,22 @@ mod tests {
             .expect("signed transaction is non-empty");
         *last ^= 0x01;
         assert!(canonical_signed_transaction_hash_v1(&tampered).is_err());
+    }
+    #[test]
+    fn generated_sm2_keypair_uses_checked_os_entropy() {
+        ensure_python();
+        Python::attach(|py| {
+            let distid = "python-sdk-random-key";
+            let (private, public) =
+                generate_sm2_keypair_py(py, Some(distid)).expect("generate checked SM2 keypair");
+            let private_bytes = private.bind(py).as_bytes();
+            let public_bytes = public.bind(py).as_bytes();
+            assert_eq!(private_bytes.len(), SM2_PRIVATE_KEY_LENGTH);
+            assert_eq!(public_bytes.len(), SM2_PUBLIC_KEY_UNCOMPRESSED_LENGTH);
+            let parsed =
+                Sm2PrivateKey::from_bytes(distid, private_bytes).expect("parse generated key");
+            assert_eq!(parsed.public_key().to_sec1_bytes(false), public_bytes);
+        });
     }
     #[test]
     fn transaction_builder_attachment_limits_are_atomic_and_remain_signable() {
@@ -11730,10 +11745,7 @@ impl SignedTransactionEnvelope {
     /// Return a Python dict summarising the envelope contents.
     fn as_dict<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
         let dict = PyDict::new(py);
-        dict.set_item(
-            "network_id",
-            canonical_network_id_literal(&self.network_id)?,
-        )?;
+        dict.set_item("network_id", canonical_network_id_literal(&self.network_id))?;
         dict.set_item("authority", &self.authority)?;
         dict.set_item(
             "signed_transaction",
@@ -11774,7 +11786,7 @@ impl SignedTransactionEnvelope {
         let mut map = norito::json::Map::new();
         map.insert(
             "network_id".into(),
-            norito::json::Value::String(canonical_network_id_literal(&self.network_id)?),
+            norito::json::Value::String(canonical_network_id_literal(&self.network_id)),
         );
         map.insert(
             "authority".into(),
@@ -12577,9 +12589,7 @@ fn generate_sm2_keypair_py(
     distid: Option<&str>,
 ) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
     let distid = sm2_distid_arg(distid);
-    let mut rng = OsRng06;
-    let private = Sm2PrivateKey::random(distid, &mut rng)
-        .into_sm2_result()
+    let private = Sm2PrivateKey::try_random_from_os(distid)
         .map_err(|err| PyValueError::new_err(format!("failed to generate SM2 key pair: {err}")))?;
     let public = private.public_key();
     let private_bytes = private.secret_bytes();

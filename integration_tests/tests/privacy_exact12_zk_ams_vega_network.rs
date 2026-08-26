@@ -90,6 +90,7 @@ use std::{
 use tokio::time::{Instant, sleep, timeout};
 const ZK_AMS_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkAmsV1;
 const VEGA_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(120);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(90);
 const RESTART_TIMEOUT: Duration = Duration::from_secs(90);
@@ -1429,7 +1430,13 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_block_cadence(TEST_BLOCK_CADENCE)
-        .with_permissioned_consensus();
+        .with_permissioned_consensus()
+        .with_config_layer(|layer| {
+            layer.write(
+                ["nexus", "storage", "local_budget_bytes"],
+                TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+            );
+        });
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };
@@ -2040,7 +2047,13 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_block_cadence(TEST_BLOCK_CADENCE)
-        .with_permissioned_consensus();
+        .with_permissioned_consensus()
+        .with_config_layer(|layer| {
+            layer.write(
+                ["nexus", "storage", "local_budget_bytes"],
+                TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+            );
+        });
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };

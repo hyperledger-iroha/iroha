@@ -826,8 +826,10 @@ mod tests {
     #[test]
     fn lifecycle_and_compiled_digest_substitutions_are_rejected() {
         let expected = fixture_artifacts();
-        let other = *privacy_activation_at_v1(&expected.instructions[1], 1)
-            .expect("second exact activation");
+        let expected_activation = *privacy_activation_at_v1(&expected.instructions[0], 0)
+            .expect("first exact activation");
+        let other = *privacy_activation_at_v1(&expected.instructions[2], 2)
+            .expect("third exact activation");
         for mutation in 0_u8..=10 {
             let mut instructions = expected.instructions.clone();
             replace_activation(&mut instructions, 0, |activation| match mutation {
@@ -866,6 +868,12 @@ mod tests {
                         });
                 }
             });
+            let mutated_activation =
+                privacy_activation_at_v1(&instructions[0], 0).expect("mutated first activation");
+            assert_ne!(
+                mutated_activation, &expected_activation,
+                "mutation {mutation} must not be a no-op"
+            );
             let mutated = rerender_with_instructions(&expected, instructions);
             let error = validate_artifacts_against_v1(
                 &mutated.instructions_json,

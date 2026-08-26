@@ -424,8 +424,8 @@ fn vega_release_envelope_fails_closed_before_native_dispatch_while_profile_is_un
         "profile unavailability must not count as native corruption coverage"
     );
     statement.context.action_index = 1;
-    refresh_vega_device_authentication_digest_v1(&mut statement, fixture.genesis_hash)
-        .expect("rebound impossible Vega action index");
+    // Canonical H_dev derivation intentionally refuses this impossible sole-action index. Keep
+    // the old digest so this call proves profile availability is checked before statement admission.
     let pre_native_rejection = verify_vega_release_production_envelope_v1(
         &statement,
         Some(&record),

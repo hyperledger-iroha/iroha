@@ -1268,7 +1268,7 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
 )
 SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "2dfa7f1222e5421c1a38bfe7481b140e8962df6637bf30dab9b272ef9471aad9"
+        "9d28823206f1e5c12c23263710f5255b5166fa27aeb16f7e2c70b2496076e1b1"
     ),
     "SumeragiV2AsyncRankAndInitProofs.tla": (
         "c6f6eade349f107e0572cb381690ad054b61493ef274a9127eed247f4f7b75ca"
@@ -1366,7 +1366,7 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
 )
 COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "2dfa7f1222e5421c1a38bfe7481b140e8962df6637bf30dab9b272ef9471aad9"
+        "9d28823206f1e5c12c23263710f5255b5166fa27aeb16f7e2c70b2496076e1b1"
     ),
     "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
         "fac37875375b831db6ed1bd1f64e194fd5e7eebde51019c345a85c4083664752"
@@ -1492,7 +1492,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "a69da1a117bb8e6f3a73d5c6ce99eb88286b1372b59238e0da2ccf555eeafb0e"
     ),
     "scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh": (
-        "1400aee6798b10b0cba2d33663c39a4a36b65e009e5ae070896c0b2dd10b199a"
+        "2d2db5fa7d443b1fff766ff70074525de8d99ac80238e0affc9a56a2a2a97d1c"
     ),
     "scripts/formal/run_sumeragi_v2_certificate_ref_recovery_mutation.sh": (
         "2c88484904aa3fb104ea8d33cc9d7ba53859fb51c50ad2aeb30cd0e35fb506b5"
@@ -1610,7 +1610,7 @@ SHARED_TLC_RESULT_BRANCH_PROFILES = {
     ),
     "scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh": (
         6,
-        40,
+        41,
         0,
         0,
         0,
@@ -1894,7 +1894,7 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
     }
 )
 SHARED_TLC_RESULT_BRANCH_PROFILES_SHA256 = (
-    "7d61a1a77e8289a2a59d7a614349a7a4b5ee9fb4e92a0d926b74e99aecf14640"
+    "8574f346c2a613fe29f452c887f716ba1f5b66fd0c71cbac009f9f3ea8bb2303"
 )
 SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256 = (
     "1f802a03156468b1edd273fe1048db5be71c46c83cfa56b6535fa0131d286d71"

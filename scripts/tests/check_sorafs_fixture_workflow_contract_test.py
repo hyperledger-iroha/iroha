@@ -698,8 +698,7 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
     assert parity.count(
         'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"'
     ) == 2
-    assert 'canonical_java_home="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c' in parity
-    assert 'NORITO_MOBILE_JAVA_HOME="$canonical_java_home"' in parity
+    assert 'NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"' in parity
     assert 'NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"' in parity
     assert 'sdkmanager_status="${PIPESTATUS[1]}"' in parity
     assert 'exit "$sdkmanager_status"' in parity

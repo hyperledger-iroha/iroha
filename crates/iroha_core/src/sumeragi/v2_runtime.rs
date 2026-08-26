@@ -1496,6 +1496,45 @@ pub(crate) struct RuntimeCandidateSemanticStatement {
     phase: Option<wire::GlobalPhase>,
     execution_commitment: Option<wire::ExecutionCommitment>,
 }
+
+/// Exact unchanged-lock body statement eligible for the bounded pre-timeout
+/// PrepareQC preview.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PreTimeoutLockedPrepareQcTargetV1 {
+    /// Current execution/proposal round which the PrepareQC must certify.
+    pub(crate) round: wire::ConsensusRound,
+    /// Exact subject retained from the older durable lock.
+    pub(crate) subject: wire::BlockSubject,
+    /// Current-round deterministic validation commitment for that subject.
+    pub(crate) execution_commitment: wire::ExecutionCommitment,
+}
+impl PreTimeoutLockedPrepareQcTargetV1 {
+    fn validate_exact(self, tag: EventTag) -> bool {
+        self.round.height == tag.height()
+            && self.round.view == tag.view()
+            && self.execution_commitment.validate().is_ok()
+    }
+}
+
+/// Move-only authority for one fixed-cut pre-timeout PrepareQC scan.
+///
+/// The cut never owns a future ingress occurrence. It is valid only while the
+/// same frozen timeout owner, current reducer tag, and unchanged-lock target
+/// remain authoritative; every use revalidates those facts against the live
+/// runtime before selecting or previewing a command.
+#[derive(Debug)]
+pub(crate) struct PreTimeoutLockedPrepareQcCutV1 {
+    tag: EventTag,
+    physical_cut: u128,
+    timeout_owner: RuntimeLifecycleOwner,
+    target: PreTimeoutLockedPrepareQcTargetV1,
+}
+impl PreTimeoutLockedPrepareQcCutV1 {
+    /// First fair-ingress physical ordinal excluded from this episode.
+    pub(crate) const fn physical_cut(&self) -> u128 {
+        self.physical_cut
+    }
+}
 impl RuntimeCandidateSemanticStatement {
     fn new(
         round: wire::ConsensusRound,
@@ -2262,6 +2301,42 @@ pub(crate) struct PendingRuntimeEffectBinding {
     candidate_semantic_identity: Option<iroha_crypto::Hash>,
     projection_hash: iroha_crypto::Hash,
 }
+/// Cloneable comparison-only fingerprint of one exact pending Store binding.
+///
+/// This value contains no lifecycle ordinal and has no projection or admission
+/// operations. It lets the executor remember a durably published Store row
+/// without cloning the move-only [`PendingRuntimeEffectBinding`] retained by
+/// the lifecycle registry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) struct PendingRuntimeEffectFingerprintV1 {
+    causal_lifecycle_key: iroha_crypto::Hash,
+    effect_kind: u8,
+    effect_identity: iroha_crypto::Hash,
+    candidate_kind: u8,
+    candidate_statement: Option<RuntimeCandidateSemanticStatement>,
+    candidate_semantic_identity: Option<iroha_crypto::Hash>,
+    projection_hash: iroha_crypto::Hash,
+}
+impl PendingRuntimeEffectFingerprintV1 {
+    /// Revalidate the inert fingerprint against its complete Store effect.
+    pub(crate) fn exactly_binds_adapter_effect(&self, effect: &AdapterEffect) -> bool {
+        PendingRuntimeEffectBinding {
+            causal_lifecycle_key: self.causal_lifecycle_key,
+            effect_kind: self.effect_kind,
+            effect_identity: self.effect_identity,
+            candidate_kind: self.candidate_kind,
+            candidate_statement: self.candidate_statement,
+            candidate_semantic_identity: self.candidate_semantic_identity,
+            projection_hash: self.projection_hash,
+        }
+        .validate_exact(effect)
+    }
+
+    /// Return the immutable candidate statement retained by this fingerprint.
+    pub(crate) const fn candidate_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
+        self.candidate_statement
+    }
+}
 /// Move-only restart successor derived from one exact recovered WAL vote.
 ///
 /// The consuming projection retains the complete verified WAL
@@ -2882,6 +2957,28 @@ impl PendingRuntimeEffectBinding {
     pub(crate) const fn candidate_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
         self.candidate_statement
     }
+    /// Project a comparison-only fingerprint for one exact Store binding.
+    ///
+    /// The returned value cannot enter lifecycle admission or mint runtime
+    /// ownership; it exists solely to authenticate retries against a Store row
+    /// which the lifecycle registry already owns.
+    pub(in crate::sumeragi) fn published_store_retry_fingerprint(
+        &self,
+        effect: &AdapterEffect,
+    ) -> Option<PendingRuntimeEffectFingerprintV1> {
+        if !matches!(effect, AdapterEffect::StoreBody { .. }) || !self.validate_exact(effect) {
+            return None;
+        }
+        Some(PendingRuntimeEffectFingerprintV1 {
+            causal_lifecycle_key: self.causal_lifecycle_key,
+            effect_kind: self.effect_kind,
+            effect_identity: self.effect_identity,
+            candidate_kind: self.candidate_kind,
+            candidate_statement: self.candidate_statement,
+            candidate_semantic_identity: self.candidate_semantic_identity,
+            projection_hash: self.projection_hash,
+        })
+    }
     fn validate_exact(&self, effect: &AdapterEffect) -> bool {
         let exact_candidate = match (
             self.candidate_kind,
@@ -3167,7 +3264,11 @@ impl PendingRuntimeEffectBinding {
         else {
             return None;
         };
-        if predecessor_tag != successor_tag
+        let tag_is_exact_or_current_view_rebind = predecessor_tag == successor_tag
+            || (predecessor_tag.height() == successor_tag.height()
+                && predecessor_tag.generation() == successor_tag.generation()
+                && predecessor_tag.view() < successor_tag.view());
+        if !tag_is_exact_or_current_view_rebind
             || predecessor_subject != successor_subject
             || certificate.proposal_round != *predecessor_round
             || certificate.subject != *predecessor_subject
@@ -4319,6 +4420,7 @@ enum RuntimeQueueSelectionKind {
     FencePredecessor,
     PacemakerProgress,
     PacemakerCertifiedProgress,
+    PreTimeoutLockedPrepareQc,
 }
 impl RuntimeQueueSelectionKind {
     const fn code(self) -> u8 {
@@ -4328,6 +4430,7 @@ impl RuntimeQueueSelectionKind {
             Self::PacemakerProgress => 3,
             Self::PacemakerCertifiedProgress => 4,
             Self::FencePredecessor => 5,
+            Self::PreTimeoutLockedPrepareQc => 6,
         }
     }
 }
@@ -4656,6 +4759,13 @@ impl RuntimeQueueSelectionSeal {
                         && self.cursor_after_removal == self.queue_before.service_cursor
                         && self.max_debt_after_upper_bound == self.queue_before.max_service_debt
                 }
+                RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc => {
+                    self.selected_class == SERVICE_CLASS_PROGRESS
+                        && self.selected_identity.kind == RuntimeCommandKind::Authenticated
+                        && self.selected_ingress_ownership_hash.is_some()
+                        && self.cursor_after_removal == self.queue_before.service_cursor
+                        && self.max_debt_after_upper_bound == self.queue_before.max_service_debt
+                }
             }
     }
     fn claim_scheduler_handoff_once(&self) -> bool {
@@ -4738,6 +4848,7 @@ struct RuntimeSchedulerArbitrationInputs {
     completion_ready: bool,
     progress_ready: bool,
     normal_ready: bool,
+    pre_timeout_locked_prepare_qc_physical_cut: Option<u128>,
     fence_completion_bypass: bool,
     fence_dependency_minimum_lifecycle_ordinal: Option<u128>,
     fence_dependency_minimum_admission_ordinal: Option<u128>,
@@ -4770,6 +4881,9 @@ pub(crate) enum RuntimeSelectedOwnerKind {
     /// A pacemaker Progress occurrence encountered bounded adapter pressure
     /// and retained its exact queue position for retry.
     PacemakerProgressRetryRetained,
+    /// One exact pre-cut authenticated PrepareQC whose cloned reducer preview
+    /// immediately stages `LockAndCommit` for the unchanged older lock.
+    PreTimeoutLockedPrepareQc,
     /// Absolute round timeout.
     Timeout,
     /// Periodic retransmission timer.
@@ -4842,6 +4956,9 @@ pub(crate) struct RuntimeSchedulerOwnershipEvidence {
     pub(crate) progress_ready: bool,
     /// Whether the Normal class had an admitted owner.
     pub(crate) normal_ready: bool,
+    /// Frozen fair-ingress cut proving that this exceptional PrepareQC was
+    /// physically admitted before the already-due timeout occurrence.
+    pre_timeout_locked_prepare_qc_physical_cut: Option<u128>,
     /// Whether this turn used the narrow dependency edge from older
     /// unserviceable adapter debt to its exact signing completion.
     pub(crate) fence_completion_bypass: bool,
@@ -4911,6 +5028,7 @@ impl RuntimeSelectedOwnerKind {
             Self::PacemakerProgressRetryRetained => 9,
             Self::FencePredecessor => 10,
             Self::FencePredecessorRetryRetained => 11,
+            Self::PreTimeoutLockedPrepareQc => 12,
         }
     }
 }
@@ -5057,6 +5175,10 @@ fn runtime_scheduler_projection_hash(
     projection.push(u8::from(evidence.completion_ready));
     projection.push(u8::from(evidence.progress_ready));
     projection.push(u8::from(evidence.normal_ready));
+    append_runtime_optional_ordinal(
+        &mut projection,
+        evidence.pre_timeout_locked_prepare_qc_physical_cut,
+    );
     projection.push(u8::from(evidence.fence_completion_bypass));
     append_runtime_optional_ordinal(
         &mut projection,
@@ -5184,6 +5306,13 @@ impl RuntimeSchedulerOwnershipEvidence {
                 | RuntimeSelectedOwnerKind::FencePredecessor
                 | RuntimeSelectedOwnerKind::FencePredecessorRetryRetained
         );
+        let pre_timeout_locked_prepare_qc_cut_is_exact =
+            match self.pre_timeout_locked_prepare_qc_physical_cut {
+                Some(cut) => {
+                    cut != 0 && self.selected == RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc
+                }
+                None => self.selected != RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc,
+            };
         let fence_dependency_rank_is_exact = match (
             self.fence_dependency_minimum_lifecycle_ordinal,
             self.fence_dependency_minimum_admission_ordinal,
@@ -5281,8 +5410,61 @@ impl RuntimeSchedulerOwnershipEvidence {
             || !fence_retry_sets_are_exact
             || !fence_retry_transition_is_exact
             || !fence_predecessor_is_exact
+            || !pre_timeout_locked_prepare_qc_cut_is_exact
         {
             return Err(RuntimeSchedulerEvidenceError::InvalidProjection);
+        }
+        if let (
+            RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+            Some(physical_cut),
+        ) = (
+            &self.selected,
+            &self.candidate,
+            self.pre_timeout_locked_prepare_qc_physical_cut,
+        ) {
+            let candidate_is_pre_cut = candidate
+                .causal_origin
+                .root_ingress_physical_ownership
+                .is_some_and(|physical| u128::from(physical.source_ordinal) < physical_cut);
+            let exact = self.clocks_armed
+                && self.timeout_due
+                && !self.periodic_timer_due
+                && !self.fifo_ready
+                && !self.completion_ready
+                && !self.progress_ready
+                && !self.normal_ready
+                && !self.fence_completion_bypass
+                && candidate.identity.validate_exact()
+                && candidate.kind == RuntimeCommandKind::Authenticated
+                && candidate.class == SERVICE_CLASS_PROGRESS
+                && candidate.admission_ordinal != 0
+                && candidate.lifecycle_ordinal != 0
+                && candidate.lifecycle_ordinal <= candidate.admission_ordinal
+                && runtime_fifo_candidate_ingress_is_exact(candidate)
+                && candidate.projection_hash == runtime_fifo_candidate_projection_hash(candidate)
+                && candidate.causal_origin.validate_exact()
+                && candidate.causal_origin.root_class == SERVICE_CLASS_PROGRESS
+                && candidate.causal_origin.root_lifecycle_ordinal
+                    == Some(candidate.lifecycle_ordinal)
+                && candidate_is_pre_cut
+                && candidate.fifo_position < self.queue_before.len
+                && candidate.eligible_skips_before <= self.queue_before.max_service_debt
+                && candidate.eligible_skips_after == 0
+                && self.queue_before.service_cursor == self.queue_after.service_cursor
+                && self.queue_after.max_service_debt <= self.queue_before.max_service_debt
+                && self.queue_after.len.checked_add(1) == Some(self.queue_before.len)
+                && self.fifo_owed_before == self.fifo_owed_after
+                && candidate.selection_seal.matches_scheduler_occurrence(
+                    candidate,
+                    &self.queue_before_snapshot,
+                    &self.queue_after_snapshot,
+                    RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc,
+                    false,
+                );
+            return exact
+                .then_some(())
+                .ok_or(RuntimeSchedulerEvidenceError::InvalidProjection);
         }
         if let (
             RuntimeSelectedOwnerKind::Deferred,
@@ -5512,7 +5694,8 @@ impl RuntimeSchedulerOwnershipEvidence {
                 ),
                 RuntimeQueueSelectionKind::Ordinary
                 | RuntimeQueueSelectionKind::FenceCompletion
-                | RuntimeQueueSelectionKind::FencePredecessor => false,
+                | RuntimeQueueSelectionKind::FencePredecessor
+                | RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc => false,
             };
             let exact = self.clocks_armed
                 && !self.fence_completion_bypass
@@ -6551,7 +6734,8 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             RuntimeQueueSelectionKind::FenceCompletion
             | RuntimeQueueSelectionKind::FencePredecessor
             | RuntimeQueueSelectionKind::PacemakerProgress
-            | RuntimeQueueSelectionKind::PacemakerCertifiedProgress => {
+            | RuntimeQueueSelectionKind::PacemakerCertifiedProgress
+            | RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc => {
                 queue_before.projection.max_service_debt
             }
         };
@@ -6932,7 +7116,13 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         &mut self,
         mut is_runnable: impl FnMut(&TaggedCommand<C>) -> bool,
         mut is_certified_fence_escape: impl FnMut(&C) -> bool,
+        forced_selection_kind: Option<RuntimeQueueSelectionKind>,
     ) -> Result<Option<(TaggedCommand<C>, RuntimeFifoCandidateOwnership)>, EnqueueError> {
+        if forced_selection_kind
+            .is_some_and(|kind| kind != RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc)
+        {
+            return Err(EnqueueError::FailClosed);
+        }
         let _ = self.oldest_lifecycle_ordinal()?;
         let queue_before = self.ownership_snapshot();
         let selected = self
@@ -6986,11 +7176,11 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         }
         let fifo_position =
             u64::try_from(index).expect("bounded runtime FIFO position is representable as u64");
-        let selection_kind = if certified_fence_escape {
+        let selection_kind = forced_selection_kind.unwrap_or(if certified_fence_escape {
             RuntimeQueueSelectionKind::PacemakerCertifiedProgress
         } else {
             RuntimeQueueSelectionKind::PacemakerProgress
-        };
+        });
         let selection_seal = self.mint_selection_seal(
             selection_kind,
             &queue_before,
@@ -9167,6 +9357,29 @@ pub(crate) trait RuntimeDriver {
     fn certified_progress_bypasses_signature_fence(&self, _command: &Self::Command) -> bool {
         false
     }
+    /// Project the sole current-view unchanged-lock body which an exact
+    /// PrepareQC may advance before an already-frozen timeout occurrence.
+    fn pre_timeout_locked_prepare_qc_target(&self) -> Option<PreTimeoutLockedPrepareQcTargetV1> {
+        None
+    }
+    /// Deep-preview one wire PrepareQC without mutating live adapter state.
+    /// Production accepts only an immediate exact `LockAndCommit` append.
+    fn wire_previews_pre_timeout_locked_prepare_qc(
+        &self,
+        _certificate: &wire::QuorumCertificate,
+        _target: PreTimeoutLockedPrepareQcTargetV1,
+    ) -> bool {
+        false
+    }
+    /// Return whether an already-authenticated runtime command is the exact
+    /// PrepareQC admitted by the same deep preview.
+    fn command_previews_pre_timeout_locked_prepare_qc(
+        &self,
+        _command: &Self::Command,
+        _target: PreTimeoutLockedPrepareQcTargetV1,
+    ) -> bool {
+        false
+    }
     /// Return whether a pending replay or persistence acknowledgement forbids
     /// every pacemaker queue dispatch. The matching asynchronous completion
     /// owns the only legal next reducer transition.
@@ -9428,8 +9641,12 @@ pub(crate) trait RuntimeDriver {
     }
     /// Return whether the unauthenticated wire shape could match a protected
     /// active-lock item after authentication.
-    #[cfg(test)]
-    fn wire_ingress_may_use_progress(&self, payload: &wire::ConsensusMessageV2Payload) -> bool;
+    ///
+    /// Synthetic drivers remain conservative unless they model an exact lock;
+    /// the production adapter overrides this with its durable-lock predicate.
+    fn wire_ingress_may_use_progress(&self, _payload: &wire::ConsensusMessageV2Payload) -> bool {
+        false
+    }
 }
 impl RuntimeDriver for SumeragiV2Adapter {
     type Command = AdapterCommand;
@@ -9467,6 +9684,34 @@ impl RuntimeDriver for SumeragiV2Adapter {
                 AdapterCommand::Authenticated(authenticated)
                     if wire_payload_is_certified_fence_escape(authenticated.payload())
             )
+    }
+    fn pre_timeout_locked_prepare_qc_target(&self) -> Option<PreTimeoutLockedPrepareQcTargetV1> {
+        SumeragiV2Adapter::pre_timeout_locked_prepare_qc_target(self)
+    }
+    fn wire_previews_pre_timeout_locked_prepare_qc(
+        &self,
+        certificate: &wire::QuorumCertificate,
+        target: PreTimeoutLockedPrepareQcTargetV1,
+    ) -> bool {
+        self.pre_timeout_locked_prepare_qc_stages_lock_and_commit(certificate, target)
+    }
+    fn command_previews_pre_timeout_locked_prepare_qc(
+        &self,
+        command: &Self::Command,
+        target: PreTimeoutLockedPrepareQcTargetV1,
+    ) -> bool {
+        matches!(
+            command,
+            AdapterCommand::Authenticated(authenticated)
+                if matches!(
+                    authenticated.payload(),
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)
+                        if self.pre_timeout_locked_prepare_qc_stages_lock_and_commit(
+                            certificate,
+                            target,
+                        )
+                )
+        )
     }
     fn pacemaker_escape_is_parked(&self) -> bool {
         SumeragiV2Adapter::pacemaker_escape_is_parked(self)
@@ -9847,28 +10092,35 @@ impl RuntimeDriver for SumeragiV2Adapter {
             AdapterEffect::StoreBody { round, subject, .. }
             | AdapterEffect::ValidateBody { round, subject, .. } => {
                 match self
-                    .replayed_decision_key()
+                    .replayed_body_authority_certificate()
                     .map_err(|error| error.to_string())?
                 {
-                    Some((decision_round, proposal_round, decision_subject, commitment))
-                        if *round == proposal_round && *subject == decision_subject =>
+                    Some(certificate)
+                        if *round == certificate.proposal_round
+                            && *subject == certificate.subject =>
                     {
-                        let decision_statement = RuntimeCandidateSemanticStatement::new(
-                            decision_round,
-                            proposal_round,
-                            Some(decision_subject),
-                            Some(wire::GlobalPhase::Commit),
-                            Some(commitment),
+                        let authority_statement = RuntimeCandidateSemanticStatement::new(
+                            certificate.round,
+                            certificate.proposal_round,
+                            Some(certificate.subject),
+                            Some(certificate.phase),
+                            Some(certificate.execution_commitment),
                         );
                         if inherited.is_some_and(|parent| {
-                            parent.commit_refinement_to(decision_statement).is_none()
+                            !matches!(
+                                parent.fetch_authority_relation_to(authority_statement),
+                                Some(
+                                    RuntimeFetchAuthorityRelation::Same
+                                        | RuntimeFetchAuthorityRelation::Upgrade
+                                )
+                            )
                         }) {
                             return Err(
-                                "Sumeragi v2 durable Decision body recovery conflicted with its causal authority"
+                                "Sumeragi v2 durable body recovery conflicted with its causal authority"
                                     .to_owned(),
                             );
                         }
-                        Some(decision_statement)
+                        Some(authority_statement)
                     }
                     Some(_) | None => inherited.copied(),
                 }
@@ -9990,7 +10242,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
             | AdapterEffect::ReportInvalidCertifiedBody { .. } => None,
         }
     }
-    #[cfg(test)]
     fn wire_ingress_may_use_progress(&self, payload: &wire::ConsensusMessageV2Payload) -> bool {
         SumeragiV2Adapter::wire_ingress_may_use_progress(self, payload)
     }
@@ -10237,6 +10488,21 @@ enum RuntimeTimeoutVoteEpisodeDisposition {
     PreCutDescent,
     RestoredDescent,
     FreshReplenishment,
+}
+/// Binding between one TimeoutVote's authenticated signer and its immutable
+/// fair-ingress semantic origin.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RuntimeTimeoutVoteOriginBinding {
+    NotApplicable,
+    Exact,
+    /// Authentication must reject this wire before reducer admission.
+    UnauthenticatedSignerIndex,
+    /// The inner signature is valid, but another peer relayed it as its own
+    /// semantic protocol message.
+    Mismatch {
+        signer: u32,
+        semantic_origin: iroha_data_model::peer::PeerId,
+    },
 }
 /// Immutable owner retained for one roster source in a timeout-recovery
 /// episode.
@@ -10913,6 +11179,99 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         self.ingress_physical_cut = physical_cut;
         Ok(())
+    }
+    /// Freeze the already-due timeout owner and mint one fixed-cut
+    /// unchanged-lock PrepareQC scan authority.
+    ///
+    /// `None` does not defer the timeout: it means either the deadline is not
+    /// due or the reducer has no exact current validated unchanged-lock target
+    /// which can immediately stage `LockAndCommit`.
+    pub(crate) fn freeze_pre_timeout_locked_prepare_qc_cut(
+        &mut self,
+        now: Instant,
+    ) -> Result<Option<PreTimeoutLockedPrepareQcCutV1>, String> {
+        if self.fail_closed {
+            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
+        }
+        if self.last_scheduler_ownership.is_some()
+            || self.pending_effect_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            self.latch_fail_closed("pre-timeout PrepareQC cut overtook retained runtime ownership");
+            return Err("Sumeragi v2 pre-timeout cut ownership was invalid".to_owned());
+        }
+        if !self.clocks_armed {
+            return Ok(None);
+        }
+        self.freeze_due_clock_owners(now).map_err(|error| {
+            self.latch_fail_closed("pre-timeout PrepareQC cut could not freeze clock ownership");
+            error.to_string()
+        })?;
+        let arbitration = self.scheduler_arbitration_inputs(now).map_err(|error| {
+            self.latch_fail_closed("pre-timeout PrepareQC cut arbitration was invalid");
+            error.to_string()
+        })?;
+        if !arbitration.timeout_due {
+            return Ok(None);
+        }
+        let Some(target) = self.driver.pre_timeout_locked_prepare_qc_target() else {
+            return Ok(None);
+        };
+        let Some(timeout_owner) = self.timeout_owner.clone() else {
+            self.latch_fail_closed("due pre-timeout PrepareQC cut lost its timeout owner");
+            return Err("Sumeragi v2 due timeout owner was missing".to_owned());
+        };
+        let Some(physical_cut) = self.timeout_owner_physical_cut else {
+            self.latch_fail_closed("due pre-timeout PrepareQC cut lost its physical cut");
+            return Err("Sumeragi v2 due timeout physical cut was missing".to_owned());
+        };
+        if !target.validate_exact(self.round_tag)
+            || physical_cut == 0
+            || physical_cut > self.ingress_physical_cut
+        {
+            self.latch_fail_closed("pre-timeout PrepareQC target or physical cut was invalid");
+            return Err("Sumeragi v2 pre-timeout PrepareQC target was invalid".to_owned());
+        }
+        Ok(Some(PreTimeoutLockedPrepareQcCutV1 {
+            tag: self.round_tag,
+            physical_cut,
+            timeout_owner,
+            target,
+        }))
+    }
+    fn pre_timeout_locked_prepare_qc_cut_is_current(
+        &self,
+        cut: &PreTimeoutLockedPrepareQcCutV1,
+    ) -> bool {
+        !self.fail_closed
+            && self.clocks_armed
+            && !self.timeout_emitted
+            && cut.tag == self.round_tag
+            && cut.physical_cut != 0
+            && cut.physical_cut <= self.ingress_physical_cut
+            && self.timeout_owner.as_ref() == Some(&cut.timeout_owner)
+            && self.timeout_owner_physical_cut == Some(cut.physical_cut)
+            && cut.target.validate_exact(cut.tag)
+            && self.driver.pre_timeout_locked_prepare_qc_target() == Some(cut.target)
+    }
+    /// Deep-preview a fair-ingress wire against one current fixed-cut target.
+    /// This method is read-only and does not authenticate ownership; the
+    /// caller must retain the ordinary fair-ingress dequeue handoff before
+    /// enqueueing the selected envelope.
+    pub(crate) fn wire_previews_pre_timeout_locked_prepare_qc(
+        &self,
+        cut: &PreTimeoutLockedPrepareQcCutV1,
+        payload: &wire::ConsensusMessageV2Payload,
+    ) -> bool {
+        self.pre_timeout_locked_prepare_qc_cut_is_current(cut)
+            && matches!(
+                payload,
+                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)
+                    if self.driver.wire_previews_pre_timeout_locked_prepare_qc(
+                        certificate,
+                        cut.target,
+                    )
+            )
     }
     fn validate_clock_owner_physical_cuts(&self) -> Result<(), EnqueueError> {
         let timeout_is_paired =
@@ -12869,6 +13228,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             completion_ready,
             progress_ready,
             normal_ready,
+            pre_timeout_locked_prepare_qc_physical_cut: None,
             fence_completion_bypass: false,
             fence_dependency_minimum_lifecycle_ordinal: None,
             fence_dependency_minimum_admission_ordinal: None,
@@ -12918,6 +13278,8 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             completion_ready: arbitration.completion_ready,
             progress_ready: arbitration.progress_ready,
             normal_ready: arbitration.normal_ready,
+            pre_timeout_locked_prepare_qc_physical_cut: arbitration
+                .pre_timeout_locked_prepare_qc_physical_cut,
             fence_completion_bypass: arbitration.fence_completion_bypass,
             fence_dependency_minimum_lifecycle_ordinal: arbitration
                 .fence_dependency_minimum_lifecycle_ordinal,
@@ -13360,6 +13722,154 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(RuntimeStep::Advanced(effects))
     }
+    /// Dispatch at most one already-admitted exact unchanged-lock PrepareQC
+    /// ahead of its frozen, already-due timeout occurrence.
+    ///
+    /// Absence consumes no scheduler owner. A selected command must be direct
+    /// authenticated Progress ingress, physically older than the cut, and
+    /// must still deep-preview as one immediate `LockAndCommit` append in the
+    /// current adapter state. Retry, Busy-deferred retention, or a post-cut
+    /// carrier is a contract violation rather than additional grace.
+    pub(crate) fn try_step_pre_timeout_locked_prepare_qc(
+        &mut self,
+        now: Instant,
+        cut: &PreTimeoutLockedPrepareQcCutV1,
+    ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
+        if self.fail_closed {
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.last_scheduler_ownership.is_some()
+            || self.pending_effect_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            self.latch_fail_closed(
+                "pre-timeout PrepareQC dispatch overtook retained runtime ownership",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.reconcile_fence_retry_blocked_fifo_owners().is_err() {
+            self.latch_fail_closed("pre-timeout PrepareQC retry ownership was invalid");
+            return Err(RuntimeError::FailClosed);
+        }
+        if !self.pre_timeout_locked_prepare_qc_cut_is_current(cut) {
+            return Ok(None);
+        }
+        let timeout_due = self
+            .scheduler_arbitration_inputs(now)
+            .map_err(|_| {
+                self.latch_fail_closed("pre-timeout PrepareQC arbitration was invalid");
+                RuntimeError::FailClosed
+            })?
+            .timeout_due;
+        if !timeout_due {
+            return Ok(None);
+        }
+        let selected_round_tag = self.round_tag;
+        let schedule = self.schedule;
+        let queue_before = self.ingress.ownership_snapshot();
+        let physical_cut = cut.physical_cut;
+        let target = cut.target;
+        let driver = &self.driver;
+        let selected = self
+            .ingress
+            .pop_pacemaker_progress_with_ownership(
+                |queued| {
+                    queued.class == CommandClass::Progress
+                        && queued.identity.kind == RuntimeCommandKind::Authenticated
+                        && queued.ingress_ownership.is_some()
+                        && queued
+                            .causal_origin
+                            .root_ingress_physical_ownership
+                            .is_some_and(|physical| {
+                                u128::from(physical.source_ordinal) < physical_cut
+                            })
+                        && driver
+                            .command_previews_pre_timeout_locked_prepare_qc(&queued.command, target)
+                },
+                |_| false,
+                Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
+            )
+            .map_err(|_| {
+                self.latch_fail_closed("pre-timeout PrepareQC selection lost exact ownership");
+                RuntimeError::FailClosed
+            })?;
+        let Some((command, candidate)) = selected else {
+            return Ok(None);
+        };
+        if candidate.selection_seal.kind != RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc
+            || !self
+                .driver
+                .command_previews_pre_timeout_locked_prepare_qc(&command.command, target)
+        {
+            self.latch_fail_closed("selected pre-timeout PrepareQC changed after queue transfer");
+            return Err(RuntimeError::FailClosed);
+        }
+        let owner = match command.lifecycle_owner() {
+            Ok(owner)
+                if owner.lifecycle_ordinal() == candidate.lifecycle_ordinal
+                    && owner.causal_origin() == &candidate.causal_origin
+                    && owner.causal_origin().root_class == SERVICE_CLASS_PROGRESS =>
+            {
+                owner
+            }
+            Ok(_) | Err(_) => {
+                self.latch_fail_closed("pre-timeout PrepareQC changed its causal Progress root");
+                return Err(RuntimeError::FailClosed);
+            }
+        };
+        let parent_statement = command.candidate_semantic_statement;
+        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) =
+            match self.driver.dispatch(command) {
+                Ok(dispatch) => self.accept_driver_dispatch(
+                    dispatch,
+                    &owner,
+                    parent_statement,
+                    RuntimeDispatchIngress::DirectAuthenticated,
+                )?,
+                Err(error) => return Err(self.close(error)),
+            };
+        if retry_unadmitted || retained_deferred_ingress {
+            self.latch_fail_closed(
+                "pre-timeout PrepareQC preview became retryable or adapter-deferred",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        let mut arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
+            self.latch_fail_closed("pre-timeout PrepareQC scheduler ownership was invalid");
+            RuntimeError::FailClosed
+        })?;
+        if !arbitration.timeout_due {
+            self.latch_fail_closed("pre-timeout PrepareQC dispatch lost the due timeout owner");
+            return Err(RuntimeError::FailClosed);
+        }
+        arbitration.periodic_timer_due = false;
+        arbitration.fifo_ready = false;
+        arbitration.completion_ready = false;
+        arbitration.progress_ready = false;
+        arbitration.normal_ready = false;
+        arbitration.pre_timeout_locked_prepare_qc_physical_cut = Some(physical_cut);
+        let queue_after = self.ingress.ownership_snapshot();
+        self.retain_scheduler_ownership(
+            RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc,
+            selected_round_tag,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+            queue_before,
+            queue_after,
+            arbitration,
+            schedule,
+            schedule,
+        )?;
+        self.finish_dispatched_step(
+            now,
+            effects,
+            RuntimeEffectSource::Fifo,
+            owner,
+            parent_statement,
+            producer_handoff,
+            retained_deferred_ingress,
+        )
+        .map(Some)
+    }
     /// Try one typed pacemaker/control turn without admitting ordinary work.
     ///
     /// A due absolute timeout is emitted first. Otherwise only a deeply
@@ -13459,6 +13969,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                                 .command_is_blocked_by_deferred_fence(queued.tag, &queued.command))
                 },
                 |command| driver.certified_progress_bypasses_signature_fence(command),
+                None,
             )
             .map_err(|_| {
                 self.latch_fail_closed("pacemaker Progress selection lost exact ownership");
@@ -14534,6 +15045,22 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         };
         class.is_none_or(|class| self.ingress.check_capacity(class).is_ok())
     }
+    /// Return whether one raw network payload can become an authenticated
+    /// pacemaker Progress root.
+    ///
+    /// QCs, TCs, and TimeoutVotes have a closed wire-level Progress class. A
+    /// Vote joins that class only as an exact historical Commit for the
+    /// durable lock or an exact current Prepare for a locally bound
+    /// unchanged-lock reproposal. The caller must still run ordinary
+    /// authentication and exact ownership admission before enqueueing the
+    /// occurrence.
+    pub(crate) fn wire_ingress_may_use_pacemaker_progress(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+    ) -> bool {
+        matches!(network_command_class(payload), Some(CommandClass::Progress))
+            || self.driver.wire_ingress_may_use_progress(payload)
+    }
     /// Tag of the view which owns the absolute clocks.
     pub(crate) const fn round_tag(&self) -> EventTag {
         self.round_tag
@@ -14854,6 +15381,55 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.driver
             .prepare_lifecycle_decision_apply_completion(authority)
     }
+    /// Validate the process-local TimeoutVote token independently of the
+    /// remote signer/origin binding.
+    ///
+    /// Token geometry is local integrity evidence and remains fail-closed. An
+    /// invalid or mismatched wire signer is remote authentication input: the
+    /// read-only fair selector may drain it so the authenticated admission
+    /// seam can reject it and retire the exact volatile lifecycle owner.
+    fn timeout_vote_origin_binding(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+        token: Option<&FairV2IngressLeaderWireToken>,
+    ) -> Result<RuntimeTimeoutVoteOriginBinding, EnqueueError> {
+        let wire::ConsensusMessageV2Payload::TimeoutVote(vote) = payload else {
+            return Ok(RuntimeTimeoutVoteOriginBinding::NotApplicable);
+        };
+        let token = token.ok_or(EnqueueError::FailClosed)?;
+        let context = self.driver.wire_context();
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        if !token.validate_exact(
+            context.id(),
+            context.height,
+            &roster,
+            context.da_layout.max_chunk_count,
+        ) || token.identity.phase != FairV2IngressLeaderWirePhase::TimeoutVote
+            || token.identity.context_id != vote.round.context_id
+            || token.identity.height != vote.round.height
+            || token.identity.view != vote.round.view
+            || token.identity.subject_hash != iroha_crypto::Hash::new([])
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let Ok(signer_index) = usize::try_from(vote.signer) else {
+            return Ok(RuntimeTimeoutVoteOriginBinding::UnauthenticatedSignerIndex);
+        };
+        let Some(signer) = context.roster.get(signer_index) else {
+            return Ok(RuntimeTimeoutVoteOriginBinding::UnauthenticatedSignerIndex);
+        };
+        if token.identity.semantic_origin != signer.validator {
+            return Ok(RuntimeTimeoutVoteOriginBinding::Mismatch {
+                signer: vote.signer,
+                semantic_origin: token.identity.semantic_origin.clone(),
+            });
+        }
+        Ok(RuntimeTimeoutVoteOriginBinding::Exact)
+    }
     fn timeout_vote_recovery_candidate_from_fair(
         &self,
         payload: &wire::ConsensusMessageV2Payload,
@@ -14903,9 +15479,9 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         token: &FairV2IngressLeaderWireToken,
         physical_ordinal: u64,
     ) -> Result<Option<RuntimeTimeoutVoteEpisodeCandidate>, EnqueueError> {
-        let wire::ConsensusMessageV2Payload::TimeoutVote(vote) = payload else {
+        if !matches!(payload, wire::ConsensusMessageV2Payload::TimeoutVote(_)) {
             return Ok(None);
-        };
+        }
         let context = self.driver.wire_context();
         if !wire_payload_matches_current_strict_timeout_recovery_round(
             payload,
@@ -14927,28 +15503,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         if episode.pre_frozen_retransmit.is_some() {
             return Ok(None);
         }
-        let roster = context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<BTreeSet<_>>();
-        let signer_index = usize::try_from(vote.signer).map_err(|_| EnqueueError::FailClosed)?;
-        let signer = context
-            .roster
-            .get(signer_index)
-            .ok_or(EnqueueError::FailClosed)?;
-        if !token.validate_exact(
-            context.id(),
-            context.height,
-            &roster,
-            context.da_layout.max_chunk_count,
-        ) || token.identity.phase != FairV2IngressLeaderWirePhase::TimeoutVote
-            || token.identity.context_id != vote.round.context_id
-            || token.identity.height != vote.round.height
-            || token.identity.view != vote.round.view
-            || token.identity.subject_hash != iroha_crypto::Hash::new([])
-            || token.identity.semantic_origin != signer.validator
-            || token.slot.semantic_origin != signer.validator
+        if self.timeout_vote_origin_binding(payload, Some(token))?
+            != RuntimeTimeoutVoteOriginBinding::Exact
         {
             return Err(EnqueueError::FailClosed);
         }
@@ -15170,7 +15726,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
             _ => {
                 self.latch_fail_closed(
-                    "coalesced body completion changed its exact lifecycle owner",
+                    "coalesced body completion changed its serialized storage owner census",
                 );
                 return Err(EnqueueError::FailClosed);
             }
@@ -15202,9 +15758,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             RuntimeFetchAuthorityRelation::Same => None,
             RuntimeFetchAuthorityRelation::Stale => {
                 if retained_owner != *ownership.owner() {
-                    self.latch_fail_closed(
-                        "coalesced body completion changed its exact lifecycle owner",
-                    );
+                    self.latch_fail_closed(format!(
+                        "coalesced body completion changed its exact lifecycle owner: tag={tag:?}; candidate={candidate:?}; target={target:?}; retained_owner={retained_owner:?}; incoming_owner={:?}; retained_statement={retained_statement:?}; incoming_statement={incoming_statement:?}",
+                        ownership.owner(),
+                    ));
                     return Err(EnqueueError::FailClosed);
                 }
                 None
@@ -15738,6 +16295,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     ) -> Result<super::v2::LocalProposalDirective, AdapterError> {
         self.driver.local_proposal_directive()
     }
+    /// Return the exact highest Prepare reference reconstructed by safety-WAL replay.
+    pub(crate) fn replayed_highest_prepare_certificate_ref(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificateRef>, AdapterError> {
+        self.driver.replayed_highest_prepare_certificate_ref()
+    }
     /// Return the exact Decision key reconstructed by safety-WAL replay.
     pub(crate) fn replayed_decision_key(
         &self,
@@ -15844,6 +16407,36 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         // clone here avoids publishing a runtime terminal obligation for an
         // authentication or capacity rejection.
         let leader_wire_registration = ingress_ownership.clone();
+        let timeout_vote_origin_binding = if matches!(
+            &message.payload,
+            wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        ) {
+            let token = match ingress_ownership.leader_wire_token() {
+                Ok(token) => token,
+                Err(_) => {
+                    self.latch_fail_closed(
+                        "TimeoutVote ingress had conflicting leader-wire token ownership",
+                    );
+                    return Err(NetworkIngressError::FailClosed);
+                }
+            };
+            match self.timeout_vote_origin_binding(&message.payload, token) {
+                Ok(binding) => binding,
+                Err(_) => {
+                    self.latch_fail_closed(
+                        "TimeoutVote ingress changed its exact local token geometry",
+                    );
+                    return Err(NetworkIngressError::FailClosed);
+                }
+            }
+        } else {
+            RuntimeTimeoutVoteOriginBinding::NotApplicable
+        };
+        let may_be_remote_timeout_vote_rejection = matches!(
+            &timeout_vote_origin_binding,
+            RuntimeTimeoutVoteOriginBinding::Mismatch { .. }
+                | RuntimeTimeoutVoteOriginBinding::UnauthenticatedSignerIndex
+        );
         let default_class = classify_reducer_network_ingress(self.fail_closed, &message.payload)?;
         let deferred_owner = self.driver.deferred_authenticated_message_owner(&message);
         if let wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) = &message.payload {
@@ -15861,12 +16454,15 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         // so it can release its ingress occurrence. An exact Busy-deferred
         // aggregate certificate may likewise spend authentication work without
         // claiming a second queue slot. Otherwise, only the adapter's exact
-        // active-lock match may proceed after the normal prefix fills.
-        // Authentication below remains mandatory before either form of
-        // coalescing.
+        // active-lock match may proceed after the normal prefix fills. One
+        // finite roster-owned TimeoutVote carrier whose signer/origin binding
+        // is structurally rejectable may also spend authentication work so it
+        // cannot pin fair ingress behind a full Progress prefix.
+        // Authentication below remains mandatory before coalescing or remote
+        // rejection.
         let may_be_exact_locked_commit =
             self.driver.wire_ingress_may_use_progress(&message.payload);
-        if deferred_owner.is_none() {
+        if deferred_owner.is_none() && !may_be_remote_timeout_vote_rejection {
             self.ingress
                 .check_authenticated_wire_capacity_with_ownership(
                     &message,
@@ -15884,6 +16480,58 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
             Err(error) => return Err(NetworkIngressError::Authentication(error)),
         };
+        let authenticated_timeout_vote_origin_binding = if matches!(
+            authenticated.payload(),
+            wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        ) {
+            let token = match ingress_ownership.leader_wire_token() {
+                Ok(token) => token,
+                Err(_) => {
+                    self.latch_fail_closed(
+                        "authentication changed TimeoutVote leader-wire token ownership",
+                    );
+                    return Err(NetworkIngressError::FailClosed);
+                }
+            };
+            match self.timeout_vote_origin_binding(authenticated.payload(), token) {
+                Ok(binding) => binding,
+                Err(_) => {
+                    self.latch_fail_closed(
+                        "authentication changed TimeoutVote local token geometry",
+                    );
+                    return Err(NetworkIngressError::FailClosed);
+                }
+            }
+        } else {
+            RuntimeTimeoutVoteOriginBinding::NotApplicable
+        };
+        if authenticated_timeout_vote_origin_binding != timeout_vote_origin_binding {
+            self.latch_fail_closed(
+                "network authentication changed the TimeoutVote signer/origin binding",
+            );
+            return Err(NetworkIngressError::FailClosed);
+        }
+        match authenticated_timeout_vote_origin_binding {
+            RuntimeTimeoutVoteOriginBinding::NotApplicable
+            | RuntimeTimeoutVoteOriginBinding::Exact => {}
+            RuntimeTimeoutVoteOriginBinding::Mismatch {
+                signer,
+                semantic_origin,
+            } => {
+                return Err(NetworkIngressError::Authentication(
+                    AdapterError::AuthenticatedTimeoutVoteOriginMismatch {
+                        signer,
+                        semantic_origin,
+                    },
+                ));
+            }
+            RuntimeTimeoutVoteOriginBinding::UnauthenticatedSignerIndex => {
+                self.latch_fail_closed(
+                    "network authentication accepted an out-of-roster TimeoutVote signer",
+                );
+                return Err(NetworkIngressError::FailClosed);
+            }
+        }
         let authenticated_deferred_owner = self
             .driver
             .deferred_authenticated_message_owner(authenticated.wire_envelope());
@@ -16182,6 +16830,19 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         if self.fail_closed {
             return Some(false);
+        }
+        match self.timeout_vote_origin_binding(&runtime_message.payload, Some(token)) {
+            Ok(RuntimeTimeoutVoteOriginBinding::Mismatch { .. })
+            | Ok(RuntimeTimeoutVoteOriginBinding::UnauthenticatedSignerIndex) => {
+                // Remote signer/origin failures must reach authentication and
+                // volatile terminalization instead of pinning a fair lane.
+                return Some(true);
+            }
+            Ok(RuntimeTimeoutVoteOriginBinding::NotApplicable)
+            | Ok(RuntimeTimeoutVoteOriginBinding::Exact) => {}
+            // Local token corruption likewise drains only so the mutating
+            // seam can latch the precise fail-closed invariant.
+            Err(_) => return Some(true),
         }
         if let Some((round, _)) = self
             .driver
@@ -17442,7 +18103,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
 }
 include!("v2_runtime/network_ingress_classification.rs");
 #[cfg(test)]
-mod tests {
+pub(in crate::sumeragi) mod tests {
     include!("tests/v2_runtime_pending_binding_cases.rs");
     include!("tests/v2_runtime_main_00.rs");
     include!("tests/v2_runtime_main_01.rs");
