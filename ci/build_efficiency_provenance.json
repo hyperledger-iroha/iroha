@@ -57,15 +57,15 @@
       "tree": "f7c0a5b889dffc76f5aec821bc35cd20472178d4"
     },
     "signed_lock_anchor": {
-      "commit": "010d466eab6c85e914101b2c0155ca4e04d1e311",
+      "commit": "47e3a7f03dff4f695c1edf69da3d5cbbc815cd4a",
       "parents": [
-        "f40ab17c5118fc22b2b16bff9129dadc9351dfb4"
+        "81c1aeef9b950ce2932f65231474886b5b936cd1"
       ],
       "rust": {
         "lines": 5312342,
         "paths": 4849
       },
-      "tree": "6c275cdadd0d202f5f90bd7448a2564a62d8abaf"
+      "tree": "af124d235ed3ed8982d022b6c85f1ff74237a6a3"
     },
     "source_budget_baseline": {
       "commit": "cd05eebfc07c9742734b9d684394c4fe89cdb7c5",

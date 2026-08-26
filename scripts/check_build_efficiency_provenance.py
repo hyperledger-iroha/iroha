@@ -36,7 +36,7 @@ REQUIRED_ROLE_IDS = {
     "donor": "d130c985b46ff8beb99c20b25b36bbdeb506e4c9",
     "source_budget_baseline": "cd05eebfc07c9742734b9d684394c4fe89cdb7c5",
     "protected_integration": "d248cbd127b0188282b761c85239a62c0c4c3d80",
-    "signed_lock_anchor": "010d466eab6c85e914101b2c0155ca4e04d1e311",
+    "signed_lock_anchor": "47e3a7f03dff4f695c1edf69da3d5cbbc815cd4a",
 }
 REQUIRED_ANCESTRY = (
     ("implementation_origin", "donor"),
