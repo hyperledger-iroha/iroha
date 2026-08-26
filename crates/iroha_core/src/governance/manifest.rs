@@ -3,6 +3,7 @@
 //! These helpers validate that lanes which advertise a governance module in the
 //! Nexus catalog have a manifest available on disk and threads the parsed rules
 //! into runtime enforcement (queue admission, governance telemetry, etc.).
+use crate::secure_file_metadata::{self, SecureMetadata};
 use hex::decode;
 use iroha_config::parameters::actual::{
     GovernanceCatalog, GovernanceModule as ConfigGovernanceModule, LaneRegistry,
@@ -1574,7 +1575,7 @@ impl LaneManifestRegistry {
         Ok(())
     }
     fn read_bounded_regular_file(path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
-        let path_metadata = fs::symlink_metadata(path)?;
+        let path_metadata = secure_file_metadata::from_path(path)?;
         if path_metadata.file_type().is_symlink() || !path_metadata.file_type().is_file() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -1604,7 +1605,7 @@ impl LaneManifestRegistry {
             options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         }
         let mut file = options.open(path)?;
-        let opened_metadata = file.metadata()?;
+        let opened_metadata = secure_file_metadata::from_file(&file)?;
         if !opened_metadata.file_type().is_file()
             || opened_metadata.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX)
         {
@@ -1634,7 +1635,7 @@ impl LaneManifestRegistry {
                 format!("source exceeds bounded read limit {max_bytes}"),
             ));
         }
-        let final_metadata = file.metadata()?;
+        let final_metadata = secure_file_metadata::from_file(&file)?;
         if !Self::manifest_file_metadata_matches(&opened_metadata, &final_metadata)
             || final_metadata.len() != u64::try_from(raw.len()).unwrap_or(u64::MAX)
         {
@@ -1646,13 +1647,12 @@ impl LaneManifestRegistry {
         Ok(raw)
     }
     #[cfg(unix)]
-    fn manifest_file_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    fn manifest_file_metadata_matches(left: &SecureMetadata, right: &SecureMetadata) -> bool {
         use std::os::unix::fs::MetadataExt as _;
         left.dev() == right.dev() && left.ino() == right.ino() && left.len() == right.len()
     }
     #[cfg(windows)]
-    fn manifest_file_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-        use std::os::windows::fs::MetadataExt as _;
+    fn manifest_file_metadata_matches(left: &SecureMetadata, right: &SecureMetadata) -> bool {
         left.file_type().is_file()
             && right.file_type().is_file()
             && left.volume_serial_number().is_some()
@@ -1662,7 +1662,7 @@ impl LaneManifestRegistry {
             && left.len() == right.len()
     }
     #[cfg(not(any(unix, windows)))]
-    fn manifest_file_metadata_matches(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    fn manifest_file_metadata_matches(_left: &SecureMetadata, _right: &SecureMetadata) -> bool {
         false
     }
     /// Build the registry from one frozen scan of the provided source configuration.

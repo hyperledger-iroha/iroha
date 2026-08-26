@@ -7814,7 +7814,7 @@
             "type": "string"
           },
           "wire_id": {
-            "const": "iroha_data_model::isi::governance::ProposeDeployContract",
+            "const": "iroha.instruction.v1::governance::ProposeDeployContract",
             "description": "Exact registered ProposeDeployContract instruction wire identifier.",
             "type": "string"
           }
@@ -14713,6 +14713,7 @@
           },
           "notes": {
             "description": "Free-form notes accompanying the latest health report.",
+            "maxLength": 512,
             "type": "string"
           },
           "relay": {
@@ -14787,6 +14788,7 @@
             "items": {
               "$ref": "#/components/schemas/KaigiRelayDomainMetrics"
             },
+            "maxItems": 500,
             "type": "array"
           },
           "failovers_total": {
@@ -14841,7 +14843,7 @@
           "bandwidth_class": {
             "description": "Advertised bandwidth class (relative scale; larger values indicate higher capacity).",
             "maximum": 255,
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "domain": {
@@ -14849,7 +14851,10 @@
             "type": "string"
           },
           "hpke_fingerprint_hex": {
-            "description": "Hex-encoded BLAKE3 fingerprint of the relay's HPKE public key.",
+            "description": "Lowercase hex-encoded Iroha marked Blake2b-32 fingerprint of the relay's HPKE public key.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
           "relay_id": {
@@ -14857,7 +14862,7 @@
             "type": "string"
           },
           "reported_at_ms": {
-            "description": "Milliseconds since UNIX epoch of the latest health report.",
+            "description": "Milliseconds since UNIX epoch of the latest health report; present exactly when status is present.",
             "format": "uint64",
             "type": "integer"
           },
@@ -14867,7 +14872,7 @@
                 "$ref": "#/components/schemas/KaigiRelayStatus"
               }
             ],
-            "description": "Latest health status when available."
+            "description": "Latest health status; present exactly when reported_at_ms is present."
           }
         },
         "required": [
@@ -14886,11 +14891,13 @@
             "items": {
               "$ref": "#/components/schemas/KaigiRelaySummary"
             },
+            "maxItems": 500,
             "type": "array"
           },
           "total": {
-            "description": "Total number of relay entries returned.",
+            "description": "Total number of relay entries returned; equals the items array length on every successful response.",
             "format": "uint64",
+            "maximum": 500,
             "type": "integer"
           }
         },
@@ -30585,7 +30592,7 @@
             "type": "string"
           },
           "wire_id": {
-            "const": "iroha_data_model::isi::governance::ProposeSccpRouteGovernance",
+            "const": "iroha.instruction.v1::governance::ProposeSccpRouteGovernance",
             "description": "Exact registered ProposeSccpRouteGovernance instruction wire identifier.",
             "type": "string"
           }
@@ -62173,6 +62180,44 @@
       "get": {
         "description": "Returns relay identifiers, domains, bandwidth classes, HPKE fingerprints, and the freshest health report (if available).",
         "operationId": "kaigiRelaysList",
+        "parameters": [
+          {
+            "description": "Iroha multihash public key of the canonical request signer.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Public-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Timestamp-Ms",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, empty-body hash, timestamp, and nonce.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -62209,7 +62254,7 @@
         "tags": [
           "Kaigi"
         ],
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/kaigi/relays/events": {
@@ -62255,16 +62300,6 @@
               }
             },
             "description": "Relay telemetry events stream."
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Telemetry profile does not permit relay telemetry."
           }
         },
         "summary": "Subscribe to Kaigi relay telemetry events (SSE).",
@@ -62278,6 +62313,44 @@
       "get": {
         "description": "Returns totals for healthy/degraded/unavailable relays along with registrations, failovers, and per-domain counters.",
         "operationId": "kaigiRelayHealth",
+        "parameters": [
+          {
+            "description": "Iroha multihash public key of the canonical request signer.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Public-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Timestamp-Ms",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, empty-body hash, timestamp, and nonce.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -62314,7 +62387,7 @@
         "tags": [
           "Kaigi"
         ],
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/kaigi/relays/{relay_id}": {
@@ -62326,6 +62399,42 @@
             "description": "Relay account identifier encoded as a canonical I105 account literal or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
             "in": "path",
             "name": "relay_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Iroha multihash public key of the canonical request signer.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Public-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Timestamp-Ms",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, empty-body hash, timestamp, and nonce.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Signature",
             "required": true,
             "schema": {
               "type": "string"
@@ -62398,7 +62507,7 @@
         "tags": [
           "Kaigi"
         ],
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/ledger/block/{height}": {

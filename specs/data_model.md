@@ -172,6 +172,12 @@ the first release does not decode superseded data-model layouts.
   consensus transition that derives both lifecycle inactivity and an exact zero
   reference count from the same frozen state; no caller-supplied approximation is
   accepted.
+- Account, asset-definition, and containing-domain unregistration scans the
+  typed validation-fee index for retained `Enacted` proposal kinds, not only the
+  active-policy projection. Every policy treasury/DS reference and every payout
+  treasury, pool-vault, recipient, DS, and XOR reference therefore remains pinned
+  during pre-activation and after lifecycle drain. Containing-domain teardown
+  matches its complete definition set in one proposal-index pass.
 
 ## Blocks
 

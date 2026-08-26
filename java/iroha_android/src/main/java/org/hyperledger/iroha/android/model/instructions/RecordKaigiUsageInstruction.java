@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -26,7 +27,7 @@ public final class RecordKaigiUsageInstruction implements InstructionTemplate {
     this.billedGas = builder.billedGas;
     this.usageCommitment = builder.usageCommitment;
     this.proofBase64 = builder.proofBase64;
-    this.arguments = Map.copyOf(argumentOrder);
+    this.arguments = Collections.unmodifiableMap(new LinkedHashMap<>(argumentOrder));
   }
 
   public KaigiInstructionUtils.CallId callId() {
@@ -60,6 +61,7 @@ public final class RecordKaigiUsageInstruction implements InstructionTemplate {
   }
 
   public static RecordKaigiUsageInstruction fromArguments(final Map<String, String> arguments) {
+    KaigiInstructionUtils.requireAction(arguments, ACTION);
     final Builder builder = builder();
     builder.setCallId(KaigiInstructionUtils.parseCallId(arguments, "call"));
     builder.setDurationMs(
@@ -117,7 +119,7 @@ public final class RecordKaigiUsageInstruction implements InstructionTemplate {
     }
 
     public Builder setDurationMs(final long durationMs) {
-      if (durationMs <= 0) {
+      if (durationMs == 0) {
         throw new IllegalArgumentException("durationMs must be greater than zero");
       }
       this.durationMs = durationMs;
@@ -125,9 +127,6 @@ public final class RecordKaigiUsageInstruction implements InstructionTemplate {
     }
 
     public Builder setBilledGas(final long billedGas) {
-      if (billedGas < 0) {
-        throw new IllegalArgumentException("billedGas must be non-negative");
-      }
       this.billedGas = billedGas;
       return this;
     }
@@ -162,11 +161,8 @@ public final class RecordKaigiUsageInstruction implements InstructionTemplate {
       if (callId == null) {
         throw new IllegalStateException("callId must be provided");
       }
-      if (durationMs <= 0) {
+      if (durationMs == 0) {
         throw new IllegalStateException("durationMs must be set and positive");
-      }
-      if (billedGas < 0) {
-        throw new IllegalStateException("billedGas must be non-negative");
       }
       return new RecordKaigiUsageInstruction(this);
     }

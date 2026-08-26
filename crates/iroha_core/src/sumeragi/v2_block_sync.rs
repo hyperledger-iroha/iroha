@@ -42,6 +42,7 @@ use crate::kura::Kura;
 use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{NetworkId, block::consensus_v2 as wire, peer::PeerId};
+use norito::codec::Encode as _;
 use std::{
     collections::{BTreeMap, VecDeque},
     num::NonZeroUsize,
@@ -101,7 +102,9 @@ pub(crate) struct V2BlockSyncDiscovery {
 /// transport responses, never consensus state; evicted clients retransmit the
 /// same exact request. A serving-key rotation invalidates an old cached
 /// response before reuse so the signed identity always matches the current
-/// authenticated outer peer.
+/// authenticated outer peer. Historical body responses are bounded by both
+/// entry count and aggregate canonical wire bytes; a response larger than the
+/// cache byte ceiling is still served, but is not retained.
 pub(crate) struct V2BlockSyncServer {
     network_id: NetworkId,
     capacity: usize,
@@ -111,10 +114,26 @@ pub(crate) struct V2BlockSyncServer {
     body_responses: BTreeMap<HashOf<wire::CertifiedBodyRequest>, CachedHistoricalBodyResponse>,
     body_identities: BTreeMap<HistoricalBodyRequestIdentity, HashOf<wire::CertifiedBodyRequest>>,
     body_order: VecDeque<HashOf<wire::CertifiedBodyRequest>>,
+    body_response_byte_capacity: usize,
+    body_response_bytes: usize,
 }
 impl V2BlockSyncServer {
     /// Construct an empty bounded server for one exact network identity.
     pub(crate) fn new(network_id: NetworkId, capacity: usize) -> Result<Self, V2BlockSyncError> {
+        // Bound persistent history-response retention independently of the
+        // ingress byte queues while leaving oversized responses serviceable.
+        let body_response_byte_capacity = usize::try_from(wire::MAX_DA_ENCODED_PAYLOAD_BYTES)?;
+        Self::new_with_body_response_byte_capacity(
+            network_id,
+            capacity,
+            body_response_byte_capacity,
+        )
+    }
+    fn new_with_body_response_byte_capacity(
+        network_id: NetworkId,
+        capacity: usize,
+        body_response_byte_capacity: usize,
+    ) -> Result<Self, V2BlockSyncError> {
         if capacity == 0 {
             return Err(V2TransportError::ZeroCapacity.into());
         }
@@ -127,6 +146,8 @@ impl V2BlockSyncServer {
             body_responses: BTreeMap::new(),
             body_identities: BTreeMap::new(),
             body_order: VecDeque::new(),
+            body_response_byte_capacity,
+            body_response_bytes: 0,
         })
     }
     /// Authenticate and answer one exact request from canonical Kura history.
@@ -196,7 +217,7 @@ impl V2BlockSyncServer {
             if cached.responder == responder {
                 return Ok(Some(cached.message.clone()));
             }
-            self.remove_body(request_hash);
+            self.remove_body(request_hash)?;
         }
         let identity = HistoricalBodyRequestIdentity::from(&request);
         if let Some(existing) = self.body_identities.get(&identity) {
@@ -208,21 +229,36 @@ impl V2BlockSyncServer {
         let Some(response) = build(&request)? else {
             return Ok(None);
         };
-        while self.body_responses.len() >= self.capacity {
+        let response_bytes = response.encoded_len();
+        if response_bytes > self.body_response_byte_capacity {
+            return Ok(Some(response));
+        }
+        while self.body_responses.len() >= self.capacity
+            || self
+                .body_response_bytes
+                .checked_add(response_bytes)
+                .is_none_or(|retained| retained > self.body_response_byte_capacity)
+        {
             let Some(oldest) = self.body_order.pop_front() else {
                 return Err(V2BlockSyncError::CorruptServerCache);
             };
-            self.remove_body(oldest);
+            self.remove_body(oldest)?;
         }
+        let retained_bytes = self
+            .body_response_bytes
+            .checked_add(response_bytes)
+            .ok_or(V2BlockSyncError::CorruptServerCache)?;
         self.body_responses.insert(
             request_hash,
             CachedHistoricalBodyResponse {
                 responder,
                 message: response.clone(),
+                retained_bytes: response_bytes,
             },
         );
         self.body_identities.insert(identity, request_hash);
         self.body_order.push_back(request_hash);
+        self.body_response_bytes = retained_bytes;
         Ok(Some(response))
     }
     fn serve_with<Build>(
@@ -290,12 +326,22 @@ impl V2BlockSyncServer {
             .retain(|_, hash| *hash != response.request_hash);
         self.order.retain(|hash| *hash != request_hash);
     }
-    fn remove_body(&mut self, request_hash: HashOf<wire::CertifiedBodyRequest>) {
-        if self.body_responses.remove(&request_hash).is_none() {
-            return;
-        }
+    fn remove_body(
+        &mut self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+    ) -> Result<(), V2BlockSyncError> {
+        let Some(cached) = self.body_responses.get(&request_hash) else {
+            return Ok(());
+        };
+        let remaining_bytes = self
+            .body_response_bytes
+            .checked_sub(cached.retained_bytes)
+            .ok_or(V2BlockSyncError::CorruptServerCache)?;
+        self.body_responses.remove(&request_hash);
         self.body_identities.retain(|_, hash| *hash != request_hash);
         self.body_order.retain(|hash| *hash != request_hash);
+        self.body_response_bytes = remaining_bytes;
+        Ok(())
     }
     #[cfg(test)]
     fn len(&self) -> usize {
@@ -305,11 +351,16 @@ impl V2BlockSyncServer {
     fn body_len(&self) -> usize {
         self.body_responses.len()
     }
+    #[cfg(test)]
+    fn body_response_bytes(&self) -> usize {
+        self.body_response_bytes
+    }
 }
 #[derive(Clone, Debug)]
 struct CachedHistoricalBodyResponse {
     responder: PeerId,
     message: wire::ConsensusMessageV2,
+    retained_bytes: usize,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct HistoricalBodyRequestIdentity {
@@ -968,6 +1019,32 @@ pub(super) mod tests {
             .payload()
             .to_vec();
     }
+    fn body_cache_response(
+        fixture: &Fixture,
+        request: &wire::CertifiedBodyRequest,
+    ) -> wire::ConsensusMessageV2 {
+        let body = b"historical canonical body".to_vec();
+        assert_eq!(Hash::new(&body), request.subject.payload_hash);
+        let encoded = encode_payload(&fixture.context, request.round, request.subject, &body)
+            .expect("encode cache-test body");
+        let (manifest, _) = encoded.into_parts();
+        let mut response = wire::CertifiedBodyResponse {
+            request_hash: HashOf::new(request),
+            manifest,
+            body,
+            responder: 0,
+            signature: Vec::new(),
+        };
+        response.signature = Signature::new(
+            fixture.old_validators[0].private_key(),
+            &response.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::CertifiedBodyResponse(
+            response,
+        ))
+    }
     /// Exact historical source and responses shared with worker rollover tests.
     pub(in crate::sumeragi) struct DurableHistoryFixture {
         /// Kura containing the canonical block and finality artifact.
@@ -1545,6 +1622,119 @@ pub(super) mod tests {
             ))
         ));
         assert_eq!(server.body_len(), 0);
+    }
+    #[test]
+    fn oversized_historical_body_response_is_served_without_caching() {
+        let fixture = Fixture::new();
+        let request = fixture.body_request(fixture.artifact.commit_qc.clone());
+        let response = body_cache_response(&fixture, &request);
+        let response_bytes = response.encoded_len();
+        let mut server = V2BlockSyncServer::new_with_body_response_byte_capacity(
+            fixture.context.network_id,
+            2,
+            response_bytes.checked_sub(1).expect("non-empty response"),
+        )
+        .expect("byte-bounded body server");
+        let builds = Cell::new(0_u32);
+        for expected_builds in 1..=2 {
+            let served = server
+                .serve_historical_body_with(
+                    request.clone(),
+                    &peer(&fixture.requester),
+                    &fixture.old_validators[0],
+                    |_| {
+                        builds.set(builds.get() + 1);
+                        Ok(Some(response.clone()))
+                    },
+                )
+                .expect("oversized response remains serviceable")
+                .expect("builder supplied a response");
+            assert_eq!(served, response);
+            assert_eq!(builds.get(), expected_builds);
+            assert_eq!(server.body_len(), 0);
+            assert_eq!(server.body_response_bytes(), 0);
+        }
+    }
+    #[test]
+    fn historical_body_response_cache_evicts_to_aggregate_byte_cap() {
+        let fixture = Fixture::new();
+        let first_request = fixture.body_request(fixture.artifact.commit_qc.clone());
+        let second_requester = key(92);
+        let mut second_request = first_request.clone();
+        second_request.requester = peer(&second_requester);
+        second_request.signature = Signature::new(
+            second_requester.private_key(),
+            &second_request.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let first_response = body_cache_response(&fixture, &first_request);
+        let second_response = body_cache_response(&fixture, &second_request);
+        let first_bytes = first_response.encoded_len();
+        let second_bytes = second_response.encoded_len();
+        let byte_capacity = first_bytes.max(second_bytes);
+        let mut server = V2BlockSyncServer::new_with_body_response_byte_capacity(
+            fixture.context.network_id,
+            2,
+            byte_capacity,
+        )
+        .expect("byte-bounded body server");
+        let first = server
+            .serve_historical_body_with(
+                first_request.clone(),
+                &peer(&fixture.requester),
+                &fixture.old_validators[0],
+                |_| Ok(Some(first_response.clone())),
+            )
+            .expect("serve first response")
+            .expect("first response exists");
+        assert_eq!(first, first_response);
+        assert_eq!(server.body_len(), 1);
+        assert_eq!(server.body_response_bytes(), first_bytes);
+        let replay = server
+            .serve_historical_body_with(
+                first_request.clone(),
+                &peer(&fixture.requester),
+                &fixture.old_validators[0],
+                |_| -> Result<_, V2BlockSyncError> {
+                    panic!("an exact cache hit must not rebuild the response")
+                },
+            )
+            .expect("serve cached response")
+            .expect("cached response exists");
+        assert_eq!(replay, first_response);
+        assert_eq!(server.body_response_bytes(), first_bytes);
+        let second = server
+            .serve_historical_body_with(
+                second_request,
+                &peer(&second_requester),
+                &fixture.old_validators[0],
+                |_| Ok(Some(second_response.clone())),
+            )
+            .expect("serve second response")
+            .expect("second response exists");
+        assert_eq!(second, second_response);
+        assert_eq!(server.body_len(), 1);
+        assert_eq!(server.body_response_bytes(), second_bytes);
+        assert!(server.body_response_bytes() <= byte_capacity);
+        let rebuilt = Cell::new(false);
+        let first_again = server
+            .serve_historical_body_with(
+                first_request,
+                &peer(&fixture.requester),
+                &fixture.old_validators[0],
+                |_| {
+                    rebuilt.set(true);
+                    Ok(Some(first_response.clone()))
+                },
+            )
+            .expect("serve evicted first response")
+            .expect("rebuilt response exists");
+        assert!(rebuilt.get());
+        assert_eq!(first_again, first_response);
+        assert_eq!(server.body_len(), 1);
+        assert_eq!(server.body_response_bytes(), first_bytes);
+        assert!(server.body_response_bytes() <= byte_capacity);
     }
     #[test]
     fn authenticated_prepare_qc_serves_only_exact_finalized_kura_body() {

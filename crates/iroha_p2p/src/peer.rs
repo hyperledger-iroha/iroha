@@ -15,7 +15,7 @@ use iroha_crypto::soranet::{
     handshake::{
         HarnessError, RelayAuthenticationSignerV1, RelayAuthenticationVerifierV1, RuntimeParams,
         build_client_hello, client_handle_relay_hello, parse_capabilities, process_client_hello,
-        validate_client_capability_vector,
+        validate_client_capability_vector, validate_runtime_configuration,
     },
     pow::{
         self, ChallengeBinding as PowBinding, Parameters as PowParameters, Ticket as PowTicket,
@@ -298,6 +298,29 @@ impl SoranetHandshakeConfig {
         // to the client's canonical nondecreasing-order rule.
         parse_capabilities(&relay_capabilities).map_err(|error| {
             Error::HandshakeSoranet(format!("invalid SoraNet relay capability vector: {error}"))
+        })?;
+        validate_runtime_configuration(&RuntimeParams {
+            descriptor_commit: &descriptor_commit,
+            client_capabilities: &client_capabilities,
+            relay_capabilities: &relay_capabilities,
+            kem_id,
+            sig_id,
+            transport_alpn: b"iroha-p2p/1",
+            tls_server_name: "iroha-quic",
+            resume_hash: resume_hash.as_deref(),
+        })
+        .map_err(|error| {
+            let detail = match error {
+                HarnessError::Downgrade { warnings, .. } => warnings
+                    .into_iter()
+                    .map(|warning| warning.message)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+                other => other.to_string(),
+            };
+            Error::HandshakeSoranet(format!(
+                "invalid SoraNet runtime handshake configuration: {detail}"
+            ))
         })?;
         if signed_ticket_public_key.is_some() {
             return Err(Error::HandshakeSoranet(

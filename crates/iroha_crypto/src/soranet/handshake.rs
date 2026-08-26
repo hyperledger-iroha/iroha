@@ -3834,6 +3834,44 @@ impl RuntimeParams<'_> {
         }
     }
 }
+
+/// Validate one complete runtime handshake configuration before it is installed.
+///
+/// This preflight checks the fixed-width transcript fields, capability syntax,
+/// selected KEM/signature advertisement, suite negotiation, and the mandatory
+/// relay descriptor commitment. It is intended for configuration loaders so a
+/// permanently incompatible policy fails at startup instead of after transport
+/// establishment.
+///
+/// # Errors
+/// Returns an error when any runtime field is malformed, capability negotiation
+/// would abort, or `snnet.transcript_commit` does not match
+/// [`RuntimeParams::descriptor_commit`].
+pub fn validate_runtime_configuration(params: &RuntimeParams<'_>) -> Result<(), HarnessError> {
+    validate_runtime_params(params)?;
+    verify_capabilities_alignment(
+        params.kem_id,
+        params.sig_id,
+        params.client_capabilities,
+        params.relay_capabilities,
+    )?;
+    let relay_capabilities = parse_capabilities(params.relay_capabilities)?;
+    let advertised_descriptor = relay_capabilities
+        .iter()
+        .find(|capability| capability.ty == CAPABILITY_TRANSCRIPT_COMMIT)
+        .ok_or_else(|| {
+            HarnessError::Validation(
+                "relay capability vector must advertise snnet.transcript_commit".to_owned(),
+            )
+        })?;
+    if advertised_descriptor.value.as_slice() != params.descriptor_commit {
+        return Err(HarnessError::Validation(
+            "relay snnet.transcript_commit does not match the configured descriptor commitment"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
 /// Shared handshake outcome containing the derived session key and metadata.
 pub struct SessionSecrets {
     /// Session key derived from the hybrid handshake via transcript-bound HKDF.

@@ -429,7 +429,7 @@ and that Torii forwarded the lineage hint SoraNS used.
 #### Dashboards & alerts
 
 Alias rotation metrics now surface in Grafana via
-`dashboards/grafana/taikai_viewer.json`. Use the new **Alias rotations (5m)** panel
+`dashboards/grafana/taikai_viewer.json`. Use the new **Alias rotations (last 5m)** panel
 and the `event`/`alias` variables to watch for unexpected spikes or stale
 windows. The panel plots `increase(taikai_trm_alias_rotations_total[5m])`
 grouped by alias so operators can verify that new TRMs land at the cadence

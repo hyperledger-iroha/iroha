@@ -8402,7 +8402,7 @@ final class ToriiClientTests: XCTestCase {
                             },
                             "variant":"Asset"
                         },
-                        "wire_id":"iroha_data_model::isi::mint_burn::MintBox"
+"wire_id":"iroha.instruction.v1::mint_burn::MintBox"
                     }
                 },
                 "transaction_hash":"9bca4ad18474058cbbad5bbc49e5e11cf58d90fc28b094ac8f8963a5116fdff5",
@@ -8489,7 +8489,7 @@ final class ToriiClientTests: XCTestCase {
                             },
                             "variant":"Asset"
                         },
-                        "wire_id":"iroha_data_model::isi::mint_burn::BurnBox"
+                        "wire_id":"iroha.instruction.v1::mint_burn::BurnBox"
                     }
                 },
                 "transaction_hash":"burn_hash_1",
@@ -13296,7 +13296,7 @@ final class ToriiClientHeaderTests: XCTestCase {
 
     private func canonicalVerifyingKeyTransactionPayload(
         wireName: String =
-            "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
+            "iroha.instruction.v1::verifying_keys::RegisterVerifyingKey",
         networkId: NetworkId = TestNetworkIds.canonical,
         domainOverride: Data? = nil,
         authority: String =
@@ -14372,7 +14372,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             (
                 "wrong operation",
                 canonicalVerifyingKeyTransactionPayload(
-                    wireName: "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey"
+                    wireName: "iroha.instruction.v1::verifying_keys::UpdateVerifyingKey"
                 ),
                 "requested registry operation"
             ),
@@ -14970,7 +14970,7 @@ final class ToriiClientHeaderTests: XCTestCase {
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let payload = self.canonicalVerifyingKeyTransactionPayload(
-                wireName: "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
+                wireName: "iroha.instruction.v1::verifying_keys::UpdateVerifyingKey",
                 version: 2,
                 circuitId: "halo2/ipa::transfer_v2",
                 schemaHash: Data(repeating: 0xff, count: 32),
@@ -14984,7 +14984,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         XCTAssertEqual(
             draft.transactionPayload,
             canonicalVerifyingKeyTransactionPayload(
-                wireName: "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
+                wireName: "iroha.instruction.v1::verifying_keys::UpdateVerifyingKey",
                 version: 2,
                 circuitId: "halo2/ipa::transfer_v2",
                 schemaHash: Data(repeating: 0xff, count: 32),
@@ -20692,7 +20692,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let payload = """
-            {"proposal_id":"\(proposalId)","tx_instructions":[{"wire_id":"iroha_data_model::isi::governance::ProposeDeployContract","payload_hex":"00ff"}]}
+            {"proposal_id":"\(proposalId)","tx_instructions":[{"wire_id":"iroha.instruction.v1::governance::ProposeDeployContract","payload_hex":"00ff"}]}
             """.data(using: .utf8)!
             return (response, payload)
         }
@@ -20710,7 +20710,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 XCTAssertEqual(response.proposalId, proposalId)
                 XCTAssertEqual(
                     response.txInstructions.first?.wireId,
-                    "iroha_data_model::isi::governance::ProposeDeployContract"
+                    "iroha.instruction.v1::governance::ProposeDeployContract"
                 )
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
@@ -20772,7 +20772,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let proposalId = String(repeating: "3", count: 64)
         let legacy = Data(
             """
-            {"ok":true,"proposal_id":"\(proposalId)","tx_instructions":[{"wire_id":"iroha_data_model::isi::governance::ProposeDeployContract","payload_hex":"00ff"}]}
+            {"ok":true,"proposal_id":"\(proposalId)","tx_instructions":[{"wire_id":"iroha.instruction.v1::governance::ProposeDeployContract","payload_hex":"00ff"}]}
             """.utf8
         )
         XCTAssertThrowsError(
@@ -20785,7 +20785,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         for instructions in [
             "[]",
             "[{\"wire_id\":\"ProposeDeployContract\",\"payload_hex\":\"00ff\"}]",
-            "[{\"wire_id\":\"iroha_data_model::isi::governance::ProposeDeployContract\",\"payload_hex\":\"00ff\"},{\"wire_id\":\"iroha_data_model::isi::governance::ProposeDeployContract\",\"payload_hex\":\"00ff\"}]",
+            "[{\"wire_id\":\"iroha.instruction.v1::governance::ProposeDeployContract\",\"payload_hex\":\"00ff\"},{\"wire_id\":\"iroha.instruction.v1::governance::ProposeDeployContract\",\"payload_hex\":\"00ff\"}]",
         ] {
             let data = Data(
                 """

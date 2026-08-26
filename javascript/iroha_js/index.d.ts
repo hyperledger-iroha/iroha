@@ -7923,7 +7923,18 @@ export interface JoinKaigiInput {
   proof?: ArrayBufferView | ArrayBuffer | Buffer | string | null;
 }
 
-export interface LeaveKaigiInput extends JoinKaigiInput {}
+export interface LeaveKaigiInput {
+  callId: KaigiIdLike;
+  participant: string;
+  /** Privacy-mode departure is off-chain only in V1. */
+  commitment?: null;
+  /** Privacy-mode departure is off-chain only in V1. */
+  nullifier?: null;
+  /** Privacy-mode departure is off-chain only in V1. */
+  rosterRoot?: null;
+  /** Privacy-mode departure is off-chain only in V1. */
+  proof?: null;
+}
 
 export interface EndKaigiInput {
   callId: KaigiIdLike;

@@ -52,6 +52,7 @@ pub fn runtime_from_handshake(
         puzzle,
         signed_ticket_public_key,
     } = pow;
+    validate_revocation_window(max_future_skew, revocation_max_ttl)?;
     validate_puzzle_work_capacities(outbound_mint_capacity, inbound_verify_capacity)?;
     let puzzle_work_admission =
         process_wide_admission(outbound_mint_capacity, inbound_verify_capacity)
@@ -128,6 +129,18 @@ pub fn runtime_from_handshake(
     Ok(Arc::new(config))
 }
 
+fn validate_revocation_window(
+    max_future_skew: std::time::Duration,
+    revocation_max_ttl: std::time::Duration,
+) -> Result<(), Error> {
+    if revocation_max_ttl < max_future_skew {
+        return Err(Error::HandshakeSoranet(format!(
+            "invalid soranet revocation configuration: revocation_store_ttl {revocation_max_ttl:?} must cover max_future_skew {max_future_skew:?}"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_puzzle_work_capacities(
     outbound_mint_capacity: NonZeroUsize,
     inbound_verify_capacity: NonZeroUsize,
@@ -165,6 +178,23 @@ mod tests {
     use soranet_pq::generate_mldsa_keypair_from_os;
 
     use super::*;
+
+    #[test]
+    fn revocation_window_must_cover_every_accepted_ticket() {
+        let max_future_skew = std::time::Duration::from_secs(300);
+        let error =
+            validate_revocation_window(max_future_skew, std::time::Duration::from_secs(299))
+                .expect_err(
+                    "a store that cannot retain every accepted ticket must fail at startup",
+                );
+        assert!(matches!(
+            error,
+            Error::HandshakeSoranet(message)
+                if message.contains("revocation_store_ttl 299s must cover max_future_skew 300s")
+        ));
+        validate_revocation_window(max_future_skew, max_future_skew)
+            .expect("an equal revocation and acceptance window is sufficient");
+    }
 
     #[test]
     fn signed_ticket_public_key_rejects_inert_material() {

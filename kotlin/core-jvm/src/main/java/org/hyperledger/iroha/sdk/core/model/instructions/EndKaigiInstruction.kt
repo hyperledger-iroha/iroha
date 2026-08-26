@@ -15,14 +15,14 @@ class EndKaigiInstruction(
 ) : InstructionTemplate {
 
     init {
-        if (endedAtMs != null) {
-            require(endedAtMs >= 0) { "endedAtMs must be non-negative" }
-        }
         require(commitmentAliasTag == null) {
             "commitment aliasTag is off-chain only and must be omitted"
         }
         require(nullifierIssuedAtMs == null || nullifierIssuedAtMs == 0L) {
             "nullifier issuedAtMs is off-chain only and must be zero when provided"
+        }
+        require(nullifierIssuedAtMs == null || nullifierDigest != null) {
+            "nullifier issuedAtMs requires nullifier digest"
         }
         if (proofBase64 != null) {
             KaigiInstructionUtils.requireBase64(proofBase64, "proof")
@@ -82,6 +82,7 @@ class EndKaigiInstruction(
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): EndKaigiInstruction {
+            KaigiInstructionUtils.requireAction(arguments, ACTION)
             val callId = KaigiInstructionUtils.parseCallId(arguments, "call")
             val ended = KaigiInstructionUtils.parseOptionalUnsignedLong(
                 arguments["ended_at_ms"],
@@ -97,6 +98,9 @@ class EndKaigiInstruction(
             )
             require(parsedNullifierIssuedAt == null || parsedNullifierIssuedAt == 0L) {
                 "nullifier issuedAtMs is off-chain only and must be zero when provided"
+            }
+            require(parsedNullifierIssuedAt == null || nullifier != null) {
+                "nullifier issuedAtMs requires nullifier digest"
             }
             val nullifierIssuedAt = parsedNullifierIssuedAt.takeIf { nullifier != null }
             return EndKaigiInstruction(

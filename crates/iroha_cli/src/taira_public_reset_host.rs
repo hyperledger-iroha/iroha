@@ -15,7 +15,9 @@ use iroha::{
     client::{
         AccountFaucetPreparedTransactionV1, AccountOnboardingPlanReceiptV1,
         AccountOnboardingPreparedTransactionV1, AccountOnboardingProofRequiredPrepareResponseV1,
-        TairaPublicResetMutationBindingV1, verify_account_onboarding_proof_required_result_v1,
+        TairaPublicResetMutationBindingV1, verify_account_faucet_prepared_transaction_v1,
+        verify_account_onboarding_prepared_transaction_v1,
+        verify_account_onboarding_proof_required_result_v1,
     },
     config::{Config as ClientConfig, LoadPath},
     data_model::{
@@ -1156,6 +1158,16 @@ fn validate_prepared_mutation_envelope(
         .wrap_err("failed to encode the canonical prepared mutation network identity")?;
     let expected_genesis_hash = hex::decode(&admitted.inventory.next_genesis_hash)
         .wrap_err("signed inventory next genesis hash is invalid")?;
+    let canary_authority_literal = admitted
+        .inventory
+        .canary_onboarding_request
+        .account_id
+        .as_str();
+    let canary_authority = AccountId::parse_encoded(canary_authority_literal)
+        .wrap_err("signed canary authority is not canonical")?;
+    if canary_authority.to_string() != canary_authority_literal {
+        return Err(eyre!("signed canary authority is not canonical"));
+    }
     if root.get("schema").and_then(norito::json::Value::as_str)
         != Some("iroha.taira.prepared-mutation-envelope.v1")
         || root
@@ -1167,13 +1179,7 @@ fn validate_prepared_mutation_envelope(
         || canonical_network_id != *network_id_value
         || network_id.as_bytes().as_slice() != expected_genesis_hash.as_slice()
         || root.get("authority").and_then(norito::json::Value::as_str)
-            != Some(
-                admitted
-                    .inventory
-                    .canary_onboarding_request
-                    .account_id
-                    .as_str(),
-            )
+            != Some(canary_authority_literal)
     {
         return Err(eyre!(
             "prepared mutation envelope differs from the signed public Taira canary identity"
@@ -1262,7 +1268,7 @@ fn validate_prepared_mutation_envelope(
             "prepared mutation operation tag or label does not match its child kind"
         ));
     }
-    if is_inrou {
+    let inrou_stage = if is_inrou {
         let stage = root
             .get("stage")
             .and_then(norito::json::Value::as_object)
@@ -1320,7 +1326,24 @@ fn validate_prepared_mutation_envelope(
                 ));
             }
         }
-    }
+        Some(crate::soracloud::TairaInrouStageIdentity {
+            service_name: canary.service_name.clone(),
+            service_version: canary.service_version.clone(),
+            route_host: canary.route_host.clone(),
+            route_path_prefix: canary.route_path_prefix.clone(),
+            healthcheck_path: canary.healthcheck_path.clone(),
+            stage_mode: "deploy".to_owned(),
+            bundle_hash: canary.bundle_hash.clone(),
+            bundle_content_cid: canary.bundle_content_cid.clone(),
+            bundle_manifest_digest_hex: canary.bundle_manifest_digest_hex.clone(),
+            guest_content_cid: canary.guest_content_cid.clone(),
+            guest_manifest_digest_hex: canary.guest_manifest_digest_hex.clone(),
+            container_manifest_hash: canary.container_manifest_hash.clone(),
+            service_manifest_hash: canary.service_manifest_hash.clone(),
+        })
+    } else {
+        None
+    };
     match admitted.request.mutation_kind.as_str() {
         "onboarding" => {
             let prepared: AccountOnboardingPreparedTransactionV1 =
@@ -1340,6 +1363,16 @@ fn validate_prepared_mutation_envelope(
                 &prepared.semantic_hash_hex,
                 "prepared onboarding semantic hash",
             )?;
+            verify_account_onboarding_prepared_transaction_v1(
+                network_id.clone(),
+                &admitted.inventory.canary_onboarding_request,
+                &prepared,
+                &prepared.receipt,
+                exact_write_binding
+                    .as_ref()
+                    .expect("prepared onboarding uses a write binding"),
+            )
+            .wrap_err("prepared onboarding transaction authentication failed")?;
         }
         "faucet" => {
             let prepared: AccountFaucetPreparedTransactionV1 =
@@ -1356,6 +1389,20 @@ fn validate_prepared_mutation_envelope(
                 ));
             }
             require_lower_sha256(&prepared.semantic_hash_hex, "prepared faucet semantic hash")?;
+            if prepared.asset_definition_id != crate::taira::DEFAULT_GAS_ASSET_ID {
+                return Err(eyre!(
+                    "prepared faucet asset differs from the canonical Taira V1 fee asset"
+                ));
+            }
+            verify_account_faucet_prepared_transaction_v1(
+                network_id.clone(),
+                &prepared,
+                &prepared.claim,
+                exact_write_binding
+                    .as_ref()
+                    .expect("prepared faucet uses a write binding"),
+            )
+            .wrap_err("prepared faucet transaction authentication failed")?;
         }
         "write_canary" => {
             require_exact_json_fields(
@@ -1389,6 +1436,12 @@ fn validate_prepared_mutation_envelope(
                     .ok_or_else(|| eyre!("prepared final-canary omits its semantic hash"))?,
                 "prepared final-canary semantic hash",
             )?;
+            crate::taira::verify_final_canary_prepared_operation_v1(
+                &norito::json::Value::Object(operation_envelope.clone()),
+                &network_id,
+                &canary_authority,
+            )
+            .wrap_err("prepared final-canary transaction authentication failed")?;
         }
         "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_canary" => {
             require_exact_json_fields(
@@ -1419,6 +1472,9 @@ fn validate_prepared_mutation_envelope(
         .get("signed_transaction_wire_hex")
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("prepared mutation operation omits exact transaction wire"))?;
+    if wire_hex.len() > MAX_PREPARED_TRANSACTION_BYTES.saturating_mul(2) {
+        return Err(eyre!("prepared transaction wire is oversized"));
+    }
     let wire = hex::decode(wire_hex).wrap_err("prepared transaction wire is not lowercase hex")?;
     if hex::encode(&wire) != wire_hex
         || wire.is_empty()
@@ -1455,16 +1511,68 @@ fn validate_prepared_mutation_envelope(
             "prepared mutation transaction hash or canonical wire is invalid"
         ));
     }
+    if transaction.network_id() != Some(&network_id) {
+        return Err(eyre!(
+            "prepared mutation transaction network differs from the signed reset network"
+        ));
+    }
+    if (is_inrou || admitted.request.mutation_kind == "write_canary")
+        && transaction.authority() != &canary_authority
+    {
+        return Err(eyre!(
+            "prepared canary transaction authority differs from the signed reset authority"
+        ));
+    }
+    let creation_ms = u64::try_from(transaction.creation_time().as_millis())
+        .wrap_err("prepared mutation transaction creation time exceeds u64")?;
+    let ttl_ms = u64::try_from(
+        transaction
+            .time_to_live()
+            .ok_or_else(|| eyre!("prepared mutation transaction omits its required TTL"))?
+            .as_millis(),
+    )
+    .wrap_err("prepared mutation transaction TTL exceeds u64")?;
+    if creation_ms
+        .checked_add(ttl_ms)
+        .is_none_or(|expires| expires > execution_expiry)
+    {
+        return Err(eyre!(
+            "prepared mutation transaction lifetime exceeds the signed execution lease"
+        ));
+    }
+    transaction
+        .fee_payment_intent()
+        .validate()
+        .wrap_err("prepared mutation fee payment is invalid")?;
+    let signed_sponsor = transaction
+        .fee_payment_intent()
+        .sponsor_program()
+        .map(|(program, revision)| (program.to_string(), revision));
+    let inventory_fee_matches = match admitted.inventory.fee_intent.payer.as_str() {
+        "authority" => signed_sponsor.is_none(),
+        "sponsor" => signed_sponsor.as_ref().is_some_and(|(program, revision)| {
+            admitted.inventory.fee_intent.sponsor_program.as_deref() == Some(program.as_str())
+                && admitted.inventory.fee_intent.sponsor_program_revision == Some(*revision)
+        }),
+        _ => false,
+    };
+    if !inventory_fee_matches {
+        return Err(eyre!(
+            "prepared mutation fee payer differs from the signed reset inventory"
+        ));
+    }
     let binding_json = json::to_json(
         root.get("binding")
             .expect("binding was validated immediately above"),
     )?;
     let binding_name = Name::from_str("taira_public_reset_binding")?;
-    let committed_binding = transaction
+    let committed_binding_matches = transaction
         .metadata()
         .get(&binding_name)
-        .and_then(|value| value.try_into_any_norito::<String>().ok());
-    if committed_binding.as_deref() != Some(binding_json.as_str()) {
+        .map(iroha_primitives::json::Json::get)
+        .map(String::as_str)
+        == Some(binding_json.as_str());
+    if !committed_binding_matches {
         return Err(eyre!(
             "prepared transaction metadata does not bind its exact reset authorization"
         ));
@@ -1472,23 +1580,29 @@ fn validate_prepared_mutation_envelope(
     let fee_payment = operation_envelope
         .get("fee_payment")
         .ok_or_else(|| eyre!("prepared transaction omits its fee payment"))?;
-    let fee_quote_value = operation_envelope
-        .get("fee_quote")
-        .and_then(norito::json::Value::as_object)
-        .ok_or_else(|| eyre!("prepared transaction omits its fee quote"))?;
-    let fee_quote: FeeQuoteResponse =
-        json::from_value(norito::json::Value::Object(fee_quote_value.clone()))
-            .wrap_err("prepared transaction fee quote is not exact typed V1 JSON")?;
-    if json::to_value(transaction.fee_payment_intent())? != *fee_payment
-        || json::to_value(&fee_quote)? != norito::json::Value::Object(fee_quote_value.clone())
-        || json::to_value(&fee_quote.intent)? != *fee_payment
-    {
+    if json::to_value(transaction.fee_payment_intent())? != *fee_payment {
         return Err(eyre!(
-            "prepared transaction fee payment and quote differ from its signed wire"
+            "prepared transaction fee payment differs from its signed wire"
         ));
     }
+    if is_inrou || admitted.request.mutation_kind == "write_canary" {
+        let fee_quote_value = operation_envelope
+            .get("fee_quote")
+            .and_then(norito::json::Value::as_object)
+            .ok_or_else(|| eyre!("prepared transaction omits its fee quote"))?;
+        let fee_quote: FeeQuoteResponse =
+            json::from_value(norito::json::Value::Object(fee_quote_value.clone()))
+                .wrap_err("prepared transaction fee quote is not exact typed V1 JSON")?;
+        if json::to_value(&fee_quote)? != norito::json::Value::Object(fee_quote_value.clone())
+            || json::to_value(&fee_quote.intent)? != *fee_payment
+        {
+            return Err(eyre!(
+                "prepared transaction fee quote differs from its signed payment"
+            ));
+        }
+    }
     if is_inrou {
-        if transaction.metadata().len() != 7
+        if transaction.metadata().iter().count() != 8
             || transaction
                 .metadata()
                 .get(&Name::from_str("taira_public_reset_authorization_sha256")?)
@@ -1537,12 +1651,30 @@ fn validate_prepared_mutation_envelope(
                 "prepared Inrou transaction metadata is outside its exact V1 closure"
             ));
         }
+        let prepared_operation = match admitted.request.mutation_kind.as_str() {
+            "inrou_bundle_pin" => crate::soracloud::TairaInrouCanaryPreparedOperationV1::BundlePin,
+            "inrou_guest_pin" => crate::soracloud::TairaInrouCanaryPreparedOperationV1::GuestPin,
+            "inrou_canary" => {
+                crate::soracloud::TairaInrouCanaryPreparedOperationV1::ServiceMutation
+            }
+            _ => unreachable!("prepared Inrou child kind was closed above"),
+        };
+        crate::soracloud::verify_taira_inrou_prepared_transaction_identity_v1(
+            &transaction,
+            prepared_operation,
+            inrou_stage
+                .as_ref()
+                .expect("prepared Inrou stage identity was validated above"),
+            &admitted.request.mutation_idempotency_key,
+        )
+        .wrap_err("prepared Inrou transaction executable authentication failed")?;
     } else {
         let semantic = operation_envelope
             .get("semantic_hash_hex")
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("prepared write transaction omits its semantic hash"))?;
-        if transaction.metadata().len() != 3
+        let is_final_canary = admitted.request.mutation_kind == "write_canary";
+        if transaction.metadata().iter().count() != if is_final_canary { 5 } else { 3 }
             || transaction
                 .metadata()
                 .get(&Name::from_str("taira_prepared_operation")?)
@@ -1555,6 +1687,19 @@ fn validate_prepared_mutation_envelope(
                 .and_then(|value| value.try_into_any_norito::<String>().ok())
                 .as_deref()
                 != Some(semantic)
+            || (is_final_canary
+                && (transaction
+                    .metadata()
+                    .get(&Name::from_str("taira_canary")?)
+                    .and_then(|value| value.try_into_any_norito::<String>().ok())
+                    .as_deref()
+                    != Some("write-canary")
+                    || transaction
+                        .metadata()
+                        .get(&Name::from_str("taira_write_canary_idempotency_v1")?)
+                        .and_then(|value| value.try_into_any_norito::<String>().ok())
+                        .as_deref()
+                        != Some(admitted.request.mutation_idempotency_key.as_str())))
         {
             return Err(eyre!(
                 "prepared write transaction metadata is outside its exact V1 closure"
@@ -11473,6 +11618,13 @@ const PREPARED_INROU_SERVICE_APPLIED_REPORT_FIELDS: &[&str] = &[
     "replica_identities",
 ];
 
+const PREPARED_INROU_REJECTED_EVIDENCE: &[&str] = &[
+    "Rejected",
+    "Expired",
+    "ExecutionExpiredBeforeSubmit",
+    "SubmittedHashMismatch",
+];
+
 fn require_exact_json_fields(
     object: &norito::json::Map,
     expected: &[&str],
@@ -11656,7 +11808,14 @@ fn validate_prepared_report_envelope_bytes(
             ));
         }
     }
-    if transaction_hash.is_empty() {
+    if transaction_hash.is_empty()
+        && matches!(
+            object
+                .get("recovery_outcome")
+                .and_then(norito::json::Value::as_str),
+            Some("ProofRequired" | "Applied")
+        )
+    {
         let semantic = prepared_onboarding_proof_required_result(bytes)?.semantic_hash_hex;
         if object.get("evidence").and_then(norito::json::Value::as_str) != Some(semantic.as_str()) {
             return Err(eyre!(
@@ -11839,7 +11998,6 @@ fn validate_prepared_inrou_report(
         "Rejected",
         "Expired",
     ];
-    const REJECTED_EVIDENCE: &[&str] = &["Rejected", "Expired"];
     validate_common_report(
         value,
         "taira_inrou_canary",
@@ -11955,7 +12113,7 @@ fn validate_prepared_inrou_report(
         )?,
         "Rejected" if applied_height.is_none() => validate_report_evidence_token(
             evidence.ok_or_else(|| eyre!("Rejected Inrou report omits its evidence class"))?,
-            REJECTED_EVIDENCE,
+            PREPARED_INROU_REJECTED_EVIDENCE,
             "prepared Inrou Rejected evidence",
         )?,
         _ => {
@@ -12865,7 +13023,7 @@ fn verify_remote_reservation_receipt(
 mod tests {
     use super::*;
 
-    #[derive(clap::Parser)]
+    #[derive(Debug, clap::Parser)]
     struct HostProtocolProbe {
         #[command(flatten)]
         host: PublicResetHost,
@@ -13908,9 +14066,9 @@ mod tests {
     fn prepared_final_canary_report_requires_its_exact_operation_name() {
         let admitted = admitted_reset_fixture();
         let idempotency_key = "3".repeat(64);
-        let mut report = prepared_write_report_fixture(&admitted, "write_canary", &idempotency_key);
+        let canonical = prepared_write_report_fixture(&admitted, "write_canary", &idempotency_key);
         validate_prepared_write_report(
-            &report,
+            &canonical,
             &admitted,
             "pre_edge",
             "write_canary",
@@ -13919,6 +14077,24 @@ mod tests {
             None,
         )
         .expect("canonical final-canary report");
+        for field in PREPARED_FINAL_CANARY_REPORT_FIELDS {
+            let mut missing = canonical.clone();
+            missing
+                .as_object_mut()
+                .expect("final-canary report object")
+                .remove(*field);
+            validate_prepared_write_report(
+                &missing,
+                &admitted,
+                "pre_edge",
+                "write_canary",
+                &idempotency_key,
+                "Prepared",
+                None,
+            )
+            .expect_err("every final-canary report field is mandatory");
+        }
+        let mut report = canonical;
         report
             .as_object_mut()
             .expect("final-canary report object")
@@ -13994,6 +14170,22 @@ mod tests {
         }
         validate_report_evidence_token(&"R".repeat(33), &["Rejected", "Expired"], "rejection")
             .expect_err("unbounded evidence must fail");
+        for evidence in PREPARED_INROU_REJECTED_EVIDENCE {
+            validate_report_evidence_token(
+                evidence,
+                PREPARED_INROU_REJECTED_EVIDENCE,
+                "Inrou rejection",
+            )
+            .expect("producer-compatible Inrou rejection evidence");
+        }
+        for retired in ["execution_expired_before_submit", "submitted_hash_mismatch"] {
+            validate_report_evidence_token(
+                retired,
+                PREPARED_INROU_REJECTED_EVIDENCE,
+                "Inrou rejection",
+            )
+            .expect_err("retired Inrou rejection spelling must fail closed");
+        }
 
         let report = norito::json!({"status": "ok", "evidence": "Rejected"});
         let pretty = json::to_json_pretty(&report).expect("pretty report");
@@ -14132,6 +14324,26 @@ mod tests {
             .insert("legacy_routes".to_owned(), norito::json!([]));
         validate_doctor_report(&extra, public_root)
             .expect_err("unknown doctor report fields must fail closed");
+
+        let mut nonfinal_mcp = canonical.clone();
+        let mcp_get = nonfinal_mcp
+            .as_object_mut()
+            .and_then(|root| root.get_mut("checks"))
+            .and_then(norito::json::Value::as_array_mut)
+            .and_then(|checks| {
+                checks.iter_mut().find(|check| {
+                    check
+                        .as_object()
+                        .and_then(|check| check.get("name"))
+                        .and_then(norito::json::Value::as_str)
+                        == Some("mcp_get")
+                })
+            })
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("MCP GET doctor check");
+        mcp_get.insert("http_status".to_owned(), 204_u64.into());
+        validate_doctor_report(&nonfinal_mcp, public_root)
+            .expect_err("MCP GET must require exact HTTP 200");
 
         let mut substituted = canonical;
         substituted
@@ -14344,6 +14556,56 @@ mod tests {
             .into_bytes();
         bytes.push(b'\n');
         bytes
+    }
+
+    #[test]
+    fn retained_proof_required_pending_report_accepts_only_live_state_classes() {
+        let (host_admission, prepared, bytes, _, _) =
+            authenticated_proof_required_fixture("https://taira.sora.org");
+        let mut admitted = admitted_reset_fixture();
+        admitted.inventory = host_admission.inventory.clone();
+        admitted.inventory_sha256 = host_admission.inventory_sha256.clone();
+        admitted.authorization = host_admission.authorization.clone();
+        admitted.authorization_sha256 = host_admission.authorization_sha256.clone();
+        let retained = RetainedPreparedMutation {
+            state: "prepared".to_owned(),
+            bytes: bytes.clone(),
+            sha256: prepared.prepared_sha256.clone(),
+            transaction_hash: String::new(),
+        };
+        for evidence in ["OnboardingAliasConflict", "OnboardingStateAbsent"] {
+            let report = norito::json!({
+                "command": "taira_write_canary",
+                "status": "ok",
+                "public_root": (admitted.inventory.inrou_canary.public_root.clone()),
+                "checks": [],
+                "warnings": [],
+                "failures": [],
+                "authorization_sha256": (admitted.authorization_sha256.clone()),
+                "authorization_nonce": (admitted.inventory.authorization_nonce.clone()),
+                "mutation_kind": "onboarding",
+                "mutation_phase": (prepared.phase.clone()),
+                "idempotency_key": (prepared.idempotency_key.clone()),
+                "operation": "onboarding",
+                "transaction_hash_hex": null,
+                "prepared_envelope_sha256": (prepared.prepared_sha256.clone()),
+                "prepared_envelope_size": u64::try_from(bytes.len()).expect("bounded envelope"),
+                "recovery_outcome": "Pending",
+                "applied_block_height": null,
+                "evidence": evidence,
+                "execution_expires_at_unix_ms": admitted.authorization.claims.execution_expires_at_unix_ms,
+            });
+            validate_prepared_write_report(
+                &report,
+                &admitted,
+                &prepared.phase,
+                "onboarding",
+                &prepared.idempotency_key,
+                "Pending",
+                Some(&retained),
+            )
+            .expect("retained proof-required Pending state remains nonterminal");
+        }
     }
 
     fn proof_required_network_id(prepared: &PreparedMutationV1) -> NetworkId {

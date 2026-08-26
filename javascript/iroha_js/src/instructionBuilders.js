@@ -802,6 +802,37 @@ function asNonNegativeInteger(value, name) {
   fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
 }
 
+function asKaigiU64(value, name) {
+  const canonical = normalizeCanonicalU64(value, name);
+  const numeric = BigInt(canonical);
+  return numeric <= MAX_SAFE_INTEGER_BIGINT ? Number(numeric) : canonical;
+}
+
+function asPositiveKaigiU64(value, name) {
+  const normalized = asKaigiU64(value, name);
+  if (normalized === 0) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be greater than zero`,
+      name,
+    );
+  }
+  return normalized;
+}
+
+function asPositiveKaigiU32(value, name) {
+  const canonical = normalizeCanonicalU64(value, name);
+  const numeric = BigInt(canonical);
+  if (numeric === 0n || numeric > BigInt(UINT32_MAX)) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be an integer between 1 and ${UINT32_MAX}`,
+      name,
+    );
+  }
+  return Number(numeric);
+}
+
 function asByte(value, name) {
   const numeric = asNonNegativeInteger(value, name);
   if (numeric > 0xff) {
@@ -1851,7 +1882,7 @@ function normalizeKaigiRelayManifest(value, context) {
   }
   return {
     hops,
-    expiry_ms: asNonNegativeInteger(expiryMs, `${context}.expiryMs`),
+    expiry_ms: asKaigiU64(expiryMs, `${context}.expiryMs`),
   };
 }
 
@@ -2041,8 +2072,8 @@ function normalizeNewKaigi(options) {
     max_participants:
       maxParticipantsValue === undefined || maxParticipantsValue === null
         ? null
-        : asPositiveInteger(maxParticipantsValue, "call.maxParticipants"),
-    gas_rate_per_minute: asNonNegativeInteger(
+        : asPositiveKaigiU32(maxParticipantsValue, "call.maxParticipants"),
+    gas_rate_per_minute: asKaigiU64(
       gasRateValue,
       "call.gasRatePerMinute",
     ),
@@ -2050,7 +2081,7 @@ function normalizeNewKaigi(options) {
     scheduled_start_ms:
       scheduledStartValue === undefined || scheduledStartValue === null
         ? null
-        : asNonNegativeInteger(
+        : asKaigiU64(
             scheduledStartValue,
             "call.scheduledStartMs",
           ),
@@ -2103,7 +2134,7 @@ function normalizeJoinOrLeaveInput(type, options) {
   const source = assertPlainObject(options, type);
   const callId = source.call_id ?? source.callId ?? source.id;
   const participant = source.participant ?? source.accountId;
-  return {
+  const normalized = {
     call_id: normalizeKaigiId(callId, `${type}.callId`),
     participant: normalizeAccountId(
       participant,
@@ -2123,6 +2154,22 @@ function normalizeJoinOrLeaveInput(type, options) {
     ),
     proof: normalizeOptionalBase64(source.proof, `${type}.proof`),
   };
+  if (
+    type === "leaveKaigi" &&
+    (
+      normalized.commitment !== null ||
+      normalized.nullifier !== null ||
+      normalized.roster_root !== null ||
+      normalized.proof !== null
+    )
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "leaveKaigi privacy artifacts are reserved and must be omitted in V1",
+      "leaveKaigi",
+    );
+  }
+  return normalized;
 }
 
 function normalizeEndKaigiInput(options) {
@@ -2135,7 +2182,7 @@ function normalizeEndKaigiInput(options) {
     ended_at_ms:
       endedValue === null || endedValue === undefined
         ? null
-        : asNonNegativeInteger(endedValue, "endKaigi.endedAtMs"),
+        : asKaigiU64(endedValue, "endKaigi.endedAtMs"),
     commitment: normalizeKaigiParticipantCommitment(
       source.commitment,
       "endKaigi.commitment",
@@ -2157,11 +2204,11 @@ function normalizeKaigiUsageInput(options) {
   const callId = source.call_id ?? source.callId ?? source.id;
   return {
     call_id: normalizeKaigiId(callId, "recordKaigiUsage.callId"),
-    duration_ms: asPositiveInteger(
+    duration_ms: asPositiveKaigiU64(
       source.duration_ms ?? source.durationMs ?? source.duration,
       "recordKaigiUsage.durationMs",
     ),
-    billed_gas: asNonNegativeInteger(
+    billed_gas: asKaigiU64(
       source.billed_gas ?? source.billedGas ?? source.gas ?? 0,
       "recordKaigiUsage.billedGas",
     ),
@@ -2265,7 +2312,7 @@ function normalizeReportKaigiRelayHealthInput(options) {
       source.status,
       "reportKaigiRelayHealth.status",
     ),
-    reported_at_ms: asNonNegativeInteger(
+    reported_at_ms: asKaigiU64(
       source.reported_at_ms ?? source.reportedAtMs,
       "reportKaigiRelayHealth.reportedAtMs",
     ),

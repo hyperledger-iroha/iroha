@@ -304,6 +304,9 @@ swapping two otherwise valid identifiers is also a wire-contract failure.
 Registries are direction-separated: concrete Rust type names are internal
 encoding keys, while decoders accept only the registered frozen wire IDs. There
 is no type-name decode alias and no unregistered type-name encoding fallback.
+Instruction framing helpers also accept only canonical wire IDs. Instruction
+registrations reject a wire ID equal to any concrete type name, a concrete type
+name equal to any registered wire ID, duplicate types, and duplicate wire IDs.
 For queries, the built-in inventory is complete; an application registry may
 add only new concrete types with unique explicit IDs and may not re-register a
 built-in type under an alternate ID. New built-ins must add a unique identifier

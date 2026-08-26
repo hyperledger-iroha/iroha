@@ -519,11 +519,11 @@ mod tests {
         );
     }
     #[test]
-    fn rwa_instruction_box_registry_decodes_type_name_and_stable_id() {
+    fn rwa_instruction_box_registry_decodes_only_stable_id() {
         let registry = crate::isi::registry::default();
         assert_registry_decodes(
             &registry,
-            std::any::type_name::<RwaInstructionBox>(),
+            RwaInstructionBox::WIRE_ID,
             RwaInstructionBox::Register(RegisterRwa { rwa: new_rwa() }),
         );
         assert_registry_decodes(
@@ -536,5 +536,6 @@ mod tests {
                 destination: account(0xB2),
             }),
         );
+        assert!(!registry.contains(std::any::type_name::<RwaInstructionBox>()));
     }
 }

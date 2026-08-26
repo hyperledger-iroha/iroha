@@ -91,14 +91,6 @@ fn sample_peer_id(seed: u8) -> String {
         .expect("fixture seed derives Ed25519 peer keypair");
     PeerId::from(keypair.public_key().clone()).to_string()
 }
-fn sample_validator_execution_host(seed: u8) -> SoraRuntimeDeterministicValidatorHostV1 {
-    let validator_account_id = sample_account_id(seed);
-    SoraRuntimeDeterministicValidatorHostV1 {
-        lane_id: LaneId::SINGLE,
-        peer_id: PeerId::from(validator_account_id.expect_single_signatory().clone()).to_string(),
-        validator_account_id,
-    }
-}
 fn sample_ed25519_keypair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("fixture seed derives Ed25519 keypair")

@@ -1,5 +1,5 @@
 //! Tests for trait object instructions
-use iroha_data_model::{instruction_registry, isi::set_instruction_registry, prelude::*};
+use iroha_data_model::{instruction_registry_with_ids, isi::set_instruction_registry, prelude::*};
 struct RegistryGuard;
 impl Drop for RegistryGuard {
     fn drop(&mut self) {
@@ -15,9 +15,9 @@ fn instruction_box_roundtrip() {
     let (payload, flags) = norito::codec::encode_with_header_flags(&log);
     let framed = norito::core::frame_bare_with_header_flags::<Log>(&payload, flags)
         .expect("frame instruction payload");
-    let registry = instruction_registry![Log];
+    let registry = instruction_registry_with_ids![Log];
     let decoded = registry
-        .decode(Instruction::id(&log), &framed)
+        .decode(Log::WIRE_ID, &framed)
         .expect("registry")
         .expect("decode");
     let decoded_log = decoded.as_any().downcast_ref::<Log>().unwrap();
@@ -41,7 +41,7 @@ fn instruction_box_norito_roundtrip() {
     }
 
     let _guard = RegistryGuard;
-    set_instruction_registry(instruction_registry![Log]);
+    set_instruction_registry(instruction_registry_with_ids![Log]);
     let log = Log::new(Level::INFO, "norito".to_string());
     let boxed = InstructionBox::from(log.clone());
     let bytes = norito::core::to_bytes(&boxed).expect("serialize");

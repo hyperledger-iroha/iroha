@@ -132,7 +132,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RefundExpiredVpnLease {
 mod tests {
     use super::*;
     use crate::isi::test_support::{
-        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
     use crate::{
         account::AccountId,
@@ -374,12 +374,12 @@ mod tests {
         assert_slice_roundtrip(RefundExpiredVpnLease::new([0xAA; 32]));
     }
     #[test]
-    fn vpn_registry_decodes_type_names() {
+fn vpn_registry_decodes_canonical_wire_ids() {
         let voucher = usage_voucher();
         let registry = crate::isi::InstructionRegistry::new()
-            .register_slice::<OpenVpnLeaseEscrow>()
-            .register_slice::<SettleVpnLease>()
-            .register_slice::<RefundExpiredVpnLease>();
+.register_with_id_slice::<OpenVpnLeaseEscrow>("iroha.instruction.v1::vpn::OpenVpnLeaseEscrow")
+            .register_with_id_slice::<SettleVpnLease>("iroha.instruction.v1::vpn::SettleVpnLease")
+            .register_with_id_slice::<RefundExpiredVpnLease>("iroha.instruction.v1::vpn::RefundExpiredVpnLease");
         assert_registry_decodes(&registry, OpenVpnLeaseEscrow::new(signed_quote()));
         assert_registry_decodes(
             &registry,

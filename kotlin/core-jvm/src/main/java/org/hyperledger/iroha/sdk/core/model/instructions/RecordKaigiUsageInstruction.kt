@@ -19,8 +19,10 @@ class RecordKaigiUsageInstruction(
     override val arguments: Map<String, String> get() = _arguments
 
     init {
-        require(durationMs > 0) { "durationMs must be greater than zero" }
-        require(billedGas >= 0) { "billedGas must be non-negative" }
+        require(durationMs != 0L) { "durationMs must be greater than zero" }
+        if (proofBase64 != null) {
+            KaigiInstructionUtils.requireBase64(proofBase64, "proof")
+        }
     }
 
     override fun equals(other: Any?): Boolean {
@@ -49,6 +51,7 @@ class RecordKaigiUsageInstruction(
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): RecordKaigiUsageInstruction {
+            KaigiInstructionUtils.requireAction(arguments, ACTION)
             return RecordKaigiUsageInstruction(
                 callId = KaigiInstructionUtils.parseCallId(arguments, "call"),
                 durationMs = KaigiInstructionUtils.parseUnsignedLong(

@@ -160,9 +160,11 @@ following Prometheus series (with OTLP mirrors) are emitted:
 These metrics show up in the SoraFS fetch observability pack
 (`dashboards/grafana/sorafs_fetch_observability.json`) so operators can alarm on
 miss/brownout rates during the SNNet-14 rollout. The Taikai cache dashboard
-(`dashboards/grafana/taikai_cache.json`) now includes dedicated panels for open
-circuits, queue depth, hedging/rate-limit events, and failover rates so SREs
-can correlate brownouts with shard-level instability.
+(`dashboards/grafana/taikai_cache.json`) derives its hit ratio,
+query/insert/eviction/promotion rates, and byte throughput from these registered
+counters. It also includes panels for open circuits, queue depth,
+hedging/rate-limit events, and failover rates so SREs can correlate brownouts
+with shard-level instability.
 
 ## Operator Controls & Rollout Overrides
 

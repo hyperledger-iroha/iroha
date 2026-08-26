@@ -149,7 +149,7 @@ def _governance_deploy_draft_response() -> dict[str, Any]:
         "proposal_id": "11" * 32,
         "tx_instructions": [
             {
-                "wire_id": "iroha_data_model::isi::governance::ProposeDeployContract",
+"wire_id": "iroha.instruction.v1::governance::ProposeDeployContract",
                 "payload_hex": "00ff",
             }
         ],

@@ -5891,16 +5891,16 @@ mod tests {
         );
         let envelope_json = envelope.to_json().expect("envelope JSON");
         Python::attach(|py| {
-            let summary = envelope.as_dict(py).expect("envelope dict");
-            let summary_network_id: String = summary
+            let envelope_dict = envelope.as_dict(py).expect("envelope dictionary");
+            let dictionary_network_id = envelope_dict
                 .bind(py)
                 .get_item("network_id")
-                .expect("network_id lookup")
-                .expect("network_id field")
-                .extract()
-                .expect("network_id string");
+                .expect("read envelope network ID")
+                .expect("envelope network ID is present")
+                .extract::<String>()
+                .expect("envelope network ID is a string");
             assert_eq!(
-                summary_network_id,
+                dictionary_network_id,
                 canonical_network_id_literal(&envelope.network_id)
             );
             let envelope_type = py.get_type::<SignedTransactionEnvelope>();
@@ -5944,6 +5944,22 @@ mod tests {
             .expect("signed transaction is non-empty");
         *last ^= 0x01;
         assert!(canonical_signed_transaction_hash_v1(&tampered).is_err());
+    }
+    #[test]
+    fn generated_sm2_keypair_uses_checked_os_entropy() {
+        ensure_python();
+        Python::attach(|py| {
+            let distid = "python-sdk-random-key";
+            let (private, public) =
+                generate_sm2_keypair_py(py, Some(distid)).expect("generate checked SM2 keypair");
+            let private_bytes = private.bind(py).as_bytes();
+            let public_bytes = public.bind(py).as_bytes();
+            assert_eq!(private_bytes.len(), SM2_PRIVATE_KEY_LENGTH);
+            assert_eq!(public_bytes.len(), SM2_PUBLIC_KEY_UNCOMPRESSED_LENGTH);
+            let parsed =
+                Sm2PrivateKey::from_bytes(distid, private_bytes).expect("parse generated key");
+            assert_eq!(parsed.public_key().to_sec1_bytes(false), public_bytes);
+        });
     }
     #[test]
     fn transaction_builder_attachment_limits_are_atomic_and_remain_signable() {

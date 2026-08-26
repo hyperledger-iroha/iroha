@@ -5099,6 +5099,133 @@ fn validate_faucet_transaction_identity(
     Ok(())
 }
 
+/// Authenticate an exact prepared onboarding transaction without constructing a client.
+///
+/// # Errors
+/// Returns an error for any substituted request, receipt, binding, wire, signature, network,
+/// authority, fee intent, metadata, or instruction sequence.
+pub fn verify_account_onboarding_prepared_transaction_v1(
+    expected_network_id: NetworkId,
+    request: &AccountOnboardingPlanRequestV1,
+    prepared: &AccountOnboardingPreparedTransactionV1,
+    receipt: &AccountOnboardingPlanReceiptV1,
+    binding: &TairaPublicResetMutationBindingV1,
+) -> Result<SignedTransaction> {
+    validate_prepared_mutation_binding(
+        &prepared.binding,
+        AccountOnboardingPreparedTransactionV1::OPERATION,
+        false,
+    )?;
+    if prepared.schema != AccountOnboardingPreparedTransactionV1::SCHEMA
+        || prepared.operation != AccountOnboardingPreparedTransactionV1::OPERATION
+        || &prepared.binding != binding
+        || &prepared.receipt != receipt
+        || prepared.semantic_hash_hex != hex::encode(receipt.plan_hash.as_ref())
+        || prepared.account_id != receipt.body.request.account_id
+        || prepared.alias != receipt.body.request.alias
+        || !onboarding_disposition_transition_allowed(
+            receipt.body.resource.disposition,
+            prepared.disposition,
+        )
+    {
+        return Err(eyre!(
+            "prepared onboarding envelope differs from its exact receipt or binding"
+        ));
+    }
+    let planned_instructions = decode_and_verify_account_onboarding_plan_for_request(
+        expected_network_id,
+        request,
+        receipt,
+    )?;
+    verify_prepared_payload_signature(
+        &AccountOnboardingPreparedSignaturePayloadV1::from(prepared),
+        &prepared.server_signature,
+        &receipt.body.authority,
+    )?;
+    let transaction = decode_canonical_prepared_transaction(
+        &prepared.transaction_hash_hex,
+        &prepared.signed_transaction_wire_hex,
+        &prepared.signed_transaction_wire_sha256,
+    )?;
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        return Err(eyre!(
+            "prepared onboarding transaction must contain a direct instruction sequence"
+        ));
+    };
+    let expected_metadata = expected_prepared_transaction_metadata(
+        binding,
+        AccountOnboardingPreparedTransactionV1::OPERATION,
+        &prepared.semantic_hash_hex,
+    )?;
+    if transaction.network_id() != Some(&expected_network_id)
+        || transaction.authority() != &receipt.body.authority
+        || transaction.payload().fee_payment != prepared.fee_payment
+        || transaction.metadata() != &expected_metadata
+        || instructions.is_empty()
+        || !instructions_are_ordered_subset(instructions.as_ref(), &planned_instructions)
+    {
+        return Err(eyre!(
+            "prepared onboarding transaction network, authority, or fee intent was substituted"
+        ));
+    }
+    Ok(transaction)
+}
+
+/// Authenticate an exact prepared faucet transaction without constructing a client.
+///
+/// # Errors
+/// Returns an error for any substituted claim, binding, wire, signature, network, fee intent,
+/// metadata, destination, amount, or instruction sequence.
+pub fn verify_account_faucet_prepared_transaction_v1(
+    expected_network_id: NetworkId,
+    prepared: &AccountFaucetPreparedTransactionV1,
+    claim: &AccountFaucetClaimV1,
+    binding: &TairaPublicResetMutationBindingV1,
+) -> Result<SignedTransaction> {
+    validate_prepared_mutation_binding(
+        &prepared.binding,
+        AccountFaucetPreparedTransactionV1::OPERATION,
+        false,
+    )?;
+    validate_account_faucet_claim(claim)?;
+    if prepared.schema != AccountFaucetPreparedTransactionV1::SCHEMA
+        || prepared.operation != AccountFaucetPreparedTransactionV1::OPERATION
+        || &prepared.binding != binding
+        || &prepared.claim != claim
+        || prepared.semantic_hash_hex != hex::encode(faucet_claim_hash(claim).as_ref())
+        || prepared.account_id != claim.account_id
+    {
+        return Err(eyre!(
+            "prepared faucet envelope differs from its exact claim or binding"
+        ));
+    }
+    let transaction = decode_canonical_prepared_transaction(
+        &prepared.transaction_hash_hex,
+        &prepared.signed_transaction_wire_hex,
+        &prepared.signed_transaction_wire_sha256,
+    )?;
+    let expected_metadata = expected_prepared_transaction_metadata(
+        binding,
+        AccountFaucetPreparedTransactionV1::OPERATION,
+        &prepared.semantic_hash_hex,
+    )?;
+    if transaction.network_id() != Some(&expected_network_id)
+        || transaction.payload().fee_payment != prepared.fee_payment
+        || transaction.metadata() != &expected_metadata
+    {
+        return Err(eyre!(
+            "prepared faucet transaction network or fee intent was substituted"
+        ));
+    }
+    verify_prepared_payload_signature(
+        &AccountFaucetPreparedSignaturePayloadV1::from(prepared),
+        &prepared.server_signature,
+        transaction.authority(),
+    )?;
+    validate_faucet_transaction_identity(prepared, &transaction)?;
+    Ok(transaction)
+}
+
 /// Authenticate a nonterminal onboarding proof requirement without constructing a signing client.
 ///
 /// Success authenticates only the exact request, receipt, reset binding, and Torii result. It does
@@ -15180,64 +15307,13 @@ impl Client {
         receipt: &AccountOnboardingPlanReceiptV1,
         binding: &TairaPublicResetMutationBindingV1,
     ) -> Result<SignedTransaction> {
-        validate_prepared_mutation_binding(
-            &prepared.binding,
-            AccountOnboardingPreparedTransactionV1::OPERATION,
-            false,
-        )?;
-        if prepared.schema != AccountOnboardingPreparedTransactionV1::SCHEMA
-            || prepared.operation != AccountOnboardingPreparedTransactionV1::OPERATION
-            || &prepared.binding != binding
-            || &prepared.receipt != receipt
-            || prepared.semantic_hash_hex != hex::encode(receipt.plan_hash.as_ref())
-            || prepared.account_id != receipt.body.request.account_id
-            || prepared.alias != receipt.body.request.alias
-            || !onboarding_disposition_transition_allowed(
-                receipt.body.resource.disposition,
-                prepared.disposition,
-            )
-        {
-            return Err(eyre!(
-                "prepared onboarding envelope differs from its exact receipt or binding"
-            ));
-        }
-        let planned_instructions = decode_and_verify_account_onboarding_plan_for_request(
+        verify_account_onboarding_prepared_transaction_v1(
             self.network_id,
             request,
+            prepared,
             receipt,
-        )?;
-        verify_prepared_payload_signature(
-            &AccountOnboardingPreparedSignaturePayloadV1::from(prepared),
-            &prepared.server_signature,
-            &receipt.body.authority,
-        )?;
-        let transaction = decode_canonical_prepared_transaction(
-            &prepared.transaction_hash_hex,
-            &prepared.signed_transaction_wire_hex,
-            &prepared.signed_transaction_wire_sha256,
-        )?;
-        let Executable::Instructions(instructions) = transaction.instructions() else {
-            return Err(eyre!(
-                "prepared onboarding transaction must contain a direct instruction sequence"
-            ));
-        };
-        let expected_metadata = expected_prepared_transaction_metadata(
             binding,
-            AccountOnboardingPreparedTransactionV1::OPERATION,
-            &prepared.semantic_hash_hex,
-        )?;
-        if transaction.network_id() != Some(&self.network_id)
-            || transaction.authority() != &receipt.body.authority
-            || transaction.payload().fee_payment != prepared.fee_payment
-            || transaction.metadata() != &expected_metadata
-            || instructions.is_empty()
-            || !instructions_are_ordered_subset(instructions.as_ref(), &planned_instructions)
-        {
-            return Err(eyre!(
-                "prepared onboarding transaction network, authority, or fee intent was substituted"
-            ));
-        }
-        Ok(transaction)
+        )
     }
 
     /// Authenticate a nonterminal onboarding result against the exact request receipt.
@@ -15451,48 +15527,7 @@ impl Client {
         claim: &AccountFaucetClaimV1,
         binding: &TairaPublicResetMutationBindingV1,
     ) -> Result<SignedTransaction> {
-        validate_prepared_mutation_binding(
-            &prepared.binding,
-            AccountFaucetPreparedTransactionV1::OPERATION,
-            false,
-        )?;
-        validate_account_faucet_claim(claim)?;
-        if prepared.schema != AccountFaucetPreparedTransactionV1::SCHEMA
-            || prepared.operation != AccountFaucetPreparedTransactionV1::OPERATION
-            || &prepared.binding != binding
-            || &prepared.claim != claim
-            || prepared.semantic_hash_hex != hex::encode(faucet_claim_hash(claim).as_ref())
-            || prepared.account_id != claim.account_id
-        {
-            return Err(eyre!(
-                "prepared faucet envelope differs from its exact claim or binding"
-            ));
-        }
-        let transaction = decode_canonical_prepared_transaction(
-            &prepared.transaction_hash_hex,
-            &prepared.signed_transaction_wire_hex,
-            &prepared.signed_transaction_wire_sha256,
-        )?;
-        let expected_metadata = expected_prepared_transaction_metadata(
-            binding,
-            AccountFaucetPreparedTransactionV1::OPERATION,
-            &prepared.semantic_hash_hex,
-        )?;
-        if transaction.network_id() != Some(&self.network_id)
-            || transaction.payload().fee_payment != prepared.fee_payment
-            || transaction.metadata() != &expected_metadata
-        {
-            return Err(eyre!(
-                "prepared faucet transaction network or fee intent was substituted"
-            ));
-        }
-        verify_prepared_payload_signature(
-            &AccountFaucetPreparedSignaturePayloadV1::from(prepared),
-            &prepared.server_signature,
-            transaction.authority(),
-        )?;
-        validate_faucet_transaction_identity(prepared, &transaction)?;
-        Ok(transaction)
+        verify_account_faucet_prepared_transaction_v1(self.network_id, prepared, claim, binding)
     }
 
     /// Submit only one already authenticated exact faucet envelope.

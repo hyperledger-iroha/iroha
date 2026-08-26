@@ -687,13 +687,8 @@ mod tests {
         );
     }
     #[test]
-    fn repo_registry_decodes_type_names_and_stable_ids() {
+    fn repo_registry_decodes_only_the_stable_box_id() {
         let registry = crate::isi::registry::default();
-        assert_registry_decodes(
-            &registry,
-            std::any::type_name::<RepoInstructionBox>(),
-            RepoInstructionBox::from(repo_instruction()),
-        );
         for value in [
             RepoInstructionBox::from(repo_instruction()),
             RepoInstructionBox::Reverse(reverse_repo_instruction()),
@@ -711,5 +706,6 @@ mod tests {
         ] {
             assert!(!registry.contains(name), "{name} must remain boxed-only");
         }
+        assert!(!registry.contains(std::any::type_name::<RepoInstructionBox>()));
     }
 }

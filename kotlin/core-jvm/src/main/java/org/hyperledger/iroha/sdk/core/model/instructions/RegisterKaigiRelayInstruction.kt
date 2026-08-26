@@ -18,7 +18,7 @@ class RegisterKaigiRelayInstruction(
 
     init {
         require(relayId.isNotBlank()) { "relayId must not be blank" }
-        require(hpkePublicKeyBase64.isNotBlank()) { "hpkePublicKeyBase64 must not be blank" }
+        KaigiInstructionUtils.requireBase64(hpkePublicKeyBase64, "hpkePublicKeyBase64")
         require(bandwidthClass in 1..0xFF) { "bandwidthClass must be between 1 and 255" }
     }
 
@@ -42,6 +42,7 @@ class RegisterKaigiRelayInstruction(
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): RegisterKaigiRelayInstruction {
+            KaigiInstructionUtils.requireAction(arguments, ACTION)
             return RegisterKaigiRelayInstruction(
                 relayId = KaigiInstructionUtils.require(arguments, "relay.relay_id"),
                 hpkePublicKeyBase64 = KaigiInstructionUtils.requireBase64(

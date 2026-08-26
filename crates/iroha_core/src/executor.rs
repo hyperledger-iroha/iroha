@@ -11312,15 +11312,16 @@ mod tests {
     include!("executor_kagemusha_canary_allowlist_tests.rs");
     macro_rules! concrete_instruction_box {
         ($instruction_ty:ty, $instruction:expr) => {{
+            const TEST_WIRE_ID: &str = "iroha.test.concrete_instruction.v1";
             let instruction: $instruction_ty = $instruction;
-            let registry =
-                iroha_data_model::isi::InstructionRegistry::new().register::<$instruction_ty>();
+            let registry = iroha_data_model::isi::InstructionRegistry::new()
+                .register_with_id::<$instruction_ty>(TEST_WIRE_ID);
             let (payload, flags) = norito::codec::encode_with_header_flags(&instruction);
             let framed =
                 norito::core::frame_bare_with_header_flags::<$instruction_ty>(&payload, flags)
                     .expect("frame concrete instruction");
             let decoded = registry
-                .decode(core::any::type_name::<$instruction_ty>(), &framed)
+                .decode(TEST_WIRE_ID, &framed)
                 .expect("concrete instruction type is registered")
                 .expect("decode concrete instruction");
             assert!(

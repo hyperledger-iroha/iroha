@@ -82,11 +82,14 @@ account field as an exact canonical I105 account id. Alias-shaped
 Each helper generates a fresh signature over the exact `GET`, path, query, and
 empty body and dispatches once with redirects and retries disabled. Bearer/API
 tokens, canonical-account or witness headers, and precomputed operator headers
-are rejected rather than used as fallbacks. The lightweight client has no
-pipeline-recovery, policy, or proof-retention method; no replacement API is
-invented for those absent surfaces. Kaigi list and health also fail closed at
-Torii's hard relay diagnostic cap rather than materializing an unbounded
-registry; the relay SSE handshake remains a separate streaming protocol.
+are rejected rather than used as fallbacks; session authentication and cookies
+are rejected as ambient authority too. The lightweight client has no pipeline
+recovery, policy, or proof-retention method; no replacement API is invented for
+those absent surfaces. Typed Kaigi responses require Torii's exact fields and
+integer spellings, and relay details bind the decoded HPKE key to its advertised
+fingerprint. Kaigi list and health also fail closed at Torii's hard relay
+diagnostic cap rather than materializing an unbounded registry; the relay SSE
+handshake remains a separate streaming protocol.
 
 ## Tenant-scoped ZK attachments
 

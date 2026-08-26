@@ -2,12 +2,12 @@
 //!
 //! The tool validates Taikai segment envelopes against CAR archives, records playback telemetry
 //! (segments, rebuffer events, CEK fetch/rotation, PQ health), and emits Prometheus text along with
-//! an optional JSON summary. Multiple renditions can be supplied via repeated `--segment` flags to
-//! cover ABR ladders in one run.
+//! an optional JSON summary. Multiple renditions or events can be supplied via repeated `--segment`
+//! flags; streams with the same name in different events remain distinct in telemetry.
 #![allow(unexpected_cfgs)]
 use iroha_data_model::taikai::{
-    CEK_ROTATION_RECEIPT_VERSION_V1, CekRotationReceiptV1, TaikaiEventId, TaikaiSegmentEnvelopeV1,
-    TaikaiStreamId,
+    CEK_ROTATION_RECEIPT_VERSION_V1, CekRotationReceiptV1, TaikaiEventId, TaikaiRenditionId,
+    TaikaiSegmentEnvelopeV1, TaikaiStreamId,
 };
 use iroha_telemetry::metrics::Metrics;
 use norito::{
@@ -19,9 +19,9 @@ use sorafs_car::taikai::{
     validate_distinct_artifact_paths, validate_track_metadata, verify_taikai_car,
 };
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     ffi::OsString,
     fs, io,
@@ -34,6 +34,9 @@ taikai_viewer --segment envelope=PATH,car=PATH [--segment ...] [--cluster LABEL]
               [--rebuffer-events N] [--pq-health PCT] [--cek-receipt PATH] [--cek-fetch-ms N]
               [--alert ALERTNAME ...] [--metrics-out PATH] [--summary-out PATH]
 ";
+const TAIKAI_VIEWER_ENVELOPE_MAX_BYTES: usize = 256 * 1024;
+const TAIKAI_VIEWER_CEK_RECEIPT_MAX_BYTES: usize = 256 * 1024;
+const TAIKAI_VIEWER_CAR_MAX_BYTES: usize = 64 * 1024 * 1024;
 #[derive(Debug)]
 struct SegmentInput {
     envelope: PathBuf,
@@ -65,12 +68,34 @@ fn run_with_args(args: ParsedArgs) -> Result<(), Box<dyn std::error::Error>> {
     preflight_output_collisions(&args)?;
     let metrics = Metrics::default();
     let mut summaries: Vec<Value> = Vec::new();
-    let mut stream_stats: HashMap<String, StreamStats> = HashMap::new();
-    let mut stream_order: Vec<String> = Vec::new();
+    let mut stream_stats: HashMap<(TaikaiEventId, TaikaiStreamId), StreamStats> = HashMap::new();
+    let mut stream_order: Vec<(TaikaiEventId, TaikaiStreamId)> = Vec::new();
+    let mut segment_identities: HashSet<(TaikaiEventId, TaikaiStreamId, TaikaiRenditionId, u64)> =
+        HashSet::new();
     let mut viewed_streams: Vec<(TaikaiEventId, TaikaiStreamId)> = Vec::new();
     for segment in &args.segments {
         let envelope = load_envelope(&segment.envelope)?;
-        let car_bytes = fs::read(&segment.car)?;
+        let segment_identity = (
+            envelope.event_id.clone(),
+            envelope.stream_id.clone(),
+            envelope.rendition_id.clone(),
+            envelope.segment_sequence,
+        );
+        if !segment_identities.insert(segment_identity) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "duplicate Taikai segment identity {}/{}/{} sequence {}",
+                    envelope.event_id,
+                    envelope.stream_id,
+                    envelope.rendition_id,
+                    envelope.segment_sequence
+                ),
+            )
+            .into());
+        }
+        let car_bytes =
+            read_bounded_regular_file(&segment.car, "Taikai CAR", TAIKAI_VIEWER_CAR_MAX_BYTES)?;
         validate_car(&envelope, &car_bytes, &segment.car)?;
         if !viewed_streams.iter().any(|(event_id, stream_id)| {
             event_id == &envelope.event_id && stream_id == &envelope.stream_id
@@ -79,10 +104,11 @@ fn run_with_args(args: ParsedArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
         let render_name = envelope.rendition_id.to_string();
         let stream = envelope.stream_id.to_string();
-        if !stream_stats.contains_key(&stream) {
-            stream_order.push(stream.clone());
+        let stream_key = (envelope.event_id.clone(), envelope.stream_id.clone());
+        if !stream_stats.contains_key(&stream_key) {
+            stream_order.push(stream_key.clone());
         }
-        let stats = stream_stats.entry(stream.clone()).or_default();
+        let stats = stream_stats.entry(stream_key).or_default();
         stats.segments += 1;
         let ingest = &envelope.ingest;
         let instrumentation = &envelope.instrumentation;
@@ -115,16 +141,22 @@ fn run_with_args(args: ParsedArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
         summaries.push(Value::Object(entry));
     }
-    if let Some(first_stream) = stream_order.first().cloned()
-        && let Some(first_stats) = stream_stats.get_mut(&first_stream)
+    let mut stream_name_counts: HashMap<TaikaiStreamId, usize> = HashMap::new();
+    for (_, stream_id) in stream_stats.keys() {
+        *stream_name_counts.entry(stream_id.clone()).or_default() += 1;
+    }
+    if let Some(first_stream) = stream_order.first()
+        && let Some(first_stats) = stream_stats.get_mut(first_stream)
     {
         first_stats.rebuffer_events = args.rebuffer_events;
         if args.rebuffer_events > 0 {
-            metrics.inc_taikai_viewer_rebuffer(&args.cluster, &first_stream, args.rebuffer_events);
+            let stream_label = metric_stream_label(first_stream, &stream_name_counts);
+            metrics.inc_taikai_viewer_rebuffer(&args.cluster, &stream_label, args.rebuffer_events);
         }
     }
-    for (stream, stats) in &stream_stats {
-        metrics.inc_taikai_viewer_segments(&args.cluster, stream, stats.segments);
+    for (stream_key, stats) in &stream_stats {
+        let stream_label = metric_stream_label(stream_key, &stream_name_counts);
+        metrics.inc_taikai_viewer_segments(&args.cluster, &stream_label, stats.segments);
     }
     metrics.set_taikai_viewer_pq_health(&args.cluster, args.pq_health);
     let mut cek_summary: Option<Map> = None;
@@ -224,6 +256,22 @@ fn run_with_args(args: ParsedArgs) -> Result<(), Box<dyn std::error::Error>> {
         println!("{metrics_text}");
     }
     Ok(())
+}
+fn metric_stream_label(
+    stream: &(TaikaiEventId, TaikaiStreamId),
+    stream_name_counts: &HashMap<TaikaiStreamId, usize>,
+) -> String {
+    if stream_name_counts
+        .get(&stream.1)
+        .copied()
+        .unwrap_or_default()
+        > 1
+    {
+        // `Name` reserves `@`, so the scoped label cannot collide with an ordinary stream name.
+        format!("{}@{}", stream.0, stream.1)
+    } else {
+        stream.1.to_string()
+    }
 }
 struct StagedOutput {
     target_path: PathBuf,
@@ -598,8 +646,53 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0
 }
+#[cfg(unix)]
+fn set_bounded_read_flags(options: &mut fs::OpenOptions) {
+    options.custom_flags(platform_no_follow_flag() | platform_nonblocking_read_flag());
+}
+#[cfg(not(unix))]
+fn set_bounded_read_flags(_options: &mut fs::OpenOptions) {}
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_nonblocking_read_flag() -> i32 {
+    0o4000
+}
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn platform_nonblocking_read_flag() -> i32 {
+    0x4
+}
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn platform_nonblocking_read_flag() -> i32 {
+    0
+}
 fn load_envelope(path: &Path) -> Result<TaikaiSegmentEnvelopeV1, Box<dyn std::error::Error>> {
-    let bytes = fs::read(path)?;
+    let bytes = read_bounded_regular_file(
+        path,
+        "Taikai segment envelope",
+        TAIKAI_VIEWER_ENVELOPE_MAX_BYTES,
+    )?;
     let envelope: TaikaiSegmentEnvelopeV1 = decode_from_bytes(&bytes)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
     if envelope.version != TaikaiSegmentEnvelopeV1::VERSION {
@@ -726,7 +819,11 @@ struct CekReceiptObservation {
 }
 fn read_cek_receipt(path: &Path) -> Result<CekReceiptObservation, Box<dyn std::error::Error>> {
     let start = Instant::now();
-    let bytes = fs::read(path)?;
+    let bytes = read_bounded_regular_file(
+        path,
+        "CEK rotation receipt",
+        TAIKAI_VIEWER_CEK_RECEIPT_MAX_BYTES,
+    )?;
     let decode_start = Instant::now();
     let receipt: CekRotationReceiptV1 = decode_from_bytes(&bytes)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
@@ -760,6 +857,107 @@ fn validate_cek_receipt(receipt: &CekRotationReceiptV1) -> io::Result<()> {
     receipt
         .validate()
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+}
+fn read_bounded_regular_file(path: &Path, label: &str, max_bytes: usize) -> io::Result<Vec<u8>> {
+    let path_metadata = fs::symlink_metadata(path).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("failed to inspect {label} `{}`: {err}", path.display()),
+        )
+    })?;
+    if path_metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} `{}` must not be a symlink", path.display()),
+        ));
+    }
+    if !path_metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} `{}` must be a regular file", path.display()),
+        ));
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    // The descriptor flags close the preflight/open race on Unix: a replacement symlink fails to
+    // open, while a replacement FIFO cannot block before the descriptor type check below.
+    set_bounded_read_flags(&mut options);
+    let file = options.open(path).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("failed to open {label} `{}`: {err}", path.display()),
+        )
+    })?;
+    let metadata = file.metadata().map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("failed to inspect {label} `{}`: {err}", path.display()),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} `{}` must be a regular file", path.display()),
+        ));
+    }
+    #[cfg(unix)]
+    if path_metadata.dev() != metadata.dev() || path_metadata.ino() != metadata.ino() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{label} `{}` changed while it was being opened",
+                path.display()
+            ),
+        ));
+    }
+    let max_bytes_u64 = u64::try_from(max_bytes).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} byte limit exceeds the platform file-size representation"),
+        )
+    })?;
+    if metadata.len() > max_bytes_u64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{label} `{}` is {} bytes; maximum is {max_bytes}",
+                path.display(),
+                metadata.len()
+            ),
+        ));
+    }
+    let read_limit = max_bytes_u64.checked_add(1).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} byte limit cannot be incremented safely"),
+        )
+    })?;
+    let initial_capacity = usize::try_from(metadata.len()).unwrap_or(max_bytes);
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(initial_capacity).map_err(|err| {
+        io::Error::other(format!(
+            "failed to reserve {initial_capacity} bytes for {label} `{}`: {err}",
+            path.display()
+        ))
+    })?;
+    file.take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|err| {
+            io::Error::new(
+                err.kind(),
+                format!("failed to read {label} `{}`: {err}", path.display()),
+            )
+        })?;
+    if bytes.len() > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{label} `{}` grew beyond the {max_bytes}-byte maximum while being read",
+                path.display()
+            ),
+        ));
+    }
+    Ok(bytes)
 }
 struct ParsedArgs {
     cluster: String,
@@ -1456,6 +1654,57 @@ mod tests {
         );
     }
     #[test]
+    fn load_envelope_rejects_oversized_file_before_decode() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let path = temp_path.join("oversized-envelope.norito");
+        let file = fs::File::create(&path).expect("create sparse envelope");
+        file.set_len(u64::try_from(TAIKAI_VIEWER_ENVELOPE_MAX_BYTES + 1).expect("limit fits u64"))
+            .expect("size sparse envelope");
+
+        let error = load_envelope(&path).expect_err("oversized envelope must be rejected");
+
+        assert!(
+            error.to_string().contains("maximum is 262144"),
+            "unexpected error: {error}"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bounded_input_rejects_symlinks() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let target = temp_path.join("target.car");
+        fs::write(&target, b"car").expect("write target");
+        let link = temp_path.join("linked.car");
+        std::os::unix::fs::symlink(&target, &link).expect("create input symlink");
+
+        let error = read_bounded_regular_file(&link, "Taikai CAR", 16)
+            .expect_err("input symlink must be rejected");
+
+        assert!(
+            error.to_string().contains("must not be a symlink"),
+            "unexpected error: {error}"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bounded_input_rejects_fifo_without_opening_it() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let fifo = temp_path.join("segment.fifo");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("run mkfifo");
+        assert!(status.success(), "mkfifo must create the test input");
+
+        let error = read_bounded_regular_file(&fifo, "Taikai CAR", 16)
+            .expect_err("FIFO input must be rejected without waiting for a writer");
+
+        assert!(
+            error.to_string().contains("must be a regular file"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
     fn load_envelope_rejects_semantically_invalid_metadata() {
         let (_temp, temp_path) = canonical_tempdir();
         let mut envelope = sample_envelope(b"car");
@@ -1496,6 +1745,23 @@ mod tests {
             error
                 .to_string()
                 .contains("unsupported CEK rotation receipt version"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn read_cek_receipt_rejects_oversized_file_before_decode() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let path = temp_path.join("oversized-cek-receipt.norito");
+        let file = fs::File::create(&path).expect("create sparse CEK receipt");
+        file.set_len(
+            u64::try_from(TAIKAI_VIEWER_CEK_RECEIPT_MAX_BYTES + 1).expect("limit fits u64"),
+        )
+        .expect("size sparse CEK receipt");
+
+        let error = read_cek_receipt(&path).expect_err("oversized CEK receipt must be rejected");
+
+        assert!(
+            error.to_string().contains("maximum is 262144"),
             "unexpected error: {error}"
         );
     }
@@ -1546,6 +1812,142 @@ mod tests {
                 .to_string()
                 .contains("absent from the viewed segments"),
             "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn run_rejects_duplicate_segment_identity() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let (first_car, first_envelope) = canonical_car_fixture(b"first duplicate payload");
+        let (second_car, second_envelope) = canonical_car_fixture(b"second duplicate payload");
+        let first_envelope_path = temp_path.join("first.norito");
+        let first_car_path = temp_path.join("first.car");
+        let second_envelope_path = temp_path.join("second.norito");
+        let second_car_path = temp_path.join("second.car");
+        fs::write(
+            &first_envelope_path,
+            norito::to_bytes(&first_envelope).expect("encode first envelope"),
+        )
+        .expect("write first envelope");
+        fs::write(&first_car_path, first_car).expect("write first CAR");
+        fs::write(
+            &second_envelope_path,
+            norito::to_bytes(&second_envelope).expect("encode second envelope"),
+        )
+        .expect("write second envelope");
+        fs::write(&second_car_path, second_car).expect("write second CAR");
+        let metrics_path = temp_path.join("metrics.prom");
+        let mut args = parsed_args_fixture(&temp_path);
+        args.cek_receipt = None;
+        args.metrics_out = Some(metrics_path.clone());
+        args.segments = vec![
+            SegmentInput {
+                envelope: first_envelope_path,
+                car: first_car_path,
+            },
+            SegmentInput {
+                envelope: second_envelope_path,
+                car: second_car_path,
+            },
+        ];
+
+        let error = run_with_args(args).expect_err("duplicate identity must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate Taikai segment identity"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !metrics_path.exists(),
+            "invalid input must fail before publishing metrics"
+        );
+    }
+    #[test]
+    fn run_rejects_oversized_car_before_verification() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let envelope = sample_envelope(b"unused CAR bytes");
+        let envelope_path = temp_path.join("segment.norito");
+        fs::write(
+            &envelope_path,
+            norito::to_bytes(&envelope).expect("encode envelope"),
+        )
+        .expect("write envelope");
+        let car_path = temp_path.join("oversized.car");
+        let file = fs::File::create(&car_path).expect("create sparse CAR");
+        file.set_len(u64::try_from(TAIKAI_VIEWER_CAR_MAX_BYTES + 1).expect("limit fits u64"))
+            .expect("size sparse CAR");
+        let mut args = parsed_args_fixture(&temp_path);
+        args.cek_receipt = None;
+        args.segments = vec![SegmentInput {
+            envelope: envelope_path,
+            car: car_path,
+        }];
+
+        let error = run_with_args(args).expect_err("oversized CAR must be rejected");
+
+        assert!(
+            error.to_string().contains("maximum is 67108864"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn run_scopes_colliding_stream_names_by_event_in_metrics() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let (first_car, first_envelope) = canonical_car_fixture(b"first event payload");
+        let (second_car, mut second_envelope) = canonical_car_fixture(b"second event payload");
+        second_envelope.event_id =
+            TaikaiEventId::new(Name::from_str("second-event").expect("event name"));
+        let first_envelope_path = temp_path.join("first.norito");
+        let first_car_path = temp_path.join("first.car");
+        let second_envelope_path = temp_path.join("second.norito");
+        let second_car_path = temp_path.join("second.car");
+        fs::write(
+            &first_envelope_path,
+            norito::to_bytes(&first_envelope).expect("encode first envelope"),
+        )
+        .expect("write first envelope");
+        fs::write(&first_car_path, first_car).expect("write first CAR");
+        fs::write(
+            &second_envelope_path,
+            norito::to_bytes(&second_envelope).expect("encode second envelope"),
+        )
+        .expect("write second envelope");
+        fs::write(&second_car_path, second_car).expect("write second CAR");
+        let metrics_path = temp_path.join("metrics.prom");
+        let mut args = parsed_args_fixture(&temp_path);
+        args.cek_receipt = None;
+        args.rebuffer_events = 3;
+        args.metrics_out = Some(metrics_path.clone());
+        args.segments = vec![
+            SegmentInput {
+                envelope: first_envelope_path,
+                car: first_car_path,
+            },
+            SegmentInput {
+                envelope: second_envelope_path,
+                car: second_car_path,
+            },
+        ];
+
+        run_with_args(args).expect("colliding stream names are scoped by event");
+
+        let metrics = fs::read_to_string(metrics_path).expect("read metrics");
+        assert!(
+            metrics.contains("stream=\"soranet-demo@primary\"} 1"),
+            "first event stream missing: {metrics}"
+        );
+        assert!(
+            metrics.contains("stream=\"second-event@primary\"} 1"),
+            "second event stream missing: {metrics}"
+        );
+        assert!(
+            metrics.contains("stream=\"soranet-demo@primary\"} 3"),
+            "rebuffer count must target the first event-scoped stream: {metrics}"
+        );
+        assert!(
+            !metrics.contains("stream=\"primary\"}"),
+            "ambiguous unscoped stream label must not be emitted: {metrics}"
         );
     }
     #[test]

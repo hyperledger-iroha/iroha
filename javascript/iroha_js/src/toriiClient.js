@@ -229,7 +229,7 @@ const JSON_REQUEST_HEADERS = Object.freeze({
   Accept: APPLICATION_JSON,
 });
 const PROPOSE_DEPLOY_CONTRACT_WIRE_ID =
-  "iroha_data_model::isi::governance::ProposeDeployContract";
+  "iroha.instruction.v1::governance::ProposeDeployContract";
 
 const AUTHORITATIVE_PIPELINE_STATUS_KINDS = new Set([
   "Queued",

@@ -1126,11 +1126,12 @@ fn productive_chunk_waits_for_exact_fetch_before_runtime_handoff() {
         );
         record.token.clone()
     };
+    let physical_cut = ingress.next_physical_admission_ordinal();
 
     let mut executor = chunk_effect_executor(&service, BTreeMap::new());
     assert!(
         ingress
-            .capture_next_ingress_turn_cut(|occurrence| {
+            .capture_next_ingress_turn_cut_before(physical_cut, |occurrence| {
                 super::super::v2_effects::v2_ingress_head_can_drain(
                     occurrence.inbound(),
                     &executor,
@@ -1162,7 +1163,7 @@ fn productive_chunk_waits_for_exact_fetch_before_runtime_handoff() {
         )]),
     );
     let durable_cut = ingress
-        .capture_next_ingress_turn_cut(|occurrence| {
+        .capture_next_ingress_turn_cut_before(physical_cut, |occurrence| {
             super::super::v2_effects::v2_ingress_head_can_drain(
                 occurrence.inbound(),
                 &durable_executor,
@@ -1192,7 +1193,7 @@ fn productive_chunk_waits_for_exact_fetch_before_runtime_handoff() {
         )
         .expect("open the exact manifest-bearing chunk fetch");
     let fetch_cut = ingress
-        .capture_next_ingress_turn_cut(|occurrence| {
+        .capture_next_ingress_turn_cut_before(physical_cut, |occurrence| {
             super::super::v2_effects::v2_ingress_head_can_drain(
                 occurrence.inbound(),
                 &executor,

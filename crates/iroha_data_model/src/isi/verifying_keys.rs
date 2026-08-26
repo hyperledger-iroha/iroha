@@ -59,7 +59,7 @@ impl_decode_verifying_key_instruction!(UpdateVerifyingKey);
 mod tests {
     use super::*;
     use crate::isi::test_support::{
-        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
     use crate::{proof::VerifyingKeyRecord, zk::BackendTag};
     fn key_id(name: &str) -> VerifyingKeyId {
@@ -87,10 +87,10 @@ mod tests {
         });
     }
     #[test]
-    fn verifying_key_registry_decodes_type_names() {
+fn verifying_key_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::InstructionRegistry::new()
-            .register_slice::<RegisterVerifyingKey>()
-            .register_slice::<UpdateVerifyingKey>();
+.register_with_id_slice::<RegisterVerifyingKey>("iroha.instruction.v1::verifying_keys::RegisterVerifyingKey")
+            .register_with_id_slice::<UpdateVerifyingKey>("iroha.instruction.v1::verifying_keys::UpdateVerifyingKey");
         assert_registry_decodes(
             &registry,
             RegisterVerifyingKey {

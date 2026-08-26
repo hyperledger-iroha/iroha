@@ -223,7 +223,35 @@ fn rejects_invalid_kem_and_signature_ids() {
             if message == "unsupported SoraNet signature identifier 99"
     ));
 
-    SoranetHandshakeConfig::new(
+    for suite in MlKemSuite::ALL {
+        let mut client_capabilities =
+            iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec();
+        let mut relay_capabilities =
+            iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec();
+        client_capabilities[4] = suite.kem_id();
+        relay_capabilities[4] = suite.kem_id();
+        SoranetHandshakeConfig::new(
+            iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+            client_capabilities,
+            relay_capabilities,
+            true,
+            suite.kem_id(),
+            1,
+            None,
+            false,
+            params,
+            None,
+            Duration::from_secs(60),
+            None,
+            test_ticket_revocation_store(),
+        )
+        .expect("every advertised ML-KEM suite in the first-release registry must be accepted");
+    }
+}
+
+#[test]
+fn rejects_selected_kem_missing_from_capability_vectors() {
+    let error = SoranetHandshakeConfig::new(
         iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
         iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
         iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
@@ -232,13 +260,43 @@ fn rejects_invalid_kem_and_signature_ids() {
         1,
         None,
         false,
-        params,
+        PowParameters::new(0, Duration::from_secs(300), Duration::from_secs(30)),
         None,
         Duration::from_secs(60),
         None,
         test_ticket_revocation_store(),
     )
-    .expect("every ML-KEM suite in the first-release registry must be accepted");
+    .expect_err("an unadvertised selected KEM must fail at construction");
+    assert!(matches!(
+        error,
+        Error::HandshakeSoranet(message)
+            if message.contains("does not advertise selected id 0x00")
+    ));
+}
+
+#[test]
+fn rejects_descriptor_commitment_mismatching_relay_capability() {
+    let error = SoranetHandshakeConfig::new(
+        vec![0xA5; iroha_crypto::Hash::LENGTH],
+        iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
+        iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
+        true,
+        1,
+        1,
+        None,
+        false,
+        PowParameters::new(0, Duration::from_secs(300), Duration::from_secs(30)),
+        None,
+        Duration::from_secs(60),
+        None,
+        test_ticket_revocation_store(),
+    )
+    .expect_err("the advertised and configured descriptor commitments must agree");
+    assert!(matches!(
+        error,
+        Error::HandshakeSoranet(message)
+            if message.contains("snnet.transcript_commit does not match")
+    ));
 }
 #[test]
 fn admission_config_retains_the_mandatory_replay_store() {

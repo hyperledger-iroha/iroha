@@ -13,7 +13,7 @@ fn registry_decodes_framed_bytes_roundtrip() {
         .expect("frame instruction payload");
     let registry = InstructionRegistry::new().register_with_id::<Log>(Log::WIRE_ID);
     let decoded: InstructionBox = registry
-        .decode(id, &framed)
+        .decode(Log::WIRE_ID, &framed)
         .expect("registered")
         .expect("decode");
     assert_eq!(Instruction::id(&*decoded), id);

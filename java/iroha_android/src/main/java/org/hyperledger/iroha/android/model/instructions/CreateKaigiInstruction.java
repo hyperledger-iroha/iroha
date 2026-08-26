@@ -143,6 +143,7 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
   }
 
   public static CreateKaigiInstruction fromArguments(final Map<String, String> arguments) {
+    KaigiInstructionUtils.requireAction(arguments, ACTION);
     final Builder builder = builder();
     builder.setCallId(KaigiInstructionUtils.parseCallId(arguments, "call"));
     builder.setHost(KaigiInstructionUtils.require(arguments, "host"));
@@ -190,6 +191,9 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
     if (nullifierIssuedAt != null && nullifierIssuedAt.longValue() != 0L) {
       throw new IllegalArgumentException(
           "nullifier issuedAtMs is off-chain only and must be zero when provided");
+    }
+    if (nullifierIssuedAt != null && nullifier == null) {
+      throw new IllegalArgumentException("nullifier issuedAtMs requires nullifier digest");
     }
     if (nullifier != null) {
       builder.setNullifierDigestLiteral(nullifier);
@@ -357,7 +361,7 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
     }
 
     public Builder setMaxParticipants(final Integer maxParticipants) {
-      if (maxParticipants != null && maxParticipants <= 0) {
+      if (maxParticipants != null && maxParticipants == 0) {
         throw new IllegalArgumentException("maxParticipants must be greater than zero when provided");
       }
       this.maxParticipants = maxParticipants;
@@ -365,9 +369,6 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
     }
 
     public Builder setGasRatePerMinute(final long gasRatePerMinute) {
-      if (gasRatePerMinute < 0) {
-        throw new IllegalArgumentException("gasRatePerMinute must be non-negative");
-      }
       this.gasRatePerMinute = gasRatePerMinute;
       return this;
     }
@@ -388,9 +389,6 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
     }
 
     public Builder setScheduledStartMs(final Long scheduledStartMs) {
-      if (scheduledStartMs != null && scheduledStartMs < 0) {
-        throw new IllegalArgumentException("scheduledStartMs must be non-negative");
-      }
       this.scheduledStartMs = scheduledStartMs;
       return this;
     }
@@ -437,9 +435,6 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
     }
 
     public Builder setRelayManifestExpiryMs(final Long expiryMs) {
-      if (expiryMs != null && expiryMs < 0) {
-        throw new IllegalArgumentException("relay manifest expiry must be non-negative");
-      }
       this.relayManifestExpiry = expiryMs;
       return this;
     }
@@ -564,6 +559,9 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
       if (host == null) {
         throw new IllegalStateException("host must be provided");
       }
+      if (nullifierIssuedAtMs != null && nullifierDigest == null) {
+        throw new IllegalStateException("nullifier issuedAtMs requires nullifier digest");
+      }
       return new CreateKaigiInstruction(this);
     }
 
@@ -594,7 +592,7 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
         args.put("description", description);
       }
       if (maxParticipants != null) {
-        args.put("max_participants", Integer.toString(maxParticipants));
+        args.put("max_participants", Integer.toUnsignedString(maxParticipants));
       }
       args.put("gas_rate_per_minute", Long.toUnsignedString(gasRatePerMinute));
       KaigiInstructionUtils.appendMetadata(metadata, args, "metadata");

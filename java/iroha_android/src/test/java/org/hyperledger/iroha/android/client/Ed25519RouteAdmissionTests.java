@@ -154,7 +154,7 @@ public final class Ed25519RouteAdmissionTests {
         + "\",\"metering_public_key_hex\":\""
         + meteringKey
         + "\",\"open_lease_instruction\":{"
-        + "\"wire_id\":\"iroha_data_model::isi::vpn::OpenVpnLeaseEscrow\","
++ "\"wire_id\":\"iroha.instruction.v1::vpn::OpenVpnLeaseEscrow\","
         + "\"payload_hex\":\"cafe\"}"
         + "}";
   }

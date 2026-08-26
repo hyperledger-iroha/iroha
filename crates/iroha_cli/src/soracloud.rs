@@ -66,8 +66,8 @@ use iroha::{
             SoraServiceManifestV1, SoraServiceMutationPreconditionV1, SoraStateBindingV1,
             SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
             SoraTrainingJobStatusV1, SoraUploadedModelBundleV1, SoracloudMutationDraftResponse,
-            encode_agent_artifact_allow_provenance_payload,
-            encode_agent_deploy_provenance_payload, encode_agent_lease_renew_provenance_payload,
+            encode_agent_artifact_allow_provenance_payload, encode_agent_deploy_provenance_payload,
+            encode_agent_lease_renew_provenance_payload,
             encode_agent_message_ack_provenance_payload,
             encode_agent_message_send_provenance_payload,
             encode_agent_policy_revoke_provenance_payload, encode_agent_restart_provenance_payload,
@@ -8759,6 +8759,176 @@ impl TairaInrouCanaryPreparedOperationV1 {
     }
 }
 
+/// Authenticate the executable identity of one prepared public-reset Inrou transaction.
+///
+/// This closes the retained stage identity over the actual signed instruction instead of
+/// accepting a transaction merely because its metadata names the expected reset child.
+pub(crate) fn verify_taira_inrou_prepared_transaction_identity_v1(
+    transaction: &SignedTransaction,
+    operation: TairaInrouCanaryPreparedOperationV1,
+    stage: &TairaInrouStageIdentity,
+    expected_idempotency_key: &str,
+) -> Result<()> {
+    if stage.stage_mode != MutationMode::Deploy.label_lowercase() {
+        return Err(eyre!(
+            "public-reset Inrou V1 accepts only the exact deploy stage"
+        ));
+    }
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        return Err(eyre!(
+            "prepared Inrou transaction must contain one direct instruction"
+        ));
+    };
+    let [instruction] = instructions.as_ref() else {
+        return Err(eyre!(
+            "prepared Inrou transaction must contain exactly one instruction"
+        ));
+    };
+    match operation {
+        TairaInrouCanaryPreparedOperationV1::BundlePin
+        | TairaInrouCanaryPreparedOperationV1::GuestPin => {
+            let registration = instruction
+                .as_any()
+                .downcast_ref::<iroha::data_model::isi::sorafs::RegisterPinManifest>()
+                .ok_or_else(|| {
+                    eyre!("prepared Inrou pin transaction substituted its instruction")
+                })?;
+            if registration.alias.is_some() || registration.successor_of.is_some() {
+                return Err(eyre!(
+                    "prepared Inrou pin transaction must not bind an alias or predecessor"
+                ));
+            }
+            let manifest =
+                sorafs_manifest::decode_manifest_v1_canonical(&registration.manifest_payload)
+                    .wrap_err("prepared Inrou pin manifest is not canonical V1")?;
+            validate_manifest(
+                &manifest,
+                &PinPolicyConstraints {
+                    require_council_signatures: true,
+                    ..PinPolicyConstraints::default()
+                },
+            )
+            .wrap_err("prepared Inrou pin manifest failed exact policy validation")?;
+            let authority = transaction
+                .authority()
+                .try_signatory()
+                .ok_or_else(|| eyre!("prepared Inrou authority must be single-signatory"))?;
+            let (_, authority_bytes) = authority
+                .try_to_bytes()
+                .wrap_err("prepared Inrou authority public key is malformed")?;
+            let authority_bytes: [u8; 32] =
+                authority_bytes.try_into().map_err(|bytes: Vec<u8>| {
+                    eyre!(
+                        "prepared Inrou authority must use a 32-byte Ed25519 key, found {} bytes",
+                        bytes.len()
+                    )
+                })?;
+            if manifest.governance.council_signatures.len() != 1
+                || manifest.governance.council_signatures[0].signer != authority_bytes
+            {
+                return Err(eyre!(
+                    "prepared Inrou pin manifest signer differs from the transaction authority"
+                ));
+            }
+            let digest_hex = hex::encode(
+                manifest
+                    .digest()
+                    .wrap_err("failed to digest prepared Inrou pin manifest")?
+                    .as_bytes(),
+            );
+            let content_cid = encode_content_cid(&manifest.root_cid);
+            let (expected_digest, expected_cid) = match operation {
+                TairaInrouCanaryPreparedOperationV1::BundlePin => (
+                    stage.bundle_manifest_digest_hex.as_str(),
+                    stage.bundle_content_cid.as_str(),
+                ),
+                TairaInrouCanaryPreparedOperationV1::GuestPin => (
+                    stage.guest_manifest_digest_hex.as_str(),
+                    stage.guest_content_cid.as_str(),
+                ),
+                TairaInrouCanaryPreparedOperationV1::ServiceMutation => unreachable!(),
+            };
+            if digest_hex != expected_digest || content_cid != expected_cid {
+                return Err(eyre!(
+                    "prepared Inrou pin instruction differs from its retained stage identity"
+                ));
+            }
+        }
+        TairaInrouCanaryPreparedOperationV1::ServiceMutation => {
+            let deployment = instruction
+                .as_any()
+                .downcast_ref::<iroha::data_model::isi::soracloud::DeploySoracloudService>()
+                .ok_or_else(|| {
+                    eyre!("prepared Inrou service transaction is not an exact deploy instruction")
+                })?;
+            validate_taira_inrou_canary_bundle(&deployment.bundle)
+                .wrap_err("prepared Inrou deployment bundle is not the canonical canary")?;
+            let expected_configs = BTreeMap::from([(
+                "public_reset_idempotency_v1".to_owned(),
+                Json::new(expected_idempotency_key.to_owned()),
+            )]);
+            if deployment.initial_service_configs != expected_configs
+                || !deployment.initial_service_secrets.is_empty()
+                || deployment.precondition != SoraServiceMutationPreconditionV1::ServiceAbsent
+            {
+                return Err(eyre!(
+                    "prepared Inrou deployment material or precondition is outside exact V1"
+                ));
+            }
+            let provenance_payload = encode_bundle_with_materials_provenance_payload(
+                &deployment.bundle,
+                &deployment.initial_service_configs,
+                &deployment.initial_service_secrets,
+                &deployment.precondition,
+            )
+            .wrap_err("failed to encode prepared Inrou deployment provenance")?;
+            let authority = transaction
+                .authority()
+                .try_signatory()
+                .ok_or_else(|| eyre!("prepared Inrou authority must be single-signatory"))?;
+            if &deployment.provenance.signer != authority {
+                return Err(eyre!(
+                    "prepared Inrou deployment signer differs from the transaction authority"
+                ));
+            }
+            deployment
+                .provenance
+                .signature
+                .verify(&deployment.provenance.signer, &provenance_payload)
+                .wrap_err("prepared Inrou deployment provenance signature is invalid")?;
+            let bundle = &deployment.bundle;
+            let route = bundle
+                .service
+                .route
+                .as_ref()
+                .ok_or_else(|| eyre!("prepared Inrou deployment omits its public route"))?;
+            let guest = bundle
+                .container
+                .inrou
+                .as_ref()
+                .and_then(|inrou| inrou.guest_images.get(&SoraInrouGuestIsaV1::Aarch64))
+                .ok_or_else(|| eyre!("prepared Inrou deployment omits its AArch64 guest"))?;
+            if bundle.service.service_name.as_ref() != stage.service_name
+                || bundle.service.service_version != stage.service_version
+                || route.host != stage.route_host
+                || route.path_prefix != stage.route_path_prefix
+                || bundle.container.lifecycle.healthcheck_path.as_deref()
+                    != Some(stage.healthcheck_path.as_str())
+                || bundle.container.bundle_hash.to_string() != stage.bundle_hash
+                || guest.published_artifact.content_cid != stage.guest_content_cid
+                || guest.published_artifact.manifest_digest_hex != stage.guest_manifest_digest_hex
+                || bundle.container_manifest_hash().to_string() != stage.container_manifest_hash
+                || bundle.service_manifest_hash().to_string() != stage.service_manifest_hash
+            {
+                return Err(eyre!(
+                    "prepared Inrou deploy instruction differs from its retained stage identity"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Prepare exactly one ledger transaction in the ordered Taira Inrou canary protocol.
 ///
 /// The caller must prove and durably record the preceding child as Applied before
@@ -14954,10 +15124,12 @@ impl TairaMutationBindingV1 {
     fn metadata(&self, operation: &str) -> Result<Metadata> {
         self.validate()?;
         validate_prepared_soracloud_operation(operation)?;
-        let binding_json = json::to_json(self)
+        let binding_value = json::to_value(self)
             .wrap_err("failed to encode exact Taira mutation binding metadata")?;
+        let binding_json = Json::from_norito_value_ref(&binding_value)
+            .wrap_err("failed to canonicalize exact Taira mutation binding metadata")?;
         let entries = [
-            ("taira_public_reset_binding", Json::new(binding_json)),
+            ("taira_public_reset_binding", binding_json),
             (
                 "taira_public_reset_authorization_sha256",
                 Json::new(self.authorization_sha256.clone()),
@@ -22716,6 +22888,172 @@ mod tests {
             assert_eq!(operation.operation_label(), label);
             assert_eq!(operation.mutation_kind(), kind);
         }
+    }
+
+    fn prepared_inrou_stage_identity_fixture(
+        bundle: &SoraDeploymentBundleV1,
+    ) -> TairaInrouStageIdentity {
+        let route = bundle
+            .service
+            .route
+            .as_ref()
+            .expect("canonical Taira route");
+        let guest = &bundle
+            .container
+            .inrou
+            .as_ref()
+            .expect("canonical Taira Inrou manifest")
+            .guest_images[&SoraInrouGuestIsaV1::Aarch64]
+            .published_artifact;
+        TairaInrouStageIdentity {
+            service_name: bundle.service.service_name.to_string(),
+            service_version: bundle.service.service_version.clone(),
+            route_host: route.host.clone(),
+            route_path_prefix: route.path_prefix.clone(),
+            healthcheck_path: bundle
+                .container
+                .lifecycle
+                .healthcheck_path
+                .clone()
+                .expect("canonical Taira healthcheck"),
+            stage_mode: "deploy".to_owned(),
+            bundle_hash: bundle.container.bundle_hash.to_string(),
+            bundle_content_cid: "bfixturebundle".to_owned(),
+            bundle_manifest_digest_hex: "ab".repeat(32),
+            guest_content_cid: guest.content_cid.clone(),
+            guest_manifest_digest_hex: guest.manifest_digest_hex.clone(),
+            container_manifest_hash: bundle.container_manifest_hash().to_string(),
+            service_manifest_hash: bundle.service_manifest_hash().to_string(),
+        }
+    }
+
+    fn sign_prepared_inrou_instruction(
+        config: &ClientConfig,
+        instruction: InstructionBox,
+        binding: &TairaMutationBindingV1,
+        operation: &str,
+    ) -> SignedTransaction {
+        let client = Client::new(config.clone());
+        let payload = client
+            .try_build_transaction_payload_from_items(
+                [instruction],
+                FeePaymentIntent::authority(Vec::new(), None),
+                binding.metadata(operation).expect("exact binding metadata"),
+            )
+            .expect("build prepared Inrou fixture payload");
+        client
+            .try_sign_transaction_payload(payload)
+            .expect("sign prepared Inrou fixture transaction")
+    }
+
+    #[test]
+    fn prepared_inrou_executable_verifier_binds_pin_manifest_and_authority() {
+        let key_pair = soracloud_fixture_key_pair(0x5B);
+        let mut config = crate::fallback_config();
+        config.account = AccountId::new(key_pair.public_key().clone());
+        config.key_pair = key_pair.clone();
+        let payload = b"exact prepared Inrou pin fixture";
+        let plan = CarBuildPlan::single_file_with_profile(
+            payload,
+            chunker_registry::default_descriptor().profile,
+        )
+        .expect("plan pin fixture payload");
+        let built = taira_stage_manifest(&plan, payload, &key_pair, "pin fixture")
+            .expect("build governed pin fixture");
+        let mut stage =
+            prepared_inrou_stage_identity_fixture(&canonical_taira_inrou_bundle_fixture());
+        stage.bundle_content_cid = encode_content_cid(&built.manifest.root_cid);
+        stage.bundle_manifest_digest_hex = built.digest_hex.clone();
+        let binding = TairaMutationBindingV1 {
+            authorization_sha256: "ab".repeat(32),
+            authorization_nonce: "0123456789abcdef_123456789abcde-".to_owned(),
+            kind: "inrou_bundle_pin".to_owned(),
+            phase: "pre_edge".to_owned(),
+            idempotency_key: "cd".repeat(32),
+            execution_expires_at_unix_ms: u64::MAX,
+        };
+        let instruction =
+            iroha::data_model::isi::sorafs::RegisterPinManifest::new(built.bytes, None, None);
+        let transaction = sign_prepared_inrou_instruction(
+            &config,
+            InstructionBox::from(instruction),
+            &binding,
+            "bundle_pin",
+        );
+        verify_taira_inrou_prepared_transaction_identity_v1(
+            &transaction,
+            TairaInrouCanaryPreparedOperationV1::BundlePin,
+            &stage,
+            &binding.idempotency_key,
+        )
+        .expect("exact governed bundle pin");
+
+        stage.bundle_manifest_digest_hex = "ef".repeat(32);
+        verify_taira_inrou_prepared_transaction_identity_v1(
+            &transaction,
+            TairaInrouCanaryPreparedOperationV1::BundlePin,
+            &stage,
+            &binding.idempotency_key,
+        )
+        .expect_err("another retained manifest identity must fail closed");
+    }
+
+    #[test]
+    fn prepared_inrou_executable_verifier_binds_exact_deploy_materials() {
+        let key_pair = soracloud_fixture_key_pair(0x5C);
+        let mut config = crate::fallback_config();
+        config.account = AccountId::new(key_pair.public_key().clone());
+        config.key_pair = key_pair.clone();
+        let bundle = canonical_taira_inrou_bundle_fixture();
+        let stage = prepared_inrou_stage_identity_fixture(&bundle);
+        let binding = TairaMutationBindingV1 {
+            authorization_sha256: "ab".repeat(32),
+            authorization_nonce: "0123456789abcdef_123456789abcde-".to_owned(),
+            kind: "inrou_canary".to_owned(),
+            phase: "pre_edge".to_owned(),
+            idempotency_key: "cd".repeat(32),
+            execution_expires_at_unix_ms: u64::MAX,
+        };
+        let configs = BTreeMap::from([(
+            "public_reset_idempotency_v1".to_owned(),
+            Json::new(binding.idempotency_key.clone()),
+        )]);
+        let request = signed_bundle_request(
+            bundle,
+            configs,
+            BTreeMap::new(),
+            SoraServiceMutationPreconditionV1::ServiceAbsent,
+            Some(&config.account),
+            &key_pair,
+        )
+        .expect("sign exact deploy request");
+        let instruction = iroha::data_model::isi::soracloud::DeploySoracloudService {
+            bundle: request.bundle,
+            initial_service_configs: request.initial_service_configs,
+            initial_service_secrets: request.initial_service_secrets,
+            precondition: request.precondition,
+            provenance: request.provenance,
+        };
+        let transaction = sign_prepared_inrou_instruction(
+            &config,
+            InstructionBox::from(instruction),
+            &binding,
+            "service_mutation",
+        );
+        verify_taira_inrou_prepared_transaction_identity_v1(
+            &transaction,
+            TairaInrouCanaryPreparedOperationV1::ServiceMutation,
+            &stage,
+            &binding.idempotency_key,
+        )
+        .expect("exact canonical Inrou deploy");
+        verify_taira_inrou_prepared_transaction_identity_v1(
+            &transaction,
+            TairaInrouCanaryPreparedOperationV1::ServiceMutation,
+            &stage,
+            &"ef".repeat(32),
+        )
+        .expect_err("another public-reset idempotency value must fail closed");
     }
 
     #[test]

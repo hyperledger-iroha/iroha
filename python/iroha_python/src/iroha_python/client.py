@@ -137,6 +137,7 @@ from iroha_torii_client.client import (
     canonical_network_request_signature_message,
     canonical_query_string,
     canonical_request_message,
+    inspect_i105_network_prefix,
 )
 from iroha_torii_client.governance_proposals import (
     GovernanceCanonicalObject,
@@ -4775,22 +4776,82 @@ class IsoMessageTimeoutError(RuntimeError):
 _KAIGI_HEALTH_STATUSES = frozenset({"healthy", "degraded", "unavailable"})
 _KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS = 500
 _KAIGI_U64_MAX = (1 << 64) - 1
+_KAIGI_RELAY_SUMMARY_REQUIRED_FIELDS = frozenset(
+    {"relay_id", "domain", "bandwidth_class", "hpke_fingerprint_hex"}
+)
+_KAIGI_RELAY_SUMMARY_OPTIONAL_FIELDS = frozenset({"status", "reported_at_ms"})
+
+
+def _require_kaigi_fields(
+    payload: Mapping[str, Any],
+    *,
+    required: frozenset[str],
+    optional: frozenset[str] = frozenset(),
+    context: str,
+) -> None:
+    """Require the exact first-release field set advertised by Torii."""
+
+    missing = required.difference(payload)
+    if missing:
+        field = min(missing)
+        raise ValueError(f"{context}.{field} is required")
+    unexpected = set(payload).difference(required | optional)
+    if unexpected:
+        field = min(unexpected)
+        raise ValueError(f"{context}.{field} is not part of the first-release contract")
+
+
+def _require_kaigi_exact_string(value: Any, context: str) -> str:
+    """Parse one non-empty response string without normalizing wire bytes."""
+
+    return _require_exact_non_empty_string(value, context)
+
+
+def _require_kaigi_canonical_account_id(value: Any, context: str) -> str:
+    """Require a canonical I105 account literal emitted by Torii."""
+
+    literal = _require_kaigi_exact_string(value, context)
+    if "@" in literal:
+        raise ValueError(f"{context} must be a canonical I105 account id")
+    try:
+        inspect_i105_network_prefix(literal)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{context} must be a canonical I105 account id") from exc
+    return literal
+
+
+def _require_kaigi_lower_hex_32(value: Any, context: str) -> str:
+    """Require the exact lowercase 32-byte fingerprint spelling from Torii."""
+
+    literal = _require_kaigi_exact_string(value, context)
+    if re.fullmatch(r"[0-9a-f]{64}", literal) is None:
+        raise ValueError(f"{context} must contain exactly 64 lowercase hex characters")
+    return literal
+
+
+def _decode_kaigi_exact_base64(value: Any, context: str) -> tuple[str, bytes]:
+    """Decode one non-empty canonical standard-base64 response field."""
+
+    literal = _require_kaigi_exact_string(value, context)
+    if any(character.isspace() for character in literal):
+        raise ValueError(f"{context} must be exact standard-base64")
+    try:
+        decoded = base64.b64decode(literal, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"{context} must be exact standard-base64") from exc
+    if not decoded or base64.b64encode(decoded).decode("ascii") != literal:
+        raise ValueError(f"{context} must be exact non-empty standard-base64")
+    return literal, decoded
 
 
 def _require_kaigi_u64(value: Any, context: str) -> int:
-    """Parse an exact unsigned Kaigi wire integer without lossy coercion."""
+    """Parse an exact unsigned Kaigi JSON integer without coercion."""
 
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{context} must be an unsigned integer")
-    if isinstance(value, int):
-        number = value
-    elif isinstance(value, str) and re.fullmatch(r"(?:0|[1-9][0-9]*)", value):
-        number = int(value, 10)
-    else:
-        raise TypeError(f"{context} must be an unsigned integer")
-    if not 0 <= number <= _KAIGI_U64_MAX:
+    if not 0 <= value <= _KAIGI_U64_MAX:
         raise ValueError(f"{context} must fit in a u64")
-    return number
+    return value
 
 
 @dataclass(frozen=True)
@@ -4808,55 +4869,58 @@ class KaigiRelaySummary:
     def from_payload(cls, payload: Mapping[str, Any]) -> "KaigiRelaySummary":
         if not isinstance(payload, Mapping):
             raise TypeError("kaigi relay summary payload must be an object")
-        relay_literal = payload.get("relay_id")
-        domain_literal = payload.get("domain")
-        if "bandwidth_class" not in payload:
-            raise ValueError("kaigi_relay_summary.bandwidth_class is required")
-        bandwidth_literal = payload.get("bandwidth_class")
-        fingerprint_literal = payload.get("hpke_fingerprint_hex")
-        status_literal = payload.get("status")
-        reported_literal = payload.get("reported_at_ms")
-
-        relay_id = _require_non_empty_string(relay_literal, "kaigi_relay_summary.relay_id")
-        domain = _require_non_empty_string(domain_literal, "kaigi_relay_summary.domain")
+        _require_kaigi_fields(
+            payload,
+            required=_KAIGI_RELAY_SUMMARY_REQUIRED_FIELDS,
+            optional=_KAIGI_RELAY_SUMMARY_OPTIONAL_FIELDS,
+            context="kaigi_relay_summary",
+        )
+        relay_id = _require_kaigi_canonical_account_id(
+            payload["relay_id"],
+            "kaigi_relay_summary.relay_id",
+        )
+        domain = _require_kaigi_exact_string(
+            payload["domain"],
+            "kaigi_relay_summary.domain",
+        )
+        bandwidth_literal = payload["bandwidth_class"]
         if isinstance(bandwidth_literal, bool) or not isinstance(bandwidth_literal, int):
             raise TypeError("kaigi_relay_summary.bandwidth_class must be an integer")
         if not 1 <= bandwidth_literal <= 0xFF:
             raise ValueError("kaigi_relay_summary.bandwidth_class must be within 1..=255")
         bandwidth_value = bandwidth_literal
-        fingerprint = _require_non_empty_string(
-            fingerprint_literal,
+        fingerprint = _require_kaigi_lower_hex_32(
+            payload["hpke_fingerprint_hex"],
             "kaigi_relay_summary.hpke_fingerprint_hex",
         )
+        has_status = "status" in payload
+        has_reported_at = "reported_at_ms" in payload
+        if has_status != has_reported_at:
+            raise ValueError(
+                "kaigi_relay_summary.status and reported_at_ms must be present together"
+            )
         status: Optional[str] = None
-        if status_literal is not None:
-            status_value = _require_non_empty_string(
-                status_literal,
+        reported_at_ms: Optional[int] = None
+        if has_status:
+            status_value = _require_kaigi_exact_string(
+                payload["status"],
                 "kaigi_relay_summary.status",
-            ).lower()
+            )
             if status_value not in _KAIGI_HEALTH_STATUSES:
                 raise ValueError(
                     f"kaigi_relay_summary.status must be one of {sorted(_KAIGI_HEALTH_STATUSES)}"
                 )
             status = status_value
-        reported_at_ms = (
-            _require_kaigi_u64(
-                reported_literal,
+            reported_at_ms = _require_kaigi_u64(
+                payload["reported_at_ms"],
                 "kaigi_relay_summary.reported_at_ms",
             )
-            if reported_literal is not None
-            else None
-        )
 
         return cls(
             relay_id=relay_id,
             domain=domain,
             bandwidth_class=bandwidth_value,
-            hpke_fingerprint_hex=_normalize_hex_string(
-                fingerprint,
-                "kaigi_relay_summary.hpke_fingerprint_hex",
-                expected_length=64,
-            ),
+            hpke_fingerprint_hex=fingerprint,
             status=status,
             reported_at_ms=reported_at_ms,
         )
@@ -4873,8 +4937,11 @@ class KaigiRelaySummaryList:
     def from_payload(cls, payload: Mapping[str, Any]) -> "KaigiRelaySummaryList":
         if not isinstance(payload, Mapping):
             raise TypeError("kaigi relay summary response must be an object")
-        if "items" not in payload:
-            raise ValueError("kaigi relay summary response `items` is required")
+        _require_kaigi_fields(
+            payload,
+            required=frozenset({"items", "total"}),
+            context="kaigi_relay_summary",
+        )
         raw_items = payload["items"]
         if not isinstance(raw_items, list):
             raise TypeError("kaigi relay summary response `items` must be an array")
@@ -4889,12 +4956,15 @@ class KaigiRelaySummaryList:
                     f"kaigi relay summary response items[{index}] must be an object"
                 )
             items.append(KaigiRelaySummary.from_payload(entry))
-        if "total" not in payload:
-            raise ValueError("kaigi relay summary response `total` is required")
         total_value = _require_kaigi_u64(
             payload["total"],
             "kaigi_relay_summary.total",
         )
+        if total_value != len(items):
+            raise ValueError("kaigi_relay_summary.total must equal the number of items")
+        relay_ids = [item.relay_id for item in items]
+        if len(set(relay_ids)) != len(relay_ids):
+            raise ValueError("kaigi_relay_summary.items contains duplicate relay ids")
         return cls(items=items, total=total_value)
 
 
@@ -4909,15 +4979,18 @@ class KaigiRelayReportedCall:
     def from_payload(cls, payload: Mapping[str, Any]) -> "KaigiRelayReportedCall":
         if not isinstance(payload, Mapping):
             raise TypeError("kaigi relay call payload must be an object")
-        domain_literal = payload.get("domain_id")
-        name_literal = payload.get("call_name")
+        _require_kaigi_fields(
+            payload,
+            required=frozenset({"domain_id", "call_name"}),
+            context="kaigi_relay_reported_call",
+        )
         return cls(
-            domain_id=_require_non_empty_string(
-                domain_literal,
+            domain_id=_require_kaigi_exact_string(
+                payload["domain_id"],
                 "kaigi_relay_reported_call.domain_id",
             ),
-            call_name=_require_non_empty_string(
-                name_literal,
+            call_name=_require_kaigi_exact_string(
+                payload["call_name"],
                 "kaigi_relay_reported_call.call_name",
             ),
         )
@@ -4937,7 +5010,19 @@ class KaigiRelayDomainMetrics:
     def from_payload(cls, payload: Mapping[str, Any]) -> "KaigiRelayDomainMetrics":
         if not isinstance(payload, Mapping):
             raise TypeError("kaigi relay domain metrics payload must be an object")
-        domain_literal = payload.get("domain")
+        _require_kaigi_fields(
+            payload,
+            required=frozenset(
+                {
+                    "domain",
+                    "registrations_total",
+                    "manifest_updates_total",
+                    "failovers_total",
+                    "health_reports_total",
+                }
+            ),
+            context="kaigi_relay_domain_metrics",
+        )
 
         def _resolve_counter(name: str) -> int:
             if name not in payload:
@@ -4948,8 +5033,8 @@ class KaigiRelayDomainMetrics:
             )
 
         return cls(
-            domain=_require_non_empty_string(
-                domain_literal,
+            domain=_require_kaigi_exact_string(
+                payload["domain"],
                 "kaigi_relay_domain_metrics.domain",
             ),
             registrations_total=_resolve_counter("registrations_total"),
@@ -4974,48 +5059,81 @@ class KaigiRelayDetail:
     def from_payload(cls, payload: Mapping[str, Any]) -> "KaigiRelayDetail":
         if not isinstance(payload, Mapping):
             raise TypeError("kaigi relay detail payload must be an object")
+        _require_kaigi_fields(
+            payload,
+            required=frozenset({"relay", "hpke_public_key_b64"}),
+            optional=frozenset({"reported_call", "reported_by", "notes", "metrics"}),
+            context="kaigi_relay_detail",
+        )
         relay_payload = payload.get("relay")
         if not isinstance(relay_payload, Mapping):
             raise TypeError("kaigi relay detail payload missing object `relay` field")
-        hpke_literal = payload.get("hpke_public_key_b64")
+        hpke_literal, hpke_bytes = _decode_kaigi_exact_base64(
+            payload["hpke_public_key_b64"],
+            "kaigi_relay_detail.hpke_public_key_b64",
+        )
         reported_call_payload = payload.get("reported_call")
         metrics_payload = payload.get("metrics")
         reported_by_literal = payload.get("reported_by")
         notes_literal = payload.get("notes")
 
         reported_by: Optional[str] = None
-        if reported_by_literal is not None:
-            reported_by = _require_non_empty_string(
+        if "reported_by" in payload:
+            reported_by = _require_kaigi_canonical_account_id(
                 reported_by_literal,
                 "kaigi_relay_detail.reported_by",
             )
         notes: Optional[str] = None
-        if notes_literal is not None:
+        if "notes" in payload:
             if not isinstance(notes_literal, str):
                 raise TypeError("kaigi_relay_detail.notes must be a string")
             notes = notes_literal
 
-        if reported_call_payload is not None and not isinstance(
-            reported_call_payload, Mapping
-        ):
+        if "reported_call" in payload and not isinstance(reported_call_payload, Mapping):
             raise TypeError("kaigi_relay_detail.reported_call must be an object")
-        if metrics_payload is not None and not isinstance(metrics_payload, Mapping):
+        if "metrics" in payload and not isinstance(metrics_payload, Mapping):
             raise TypeError("kaigi_relay_detail.metrics must be an object")
 
+        relay = KaigiRelaySummary.from_payload(relay_payload)
+        from .crypto import hash_blake2b_32
+
+        expected_fingerprint = hash_blake2b_32(hpke_bytes).hex()
+        if relay.hpke_fingerprint_hex != expected_fingerprint:
+            raise ValueError(
+                "kaigi_relay_detail.hpke_public_key_b64 does not match the relay fingerprint"
+            )
+        has_reported_call = "reported_call" in payload
+        has_reported_by = "reported_by" in payload
+        if has_reported_call != has_reported_by:
+            raise ValueError(
+                "kaigi_relay_detail.reported_call and reported_by must be present together"
+            )
+        has_feedback = relay.status is not None
+        if has_feedback != has_reported_call:
+            raise ValueError(
+                "kaigi_relay_detail feedback fields must agree with the relay health summary"
+            )
+        if "notes" in payload and not has_feedback:
+            raise ValueError("kaigi_relay_detail.notes requires relay health feedback")
+        metrics = (
+            KaigiRelayDomainMetrics.from_payload(metrics_payload)
+            if "metrics" in payload
+            else None
+        )
+        if metrics is not None and metrics.domain != relay.domain:
+            raise ValueError(
+                "kaigi_relay_detail.metrics.domain must match the relay domain"
+            )
+
         return cls(
-            relay=KaigiRelaySummary.from_payload(relay_payload),
-            hpke_public_key_b64=_require_non_empty_string(
-                hpke_literal,
-                "kaigi_relay_detail.hpke_public_key_b64",
-            ),
+            relay=relay,
+            hpke_public_key_b64=hpke_literal,
             reported_call=KaigiRelayReportedCall.from_payload(reported_call_payload)
-            if isinstance(reported_call_payload, Mapping)
+            if "reported_call" in payload
             else None,
             reported_by=reported_by,
             notes=notes,
-            metrics=KaigiRelayDomainMetrics.from_payload(metrics_payload)
-            if isinstance(metrics_payload, Mapping)
-            else None,
+            metrics=metrics,
         )
 
 
@@ -5035,8 +5153,21 @@ class KaigiRelayHealthSnapshot:
     def from_payload(cls, payload: Mapping[str, Any]) -> "KaigiRelayHealthSnapshot":
         if not isinstance(payload, Mapping):
             raise TypeError("kaigi relay health payload must be an object")
-        if "domains" not in payload:
-            raise ValueError("kaigi relay health payload `domains` is required")
+        _require_kaigi_fields(
+            payload,
+            required=frozenset(
+                {
+                    "healthy_total",
+                    "degraded_total",
+                    "unavailable_total",
+                    "reports_total",
+                    "registrations_total",
+                    "failovers_total",
+                    "domains",
+                }
+            ),
+            context="kaigi_relay_health",
+        )
         domains_value = payload["domains"]
         if not isinstance(domains_value, list):
             raise TypeError("kaigi relay health payload `domains` must be an array")
@@ -5051,13 +5182,16 @@ class KaigiRelayHealthSnapshot:
                     f"kaigi relay health payload domains[{index}] must be an object"
                 )
             domains.append(KaigiRelayDomainMetrics.from_payload(entry))
+        domain_ids = [entry.domain for entry in domains]
+        if len(set(domain_ids)) != len(domain_ids):
+            raise ValueError("kaigi_relay_health.domains contains duplicate domains")
 
         def _resolve_counter(name: str) -> int:
             if name not in payload:
                 raise ValueError(f"kaigi_relay_health.{name} is required")
             return _require_kaigi_u64(payload[name], f"kaigi_relay_health.{name}")
 
-        return cls(
+        snapshot = cls(
             healthy_total=_resolve_counter("healthy_total"),
             degraded_total=_resolve_counter("degraded_total"),
             unavailable_total=_resolve_counter("unavailable_total"),
@@ -5066,6 +5200,39 @@ class KaigiRelayHealthSnapshot:
             failovers_total=_resolve_counter("failovers_total"),
             domains=domains,
         )
+        current_status_total = (
+            snapshot.healthy_total
+            + snapshot.degraded_total
+            + snapshot.unavailable_total
+        )
+        if current_status_total > _KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS:
+            raise ValueError(
+                "kaigi_relay_health current status totals exceed the relay diagnostic cap"
+            )
+        aggregate_checks = (
+            (
+                "reports_total",
+                snapshot.reports_total,
+                sum(entry.health_reports_total for entry in domains),
+            ),
+            (
+                "registrations_total",
+                snapshot.registrations_total,
+                sum(entry.registrations_total for entry in domains),
+            ),
+            (
+                "failovers_total",
+                snapshot.failovers_total,
+                sum(entry.failovers_total for entry in domains),
+            ),
+        )
+        for field, actual, summed in aggregate_checks:
+            expected = min(summed, _KAIGI_U64_MAX)
+            if actual != expected:
+                raise ValueError(
+                    f"kaigi_relay_health.{field} must equal the saturated domain total"
+                )
+        return snapshot
 
 
 def _configuration_snapshot_to_dict(snapshot: ConfigurationSnapshot) -> Dict[str, Any]:
@@ -16382,7 +16549,7 @@ class ToriiClient(
             return None
         payload = self._maybe_json(response)
         if payload is None:
-            return None
+            raise RuntimeError("kaigi relay detail endpoint returned an empty success response")
         if not isinstance(payload, Mapping):
             raise TypeError("kaigi relay detail response must be an object")
         return payload

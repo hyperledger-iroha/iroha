@@ -454,7 +454,7 @@ class HttpClientTransportVpnParserTest {
               "directory_snapshot_digest_hex": "${"42".repeat(32)}",
               "metering_public_key_hex": "$meteringKey",
               "open_lease_instruction": {
-                "wire_id": "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow",
+"wire_id": "iroha.instruction.v1::vpn::OpenVpnLeaseEscrow",
                 "payload_hex": "cafe"
               }
             }
@@ -515,7 +515,7 @@ class HttpClientTransportVpnParserTest {
         val settle = if (settled) {
             """,
               "settle_lease_instruction": {
-                "wire_id": "iroha_data_model::isi::vpn::SettleVpnLease",
+                "wire_id": "iroha.instruction.v1::vpn::SettleVpnLease",
                 "payload_hex": "f00d"
               }"""
         } else {

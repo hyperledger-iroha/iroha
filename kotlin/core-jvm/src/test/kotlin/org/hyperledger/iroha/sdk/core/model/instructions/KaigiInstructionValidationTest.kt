@@ -22,6 +22,67 @@ class KaigiInstructionValidationTest {
     }
 
     @Test
+    fun `full width unsigned Kaigi fields round trip through signed JVM carriers`() {
+        val callId = KaigiInstructionUtils.CallId("wonderland", "unsigned-boundary")
+        val u64Max = -1L
+        val u32Max = -1
+        val u64MaxText = "18446744073709551615"
+        val u32MaxText = "4294967295"
+
+        val create = CreateKaigiInstruction.create(
+            callId = callId,
+            host = "host",
+            maxParticipants = u32Max,
+            gasRatePerMinute = u64Max,
+            scheduledStartMs = u64Max,
+        )
+        assertEquals(u32MaxText, create.arguments["max_participants"])
+        assertEquals(u64MaxText, create.arguments["gas_rate_per_minute"])
+        assertEquals(u64MaxText, create.arguments["scheduled_start_ms"])
+        assertEquals(create, CreateKaigiInstruction.fromArguments(create.arguments))
+
+        val end = EndKaigiInstruction(callId, endedAtMs = u64Max)
+        assertEquals(u64MaxText, end.arguments["ended_at_ms"])
+        assertEquals(end, EndKaigiInstruction.fromArguments(end.arguments))
+
+        val usage = RecordKaigiUsageInstruction(callId, durationMs = u64Max, billedGas = u64Max)
+        assertEquals(u64MaxText, usage.arguments["duration_ms"])
+        assertEquals(u64MaxText, usage.arguments["billed_gas"])
+        assertEquals(usage, RecordKaigiUsageInstruction.fromArguments(usage.arguments))
+
+        val manifest = SetKaigiRelayManifestInstruction.builder()
+            .setCallId(callId)
+            .setRelayManifestExpiryMs(u64Max)
+            .addRelayManifestHop("relay-a", key(1), 1)
+            .addRelayManifestHop("relay-b", key(2), 1)
+            .addRelayManifestHop("relay-c", key(3), 1)
+            .build()
+        assertEquals(u64MaxText, manifest.arguments["relay_manifest.expiry_ms"])
+        assertEquals(manifest, SetKaigiRelayManifestInstruction.fromArguments(manifest.arguments))
+
+        assertFailsWith<IllegalArgumentException> {
+            RecordKaigiUsageInstruction.fromArguments(
+                usage.arguments + ("duration_ms" to "01"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RecordKaigiUsageInstruction.fromArguments(
+                usage.arguments + ("billed_gas" to "18446744073709551616"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CreateKaigiInstruction.fromArguments(
+                create.arguments + ("scheduled_start_ms" to ""),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CreateKaigiInstruction.fromArguments(
+                create.arguments + ("max_participants" to "4294967296"),
+            )
+        }
+    }
+
+    @Test
     fun `relay manifest parser rejects oversized and sparse hop indices`() {
         val oversized = linkedMapOf(
             "action" to "SetKaigiRelayManifest",
@@ -49,12 +110,80 @@ class KaigiInstructionValidationTest {
         assertFailsWith<IllegalArgumentException> {
             SetKaigiRelayManifestInstruction.fromArguments(sparse)
         }
+
+        val nonCanonical = linkedMapOf(
+            "action" to "SetKaigiRelayManifest",
+            "call.domain_id" to "wonderland",
+            "call.call_name" to "sync",
+            "relay_manifest.expiry_ms" to "100",
+            "relay_manifest.hop.00.relay_id" to "relay-a",
+        )
+        assertFailsWith<IllegalArgumentException> {
+            SetKaigiRelayManifestInstruction.fromArguments(nonCanonical)
+        }
+    }
+
+    @Test
+    fun `typed Kaigi parsers require their exact action discriminator`() {
+        val usage = RecordKaigiUsageInstruction(
+            KaigiInstructionUtils.CallId("wonderland", "sync"),
+            durationMs = 1,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            RecordKaigiUsageInstruction.fromArguments(
+                usage.arguments + ("action" to "EndKaigi"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RecordKaigiUsageInstruction.fromArguments(usage.arguments - "action")
+        }
+    }
+
+    @Test
+    fun `unit enum payloads and call identifiers reject malformed state`() {
+        assertFailsWith<IllegalArgumentException> {
+            KaigiInstructionUtils.CallId("", "sync")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KaigiInstructionUtils.CallId("wonderland", " ")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KaigiInstructionUtils.PrivacyMode("Transparent", "unexpected")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KaigiInstructionUtils.RoomPolicy("Public", "unexpected")
+        }
+
+        val create = CreateKaigiInstruction.create(
+            KaigiInstructionUtils.CallId("wonderland", "sync"),
+            "host",
+        )
+        assertFailsWith<IllegalArgumentException> {
+            CreateKaigiInstruction.fromArguments(
+                create.arguments + ("privacy.state" to "unexpected"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CreateKaigiInstruction.fromArguments(
+                create.arguments + ("room_policy.state" to "unexpected"),
+            )
+        }
     }
 
     @Test
     fun `relay registration requires a nonzero explicit bandwidth class`() {
         assertFailsWith<IllegalArgumentException> {
             RegisterKaigiRelayInstruction("relay-a", key(1), 0)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RegisterKaigiRelayInstruction("relay-a", "not!base64", 1)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RecordKaigiUsageInstruction(
+                KaigiInstructionUtils.CallId("wonderland", "sync"),
+                durationMs = 1,
+                proofBase64 = "not!base64",
+            )
         }
     }
 
@@ -142,11 +271,6 @@ class KaigiInstructionValidationTest {
         val leave = LeaveKaigiInstruction(
             callId = callId,
             participant = "participant",
-            commitment = "commitment-literal",
-            nullifierDigest = "nullifier-literal",
-            nullifierIssuedAtMs = 0,
-            rosterRoot = "roster-literal",
-            proofBase64 = proof,
         )
         val end = EndKaigiInstruction(
             callId = callId,
@@ -158,9 +282,19 @@ class KaigiInstructionValidationTest {
             proofBase64 = proof,
         )
 
-        for (instruction in listOf(create, join, leave, end)) {
+        for (instruction in listOf(create, join, end)) {
             assertEquals(null, instruction.arguments["commitment.alias_tag"])
             assertEquals("0", instruction.arguments["nullifier.issued_at_ms"])
+        }
+        for (key in listOf(
+            "commitment.commitment",
+            "commitment.alias_tag",
+            "nullifier.digest",
+            "nullifier.issued_at_ms",
+            "roster_root",
+            "proof",
+        )) {
+            assertEquals(null, leave.arguments[key])
         }
         assertEquals("Public", create.arguments["room_policy.policy"])
         assertEquals("roster-literal", create.arguments["roster_root"])
@@ -183,7 +317,6 @@ class KaigiInstructionValidationTest {
         val leaveWithoutIssuedAt = LeaveKaigiInstruction(
             callId = callId,
             participant = "participant",
-            nullifierDigest = "nullifier-literal",
         )
         val endWithoutIssuedAt = EndKaigiInstruction(
             callId = callId,
@@ -237,6 +370,21 @@ class KaigiInstructionValidationTest {
             LeaveKaigiInstruction(callId, "participant", commitmentAliasTag = "participant-alias")
         }
         assertFailsWith<IllegalArgumentException> {
+            LeaveKaigiInstruction(callId, "participant", commitment = "commitment")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            LeaveKaigiInstruction(callId, "participant", nullifierDigest = "nullifier")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            LeaveKaigiInstruction(callId, "participant", nullifierIssuedAtMs = 0)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            LeaveKaigiInstruction(callId, "participant", rosterRoot = "root")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            LeaveKaigiInstruction(callId, "participant", proofBase64 = key(1))
+        }
+        assertFailsWith<IllegalArgumentException> {
             EndKaigiInstruction(callId, commitmentAliasTag = "host-alias")
         }
         assertFailsWith<IllegalArgumentException> {
@@ -250,6 +398,15 @@ class KaigiInstructionValidationTest {
         }
         assertFailsWith<IllegalArgumentException> {
             EndKaigiInstruction(callId, nullifierIssuedAtMs = 1)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CreateKaigiInstruction.create(callId, "host", nullifierIssuedAtMs = 0)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            JoinKaigiInstruction(callId, "participant", nullifierIssuedAtMs = 0)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            EndKaigiInstruction(callId, nullifierIssuedAtMs = 0)
         }
 
         assertFailsWith<IllegalArgumentException> {
@@ -265,6 +422,26 @@ class KaigiInstructionValidationTest {
         assertFailsWith<IllegalArgumentException> {
             LeaveKaigiInstruction.fromArguments(
                 leave.arguments + ("commitment.alias_tag" to "participant-alias"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            LeaveKaigiInstruction.fromArguments(
+                leave.arguments + ("commitment.commitment" to "commitment"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            LeaveKaigiInstruction.fromArguments(
+                leave.arguments + ("nullifier.issued_at_ms" to "0"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            LeaveKaigiInstruction.fromArguments(
+                leave.arguments + ("roster_root" to "root"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            LeaveKaigiInstruction.fromArguments(
+                leave.arguments + ("proof" to key(1)),
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -290,6 +467,21 @@ class KaigiInstructionValidationTest {
         assertFailsWith<IllegalArgumentException> {
             EndKaigiInstruction.fromArguments(
                 end.arguments + ("nullifier.issued_at_ms" to "1"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CreateKaigiInstruction.fromArguments(
+                create.arguments + ("nullifier.issued_at_ms" to "0"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            JoinKaigiInstruction.fromArguments(
+                join.arguments + ("nullifier.issued_at_ms" to "0"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            EndKaigiInstruction.fromArguments(
+                end.arguments + ("nullifier.issued_at_ms" to "0"),
             )
         }
     }

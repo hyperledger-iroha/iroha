@@ -6146,7 +6146,7 @@ public final class HttpClientTransportTests {
         + "\",\"metering_public_key_hex\":\""
         + meteringKey
         + "\",\"open_lease_instruction\":{"
-        + "\"wire_id\":\"iroha_data_model::isi::vpn::OpenVpnLeaseEscrow\","
++ "\"wire_id\":\"iroha.instruction.v1::vpn::OpenVpnLeaseEscrow\","
         + "\"payload_hex\":\"cafe\"}"
         + "}";
   }
@@ -6220,7 +6220,7 @@ public final class HttpClientTransportTests {
     final String settlement =
         settled
             ? ",\"settle_lease_instruction\":{"
-                + "\"wire_id\":\"iroha_data_model::isi::vpn::SettleVpnLease\","
+                + "\"wire_id\":\"iroha.instruction.v1::vpn::SettleVpnLease\","
                 + "\"payload_hex\":\"f00d\"}"
             : ",\"settle_lease_instruction\":null";
     return "{"

@@ -9814,23 +9814,29 @@ fn validate_dns_servers(entries: &[String]) -> Result<(), ControllerError> {
             ))
         })?;
         let canonical = address.to_string();
+        let normalized = match address {
+            IpAddr::V6(address) => address
+                .to_ipv4_mapped()
+                .map_or(IpAddr::V6(address), IpAddr::V4),
+            IpAddr::V4(_) => address,
+        };
         let limited_broadcast =
-            matches!(address, IpAddr::V4(address) if address == Ipv4Addr::BROADCAST);
+            matches!(normalized, IpAddr::V4(address) if address == Ipv4Addr::BROADCAST);
         if entry != &canonical
-            || address.is_unspecified()
-            || address.is_multicast()
+            || normalized.is_unspecified()
+            || normalized.is_multicast()
             || limited_broadcast
         {
             return Err(ControllerError::InvalidPayload(format!(
                 "dnsServers[{index}] must be a canonical unicast IP address"
             )));
         }
-        if parsed_entries.contains(&address) {
+        if parsed_entries.contains(&normalized) {
             return Err(ControllerError::InvalidPayload(
                 "dnsServers must not contain semantically duplicate entries".to_owned(),
             ));
         }
-        parsed_entries.push(address);
+        parsed_entries.push(normalized);
     }
     Ok(())
 }
@@ -12082,7 +12088,16 @@ mod tests {
                 .contains("duplicate")
         );
 
-        for resolver in ["0.0.0.0", "255.255.255.255", "224.0.0.1", "::", "ff02::1"] {
+        for resolver in [
+            "0.0.0.0",
+            "255.255.255.255",
+            "224.0.0.1",
+            "::",
+            "ff02::1",
+            "::ffff:0.0.0.0",
+            "::ffff:255.255.255.255",
+            "::ffff:224.0.0.1",
+        ] {
             let mut payload = test_connect_payload(TEST_SESSION_ID);
             payload.dns_servers = vec![resolver.to_owned()];
             assert!(
@@ -12090,6 +12105,15 @@ mod tests {
                 "{resolver} is not a canonical unicast resolver"
             );
         }
+
+        let mut mapped_duplicate = test_connect_payload(TEST_SESSION_ID);
+        mapped_duplicate.dns_servers = vec!["1.1.1.1".to_owned(), "::ffff:1.1.1.1".to_owned()];
+        assert!(
+            validate_connect_payload(mapped_duplicate)
+                .expect_err("mapped and native IPv4 resolvers are semantic duplicates")
+                .to_string()
+                .contains("duplicate")
+        );
     }
     #[test]
     fn connect_payload_requires_canonical_network_policy() {

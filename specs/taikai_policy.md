@@ -28,7 +28,7 @@ behaviour.
    streaming hierarchy (GCK → CEK) to managed keys, rotation policies, and
    observability so relays can prove that encryption state tracks governance
    policy.
-3. **Replication Proof Token (RPT) attestation workflow** — Produce a signed
+3. **Replication Proof Token (RPT) attestation workflow** — Produce a canonical
    artefact for every rollout that binds GAR, CEK lineage, and distribution
    evidence together. Provide a CLI + CI hook so operators cannot skip it.
 
@@ -102,11 +102,11 @@ exact KMS lineage without revealing secrets.
 
 ### Automation & CLI
 
-- New command: `iroha app taikai cek-rotate --event <event> --stream <stream> \
+- New command: `iroha app taikai cek-rotate --event-id <event> --stream-id <stream> \
   --effective-segment <seq> --kms-profile <profile>` which:
   1. Requests a fresh GCK wrap key from the configured KMS profile.
-  2. Emits a Norito `CekRotationReceiptV1` containing the old/new key labels,
-     a non-zero HKDF salt, and operator signature.
+  2. Emits a Norito `CekRotationReceiptV1` containing the old/new key labels
+     and a non-zero HKDF salt.
   3. Stores the receipt under
      `artifacts/taikai/cek_rotations/<event>/<stream>/<timestamp>.to`.
 - CI hook: `ci/check_taikai_keys.sh` (future) asserts receipts exist for every
@@ -124,10 +124,14 @@ exact KMS lineage without revealing secrets.
 
 ## Replication Proof Tokens (RPT)
 
-RPTs are signed Norito envelopes that prove a Taikai rollout tied GAR v2,
-encryption state, and SoraFS distribution evidence together. They are designed
-to be generic so SoraDNS/SoraNet programs can re-use them when proving cache
-consistency or zone publication.
+RPTs are canonical Norito commitment envelopes that prove a Taikai rollout
+tied GAR v2, encryption state, and SoraFS distribution evidence together. They
+are designed to be generic so SoraDNS/SoraNet programs can re-use them when
+proving cache consistency or zone publication. The v1 envelope does not carry
+its own signature: authenticity depends on the authenticated publication
+channel and the signed GAR whose exact bytes it commits. Adding an RPT signer
+or signature requires an explicitly versioned signed wrapper or a new schema
+version rather than silently changing v1.
 
 ### Schema
 
@@ -141,7 +145,6 @@ consistency or zone publication.
 | `distribution_bundle_digest` | Digest of the artefact directory under `artifacts/fastpq_rollouts/` (or Taikai equivalent) proving CAR replication. |
 | `policy_labels` | Copy of GAR `telemetry_labels` at attestation time. |
 | `valid_from`, `valid_until` | Unix timestamps describing the coverage window. |
-| `signer` | Governance key identifier. |
 
 The GAR and CEK receipt fields are the raw BLAKE3-256 digest of the exact file
 bytes. The distribution bundle uses the canonical `iroha.taikai.bundle.v1`
@@ -164,15 +167,22 @@ implement this same framing.
 
 ### Workflow
 
-1. Operators run `iroha app taikai rpt-attest --event <event> --stream <stream> \
-   --manifest <gar.json> --cek-receipt <path> --bundle <dir> --out <path>`.
-2. CLI validates each input (GAR signature, CEK receipt signature, bundle hash)
-   and writes:
+1. Operators run `iroha app taikai rpt-attest --event-id <event> --stream-id <stream> \
+   --rendition-id <rendition> --gar <gar.json> --cek-receipt <path> \
+   --bundle <dir> --out <path>`.
+2. CLI hashes the exact GAR bytes, validates the CEK receipt invariants and
+   event/stream scope, computes the canonical bundle hash, and writes:
    - `taikai_rpt_<timestamp>.to` — Norito-encoded RPT.
    - `taikai_rpt_<timestamp>.json` — human summary.
-3. `cargo xtask taikai-rpt-verify --envelope <path>` verifies signatures and
-   prints the digests. CI wires this into the rollout gate alongside the GAR
-   and CEK checks.
+3. `cargo xtask taikai-rpt-verify --envelope <path> --gar <path>
+   --cek-receipt <path> --bundle <path>` requires every evidence input,
+   recomputes all three digests, validates the CEK receipt scope, and prints the
+   verified commitments. CI wires this into the rollout gate alongside the GAR
+   signature check. The verifier rejects symlinked file inputs and publishes a
+   requested JSON report through a synced staged atomic replacement, preserving
+   permissions when replacing an existing report and syncing its directory on
+   Unix. RPT and CEK receipt documents are each capped at 1 MiB before decoding;
+   GAR and distribution bundle contents remain streaming inputs.
 4. Torii stores the latest valid RPT digest under `/v1/config/taikai.rpt.digest`
    so relays and gateways can assert that the operational surface matches the
    attested policy.

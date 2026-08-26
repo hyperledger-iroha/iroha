@@ -1293,7 +1293,7 @@ export function registerToriiClientGovernanceTests({
     assert.equal(Object.hasOwn(result, "ok"), false);
     assert.deepEqual(result.tx_instructions, [
       {
-        wire_id: "iroha_data_model::isi::governance::ProposeDeployContract",
+wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         payload_hex: "00",
       },
     ]);
@@ -1311,7 +1311,7 @@ export function registerToriiClientGovernanceTests({
       {
         ...canonical,
         tx_instructions: [{
-          wire_id: "iroha_data_model::isi::governance::ProposeDeployContract",
+          wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         }],
       },
       {

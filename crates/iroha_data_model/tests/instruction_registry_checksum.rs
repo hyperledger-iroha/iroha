@@ -46,9 +46,9 @@ fn frame_helper_produces_valid_header() {
         "header checksum must match payload"
     );
     // And the registry should accept the framed bytes.
-    let registry = InstructionRegistry::new().register::<Log>();
+    let registry = InstructionRegistry::new().register_with_id::<Log>(Log::WIRE_ID);
     let decoded = registry
-        .decode(type_name, &framed)
+        .decode(Log::WIRE_ID, &framed)
         .expect("registered")
         .expect("decode framed payload");
     assert_eq!(Instruction::id(&*decoded), type_name);

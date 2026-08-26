@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -32,7 +33,7 @@ public final class JoinKaigiInstruction implements InstructionTemplate {
     this.nullifierIssuedAtMs = builder.nullifierIssuedAtMs;
     this.rosterRoot = builder.rosterRoot;
     this.proofBase64 = builder.proofBase64;
-    this.arguments = Map.copyOf(argumentOrder);
+    this.arguments = Collections.unmodifiableMap(new LinkedHashMap<>(argumentOrder));
   }
 
   public KaigiInstructionUtils.CallId callId() {
@@ -78,6 +79,7 @@ public final class JoinKaigiInstruction implements InstructionTemplate {
   }
 
   public static JoinKaigiInstruction fromArguments(final Map<String, String> arguments) {
+    KaigiInstructionUtils.requireAction(arguments, ACTION);
     final Builder builder = builder();
     builder.setCallId(KaigiInstructionUtils.parseCallId(arguments, "call"));
     builder.setParticipant(KaigiInstructionUtils.require(arguments, "participant"));
@@ -98,6 +100,9 @@ public final class JoinKaigiInstruction implements InstructionTemplate {
     if (issuedAt != null && issuedAt.longValue() != 0L) {
       throw new IllegalArgumentException(
           "nullifier issuedAtMs is off-chain only and must be zero when provided");
+    }
+    if (issuedAt != null && nullifier == null) {
+      throw new IllegalArgumentException("nullifier issuedAtMs requires nullifier digest");
     }
     if (nullifier != null) {
       builder.setNullifierDigest(nullifier);
@@ -252,6 +257,9 @@ public final class JoinKaigiInstruction implements InstructionTemplate {
       }
       if (participant == null) {
         throw new IllegalStateException("participant must be provided");
+      }
+      if (nullifierIssuedAtMs != null && nullifierDigest == null) {
+        throw new IllegalStateException("nullifier issuedAtMs requires nullifier digest");
       }
       return new JoinKaigiInstruction(this);
     }

@@ -1445,6 +1445,98 @@ test("buildLeaveKaigiInstruction accepts minimal payload", () => {
   assert.deepEqual(encodeAndDecode(instruction), expected);
 });
 
+baseTest("buildLeaveKaigiInstruction rejects reserved V1 privacy artifacts", () => {
+  assert.throws(
+    () =>
+      buildLeaveKaigiInstruction({
+        callId: "wonderland.sora:weekly-sync",
+        participant: ACCOUNT_ID,
+        proof: Buffer.from([0x01]),
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.equal(error?.path, "leaveKaigi");
+      assert.match(error?.message ?? "", /privacy artifacts are reserved/u);
+      return true;
+    },
+  );
+});
+
+baseTest("Kaigi builders preserve the full u64 and u32 wire domains", () => {
+  const maxU64 = "18446744073709551615";
+  const maxU32 = 0xffff_ffff;
+  const create = buildCreateKaigiInstruction({
+    id: "wonderland.sora:full-width",
+    host: ACCOUNT_ID,
+    maxParticipants: maxU32,
+    gasRatePerMinute: BigInt(maxU64),
+    scheduledStartMs: maxU64,
+    relayManifest: {
+      expiryMs: maxU64,
+      hops: kaigiRelayHops(),
+    },
+  });
+  assert.equal(create.Kaigi.CreateKaigi.call.max_participants, maxU32);
+  assert.equal(create.Kaigi.CreateKaigi.call.gas_rate_per_minute, maxU64);
+  assert.equal(create.Kaigi.CreateKaigi.call.scheduled_start_ms, maxU64);
+  assert.equal(create.Kaigi.CreateKaigi.call.relay_manifest.expiry_ms, maxU64);
+  assert.deepEqual(encodeAndDecode(create), create);
+
+  const usage = buildRecordKaigiUsageInstruction({
+    callId: "wonderland.sora:full-width",
+    durationMs: BigInt(maxU64),
+    billedGas: maxU64,
+  });
+  assert.equal(usage.Kaigi.RecordKaigiUsage.duration_ms, maxU64);
+  assert.equal(usage.Kaigi.RecordKaigiUsage.billed_gas, maxU64);
+  assert.deepEqual(encodeAndDecode(usage), usage);
+
+  const end = buildEndKaigiInstruction({
+    callId: "wonderland.sora:full-width",
+    endedAtMs: maxU64,
+  });
+  assert.equal(end.Kaigi.EndKaigi.ended_at_ms, maxU64);
+  assert.deepEqual(encodeAndDecode(end), end);
+
+  const health = buildReportKaigiRelayHealthInstruction({
+    callId: "wonderland.sora:full-width",
+    relayId: RELAY_ACCOUNT_ID,
+    status: "Healthy",
+    reportedAtMs: maxU64,
+  });
+  assert.equal(health.Kaigi.ReportKaigiRelayHealth.reported_at_ms, maxU64);
+  assert.deepEqual(encodeAndDecode(health), health);
+});
+
+baseTest("Kaigi builders reject values outside their unsigned wire domains", () => {
+  const overflowU64 = "18446744073709551616";
+  assert.throws(
+    () =>
+      buildRecordKaigiUsageInstruction({
+        callId: "wonderland.sora:overflow",
+        durationMs: overflowU64,
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
+      assert.equal(error?.path, "recordKaigiUsage.durationMs");
+      return true;
+    },
+  );
+  assert.throws(
+    () =>
+      buildCreateKaigiInstruction({
+        id: "wonderland.sora:overflow",
+        host: ACCOUNT_ID,
+        maxParticipants: 0x1_0000_0000,
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
+      assert.equal(error?.path, "call.maxParticipants");
+      return true;
+    },
+  );
+});
+
 test("buildEndKaigiInstruction normalizes optional timestamp", () => {
   const instruction = buildEndKaigiInstruction({
     callId: "wonderland.sora:weekly-sync",

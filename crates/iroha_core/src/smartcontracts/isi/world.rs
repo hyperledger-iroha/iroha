@@ -17745,6 +17745,21 @@ pub mod isi {
                 .get(&domain_id)
                 .cloned()
                 .unwrap_or_default();
+            if let Some((proposal_id, reference_kind, asset_definition_id)) =
+                crate::validation_fee::retained_enacted_validation_fee_asset_reference_in(
+                    state_transaction,
+                    &remove_asset_definitions,
+                )
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is retained as the enacted validation-fee {reference_kind} by proposal {}",
+                        hex::encode(proposal_id)
+                    )
+                    .into(),
+                )
+                .into());
+            }
             let remove_assets = state_transaction
                 .world
                 .assets_by_domain

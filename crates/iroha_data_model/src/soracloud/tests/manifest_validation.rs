@@ -2920,6 +2920,7 @@ fn sample_active_rollout_deployment() -> SoraServiceDeploymentStateV1 {
         created_sequence: 7,
         updated_sequence: 7,
     });
+    deployment.last_rollout = deployment.active_rollout.clone();
     deployment
 }
 #[test]
@@ -2934,7 +2935,17 @@ fn service_rollout_state_validate_rejects_missing_or_reused_baseline() {
         let error = deployment
             .validate()
             .expect_err("baseline must be present and distinct from the candidate");
-        assert_soracloud_invalid_field(error, "baseline_version");
+        if baseline_version.is_empty() {
+            assert_eq!(
+                error,
+                SoracloudManifestError::EmptyField {
+                    manifest: "sora service rollout state",
+                    field: "baseline_version",
+                }
+            );
+        } else {
+            assert_soracloud_invalid_field(error, "baseline_version");
+        }
     }
 }
 #[test]
@@ -3030,14 +3041,20 @@ fn service_deployment_state_validate_requires_exact_active_canary_relation() {
     let error = deployment
         .validate()
         .expect_err("active rollout must name its baseline revision");
-    assert_soracloud_invalid_field(error, "active_rollout.baseline_version");
+    assert_eq!(
+        error,
+        SoracloudManifestError::EmptyField {
+            manifest: "sora service rollout state",
+            field: "baseline_version",
+        }
+    );
 
     let active_rollout = deployment.active_rollout.as_mut().expect("active rollout");
     active_rollout.baseline_version = current_version;
     let error = deployment
         .validate()
         .expect_err("active rollout baseline and candidate must differ");
-    assert_soracloud_invalid_field(error, "active_rollout.baseline_version");
+    assert_soracloud_invalid_field(error, "baseline_version");
 
     let active_rollout = deployment.active_rollout.as_mut().expect("active rollout");
     active_rollout.baseline_version = "1.0.0".to_owned();
@@ -3052,6 +3069,7 @@ fn service_deployment_state_validate_requires_exact_active_canary_relation() {
         .as_mut()
         .expect("active rollout")
         .traffic_percent = 25;
+    deployment.last_rollout = deployment.active_rollout.clone();
     deployment
         .validate()
         .expect("exact active canary relation must pass");

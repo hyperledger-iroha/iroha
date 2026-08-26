@@ -1831,9 +1831,15 @@ Operators can audit registered Kaigi relays, inspect per-domain metrics, and
 capture health snapshots with typed Torii helpers:
 
 ```python
-from iroha_python import ToriiClient
+from iroha_python import OperatorSigningContext, ToriiClient
 
-client = ToriiClient("http://127.0.0.1:8080", auth_token="admin-token")
+client = ToriiClient(
+    "http://127.0.0.1:8080",
+    operator_signing_context=OperatorSigningContext(
+        network_id=exact_genesis_network_id,
+        key_pair=operator_key_pair,
+    ),
+)
 
 relays = client.list_kaigi_relays_typed()
 for entry in relays.items:
@@ -1858,10 +1864,13 @@ the current Rust payloads so dashboards and readiness scripts can validate the
 same DTOs. The three snapshot calls require the immutable exact-network
 context, generate fresh headers for the final encoded target and empty body,
 and dispatch once with redirects and retries disabled. Tokens and precomputed
-operator headers are rejected. List and health fail closed at Torii's hard
-relay diagnostic cap rather than materializing an unbounded registry. Keep the
-operator key runtime-only; the Kaigi SSE feed retains its separate streaming
-authentication contract.
+operator headers, session authentication, and cookies are rejected. Typed
+responses require Torii's exact first-release fields and integer spellings;
+relay details also verify that the decoded HPKE key hashes to the advertised
+fingerprint. List and health fail closed at Torii's hard relay diagnostic cap
+rather than materializing an unbounded registry. Keep the operator key
+runtime-only; the Kaigi SSE feed retains its separate streaming authentication
+contract.
 
 For configuration changes, the client now mirrors the `/v1/configuration` contract so
 admin scripts can stage updates without hand-editing JSON blobs. For example:

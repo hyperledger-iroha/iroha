@@ -2,6 +2,7 @@
 use super::*;
 use crate::prelude::*;
 use iroha_primitives::const_vec::ConstVec;
+const RECORD_SCCP_MESSAGE_WIRE_ID: &str = "iroha.instruction.v1::bridge::RecordSccpMessage";
 macro_rules! check_enum {
         ($name:ident { $($variant:ident),+ $(,)? }) => {
             $(assert_eq!($name::try_from($name::$variant as u8).unwrap(), $name::$variant);)+
@@ -55,17 +56,18 @@ fn framed_instruction_pair(name: &str, framed_payload: Vec<u8>) -> Vec<u8> {
 }
 #[test]
 fn aa_setup_instruction_registry() {
-    let _guard = RegistryGuard::set(instruction_registry![Log]);
+    let _guard = RegistryGuard::set(instruction_registry_with_ids![Log]);
 }
 #[test]
 fn register_and_decode_instruction() {
-    let registry = InstructionRegistry::new().register_slice::<Log>();
-    // Sanity: decode map contains type name and entries are populated
+    let registry = InstructionRegistry::new().register_with_id_slice::<Log>(Log::WIRE_ID);
+    // The concrete type name selects encoding only; the wire ID selects decoding.
     assert!(
         !registry.is_empty(),
         "registry should contain at least one entry"
     );
-    assert!(registry.contains(std::any::type_name::<Log>()));
+    assert!(registry.contains(Log::WIRE_ID));
+    assert!(!registry.contains(std::any::type_name::<Log>()));
     let name = std::any::type_name::<Log>();
     let instruction = Log {
         level: Level::INFO,
@@ -75,7 +77,7 @@ fn register_and_decode_instruction() {
     let bytes = norito::core::frame_bare_with_header_flags::<Log>(&payload, flags)
         .expect("frame instruction payload");
     // Use the decode API directly to ensure local registry wiring works
-    let decoded = InstructionRegistry::decode(&registry, name, &bytes)
+    let decoded = InstructionRegistry::decode(&registry, Log::WIRE_ID, &bytes)
         .expect("constructor not found in decode map")
         .expect("failed to decode");
     // Verify type id and payload equivalence without relying on downcast
@@ -85,7 +87,7 @@ fn register_and_decode_instruction() {
 #[cfg(feature = "json")]
 #[test]
 fn instruction_box_json_is_canonical_and_ambient_independent() {
-    let registry = InstructionRegistry::new().register_slice::<Log>();
+    let registry = InstructionRegistry::new().register_with_id_slice::<Log>(Log::WIRE_ID);
     let _registry = RegistryGuard::set(registry);
     let instruction = InstructionBox::from(Log::new(
         Level::INFO,
@@ -128,15 +130,16 @@ fn decode_unregistered_instruction() {
 }
 #[test]
 fn record_sccp_message_registry_roundtrip_preserves_payload_bytes() {
-    let registry = InstructionRegistry::new().register_slice::<RecordSccpMessage>();
+    let registry = InstructionRegistry::new()
+        .register_with_id_slice::<RecordSccpMessage>(RECORD_SCCP_MESSAGE_WIRE_ID);
     let _guard = RegistryGuard::set(registry);
     let instruction = RecordSccpMessage::new(outbound_sccp_context(), vec![0xAA, 0xBB, 0xCC]);
     let (bytes, expected_flags) = norito::codec::encode_with_header_flags(&instruction);
-    let framed = frame_instruction_payload(std::any::type_name::<RecordSccpMessage>(), &bytes)
+    let framed = frame_instruction_payload(RECORD_SCCP_MESSAGE_WIRE_ID, &bytes)
         .expect("record sccp message must frame");
     let view = norito::core::from_bytes_view(&framed).expect("framed instruction payload");
     assert_eq!(view.flags(), expected_flags);
-    let decoded = decode_instruction_from_pair(std::any::type_name::<RecordSccpMessage>(), &framed)
+    let decoded = decode_instruction_from_pair(RECORD_SCCP_MESSAGE_WIRE_ID, &framed)
         .expect("record sccp message must decode");
     let decoded = decoded
         .as_any()
@@ -147,15 +150,16 @@ fn record_sccp_message_registry_roundtrip_preserves_payload_bytes() {
 }
 #[test]
 fn registry_decode_accepts_misaligned_framed_payload() {
-    let registry = InstructionRegistry::new().register_slice::<Log>();
+    let registry = InstructionRegistry::new().register_with_id_slice::<Log>(Log::WIRE_ID);
     let name = std::any::type_name::<Log>();
     let instruction = Log::new(Level::INFO, "misaligned framed payload".to_owned());
     let payload = instruction.encode();
-    let framed = frame_instruction_payload(name, &payload).expect("frame instruction payload");
+    let framed =
+        frame_instruction_payload(Log::WIRE_ID, &payload).expect("frame instruction payload");
     let mut misaligned = Vec::with_capacity(framed.len() + 1);
     misaligned.push(0xAA);
     misaligned.extend_from_slice(&framed);
-    let decoded = InstructionRegistry::decode(&registry, name, &misaligned[1..])
+    let decoded = InstructionRegistry::decode(&registry, Log::WIRE_ID, &misaligned[1..])
         .expect("constructor not found in decode map")
         .expect("decode misaligned framed payload");
     assert_eq!(Instruction::id(&*decoded), name);
@@ -163,15 +167,18 @@ fn registry_decode_accepts_misaligned_framed_payload() {
 }
 #[test]
 fn record_sccp_registry_decode_accepts_misaligned_framed_payload() {
-    let registry = InstructionRegistry::new().register_slice::<RecordSccpMessage>();
+    let registry = InstructionRegistry::new()
+        .register_with_id_slice::<RecordSccpMessage>(RECORD_SCCP_MESSAGE_WIRE_ID);
     let name = std::any::type_name::<RecordSccpMessage>();
     let instruction = RecordSccpMessage::new(outbound_sccp_context(), vec![0xAA, 0xBB, 0xCC, 0xDD]);
     let payload = instruction.encode();
-    let framed = frame_instruction_payload(name, &payload).expect("frame instruction payload");
+    let framed = frame_instruction_payload(RECORD_SCCP_MESSAGE_WIRE_ID, &payload)
+        .expect("frame instruction payload");
     let mut misaligned = Vec::with_capacity(framed.len() + 1);
     misaligned.push(0xAA);
     misaligned.extend_from_slice(&framed);
-    let decoded = InstructionRegistry::decode(&registry, name, &misaligned[1..])
+    let decoded =
+        InstructionRegistry::decode(&registry, RECORD_SCCP_MESSAGE_WIRE_ID, &misaligned[1..])
         .expect("constructor not found in decode map")
         .expect("decode misaligned framed payload");
     assert_eq!(Instruction::id(&*decoded), name);
@@ -179,7 +186,8 @@ fn record_sccp_registry_decode_accepts_misaligned_framed_payload() {
 }
 #[test]
 fn instruction_box_embeds_instruction_payload_with_recorded_flags() {
-    let registry = InstructionRegistry::new().register_slice::<RecordSccpMessage>();
+    let registry = InstructionRegistry::new()
+        .register_with_id_slice::<RecordSccpMessage>(RECORD_SCCP_MESSAGE_WIRE_ID);
     let _guard = RegistryGuard::set(registry);
     let instruction = RecordSccpMessage::new(outbound_sccp_context(), vec![0xAA, 0xBB, 0xCC]);
     let (_, expected_flags) = norito::codec::encode_with_header_flags(&instruction);
@@ -190,14 +198,29 @@ fn instruction_box_embeds_instruction_payload_with_recorded_flags() {
     assert_eq!(view.flags(), expected_flags);
 }
 #[test]
-fn frame_payload_accepts_non_static_type_name() {
+fn frame_payload_accepts_non_static_wire_id() {
     let log = Log::new(Level::INFO, "framed".to_string());
     let payload = log.encode();
-    let type_name = std::any::type_name::<Log>().to_string();
+    let wire_id = Log::WIRE_ID.to_owned();
     let framed =
-        frame_instruction_payload(&type_name, &payload).expect("frame instruction payload");
+        frame_instruction_payload(&wire_id, &payload).expect("frame instruction payload");
     let decoded: Log = norito::decode_from_bytes(&framed).expect("decode framed payload");
     assert_eq!(decoded, log);
+}
+#[test]
+fn public_pair_helpers_reject_type_name_decode_aliases_with_bounded_errors() {
+    let log = Log::new(Level::INFO, "type-name alias rejection".to_owned());
+    let payload = log.encode();
+    let framed = frame_instruction_payload(Log::WIRE_ID, &payload).expect("frame log payload");
+    let type_name = std::any::type_name::<Log>();
+    for error in [
+        frame_instruction_payload(type_name, &payload).expect_err("frame alias must fail"),
+        decode_instruction_from_pair(type_name, &framed).expect_err("decode alias must fail"),
+        decode_instruction_from_pair(&"x".repeat(4096), &framed)
+            .expect_err("unknown oversized wire identifier must fail"),
+    ] {
+        assert_eq!(error.to_string(), "unknown instruction wire identifier");
+    }
 }
 #[test]
 fn dyn_encode_matches_instruction_box() {
@@ -287,7 +310,7 @@ fn norito_serialize_trait_object() {
 }
 #[test]
 fn instruction_box_direct_serialize_matches_tuple_wire_layout() {
-    let _guard = RegistryGuard::set(instruction_registry![Log]);
+    let _guard = RegistryGuard::set(instruction_registry_with_ids![Log]);
     let boxed = InstructionBox::from(Log {
         level: Level::INFO,
         msg: "tuple layout".to_string(),
@@ -343,7 +366,7 @@ fn norito_roundtrip_trait_object_deserialize() {
         level: Level::INFO,
         msg: "deserialize".to_string(),
     };
-    let _guard = RegistryGuard::set(instruction_registry![Log]);
+    let _guard = RegistryGuard::set(instruction_registry_with_ids![Log]);
     let boxed = InstructionBox::from(log.clone());
     let bytes = norito::core::to_bytes(&boxed).expect("serialize");
     let archived = norito::core::from_bytes::<InstructionBox>(&bytes).expect("from_bytes");
@@ -367,7 +390,7 @@ fn instruction_pair_canonical_decode_covers_payload_body() {
 }
 #[test]
 fn borrowed_instruction_pair_decodes_without_owned_payload() {
-    let _guard = RegistryGuard::set(instruction_registry![Log]);
+    let _guard = RegistryGuard::set(instruction_registry_with_ids![Log]);
     let expected = InstructionBox::from(Log::new(Level::INFO, "borrowed pair".to_owned()));
     let mut bytes = Vec::new();
     norito::core::serialize_to_buffer(&expected, &mut bytes)
@@ -405,7 +428,7 @@ fn borrowed_instruction_pair_honors_inner_frame_flags_under_outer_canonical_layo
 #[test]
 fn instruction_box_decode_from_slice_accepts_misaligned_borrowed_pair() {
     use norito::core::DecodeFromSlice;
-    let _guard = RegistryGuard::set(instruction_registry![Log]);
+    let _guard = RegistryGuard::set(instruction_registry_with_ids![Log]);
     let expected = InstructionBox::from(Log::new(Level::INFO, "misaligned pair".to_owned()));
     let mut bytes = vec![0xAA];
     norito::core::serialize_to_buffer(&expected, &mut bytes)
@@ -617,7 +640,7 @@ fn instruction_box_lossy_deserialize_bounds_unknown_wire_error_message() {
 #[test]
 fn instruction_box_decode_from_slice_rejects_trailing_bytes_after_valid_pair() {
     use norito::core::DecodeFromSlice;
-    let _guard = RegistryGuard::set(instruction_registry![Log]);
+    let _guard = RegistryGuard::set(instruction_registry_with_ids![Log]);
     let boxed = InstructionBox::from(Log::new(Level::INFO, "pair tail".to_owned()));
     let mut bare_pair = Vec::new();
     norito::core::serialize_to_buffer(&boxed, &mut bare_pair)
@@ -635,7 +658,7 @@ fn instruction_box_decode_from_slice_rejects_trailing_bytes_after_valid_pair() {
 }
 #[test]
 fn instruction_box_try_deserialize_rejects_trailing_bytes_inside_framed_pair() {
-    let _guard = RegistryGuard::set(instruction_registry![Log]);
+    let _guard = RegistryGuard::set(instruction_registry_with_ids![Log]);
     let boxed = InstructionBox::from(Log::new(Level::INFO, "framed pair tail".to_owned()));
     let mut bare_pair = Vec::new();
     norito::core::serialize_to_buffer(&boxed, &mut bare_pair)
@@ -692,7 +715,7 @@ fn instruction_box_lossy_deserialize_maps_trailing_pair_bytes_to_invalid_instruc
 }
 #[test]
 fn const_vec_instruction_box_rejects_zeroed_varint_element_length() {
-    let _guard = RegistryGuard::set(instruction_registry![Log]);
+    let _guard = RegistryGuard::set(instruction_registry_with_ids![Log]);
     let instruction = InstructionBox::from(Log {
         level: Level::INFO,
         msg: "varint tail regression".to_owned(),

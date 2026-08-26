@@ -3105,7 +3105,7 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
-        ChainId, HasMetadata, IntoKeyValue, Registrable,
+        ChainId, IntoKeyValue, Registrable,
         account::{
             Account, AccountController, AccountId, MultisigMember, MultisigPolicy,
             rekey::{AccountAlias, AccountAliasDomain, AccountRekeyTransitionProvenance},

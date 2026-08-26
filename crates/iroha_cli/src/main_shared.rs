@@ -8231,7 +8231,6 @@ fn render_cli_error(
 mod tests;
 #[cfg(test)]
 mod multisig_json_tests {
-    use super::*;
     use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
         account::AccountId,

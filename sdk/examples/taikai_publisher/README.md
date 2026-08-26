@@ -111,7 +111,11 @@ The repository ships `sample_config.json` (1080p),
 `sample_config_720p.json` (720p), and `sample_config_audio.json`
 (`audio-stereo`) so publishers can rehearse ladder + audio workflows without
 duplicating payload definitions. Each config uses a distinct CMAF fixture so
-output filenames remain stable across runs.
+output filenames remain stable across runs. The helper loads every config and
+preflights all input/output paths before invoking the bundler; configurations
+whose payload stems would target the same output are rejected instead of
+silently overwriting an earlier rung. Aggregate summaries are published
+atomically and must not alias an input or bundle artifact.
 
 ## Rehydrate from a stored CAR
 

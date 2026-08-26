@@ -66,7 +66,7 @@ fn provision_fee_sponsor_program(
     let previous_call_hash = state_transaction.tx_call_hash.replace(setup_call_hash);
     let selector = FeeSponsorRuleSelector::NativeInstruction(
         iroha_data_model::nexus::FeeSponsorNativeInstructionSelector {
-            wire_id: iroha_data_model::isi::instruction_wire_id(instruction)
+wire_id: iroha.instruction.v1::instruction_wire_id(instruction)
                 .expect("native instruction must have a registered wire id")
                 .to_owned(),
             asset_definition_id: None,

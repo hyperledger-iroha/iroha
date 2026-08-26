@@ -80,7 +80,13 @@ try:
         }
         def ordinary_git(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
             return subprocess.run(
-                [str(SOURCE_GIT), '-C', str(repository), '-c', 'core.hooksPath=/dev/null', *arguments],
+                [
+                    str(SOURCE_GIT), '-C', str(repository),
+                    '-c', 'core.hooksPath=/dev/null',
+                    '-c', 'user.name=Kagemusha Self Test',
+                    '-c', 'user.email=kagemusha-self-test.invalid',
+                    *arguments,
+                ],
                 cwd=Path('/'),
                 env=ordinary_environment,
                 stdin=subprocess.DEVNULL,
@@ -93,8 +99,7 @@ try:
         conflict = repository / 'conflict.txt'
         conflict.write_text('base\n', encoding='utf-8')
         ordinary_git('add', '--', conflict.name)
-        ordinary_git('-c', 'user.name=Kagemusha Self Test', '-c',
-                     'user.email=kagemusha-self-test.invalid', 'commit', '-qm', 'base')
+        ordinary_git('commit', '-qm', 'base')
         ordinary_git('checkout', '-qb', 'other')
         conflict.write_text('other\n', encoding='utf-8')
         ordinary_git('commit', '-qam', 'other')

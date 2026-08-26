@@ -10,7 +10,10 @@ public final class KaigiInstructionValidationTests {
 
   public static void main(final String[] args) {
     usageDurationAboveSignedIntRangeRoundTrips();
+    fullWidthUnsignedFieldsRoundTripThroughSignedJvmCarriers();
     rejectsOversizedAndSparseRelayManifestHopIndices();
+    typedParsersRequireExactActionDiscriminator();
+    unitEnumPayloadsAndCallIdentifiersRejectMalformedState();
     rejectsInvalidRelayHpkeKey();
     rejectsInvalidRelayManifestHpkeKey();
     rejectsInvalidRelayManifestParse();
@@ -40,6 +43,77 @@ public final class KaigiInstructionValidationTests {
     assertEquals(instruction, decoded);
   }
 
+  private static void fullWidthUnsignedFieldsRoundTripThroughSignedJvmCarriers() {
+    final long u64Max = -1L;
+    final int u32Max = -1;
+    final String u64MaxText = "18446744073709551615";
+    final String u32MaxText = "4294967295";
+
+    final CreateKaigiInstruction create =
+        CreateKaigiInstruction.builder()
+            .setCallId("wonderland", "unsigned-boundary")
+            .setHost("host")
+            .setMaxParticipants(u32Max)
+            .setGasRatePerMinute(u64Max)
+            .setScheduledStartMs(u64Max)
+            .build();
+    assertEquals(u32MaxText, create.toArguments().get("max_participants"));
+    assertEquals(u64MaxText, create.toArguments().get("gas_rate_per_minute"));
+    assertEquals(u64MaxText, create.toArguments().get("scheduled_start_ms"));
+    assertEquals(create, CreateKaigiInstruction.fromArguments(create.toArguments()));
+
+    final EndKaigiInstruction end =
+        EndKaigiInstruction.builder()
+            .setCallId("wonderland", "unsigned-boundary")
+            .setEndedAtMs(u64Max)
+            .build();
+    assertEquals(u64MaxText, end.toArguments().get("ended_at_ms"));
+    assertEquals(end, EndKaigiInstruction.fromArguments(end.toArguments()));
+
+    final RecordKaigiUsageInstruction usage =
+        RecordKaigiUsageInstruction.builder()
+            .setCallId("wonderland", "unsigned-boundary")
+            .setDurationMs(u64Max)
+            .setBilledGas(u64Max)
+            .build();
+    assertEquals(u64MaxText, usage.toArguments().get("duration_ms"));
+    assertEquals(u64MaxText, usage.toArguments().get("billed_gas"));
+    assertEquals(usage, RecordKaigiUsageInstruction.fromArguments(usage.toArguments()));
+
+    final SetKaigiRelayManifestInstruction manifest =
+        SetKaigiRelayManifestInstruction.builder()
+            .setCallId("wonderland", "unsigned-boundary")
+            .setRelayManifestExpiryMs(u64Max)
+            .addRelayManifestHop("relay-alpha", key(1), 1)
+            .addRelayManifestHop("relay-beta", key(2), 1)
+            .addRelayManifestHop("relay-gamma", key(3), 1)
+            .build();
+    assertEquals(u64MaxText, manifest.toArguments().get("relay_manifest.expiry_ms"));
+    assertEquals(manifest, SetKaigiRelayManifestInstruction.fromArguments(manifest.toArguments()));
+
+    assertThrows(
+        () ->
+            RecordKaigiUsageInstruction.fromArguments(
+                withArgument(usage.toArguments(), "duration_ms", "01")),
+        "expected non-canonical duration to throw");
+    assertThrows(
+        () ->
+            RecordKaigiUsageInstruction.fromArguments(
+                withArgument(
+                    usage.toArguments(), "billed_gas", "18446744073709551616")),
+        "expected overflowing u64 to throw");
+    assertThrows(
+        () ->
+            CreateKaigiInstruction.fromArguments(
+                withArgument(create.toArguments(), "scheduled_start_ms", "")),
+        "expected blank optional timestamp to throw");
+    assertThrows(
+        () ->
+            CreateKaigiInstruction.fromArguments(
+                withArgument(create.toArguments(), "max_participants", "4294967296")),
+        "expected overflowing u32 to throw");
+  }
+
   private static void rejectsOversizedAndSparseRelayManifestHopIndices() {
     final Map<String, String> oversized = new HashMap<>();
     oversized.put("action", "SetKaigiRelayManifest");
@@ -65,6 +139,70 @@ public final class KaigiInstructionValidationTests {
     assertThrows(
         () -> SetKaigiRelayManifestInstruction.fromArguments(sparse),
         "expected sparse relay manifest hop indices to throw");
+
+    final Map<String, String> nonCanonical = new HashMap<>();
+    nonCanonical.put("action", "SetKaigiRelayManifest");
+    nonCanonical.put("call.domain_id", "wonderland");
+    nonCanonical.put("call.call_name", "weekly-sync");
+    nonCanonical.put("relay_manifest.expiry_ms", "100");
+    nonCanonical.put("relay_manifest.hop.00.relay_id", "relay-alpha");
+    assertThrows(
+        () -> SetKaigiRelayManifestInstruction.fromArguments(nonCanonical),
+        "expected non-canonical relay manifest hop index to throw");
+  }
+
+  private static void typedParsersRequireExactActionDiscriminator() {
+    final RecordKaigiUsageInstruction usage =
+        RecordKaigiUsageInstruction.builder()
+            .setCallId("wonderland", "weekly-sync")
+            .setDurationMs(1)
+            .build();
+    assertThrows(
+        () ->
+            RecordKaigiUsageInstruction.fromArguments(
+                withArgument(usage.toArguments(), "action", "EndKaigi")),
+        "expected mismatched action to throw");
+    final Map<String, String> missingAction = new HashMap<>(usage.toArguments());
+    missingAction.remove("action");
+    assertThrows(
+        () -> RecordKaigiUsageInstruction.fromArguments(missingAction),
+        "expected missing action to throw");
+  }
+
+  private static void unitEnumPayloadsAndCallIdentifiersRejectMalformedState() {
+    assertThrows(
+        () -> CreateKaigiInstruction.builder().setCallId("", "weekly-sync"),
+        "expected blank call domain to throw");
+    assertThrows(
+        () -> CreateKaigiInstruction.builder().setCallId("wonderland", " "),
+        "expected blank call name to throw");
+    assertThrows(
+        () ->
+            CreateKaigiInstruction.builder()
+                .setPrivacyMode("Transparent", "unexpected"),
+        "expected unit privacy mode state to throw");
+    assertThrows(
+        () ->
+            CreateKaigiInstruction.builder()
+                .setRoomPolicy("Public", "unexpected"),
+        "expected unit room policy state to throw");
+
+    final Map<String, String> create =
+        CreateKaigiInstruction.builder()
+            .setCallId("wonderland", "weekly-sync")
+            .setHost("host")
+            .build()
+            .toArguments();
+    assertThrows(
+        () ->
+            CreateKaigiInstruction.fromArguments(
+                withArgument(create, "privacy.state", "unexpected")),
+        "expected parsed unit privacy mode state to throw");
+    assertThrows(
+        () ->
+            CreateKaigiInstruction.fromArguments(
+                withArgument(create, "room_policy.state", "unexpected")),
+        "expected parsed unit room policy state to throw");
   }
 
   private static void rejectsInvalidRelayHpkeKey() {
@@ -234,11 +372,6 @@ public final class KaigiInstructionValidationTests {
         LeaveKaigiInstruction.builder()
             .setCallId("wonderland", "weekly-sync")
             .setParticipant("participant")
-            .setCommitment(hash(1))
-            .setNullifierDigest(hash(2))
-            .setNullifierIssuedAtMs(0L)
-            .setRosterRoot(hash(3))
-            .setProofBase64(proof)
             .build();
     final EndKaigiInstruction end =
         EndKaigiInstruction.builder()
@@ -252,9 +385,20 @@ public final class KaigiInstructionValidationTests {
             .build();
 
     for (InstructionTemplate instruction :
-        new InstructionTemplate[] {create, join, leave, end}) {
+        new InstructionTemplate[] {create, join, end}) {
       assertEquals(null, instruction.toArguments().get("commitment.alias_tag"));
       assertEquals("0", instruction.toArguments().get("nullifier.issued_at_ms"));
+    }
+    for (String key :
+        new String[] {
+          "commitment.commitment",
+          "commitment.alias_tag",
+          "nullifier.digest",
+          "nullifier.issued_at_ms",
+          "roster_root",
+          "proof"
+        }) {
+      assertEquals(null, leave.toArguments().get(key));
     }
     assertEquals("Public", create.toArguments().get("room_policy.policy"));
     assertEquals(proof, create.toArguments().get("proof"));
@@ -279,7 +423,6 @@ public final class KaigiInstructionValidationTests {
         LeaveKaigiInstruction.builder()
             .setCallId("wonderland", "weekly-sync")
             .setParticipant("participant")
-            .setNullifierDigest(hash(2))
             .build();
     final EndKaigiInstruction endWithoutIssuedAt =
         EndKaigiInstruction.builder()
@@ -330,6 +473,41 @@ public final class KaigiInstructionValidationTests {
         "expected LeaveKaigi commitment alias to throw");
     assertThrows(
         () ->
+            LeaveKaigiInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .setParticipant("participant")
+                .setCommitment(hash(1)),
+        "expected LeaveKaigi commitment to throw");
+    assertThrows(
+        () ->
+            LeaveKaigiInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .setParticipant("participant")
+                .setNullifierDigest(hash(2)),
+        "expected LeaveKaigi nullifier to throw");
+    assertThrows(
+        () ->
+            LeaveKaigiInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .setParticipant("participant")
+                .setNullifierIssuedAtMs(0L),
+        "expected LeaveKaigi nullifier timestamp to throw");
+    assertThrows(
+        () ->
+            LeaveKaigiInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .setParticipant("participant")
+                .setRosterRoot(hash(3)),
+        "expected LeaveKaigi roster root to throw");
+    assertThrows(
+        () ->
+            LeaveKaigiInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .setParticipant("participant")
+                .setProofBase64(key(1)),
+        "expected LeaveKaigi proof to throw");
+    assertThrows(
+        () ->
             EndKaigiInstruction.builder()
                 .setCallId("wonderland", "weekly-sync")
                 .setCommitmentAliasTag("host-alias"),
@@ -362,6 +540,29 @@ public final class KaigiInstructionValidationTests {
                 .setCallId("wonderland", "weekly-sync")
                 .setNullifierIssuedAtMs(1L),
         "expected EndKaigi nonzero nullifier time to throw");
+    assertStateThrows(
+        () ->
+            CreateKaigiInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .setHost("host")
+                .setNullifierIssuedAtMs(0L)
+                .build(),
+        "expected CreateKaigi orphan nullifier time to throw");
+    assertStateThrows(
+        () ->
+            JoinKaigiInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .setParticipant("participant")
+                .setNullifierIssuedAtMs(0L)
+                .build(),
+        "expected JoinKaigi orphan nullifier time to throw");
+    assertStateThrows(
+        () ->
+            EndKaigiInstruction.builder()
+                .setCallId("wonderland", "weekly-sync")
+                .setNullifierIssuedAtMs(0L)
+                .build(),
+        "expected EndKaigi orphan nullifier time to throw");
 
     final Map<String, String> create =
         CreateKaigiInstruction.builder()
@@ -404,6 +605,25 @@ public final class KaigiInstructionValidationTests {
         "expected parsed LeaveKaigi commitment alias to throw");
     assertThrows(
         () ->
+            LeaveKaigiInstruction.fromArguments(
+                withArgument(leave, "commitment.commitment", hash(1))),
+        "expected parsed LeaveKaigi commitment to throw");
+    assertThrows(
+        () ->
+            LeaveKaigiInstruction.fromArguments(
+                withArgument(leave, "nullifier.issued_at_ms", "0")),
+        "expected parsed LeaveKaigi nullifier timestamp to throw");
+    assertThrows(
+        () ->
+            LeaveKaigiInstruction.fromArguments(
+                withArgument(leave, "roster_root", hash(3))),
+        "expected parsed LeaveKaigi roster root to throw");
+    assertThrows(
+        () ->
+            LeaveKaigiInstruction.fromArguments(withArgument(leave, "proof", key(1))),
+        "expected parsed LeaveKaigi proof to throw");
+    assertThrows(
+        () ->
             EndKaigiInstruction.fromArguments(
                 withArgument(end, "commitment.alias_tag", "host-alias")),
         "expected parsed EndKaigi commitment alias to throw");
@@ -427,6 +647,21 @@ public final class KaigiInstructionValidationTests {
             EndKaigiInstruction.fromArguments(
                 withArgument(end, "nullifier.issued_at_ms", "1")),
         "expected parsed EndKaigi nonzero nullifier time to throw");
+    assertThrows(
+        () ->
+            CreateKaigiInstruction.fromArguments(
+                withArgument(create, "nullifier.issued_at_ms", "0")),
+        "expected parsed CreateKaigi orphan nullifier time to throw");
+    assertThrows(
+        () ->
+            JoinKaigiInstruction.fromArguments(
+                withArgument(join, "nullifier.issued_at_ms", "0")),
+        "expected parsed JoinKaigi orphan nullifier time to throw");
+    assertThrows(
+        () ->
+            EndKaigiInstruction.fromArguments(
+                withArgument(end, "nullifier.issued_at_ms", "0")),
+        "expected parsed EndKaigi orphan nullifier time to throw");
   }
 
   private static Map<String, String> withArgument(

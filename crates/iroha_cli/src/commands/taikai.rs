@@ -55,6 +55,7 @@ use std::{
 const DEFAULT_LADDER_PRESETS_JSON: &str =
     include_str!("../../../../fixtures/taikai/ladder_presets.json");
 const TAIKAI_BUNDLE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.taikai.bundle.v1";
+const MAX_TAIKAI_POLICY_DOCUMENT_BYTES: u64 = 1024 * 1024;
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Bundle a Taikai segment into a CAR archive and Norito envelope.
@@ -1206,15 +1207,95 @@ fn resolve_rpt_validity_window(
     }
     Ok((valid_from, valid_until))
 }
-fn compute_file_digest(path: &Path) -> Result<[u8; 32]> {
-    let metadata = fs::symlink_metadata(path)
-        .wrap_err_with(|| format!("failed to stat `{}`", path.display()))?;
-    if !metadata.is_file() {
-        return Err(eyre!("`{}` is not a regular file", path.display()));
+
+fn open_policy_input(path: &Path, label: &str) -> Result<File> {
+    let path_metadata = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("failed to inspect {label} `{}`", path.display()))?;
+    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
+        return Err(eyre!(
+            "{label} `{}` must be a regular file and must not be a symlink",
+            path.display()
+        ));
     }
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    set_policy_no_follow(&mut options);
+    let file = options
+        .open(path)
+        .wrap_err_with(|| format!("failed to open {label} `{}`", path.display()))?;
+    let opened_metadata = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect opened {label} `{}`", path.display()))?;
+    if !opened_metadata.is_file() {
+        return Err(eyre!(
+            "{label} `{}` changed to a non-regular file while opening it",
+            path.display()
+        ));
+    }
+    ensure_same_policy_input(&path_metadata, &opened_metadata, path, label)?;
+    Ok(file)
+}
+
+fn read_policy_document(file: &mut File, path: &Path, label: &str) -> Result<Vec<u8>> {
+    let advertised_len = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect opened {label} `{}`", path.display()))?
+        .len();
+    if advertised_len > MAX_TAIKAI_POLICY_DOCUMENT_BYTES {
+        return Err(eyre!(
+            "{label} `{}` exceeds the {}-byte policy document limit",
+            path.display(),
+            MAX_TAIKAI_POLICY_DOCUMENT_BYTES
+        ));
+    }
+    let capacity = usize::try_from(advertised_len).expect("bounded document length fits usize");
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take(MAX_TAIKAI_POLICY_DOCUMENT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .wrap_err_with(|| format!("failed to read {label} `{}`", path.display()))?;
+    if u64::try_from(bytes.len()).expect("bounded document length fits u64")
+        > MAX_TAIKAI_POLICY_DOCUMENT_BYTES
+    {
+        return Err(eyre!(
+            "{label} `{}` grew beyond the {}-byte policy document limit while reading",
+            path.display(),
+            MAX_TAIKAI_POLICY_DOCUMENT_BYTES
+        ));
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn ensure_same_policy_input(
+    expected: &fs::Metadata,
+    opened: &fs::Metadata,
+    path: &Path,
+    label: &str,
+) -> Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    if expected.dev() != opened.dev() || expected.ino() != opened.ino() {
+        return Err(eyre!(
+            "{label} `{}` changed while it was being opened",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_same_policy_input(
+    _expected: &fs::Metadata,
+    _opened: &fs::Metadata,
+    _path: &Path,
+    _label: &str,
+) -> Result<()> {
+    Ok(())
+}
+
+fn compute_file_digest(path: &Path) -> Result<[u8; 32]> {
     let mut hasher = Hasher::new();
-    let mut file =
-        File::open(path).wrap_err_with(|| format!("failed to open `{}`", path.display()))?;
+    let mut file = open_policy_input(path, "policy input")?;
     let mut buffer = [0u8; 8192];
     loop {
         let read = file
@@ -1232,16 +1313,8 @@ fn validate_cek_receipt_binding(
     event_id: &TaikaiEventId,
     stream_id: &TaikaiStreamId,
 ) -> Result<[u8; 32]> {
-    let metadata = fs::symlink_metadata(path)
-        .wrap_err_with(|| format!("failed to stat CEK receipt `{}`", path.display()))?;
-    if !metadata.is_file() {
-        return Err(eyre!(
-            "CEK receipt `{}` is not a regular file",
-            path.display()
-        ));
-    }
-    let bytes = fs::read(path)
-        .wrap_err_with(|| format!("failed to read CEK receipt `{}`", path.display()))?;
+    let mut file = open_policy_input(path, "CEK receipt")?;
+    let bytes = read_policy_document(&mut file, path, "CEK receipt")?;
     let receipt = norito::decode_from_bytes::<CekRotationReceiptV1>(&bytes).map_err(|err| {
         eyre!(
             "failed to decode CEK receipt `{}` as canonical framed Norito: {err}",
@@ -1285,8 +1358,7 @@ fn compute_bundle_digest(path: &Path) -> Result<[u8; 32]> {
 }
 fn hash_file_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
     update_path_marker(relative, b'F', hasher)?;
-    let mut file =
-        File::open(path).wrap_err_with(|| format!("failed to open `{}`", path.display()))?;
+    let mut file = open_policy_input(path, "bundle file")?;
     let expected_len = file
         .metadata()
         .wrap_err_with(|| format!("failed to inspect `{}`", path.display()))?
@@ -2992,6 +3064,22 @@ mod tests {
         let error = validate_cek_receipt_binding(&receipt_path, &event, &stream)
             .expect_err("mismatched receipt scope must fail");
         assert!(error.to_string().contains("does not match RPT scope"));
+    }
+    #[test]
+    fn cek_receipt_binding_rejects_oversized_policy_document() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let receipt_path = tmp.path().join("oversized-cek.to");
+        File::create(&receipt_path)
+            .expect("create oversized receipt")
+            .set_len(MAX_TAIKAI_POLICY_DOCUMENT_BYTES + 1)
+            .expect("size oversized receipt");
+        let event = TaikaiEventId::new(Name::from_str("expected-event").expect("event"));
+        let stream = TaikaiStreamId::new(Name::from_str("stream").expect("stream"));
+
+        let error = validate_cek_receipt_binding(&receipt_path, &event, &stream)
+            .expect_err("oversized CEK receipt must fail before decoding");
+
+        assert!(error.to_string().contains("policy document limit"));
     }
     #[test]
     fn storage_ticket_derivation_length_prefixes_names() {

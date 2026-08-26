@@ -1883,11 +1883,6 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         first_ordinal,
         "deriving readiness borrows and preserves the complete prepared token",
     );
-    let owner_effect = task.adapter_effect();
-    let owner_pending = task
-        .ownership()
-        .exact_pending_adapter_effect_binding(&owner_effect)
-        .expect("mint the exact Fetch registry carrier for owner admission");
     let proofs = fixture
         .validator_keys
         .iter()
@@ -1899,15 +1894,14 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     let verified = VerifiedHeightContext::genesis(fixture.context.clone(), proofs)
         .expect("verified owner context");
     let owner_directory = TempDir::new().expect("temporary lifecycle owner storage");
-    let (mut owner, lifecycle_ordinal, lifecycle_source) =
-        crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::waiting_fetch_for_ingress_test(
+    let mut owner =
+        crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::empty_owner_for_ingress_test(
             verified,
-            &winning_prepared,
-            owner_effect,
-            owner_pending,
             &fixture.validator_keys[0],
             owner_directory.path(),
         );
+    let lifecycle_ordinal = 1;
+    let lifecycle_source = wake_source;
     assert!(first_leader_wire_token.scheduler_ordinal() > lifecycle_ordinal);
     let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
     let before_foreign_sign_cursor =
@@ -1992,6 +1986,12 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         .expect("the exact winner remains selectable for a capacity wait");
     let before_capacity_wait =
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
+    let registry_before_capacity_wait = owner.fetch_registry_snapshot_for_test();
+    assert_eq!(
+        before_capacity_wait,
+        (None, None, None, false),
+        "an empty owner has no durable Fetch admission before capacity capture",
+    );
     let capacity_result = owner.plan_ingress_turn_for_test(
         &production_services,
         &fixture.executor,
@@ -2033,17 +2033,17 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
             panic!("an exact generation release cannot require restart")
         }
     };
-    drop(released_selector);
     planner_io.release_one_predecessor();
     assert_eq!(
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
         before_capacity_wait,
-        "capacity waiting cannot advance the Fetch generation or claim a lease",
+        "capacity waiting cannot create or advance a durable Fetch admission",
     );
-    let winning_prepared = fixture
-        .executor
-        .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
-        .expect("the exact winner remains selectable after capacity release");
+    assert_eq!(
+        owner.fetch_registry_snapshot_for_test(),
+        registry_before_capacity_wait,
+        "capacity waiting cannot install the concrete Fetch carrier",
+    );
     let mode = fixture.executor.lifecycle_mode_rank_snapshot();
     let runner =
         crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context);
@@ -2051,7 +2051,7 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         &production_services,
         &fixture.executor,
         mode,
-        winning_prepared,
+        released_selector,
         runner,
     );
     let queued = match planned {

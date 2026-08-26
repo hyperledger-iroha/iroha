@@ -1,13 +1,13 @@
 //! Simple per-client congestion control for the SoraNet relay.
 //!
 //! The controller throttles repeated handshake attempts from the same remote
-//! peer and limits the number of simultaneous circuits each remote may
+//! IP and limits the number of simultaneous circuits each remote IP may
 //! establish. It is intentionally conservative; production operators should
 //! tune the limits via configuration once traffic characteristics are known.
 use crate::config::{CONGESTION_MAX_ACTIVE_CIRCUITS_V1, CongestionConfig};
 use std::{
     collections::HashMap,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -17,14 +17,16 @@ use std::{
 use thiserror::Error;
 use tracing::warn;
 #[derive(Debug)]
-/// Per-remote circuit accounting state.
+/// Per-remote-IP circuit accounting state.
 struct ClientState {
     active: u32,
     last_attempt: Instant,
 }
 #[derive(Debug, Default)]
 struct CongestionState {
-    clients: HashMap<SocketAddr, ClientState>,
+    // Zero-active entries preserve the cooldown across failed or short-lived
+    // handshakes. Admission keeps this map bounded by `max_active_circuits`.
+    clients: HashMap<IpAddr, ClientState>,
     active_circuits: usize,
 }
 #[derive(Debug)]
@@ -33,6 +35,14 @@ struct CongestionInner {
     cooldown: Duration,
     state: Mutex<CongestionState>,
     unavailable: AtomicBool,
+}
+fn normalized_client_ip(remote: SocketAddr) -> IpAddr {
+    match remote.ip() {
+        IpAddr::V6(address) => address
+            .to_ipv4_mapped()
+            .map_or(IpAddr::V6(address), IpAddr::V4),
+        address => address,
+    }
 }
 impl CongestionInner {
     fn new(mut config: CongestionConfig) -> Self {
@@ -76,7 +86,23 @@ impl CongestionInner {
                 limit: self.limits.max_active_circuits,
             });
         }
-        if !guard.clients.contains_key(&remote) {
+        let client = normalized_client_ip(remote);
+        if !guard.clients.contains_key(&client) {
+            if guard.clients.len() >= self.limits.max_active_circuits {
+                let cooldown = self.cooldown;
+                guard.clients.retain(|_, state| {
+                    state.active > 0
+                        || now
+                            .checked_duration_since(state.last_attempt)
+                            .unwrap_or_default()
+                            < cooldown
+                });
+                if guard.clients.len() >= self.limits.max_active_circuits {
+                    return Err(CongestionError::GlobalCircuitCapacity {
+                        limit: self.limits.max_active_circuits,
+                    });
+                }
+            }
             guard
                 .clients
                 .try_reserve(1)
@@ -84,7 +110,7 @@ impl CongestionInner {
                     limit: self.limits.max_active_circuits,
                 })?;
             guard.clients.insert(
-                remote,
+                client,
                 ClientState {
                     active: 1,
                     last_attempt: now,
@@ -100,7 +126,7 @@ impl CongestionInner {
         }
         let entry = guard
             .clients
-            .get_mut(&remote)
+            .get_mut(&client)
             .expect("client inserted before congestion checks");
         if entry.active >= self.limits.max_circuits_per_client {
             return Err(CongestionError::TooManyCircuits {
@@ -138,20 +164,18 @@ impl CongestionInner {
                 error.into_inner()
             }
         };
-        let (released, remove) = if let Some(entry) = guard.clients.get_mut(&remote) {
+        let client = normalized_client_ip(remote);
+        let released = if let Some(entry) = guard.clients.get_mut(&client) {
             let released = entry.active > 0;
             if entry.active > 0 {
                 entry.active -= 1;
             }
-            (released, entry.active == 0)
+            released
         } else {
-            (false, false)
+            false
         };
         if released {
             guard.active_circuits = guard.active_circuits.saturating_sub(1);
-        }
-        if remove {
-            guard.clients.remove(&remote);
         }
     }
 }
@@ -269,9 +293,9 @@ mod tests {
     fn global_capacity_rejects_before_map_overshoot_and_recovers_on_release() {
         let controller = controller(2);
         let now = Instant::now();
-        let first = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 10_001);
-        let second = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 10_002);
-        let overflow = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 10_003);
+        let first = SocketAddr::new(IpAddr::from([127, 0, 0, 1]), 10_001);
+        let second = SocketAddr::new(IpAddr::from([127, 0, 0, 2]), 10_002);
+        let overflow = SocketAddr::new(IpAddr::from([127, 0, 0, 3]), 10_003);
         let first_reservation = controller.reserve(first, now).expect("first slot");
         let _second_reservation = controller.reserve(second, now).expect("second slot");
         assert!(matches!(
@@ -282,16 +306,104 @@ mod tests {
             let state = controller.inner.state.lock().expect("congestion state");
             assert_eq!(state.active_circuits, 2);
             assert_eq!(state.clients.len(), 2);
-            assert!(!state.clients.contains_key(&overflow));
+            assert!(!state.clients.contains_key(&overflow.ip()));
         }
         drop(first_reservation);
+        assert!(matches!(
+            controller.reserve(overflow, now),
+            Err(CongestionError::GlobalCircuitCapacity { limit: 2 })
+        ));
+        {
+            let state = controller.inner.state.lock().expect("congestion state");
+            assert_eq!(state.active_circuits, 1);
+            assert_eq!(state.clients.len(), 2);
+            assert_eq!(state.clients[&first.ip()].active, 0);
+        }
         let _replacement = controller
-            .reserve(overflow, now)
-            .expect("released capacity is reusable");
+            .reserve(overflow, now + Duration::from_millis(1))
+            .expect("released capacity is reusable after its cooldown expires");
         let state = controller.inner.state.lock().expect("congestion state");
         assert_eq!(state.active_circuits, 2);
         assert_eq!(state.clients.len(), 2);
-        assert!(state.clients.contains_key(&overflow));
+        assert!(state.clients.contains_key(&overflow.ip()));
+    }
+    #[test]
+    fn released_reservation_retains_bounded_cooldown_state() {
+        let controller = controller(2);
+        let now = Instant::now();
+        let first = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 10_007);
+        let rotated = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 10_008);
+
+        let reservation = controller.reserve(first, now).expect("first slot");
+        drop(reservation);
+        {
+            let state = controller.inner.state.lock().expect("congestion state");
+            assert_eq!(state.active_circuits, 0);
+            assert_eq!(state.clients.len(), 1);
+            assert_eq!(state.clients[&first.ip()].active, 0);
+        }
+        assert!(matches!(
+            controller.reserve(rotated, now),
+            Err(CongestionError::HandshakeCooldown { .. })
+        ));
+        let _reservation = controller
+            .reserve(rotated, now + Duration::from_millis(1))
+            .expect("same IP is admitted after the cooldown");
+
+        let state = controller.inner.state.lock().expect("congestion state");
+        assert_eq!(state.active_circuits, 1);
+        assert_eq!(state.clients.len(), 1);
+    }
+    #[test]
+    fn source_port_rotation_does_not_bypass_client_limits() {
+        let controller = controller(4);
+        let now = Instant::now();
+        let first = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 10_010);
+        let second = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 10_011);
+        let third = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 10_012);
+
+        let _first = controller.reserve(first, now).expect("first slot");
+        assert!(matches!(
+            controller.reserve(second, now),
+            Err(CongestionError::HandshakeCooldown { .. })
+        ));
+        let _second = controller
+            .reserve(second, now + Duration::from_millis(2))
+            .expect("second slot after cooldown");
+        assert!(matches!(
+            controller.reserve(third, now + Duration::from_millis(4)),
+            Err(CongestionError::TooManyCircuits { limit: 2 })
+        ));
+
+        let state = controller.inner.state.lock().expect("congestion state");
+        assert_eq!(state.active_circuits, 2);
+        assert_eq!(state.clients.len(), 1);
+        assert!(state.clients.contains_key(&first.ip()));
+    }
+    #[test]
+    fn ipv4_mapped_ipv6_does_not_create_a_second_client_identity() {
+        let controller = controller(4);
+        let now = Instant::now();
+        let address = Ipv4Addr::new(192, 0, 2, 1);
+        let ipv4 = SocketAddr::new(IpAddr::V4(address), 10_020);
+        let mapped = SocketAddr::new(IpAddr::V6(address.to_ipv6_mapped()), 10_021);
+
+        let _first = controller.reserve(ipv4, now).expect("first slot");
+        assert!(matches!(
+            controller.reserve(mapped, now),
+            Err(CongestionError::HandshakeCooldown { .. })
+        ));
+        let _second = controller
+            .reserve(mapped, now + Duration::from_millis(2))
+            .expect("mapped form shares the same client after cooldown");
+        assert!(matches!(
+            controller.reserve(ipv4, now + Duration::from_millis(4)),
+            Err(CongestionError::TooManyCircuits { limit: 2 })
+        ));
+
+        let state = controller.inner.state.lock().expect("congestion state");
+        assert_eq!(state.clients.len(), 1);
+        assert_eq!(state.clients[&IpAddr::V4(address)].active, 2);
     }
     #[test]
     fn programmatic_configuration_is_clamped_to_memory_corridor() {
@@ -312,7 +424,7 @@ mod tests {
         let remote = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 10_004);
         let _reservation = controller
             .reserve(remote, Instant::now())
-            .expect("a first attempt must not be retained as an inactive cooldown entry");
+            .expect("an initial reservation must fit within the clamped bound");
         let state = controller.inner.state.lock().expect("congestion state");
         assert_eq!(state.active_circuits, 1);
         assert_eq!(state.clients.len(), 1);
@@ -348,6 +460,7 @@ mod tests {
         ));
         let state = controller.inner.state.lock().expect("cleared state lock");
         assert_eq!(state.active_circuits, 0);
-        assert!(state.clients.is_empty());
+        assert_eq!(state.clients.len(), 1);
+        assert_eq!(state.clients[&first.ip()].active, 0);
     }
 }

@@ -42,8 +42,10 @@ def create_kaigi_relay_client_mixin(
                 headers={"Accept": "application/json"},
             )
             self._expect_status(response, {200, 404})
-            if response.status_code == 404 or not response.content:
+            if response.status_code == 404:
                 return None
+            if not response.content:
+                raise RuntimeError("kaigi relay detail endpoint returned an empty success response")
             payload = self._ensure_mapping(response.json(), "kaigi relay detail response")
             return self._parse_kaigi_relay_detail(
                 payload,

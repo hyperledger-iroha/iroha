@@ -6,10 +6,10 @@ use crate::da::taikai::taikai_ingest::{
     AnchorSendError, AnchorSender, collect_pending_uploads, process_batch,
 };
 use crate::da::taikai::{
-    TAIKAI_ANCHOR_REQUEST_PREFIX, TAIKAI_ANCHOR_REQUEST_SUFFIX, TAIKAI_ANCHOR_SENTINEL_PREFIX,
-    TAIKAI_ANCHOR_SENTINEL_SUFFIX, TAIKAI_SPOOL_SUBDIR, TAIKAI_TRM_LINEAGE_PREFIX,
-    TAIKAI_TRM_LINEAGE_SUFFIX, TAIKAI_TRM_LOCK_PREFIX, TAIKAI_TRM_LOCK_STALE_SECS,
-    TAIKAI_TRM_LOCK_SUFFIX,
+    TAIKAI_ANCHOR_READY_PREFIX, TAIKAI_ANCHOR_READY_SUFFIX, TAIKAI_ANCHOR_REQUEST_PREFIX,
+    TAIKAI_ANCHOR_REQUEST_SUFFIX, TAIKAI_ANCHOR_SENTINEL_PREFIX, TAIKAI_ANCHOR_SENTINEL_SUFFIX,
+    TAIKAI_SPOOL_SUBDIR, TAIKAI_TRM_LINEAGE_PREFIX, TAIKAI_TRM_LINEAGE_SUFFIX,
+    TAIKAI_TRM_LOCK_PREFIX, TAIKAI_TRM_LOCK_SUFFIX,
 };
 use crate::da::{
     DaReceiptLog, DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpooler, ReplayCursorStore,
@@ -1445,6 +1445,14 @@ fn sample_trm_manifest() -> TaikaiRoutingManifestV1 {
 fn sample_trm_bytes() -> Vec<u8> {
     to_bytes(&sample_trm_manifest()).expect("encode trm")
 }
+fn sample_trm_manifest_for_envelope(
+    envelope: &taikai_ingest::EnvelopeArtifacts,
+) -> TaikaiRoutingManifestV1 {
+    let mut manifest = sample_trm_manifest();
+    manifest.renditions[0].latest_manifest_hash = envelope.ingest.manifest_hash;
+    manifest.renditions[0].latest_car = envelope.ingest.car.clone();
+    manifest
+}
 fn taikai_envelope_fixture() -> taikai_ingest::EnvelopeArtifacts {
     let (_, envelope) = taikai_ssm_validation_fixture();
     envelope
@@ -2113,6 +2121,20 @@ fn taikai_artifacts_persist_idempotent() {
     .expect("persist trm second")
     .expect("path");
     assert_eq!(trm_path, trm_second);
+    let ready_path = taikai_ingest::persist_anchor_ready(
+        dir.path(),
+        lane_id,
+        epoch,
+        sequence,
+        &storage_ticket,
+        &fingerprint,
+    )
+    .expect("persist readiness marker")
+    .expect("readiness path");
+    assert_eq!(
+        fs::read(&ready_path).expect("read readiness"),
+        b"ready-v1\n"
+    );
     let err = taikai_ingest::persist_envelope(
         dir.path(),
         lane_id,
@@ -2124,6 +2146,20 @@ fn taikai_artifacts_persist_idempotent() {
     )
     .expect_err("mismatched envelope bytes must fail");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+}
+#[test]
+fn taikai_anchor_readiness_does_not_recreate_retired_sources() {
+    let dir = tempdir().expect("tempdir");
+    let path = taikai_ingest::persist_anchor_ready(
+        dir.path(),
+        LaneId::new(3),
+        7,
+        11,
+        &StorageTicketId::new([0x11; 32]),
+        &ReplayFingerprint::from_hash(blake3::hash(b"fingerprint")),
+    )
+    .expect("missing source is an idempotent no-op");
+    assert!(path.is_none());
 }
 #[cfg(unix)]
 #[test]
@@ -2351,6 +2387,14 @@ async fn write_minimal_taikai_anchor_artifacts(spool_dir: &Path, base_id: &str) 
     )
     .await
     .expect("write ssm");
+    async_fs::write(
+        spool_dir.join(format!(
+            "{TAIKAI_ANCHOR_READY_PREFIX}{base_id}{TAIKAI_ANCHOR_READY_SUFFIX}"
+        )),
+        b"ready-v1\n",
+    )
+    .await
+    .expect("write readiness marker");
 }
 const ANCHOR_BASE_ID: &str = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 struct AnchorFixture {
@@ -2418,6 +2462,76 @@ async fn taikai_collect_pending_uploads_sorts_by_base_id() {
     assert_eq!(observed, vec![base_a, base_b]);
 }
 #[tokio::test]
+async fn taikai_anchor_collection_waits_for_durable_readiness_marker() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    write_minimal_taikai_anchor_artifacts(&spool_dir, ANCHOR_BASE_ID).await;
+    let ready_path = spool_dir.join(format!(
+        "{TAIKAI_ANCHOR_READY_PREFIX}{ANCHOR_BASE_ID}{TAIKAI_ANCHOR_READY_SUFFIX}"
+    ));
+    async_fs::remove_file(&ready_path)
+        .await
+        .expect("remove readiness marker");
+    assert!(
+        collect_pending_uploads(&spool_dir)
+            .await
+            .expect("incomplete upload collection")
+            .is_empty(),
+        "an envelope must remain invisible until its durable receipt publishes readiness"
+    );
+    async_fs::write(&ready_path, b"ready-v1\n")
+        .await
+        .expect("restore readiness marker");
+    assert_eq!(
+        collect_pending_uploads(&spool_dir)
+            .await
+            .expect("ready upload collection")
+            .len(),
+        1
+    );
+}
+#[tokio::test]
+async fn taikai_anchor_processing_continues_after_candidate_load_failure() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    let corrupt_base = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let valid_base = "00000001-0000000000000002-0000000000000004-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    write_minimal_taikai_anchor_artifacts(&spool_dir, corrupt_base).await;
+    write_minimal_taikai_anchor_artifacts(&spool_dir, valid_base).await;
+    async_fs::write(
+        spool_dir.join(format!("taikai-indexes-{corrupt_base}.json")),
+        b"{not-json",
+    )
+    .await
+    .expect("corrupt first indexes");
+    let sender = MockAnchorSender::default();
+    let err = process_batch(&spool_dir, &taikai_anchor_config(None), &sender)
+        .await
+        .expect_err("corrupt candidate must be reported");
+    assert!(err.contains(corrupt_base), "unexpected error: {err}");
+    assert_eq!(
+        sender.calls.lock().await.len(),
+        1,
+        "the valid later candidate must still be delivered"
+    );
+    assert!(
+        spool_dir
+            .join(format!(
+                "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{valid_base}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+            ))
+            .exists(),
+        "later successful candidate must be acknowledged"
+    );
+    assert!(
+        spool_dir
+            .join(format!(
+                "{TAIKAI_ANCHOR_READY_PREFIX}{corrupt_base}{TAIKAI_ANCHOR_READY_SUFFIX}"
+            ))
+            .is_file(),
+        "a failed candidate must remain durable for retry or operator repair"
+    );
+}
+#[tokio::test]
 async fn taikai_anchor_processing_generates_payload_and_sentinel() {
     let dir = tempdir().expect("tempdir");
     let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
@@ -2452,6 +2566,14 @@ async fn taikai_anchor_processing_generates_payload_and_sentinel() {
     async_fs::write(&ssm_path, b"ssm-bytes")
         .await
         .expect("write ssm");
+    async_fs::write(
+        spool_dir.join(format!(
+            "{TAIKAI_ANCHOR_READY_PREFIX}{base_id}{TAIKAI_ANCHOR_READY_SUFFIX}"
+        )),
+        b"ready-v1\n",
+    )
+    .await
+    .expect("write readiness marker");
     let trm_bytes = sample_trm_bytes();
     let trm_path = spool_dir.join(format!("taikai-trm-{base_id}.norito"));
     async_fs::write(&trm_path, &trm_bytes)
@@ -3023,6 +3145,14 @@ async fn taikai_anchor_collection_rejects_missing_required_artifacts() {
     )
     .await
     .expect("write envelope");
+    async_fs::write(
+        spool_dir.join(format!(
+            "{TAIKAI_ANCHOR_READY_PREFIX}{base_id}{TAIKAI_ANCHOR_READY_SUFFIX}"
+        )),
+        b"ready-v1\n",
+    )
+    .await
+    .expect("write readiness marker");
     let err = match collect_pending_uploads(&spool_dir).await {
         Ok(_) => panic!("missing required companion artifact must reject anchor collection"),
         Err(err) => err,
@@ -3466,6 +3596,7 @@ fn taikai_trm_lineage_guard_rejects_lock_symlink() {
         .expect("enabled");
     let lock_path = taikai_lock_path(spool_dir);
     drop(guard);
+    fs::remove_file(&lock_path).expect("remove persistent lock before symlink test");
     let lock_target = spool_dir
         .join(TAIKAI_SPOOL_SUBDIR)
         .join("lineage-lock-target.lock");
@@ -3496,8 +3627,8 @@ fn taikai_trm_lineage_guard_rejects_lock_symlink() {
 }
 #[cfg(unix)]
 #[test]
-fn taikai_trm_lineage_guard_rejects_unremovable_stale_lock() {
-    use std::{os::unix::fs::PermissionsExt as _, time::SystemTime};
+fn taikai_trm_lineage_guard_never_steals_an_aged_live_lock() {
+    use std::time::SystemTime;
     let dir = tempdir().expect("tempdir");
     let spool_dir = dir.path();
     let alias = sample_trm_manifest().alias_binding;
@@ -3505,9 +3636,7 @@ fn taikai_trm_lineage_guard_rejects_unremovable_stale_lock() {
         .expect("guard")
         .expect("enabled");
     let lock_path = taikai_lock_path(spool_dir);
-    drop(guard);
-    fs::write(&lock_path, b"0\n").expect("seed stale lock");
-    let stale_at = SystemTime::now() - Duration::from_secs(TAIKAI_TRM_LOCK_STALE_SECS + 1);
+    let stale_at = SystemTime::now() - Duration::from_secs(24 * 60 * 60);
     let stale_times = std::fs::FileTimes::new()
         .set_accessed(stale_at)
         .set_modified(stale_at);
@@ -3516,38 +3645,22 @@ fn taikai_trm_lineage_guard_rejects_unremovable_stale_lock() {
         .open(&lock_path)
         .expect("open stale lock")
         .set_times(stale_times)
-        .expect("age stale lock");
-    let base_dir = spool_dir.join(TAIKAI_SPOOL_SUBDIR);
-    let mut permissions = fs::metadata(&base_dir)
-        .expect("read Taikai spool permissions")
-        .permissions();
-    permissions.set_mode(0o500);
-    fs::set_permissions(&base_dir, permissions).expect("make Taikai spool unwritable");
+        .expect("age live lock");
     let err = match taikai_ingest::TrmLineageGuard::new(spool_dir, &alias) {
-        Ok(_) => panic!("unremovable stale lock must reject lineage guard acquisition"),
+        Ok(_) => panic!("an aged live lock must not be stolen"),
         Err(err) => err,
     };
-    let mut permissions = fs::metadata(&base_dir)
-        .expect("read Taikai spool permissions")
-        .permissions();
-    permissions.set_mode(0o700);
-    fs::set_permissions(&base_dir, permissions).expect("restore Taikai spool permissions");
-    assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
     assert!(
-        err.1
-            .contains("failed to remove stale Taikai routing manifest lock"),
-        "unexpected stale lock error: {:?}",
+        err.1.contains("routing manifest lock busy for alias slug"),
+        "unexpected busy lock error: {:?}",
         err
     );
-    assert!(
-        err.1.contains(&lock_path.display().to_string()),
-        "stale lock error should include path: {:?}",
-        err
-    );
-    assert!(
-        lock_path.exists(),
-        "failed cleanup should leave stale lock visible for operator repair"
-    );
+    drop(guard);
+    let recovered = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
+        .expect("released persistent lock must be reusable")
+        .expect("enabled");
+    drop(recovered);
 }
 #[test]
 fn taikai_trm_lineage_hint_contains_previous_digest() {
@@ -4158,8 +4271,11 @@ fn validate_taikai_ssm_rejects_malformed_mldsa_signature_lengths() {
 #[test]
 fn validate_taikai_trm_accepts_matching_manifest() {
     let (_, taikai) = taikai_ssm_validation_fixture();
+    let manifest = sample_trm_manifest_for_envelope(&taikai);
+    let trm_bytes = to_bytes(&manifest).expect("encode trm");
     let routing_manifest =
-        taikai::validate_taikai_trm(&sample_trm_bytes(), &taikai).expect("trm valid");
+        taikai::validate_taikai_trm(&trm_bytes, &taikai, &manifest.alias_binding)
+            .expect("trm valid");
     assert_eq!(
         routing_manifest.alias_binding.name.as_str(),
         "docs",
@@ -4173,19 +4289,21 @@ fn validate_taikai_trm_accepts_matching_manifest() {
 #[test]
 fn validate_taikai_trm_rejects_mismatched_event() {
     let (_, taikai) = taikai_ssm_validation_fixture();
-    let mut trm = sample_trm_manifest();
+    let mut trm = sample_trm_manifest_for_envelope(&taikai);
     trm.event_id = TaikaiEventId::new(Name::from_str("other-event").unwrap());
     let trm_bytes = to_bytes(&trm).expect("encode trm");
-    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai).expect_err("validation must fail");
+    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai, &trm.alias_binding)
+        .expect_err("validation must fail");
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
 }
 #[test]
 fn validate_taikai_trm_rejects_invalid_version() {
     let taikai = taikai_envelope_fixture();
-    let mut trm = sample_trm_manifest();
+    let mut trm = sample_trm_manifest_for_envelope(&taikai);
     trm.version = TaikaiRoutingManifestV1::VERSION + 1;
     let trm_bytes = to_bytes(&trm).expect("encode trm");
-    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai).expect_err("validation must fail");
+    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai, &trm.alias_binding)
+        .expect_err("validation must fail");
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
     assert!(
         err.1.contains("unsupported manifest version"),
@@ -4196,10 +4314,11 @@ fn validate_taikai_trm_rejects_invalid_version() {
 #[test]
 fn validate_taikai_trm_rejects_invalid_window() {
     let taikai = taikai_envelope_fixture();
-    let mut trm = sample_trm_manifest();
+    let mut trm = sample_trm_manifest_for_envelope(&taikai);
     trm.segment_window = TaikaiSegmentWindow::new(50, 40);
     let trm_bytes = to_bytes(&trm).expect("encode trm");
-    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai).expect_err("validation must fail");
+    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai, &trm.alias_binding)
+        .expect_err("validation must fail");
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
     assert!(
         err.1.contains("invalid routing manifest"),
@@ -4211,10 +4330,10 @@ fn validate_taikai_trm_rejects_invalid_window() {
 #[test]
 fn validate_taikai_trm_rejects_rendition_window_that_misses_segment() {
     let taikai = taikai_envelope_fixture();
-    let mut trm = sample_trm_manifest();
+    let mut trm = sample_trm_manifest_for_envelope(&taikai);
     trm.renditions[0].ssm_range = TaikaiSegmentWindow::new(50, 64);
     let trm_bytes = to_bytes(&trm).expect("encode trm");
-    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai)
+    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai, &trm.alias_binding)
         .expect_err("rendition signing window must cover the admitted segment");
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
     assert!(
@@ -4222,6 +4341,52 @@ fn validate_taikai_trm_rejects_rendition_window_that_misses_segment() {
         "unexpected error message: {}",
         err.1
     );
+}
+#[test]
+fn validate_taikai_trm_rejects_head_manifest_mismatch() {
+    let taikai = taikai_envelope_fixture();
+    let mut trm = sample_trm_manifest_for_envelope(&taikai);
+    trm.renditions[0].latest_manifest_hash = BlobDigest::from_hash(blake3_hash(b"other-manifest"));
+    let trm_bytes = to_bytes(&trm).expect("encode trm");
+    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai, &trm.alias_binding)
+        .expect_err("TRM head manifest must bind the admitted segment");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("latest_manifest_hash"));
+}
+#[test]
+fn validate_taikai_trm_rejects_head_car_mismatch() {
+    let taikai = taikai_envelope_fixture();
+    let mut trm = sample_trm_manifest_for_envelope(&taikai);
+    trm.renditions[0].latest_car.car_digest = BlobDigest::from_hash(blake3_hash(b"other-car"));
+    let trm_bytes = to_bytes(&trm).expect("encode trm");
+    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai, &trm.alias_binding)
+        .expect_err("TRM head CAR must bind the admitted segment");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("latest_car"));
+}
+#[test]
+fn validate_taikai_trm_rejects_ssm_alias_mismatch() {
+    let taikai = taikai_envelope_fixture();
+    let trm = sample_trm_manifest_for_envelope(&taikai);
+    let trm_bytes = to_bytes(&trm).expect("encode trm");
+    let mut ssm_alias = trm.alias_binding.clone();
+    ssm_alias.name = "other-alias".to_owned();
+    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai, &ssm_alias)
+        .expect_err("TRM alias must bind the authenticated SSM alias");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("authenticated SSM alias binding"));
+}
+#[test]
+fn validate_taikai_trm_rejects_ssm_alias_proof_mismatch() {
+    let taikai = taikai_envelope_fixture();
+    let trm = sample_trm_manifest_for_envelope(&taikai);
+    let trm_bytes = to_bytes(&trm).expect("encode trm");
+    let mut ssm_alias = trm.alias_binding.clone();
+    ssm_alias.proof.push(0xff);
+    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai, &ssm_alias)
+        .expect_err("TRM alias proof must be the proof authenticated by the SSM");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("authenticated SSM alias binding"));
 }
 #[test]
 fn normalize_payload_handles_gzip() {
@@ -6195,6 +6360,50 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
     .expect("durable duplicate should be present after restart");
     assert_eq!(recovered_after_restart.receipt, receipt);
     assert_eq!(recovered_after_restart.pdp_commitment_bytes, pdp_bytes);
+}
+#[test]
+fn duplicate_taikai_ingest_does_not_publish_readiness_before_receipt_validation() {
+    let temp_dir = tempdir().expect("temp dir");
+    let spool_dir = temp_dir.path();
+    let context = sample_manifest_context_for(BlobClass::TaikaiSegment);
+    let request = context.request;
+    let manifest = context.artifacts;
+    taikai_ingest::persist_envelope(
+        spool_dir,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+        b"envelope",
+    )
+    .expect("persist envelope fixture")
+    .expect("envelope path");
+    let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let signer = checked_random_keypair();
+    let receipt_log =
+        open_receipt_log(spool_dir, &cursor_store, &signer).expect("open receipt log");
+    load_duplicate_da_artifacts_and_publish_taikai_ready(
+        &receipt_log,
+        spool_dir,
+        &request,
+        &manifest,
+        lane_epoch,
+    )
+    .expect_err("missing durable receipt artifacts must reject duplicate recovery");
+    let ready_path = spool_dir.join(TAIKAI_SPOOL_SUBDIR).join(format!(
+        "{TAIKAI_ANCHOR_READY_PREFIX}{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}{TAIKAI_ANCHOR_READY_SUFFIX}",
+        lane = request.lane_id.as_u32(),
+        epoch = request.epoch,
+        sequence = request.sequence,
+        ticket = hex::encode(manifest.storage_ticket.as_ref()),
+        fingerprint = hex::encode(manifest.fingerprint.as_bytes()),
+    ));
+    assert!(
+        !ready_path.exists(),
+        "an invalid in-memory duplicate must not become visible to the anchor worker"
+    );
 }
 #[test]
 fn da_receipt_log_rejects_receipt_hash_mismatch_against_ticket_manifest_on_open() {

@@ -10243,9 +10243,9 @@ fileprivate enum ToriiVerifyingKeyDraftOperation {
     var wireName: String {
         switch self {
         case .register:
-            return "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey"
+            return "iroha.instruction.v1::verifying_keys::RegisterVerifyingKey"
         case .update:
-            return "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey"
+            return "iroha.instruction.v1::verifying_keys::UpdateVerifyingKey"
         }
     }
 }
@@ -17939,7 +17939,7 @@ public struct ToriiGovernanceProposalResponse: Decodable, Sendable {
             forKey: .txInstructions
         )
         guard txInstructions.count == 1,
-              txInstructions[0].wireId == "iroha_data_model::isi::governance::ProposeDeployContract" else {
+              txInstructions[0].wireId == "iroha.instruction.v1::governance::ProposeDeployContract" else {
             throw DecodingError.dataCorruptedError(
                 forKey: .txInstructions,
                 in: container,

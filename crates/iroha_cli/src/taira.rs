@@ -49,7 +49,8 @@ use zeroize::Zeroizing;
 const DEFAULT_PUBLIC_ROOT: &str = "https://taira.sora.org";
 const DEFAULT_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const DEFAULT_CHAIN_DISCRIMINANT: u16 = 369;
-const DEFAULT_GAS_ASSET_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
+/// Canonical first-release Taira fee/faucet asset definition.
+pub(crate) const DEFAULT_GAS_ASSET_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const DEFAULT_ALIAS_PREFIX: &str = "tairarolloutcanary";
 const TAIRA_CANARY_ALIAS_SCOPE: &str = "taira.universal";
 const DEFAULT_WRITE_TTL_MS: u64 = 120_000;
@@ -1632,8 +1633,8 @@ fn prove_inrou_predecessor_applied(
     if transaction
         .metadata()
         .get(&binding_name)
-        .and_then(|value| value.try_into_any_norito::<String>().ok())
-        .as_deref()
+        .map(IrohaJson::get)
+        .map(String::as_str)
         != Some(expected_binding_json.as_str())
     {
         eyre::bail!("Inrou predecessor transaction metadata has a substituted binding");
@@ -1825,7 +1826,7 @@ fn run_doctor(public_root: &str) -> Result<Value> {
     }
     let mcp_url = join_url(&public_root, "/v1/mcp")?;
     let mcp_get = http_json(&http, reqwest::Method::GET, mcp_url.as_str(), None)?;
-    let mcp_get_ok = (200..300).contains(&mcp_get.status);
+    let mcp_get_ok = mcp_get.status == 200;
     push_check(&mut checks, "mcp_get", mcp_get.status, mcp_get_ok, None);
     if !mcp_get_ok {
         failures.push(format!("mcp_get returned HTTP {}", mcp_get.status));
@@ -1846,7 +1847,7 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         mcp_url.as_str(),
         Some(&initialize),
     )?;
-    let mcp_init_ok = (200..300).contains(&mcp_init.status);
+    let mcp_init_ok = mcp_init.status == 200;
     push_check(
         &mut checks,
         "mcp_initialize",
@@ -1869,7 +1870,7 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         mcp_url.as_str(),
         Some(&tools_payload),
     )?;
-    let tools_ok = (200..300).contains(&tools.status);
+    let tools_ok = tools.status == 200;
     push_check(&mut checks, "mcp_tools_list", tools.status, tools_ok, None);
     if !tools_ok {
         failures.push(format!("mcp_tools_list returned HTTP {}", tools.status));
@@ -3000,7 +3001,7 @@ fn validate_prepared_operation(
         let wire = supplied_wire
             .as_deref()
             .ok_or_else(|| eyre!("prepared transaction omits its exact wire"))?;
-        validate_prepared_transaction_closure(transaction, operation, wire, config)?;
+        validate_prepared_transaction_closure(transaction, operation, wire, &config.network_id)?;
         validate_prepared_transaction_lifetime(transaction, &envelope.binding)?;
     } else if supplied_wire.is_some() {
         eyre::bail!("proof-required onboarding result must not contain transaction bytes");
@@ -3027,7 +3028,7 @@ fn validate_prepared_transaction_closure(
     transaction: &SignedTransaction,
     operation: &PreparedTransactionOperationV1,
     wire: &[u8],
-    config: &Config,
+    expected_network_id: &NetworkId,
 ) -> Result<()> {
     let transaction_hash_hex = operation
         .transaction_hash_hex()
@@ -3053,7 +3054,7 @@ fn validate_prepared_transaction_closure(
         .map_err(|error| eyre!("failed to re-encode prepared transaction: {error}"))?;
     if canonical != wire
         || hex::encode(transaction.hash().as_ref()) != transaction_hash_hex
-        || transaction.network_id() != Some(&config.network_id)
+        || transaction.network_id() != Some(expected_network_id)
         || transaction.fee_payment_intent() != fee_payment
     {
         eyre::bail!("prepared operation transaction bytes do not bind its declared identity");
@@ -3136,6 +3137,41 @@ fn validate_prepared_transaction_closure(
         }
     }
     Ok(())
+}
+
+/// Authenticate one exact first-release final-canary operation without network I/O.
+///
+/// # Errors
+/// Returns an error for noncanonical JSON, a substituted binding, wire, signature, network,
+/// authority, fee closure, metadata, semantic message, instruction sequence, or lifetime.
+pub(crate) fn verify_final_canary_prepared_operation_v1(
+    operation_value: &Value,
+    expected_network_id: &NetworkId,
+    expected_authority: &AccountId,
+) -> Result<SignedTransaction> {
+    let operation: FinalCanaryPreparedTransactionV1 = json::from_value(operation_value.clone())
+        .wrap_err("prepared final canary is not exact typed V1 JSON")?;
+    if json::to_value(&operation)? != *operation_value {
+        eyre::bail!("prepared final canary is outside its exact typed V1 JSON closure");
+    }
+    validate_final_canary_envelope(&operation)?;
+    if operation.signed_transaction_wire_hex.len()
+        > PREPARED_TRANSACTION_MAX_BYTES.saturating_mul(2)
+    {
+        eyre::bail!("prepared final-canary transaction wire is oversized");
+    }
+    let wire = hex::decode(&operation.signed_transaction_wire_hex)
+        .wrap_err("prepared final-canary transaction wire is not hexadecimal")?;
+    let transaction = SignedTransaction::decode_all_versioned(&wire)
+        .wrap_err("prepared final canary is not a versioned SignedTransaction")?;
+    if transaction.authority() != expected_authority {
+        eyre::bail!("prepared final canary has a substituted authority");
+    }
+    let binding = operation.binding.clone();
+    let tagged = PreparedTransactionOperationV1::FinalCanary(operation);
+    validate_prepared_transaction_closure(&transaction, &tagged, &wire, expected_network_id)?;
+    validate_prepared_transaction_lifetime(&transaction, &binding)?;
+    Ok(transaction)
 }
 
 fn validate_prepared_transaction_lifetime(

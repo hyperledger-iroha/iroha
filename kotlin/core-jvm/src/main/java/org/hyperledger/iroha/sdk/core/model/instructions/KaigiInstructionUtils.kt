@@ -12,6 +12,13 @@ private const val CALL_NAME_KEY = "call_name"
 /** Shared helpers for flattening Kaigi instruction payloads to argument maps. */
 object KaigiInstructionUtils {
 
+    fun requireAction(arguments: Map<String, String>, expected: String) {
+        val actual = require(arguments, "action")
+        require(actual == expected) {
+            "Instruction action must be '$expected', got '$actual'"
+        }
+    }
+
     fun parseCallId(arguments: Map<String, String>, prefix: String): CallId {
         val domain = require(arguments, prefixKey(prefix, DOMAIN_KEY))
         val callName = require(arguments, prefixKey(prefix, CALL_NAME_KEY))
@@ -66,9 +73,11 @@ object KaigiInstructionUtils {
     fun parseUnsignedLong(value: String, fieldName: String): Long {
         requireNotNull(value) { fieldName }
         try {
+            // Long is the JVM carrier for Rust u64 fields. Values in the upper half of the
+            // unsigned range intentionally have a negative signed representation.
             val parsed = java.lang.Long.parseUnsignedLong(value)
-            if (parsed < 0) {
-                throw IllegalArgumentException("$fieldName must be unsigned")
+            require(java.lang.Long.toUnsignedString(parsed) == value) {
+                "$fieldName must use canonical unsigned decimal syntax"
             }
             return parsed
         } catch (ex: NumberFormatException) {
@@ -77,7 +86,7 @@ object KaigiInstructionUtils {
     }
 
     fun parseOptionalUnsignedLong(value: String?, fieldName: String): Long? {
-        if (value.isNullOrBlank()) return null
+        if (value == null) return null
         return parseUnsignedLong(value, fieldName)
     }
 
@@ -85,8 +94,13 @@ object KaigiInstructionUtils {
         requireNotNull(value) { fieldName }
         try {
             val parsed = Integer.parseUnsignedInt(value)
-            if (parsed <= 0) {
+            // Int is the JVM carrier for Rust u32 fields, so only the all-zero bit pattern is
+            // invalid here. High-bit values are valid positive u32 values.
+            if (parsed == 0) {
                 throw IllegalArgumentException("$fieldName must be greater than zero")
+            }
+            require(Integer.toUnsignedString(parsed) == value) {
+                "$fieldName must use canonical unsigned decimal syntax"
             }
             return parsed
         } catch (ex: NumberFormatException) {
@@ -95,7 +109,7 @@ object KaigiInstructionUtils {
     }
 
     fun parseOptionalPositiveInt(value: String?, fieldName: String): Int? {
-        if (value.isNullOrBlank()) return null
+        if (value == null) return null
         return parsePositiveInt(value, fieldName)
     }
 
@@ -103,8 +117,8 @@ object KaigiInstructionUtils {
         requireNotNull(value) { fieldName }
         try {
             val parsed = Integer.parseUnsignedInt(value)
-            if (parsed < 0) {
-                throw IllegalArgumentException("$fieldName must be non-negative")
+            require(Integer.toUnsignedString(parsed) == value) {
+                "$fieldName must use canonical unsigned decimal syntax"
             }
             return parsed
         } catch (ex: NumberFormatException) {
@@ -189,6 +203,9 @@ object KaigiInstructionUtils {
             } catch (ex: NumberFormatException) {
                 throw IllegalArgumentException("Relay manifest hop index must be numeric: $key", ex)
             }
+            if (index.toString() != tail.substring(0, separator)) {
+                throw IllegalArgumentException("Relay manifest hop index must be canonical: $key")
+            }
             if (index !in 0 until hopArgumentCount) {
                 throw IllegalArgumentException("Relay manifest hop index is out of bounds: $key")
             }
@@ -250,9 +267,8 @@ object KaigiInstructionUtils {
     }
 
     fun validateRelayManifest(manifest: RelayManifest): RelayManifest {
-        val expiryMs = manifest.expiryMs
+        manifest.expiryMs
             ?: throw IllegalArgumentException("relay manifest expiry_ms is required")
-        require(expiryMs >= 0) { "relay manifest expiry must be non-negative" }
         require(manifest.hops.size >= 3) { "relay manifest must contain at least 3 hops" }
         val relayIds = mutableSetOf<String>()
         for ((index, hop) in manifest.hops.withIndex()) {
@@ -288,7 +304,12 @@ object KaigiInstructionUtils {
     data class CallId(
         @JvmField val domainId: String,
         @JvmField val callName: String,
-    )
+    ) {
+        init {
+            require(domainId.isNotBlank()) { "Kaigi call domainId must not be blank" }
+            require(callName.isNotBlank()) { "Kaigi callName must not be blank" }
+        }
+    }
 
     /** Immutable privacy configuration descriptor. */
     class PrivacyMode(mode: String, state: String?) {
@@ -304,8 +325,9 @@ object KaigiInstructionUtils {
             if (normalized != "Transparent" && normalized != "ZkRosterV1") {
                 throw IllegalArgumentException("privacy mode must be Transparent or ZkRosterV1")
             }
+            require(state == null) { "Kaigi privacy mode variants do not accept state" }
             this.mode = normalized
-            this.state = if (state.isNullOrBlank()) null else state
+            this.state = null
         }
     }
 
@@ -323,8 +345,9 @@ object KaigiInstructionUtils {
             if (normalized != "Public" && normalized != "Authenticated") {
                 throw IllegalArgumentException("room policy must be Public or Authenticated")
             }
+            require(state == null) { "Kaigi room policy variants do not accept state" }
             this.policy = normalized
-            this.state = if (state.isNullOrBlank()) null else state
+            this.state = null
         }
     }
 

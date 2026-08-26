@@ -1743,12 +1743,12 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
         (
             "DeployContractProposalDraftResponseV1",
             "DeployContractProposalInstructionDraftV1",
-            "iroha_data_model::isi::governance::ProposeDeployContract",
+            "iroha.instruction.v1::governance::ProposeDeployContract",
         ),
         (
             "SccpRouteGovernanceProposalDraftResponseV1",
             "SccpRouteGovernanceProposalInstructionDraftV1",
-            "iroha_data_model::isi::governance::ProposeSccpRouteGovernance",
+            "iroha.instruction.v1::governance::ProposeSccpRouteGovernance",
         ),
     ] {
         let properties = schemas

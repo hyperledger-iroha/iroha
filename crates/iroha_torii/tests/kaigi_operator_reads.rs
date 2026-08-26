@@ -11,6 +11,7 @@ use iroha_torii_shared::route_catalog::{
     AdmissionPolicy, AuthenticationPolicy, RouteEffect, RouteProjections, application_api,
 };
 use norito_rpc_harness::NoritoRpcHarness;
+use std::collections::BTreeSet;
 use tower::ServiceExt as _;
 fn request(uri: Uri, headers: HeaderMap) -> Request<Body> {
     let mut request = Request::builder()
@@ -92,6 +93,94 @@ fn kaigi_relay_diagnostics_are_operator_only_and_classified_by_cost() {
     assert_eq!(
         application_api::KAIGI_RELAYS_HEALTH_GET.effect(),
         RouteEffect::ExpensiveCompute
+    );
+}
+#[test]
+fn kaigi_relay_openapi_requires_the_exact_operator_signature_tuple() {
+    let document = iroha_torii::openapi::generate_spec();
+    let paths = document["paths"].as_object().expect("OpenAPI paths");
+    let expected_headers = BTreeSet::from([
+        "X-Iroha-Operator-Nonce",
+        "X-Iroha-Operator-Public-Key",
+        "X-Iroha-Operator-Signature",
+        "X-Iroha-Operator-Timestamp-Ms",
+    ]);
+    for path in [
+        "/v1/kaigi/relays",
+        "/v1/kaigi/relays/{relay_id}",
+        "/v1/kaigi/relays/health",
+    ] {
+        let operation = paths[path]["get"]
+            .as_object()
+            .expect("Kaigi relay GET operation");
+        assert_eq!(
+            operation
+                .get("x-iroha-tool-effect")
+                .and_then(norito::json::Value::as_str),
+            Some("operator"),
+            "{path}"
+        );
+        let headers = operation["parameters"]
+            .as_array()
+            .expect("Kaigi relay parameters")
+            .iter()
+            .filter_map(|parameter| {
+                let parameter = parameter.as_object()?;
+                (parameter.get("in").and_then(norito::json::Value::as_str) == Some("header"))
+                    .then_some(parameter)
+            })
+            .map(|parameter| {
+                assert_eq!(
+                    parameter.get("required"),
+                    Some(&norito::json::Value::Bool(true))
+                );
+                parameter["name"].as_str().expect("operator header name")
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(headers, expected_headers, "{path}");
+    }
+}
+#[test]
+fn kaigi_relay_openapi_matches_runtime_output_bounds() {
+    let document = iroha_torii::openapi::generate_spec();
+    let event_responses = document["paths"]["/v1/kaigi/relays/events"]["get"]["responses"]
+        .as_object()
+        .expect("Kaigi relay event responses");
+    assert_eq!(
+        event_responses
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["200"],
+        "the event-broadcast stream is not gated by the metrics telemetry profile"
+    );
+    let schemas = document["components"]["schemas"]
+        .as_object()
+        .expect("OpenAPI schemas");
+    let summary = schemas["KaigiRelaySummary"]["properties"]
+        .as_object()
+        .expect("Kaigi relay summary properties");
+    assert_eq!(summary["bandwidth_class"]["minimum"].as_u64(), Some(1));
+    assert_eq!(summary["bandwidth_class"]["maximum"].as_u64(), Some(255));
+    assert_eq!(
+        summary["hpke_fingerprint_hex"]["pattern"].as_str(),
+        Some("^[0-9a-f]{64}$")
+    );
+    assert_eq!(
+        schemas["KaigiRelaySummaryList"]["properties"]["items"]["maxItems"].as_u64(),
+        Some(500)
+    );
+    assert_eq!(
+        schemas["KaigiRelaySummaryList"]["properties"]["total"]["maximum"].as_u64(),
+        Some(500)
+    );
+    assert_eq!(
+        schemas["KaigiRelayHealthSnapshot"]["properties"]["domains"]["maxItems"].as_u64(),
+        Some(500)
+    );
+    assert_eq!(
+        schemas["KaigiRelayDetail"]["properties"]["notes"]["maxLength"].as_u64(),
+        Some(512)
     );
 }
 #[tokio::test]

@@ -6650,6 +6650,31 @@ impl SoranetHandshake {
     const fn default_trust_gossip() -> bool {
         true
     }
+    fn synchronize_default_capabilities(
+        descriptor_commit: &[u8],
+        kem_id: u8,
+        client_uses_defaults: bool,
+        relay_uses_defaults: bool,
+        client_capabilities: &mut [u8],
+        relay_capabilities: &mut [u8],
+    ) {
+        // Keep the bundled fixture vectors aligned with simple top-level
+        // overrides. Origin and exact-match checks ensure operator-supplied
+        // vectors remain authoritative and are validated strictly by P2P.
+        if client_uses_defaults {
+            // First TLV: snnet.pqkem (u16 type, u16 length, u8 KEM id).
+            client_capabilities[4] = kem_id;
+        }
+        if relay_uses_defaults {
+            relay_capabilities[4] = kem_id;
+            // Third relay TLV: snnet.transcript_commit. Avoid slicing when an
+            // invalid descriptor length is configured; startup validation will
+            // then report the malformed field without panicking in the parser.
+            if descriptor_commit.len() == DEFAULT_DESCRIPTOR_COMMIT.len() {
+                relay_capabilities[16..48].copy_from_slice(descriptor_commit);
+            }
+        }
+    }
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoranetHandshake {
         let Self {
             descriptor_commit,
@@ -6686,10 +6711,29 @@ impl SoranetHandshake {
             );
             1
         };
+        let client_uses_defaults = matches!(
+            client_capabilities.origin(),
+            ParameterOrigin::Default { .. }
+        ) && client_capabilities.value().0.as_slice()
+            == DEFAULT_CLIENT_CAPABILITIES;
+        let relay_uses_defaults =
+            matches!(relay_capabilities.origin(), ParameterOrigin::Default { .. })
+                && relay_capabilities.value().0.as_slice() == DEFAULT_RELAY_CAPABILITIES;
+        let descriptor_commit = descriptor_commit.map(Into::into);
+        let mut client_capabilities = client_capabilities.map(Into::into);
+        let mut relay_capabilities = relay_capabilities.map(Into::into);
+        Self::synchronize_default_capabilities(
+            descriptor_commit.value(),
+            resolved_kem_id,
+            client_uses_defaults,
+            relay_uses_defaults,
+            client_capabilities.value_mut(),
+            relay_capabilities.value_mut(),
+        );
         actual::SoranetHandshake {
-            descriptor_commit: descriptor_commit.map(Into::into),
-            client_capabilities: client_capabilities.map(Into::into),
-            relay_capabilities: relay_capabilities.map(Into::into),
+            descriptor_commit,
+            client_capabilities,
+            relay_capabilities,
             trust_gossip,
             kem_id: resolved_kem_id,
             sig_id: resolved_sig_id,

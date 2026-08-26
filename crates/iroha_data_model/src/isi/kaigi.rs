@@ -91,7 +91,9 @@ isi! {
     pub billed_gas: u64,
     /// Commitment to the usage tuple (privacy mode only).
     pub usage_commitment: Option<Hash>,
-    /// Optional proof tying the commitment to encrypted logs (privacy mode only).
+    /// Proof binding the commitment to the supplied usage tuple (required in privacy mode).
+    ///
+    /// The V1 statement does not attest an encrypted-log payload.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub proof: Option<Vec<u8>>,
 }
@@ -224,7 +226,7 @@ impl_kaigi_decode_from_slice!(ReportKaigiRelayHealth {
 mod tests {
     use super::*;
     use crate::isi::test_support::{
-        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
     use crate::{
         domain::DomainId,
@@ -346,7 +348,7 @@ mod tests {
         });
     }
     #[test]
-    fn kaigi_default_registry_decodes_type_names() {
+fn kaigi_default_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::registry::default();
         let call_id = call_id();
         assert_registry_decodes(

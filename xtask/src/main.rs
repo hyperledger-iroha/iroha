@@ -3186,11 +3186,17 @@ where
             }
             let envelope_path = envelope
                 .ok_or_else(|| "taikai-rpt-verify requires --envelope <path>".to_string())?;
+            let gar_path =
+                gar_path.ok_or_else(|| "taikai-rpt-verify requires --gar <path>".to_string())?;
+            let cek_receipt_path = cek_receipt
+                .ok_or_else(|| "taikai-rpt-verify requires --cek-receipt <path>".to_string())?;
+            let bundle_path = bundle_path
+                .ok_or_else(|| "taikai-rpt-verify requires --bundle <path>".to_string())?;
             Ok(CommandKind::TaikaiRptVerify {
                 options: taikai::RptVerifyOptions {
                     envelope_path,
                     gar_path,
-                    cek_receipt_path: cek_receipt,
+                    cek_receipt_path,
                     bundle_path,
                     output: json_out,
                 },

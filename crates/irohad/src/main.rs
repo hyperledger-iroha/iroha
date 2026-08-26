@@ -812,6 +812,16 @@ pub struct StartupArgs {
     #[arg(long, value_name = "HEX", requires = "config")]
     pub config_blake3: Option<String>,
 }
+
+#[cfg(feature = "test-network-parliament-signers")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+enum TestNetworkParliamentBeaconSignerMode {
+    #[default]
+    Valid,
+    Absent,
+    Invalid,
+}
+
 /// Complete command-line arguments for the Iroha server.
 #[derive(Parser, Debug)]
 #[command(
@@ -850,6 +860,14 @@ pub struct Args {
     /// Enable Sora Nexus feature profile (`SoraFS`, `SoraNet` handshake, multi-lane consensus)
     #[arg(long, env = "IROHA_SORA_PROFILE")]
     pub sora: bool,
+    #[cfg(feature = "test-network-parliament-signers")]
+    #[arg(
+        long = "test-network-parliament-beacon-signer-mode",
+        value_enum,
+        default_value_t,
+        hide = true
+    )]
+    test_network_parliament_beacon_signer_mode: TestNetworkParliamentBeaconSignerMode,
     /// Override FASTPQ prover execution mode (`cpu` or `gpu`).
     #[arg(
         long = "fastpq-execution-mode",
@@ -13596,28 +13614,41 @@ fn run_main_with_config_guard(
                 filter_validators_from_trusted(config.common.trusted_peers.value());
             let test_network_id = NetworkId::from_genesis_hash(config.genesis.expected_hash);
             let beacon_signer = iroha_core::beacon::parliament_test_network_signer::
-            TestNetworkParliamentBeaconPartialSignerV1::try_new(
-                test_network_id,
-                ordered_roster.clone(),
-                &config.common.peer.id,
-            )
-            .map_err(|_| Report::new(MainError::Config))
-            .attach(
-                "failed to bind the feature-isolated Parliament beacon signer to the exact local validator seat",
-            )?;
+                TestNetworkParliamentBeaconPartialSignerV1::try_new(
+                    test_network_id,
+                    ordered_roster.clone(),
+                    &config.common.peer.id,
+                )
+                .map_err(|_| Report::new(MainError::Config))
+                .attach(
+                    "failed to bind the feature-isolated Parliament beacon signer to the exact local validator seat",
+                )?;
+            let beacon_signer: Option<
+                Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>,
+            > = match args.test_network_parliament_beacon_signer_mode {
+                TestNetworkParliamentBeaconSignerMode::Valid => Some(Arc::new(beacon_signer)),
+                TestNetworkParliamentBeaconSignerMode::Absent => None,
+                TestNetworkParliamentBeaconSignerMode::Invalid => {
+                    Some(Arc::new(beacon_signer.with_deliberately_invalid_outbound()))
+                }
+            };
             let tle_signer = iroha_core::tle_release::parliament_test_network_signer::
-            TestNetworkParliamentTlePartialReleaseSignerV1::try_new(
-                test_network_id,
-                ordered_roster,
-                &config.common.peer.id,
-            )
-            .map_err(|_| Report::new(MainError::Config))
-            .attach(
-                "failed to bind the feature-isolated Parliament TLE signer to the exact local validator seat",
-            )?;
-            runtime_deps
-                .with_sumeragi_global_beacon_partial_signer(Arc::new(beacon_signer))
-                .with_parliament_tle_partial_release_signer(Arc::new(tle_signer))
+                TestNetworkParliamentTlePartialReleaseSignerV1::try_new(
+                    test_network_id,
+                    ordered_roster,
+                    &config.common.peer.id,
+                )
+                .map_err(|_| Report::new(MainError::Config))
+                .attach(
+                    "failed to bind the feature-isolated Parliament TLE signer to the exact local validator seat",
+                )?;
+            let runtime_deps =
+                runtime_deps.with_parliament_tle_partial_release_signer(Arc::new(tle_signer));
+            if let Some(beacon_signer) = beacon_signer {
+                runtime_deps.with_sumeragi_global_beacon_partial_signer(beacon_signer)
+            } else {
+                runtime_deps
+            }
         }
     };
     let musubi_publication_factory = if emergency_fast {
@@ -15426,6 +15457,11 @@ mod tests {
         assert!(confidential_setup.0.contains("state.zk_snapshot()"));
         assert!(
             confidential_setup
+                .0
+                .contains("state.sccp_policy_hash_snapshot()")
+        );
+        assert!(
+            !confidential_setup
                 .0
                 .contains("state.sccp_registry_snapshot()")
         );
@@ -19166,6 +19202,9 @@ mod tests {
                 terminal_colors: false,
                 language: None,
                 sora: false,
+                #[cfg(feature = "test-network-parliament-signers")]
+                test_network_parliament_beacon_signer_mode:
+                    TestNetworkParliamentBeaconSignerMode::Valid,
                 fastpq_execution_mode: None,
                 fastpq_poseidon_mode: None,
                 fastpq_device_class: None,

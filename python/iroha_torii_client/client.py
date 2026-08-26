@@ -118,6 +118,7 @@ from .governance_ballot_client import create_governance_ballot_client_mixin
 from .governance_proposals import GovernanceProposalResult
 from .kaigi_relay_client import create_kaigi_relay_client_mixin
 from .native_amx import (
+    _hash_bytes as _iroha_hash_bytes,
     compute_native_amx_descriptor_hash,
     compute_native_amx_participant_settlement_hash,
     compute_native_amx_proposal_hash,
@@ -894,9 +895,16 @@ HEADER_OPERATOR_NONCE = "X-Iroha-Operator-Nonce"
 HEADER_OPERATOR_SIGNATURE = "X-Iroha-Operator-Signature"
 KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS = 500
 KAIGI_U64_MAX = (1 << 64) - 1
+_KAIGI_RELAY_SUMMARY_REQUIRED_FIELDS = frozenset(
+    {"relay_id", "domain", "bandwidth_class", "hpke_fingerprint_hex"}
+)
+_KAIGI_RELAY_SUMMARY_OPTIONAL_FIELDS = frozenset({"status", "reported_at_ms"})
 _OPERATOR_FORBIDDEN_AUTH_HEADERS = frozenset(
     {
         "authorization",
+        "proxy-authorization",
+        "cookie",
+        "cookie2",
         "x-api-token",
         "x-iroha-account",
         "x-iroha-signature",
@@ -11416,7 +11424,7 @@ class ToriiClient(
             )
         instructions = self._parse_tx_instructions(body.get("tx_instructions"))
         if instructions[0].wire_id != (
-            "iroha_data_model::isi::governance::ProposeDeployContract"
+            "iroha.instruction.v1::governance::ProposeDeployContract"
         ):
             raise RuntimeError("deploy-contract response returned the wrong instruction wire_id")
         canonical_payload_hex = self._require_exact_lower_even_hex_string(
@@ -12210,6 +12218,14 @@ class ToriiClient(
                     )
         if getattr(self._session, "auth", None) is not None:
             raise ValueError("operator GETs reject Session.auth token fallback")
+        cookies = getattr(self._session, "cookies", None)
+        if cookies is not None:
+            try:
+                has_cookies = len(cookies) != 0
+            except TypeError as exc:
+                raise TypeError("operator GETs require a sized Session.cookies jar") from exc
+            if has_cookies:
+                raise ValueError("operator GETs reject Session.cookies token fallback")
         final_headers = _OperatorRequestHeaderPlan(final_headers, context)
         return self._request(
             "GET",
@@ -15593,20 +15609,83 @@ class ToriiClient(
         )
 
     @staticmethod
-    def _parse_kaigi_unsigned(value: Any, *, context: str) -> int:
-        """Parse an exact unsigned Kaigi wire integer without truncation."""
+    def _require_kaigi_fields(
+        record: Mapping[str, Any],
+        *,
+        required: frozenset[str],
+        optional: frozenset[str] = frozenset(),
+        context: str,
+    ) -> None:
+        """Require the exact first-release field set advertised by Torii."""
 
-        if isinstance(value, bool):
+        missing = required.difference(record)
+        if missing:
+            field = min(missing)
+            raise RuntimeError(f"{context}.{field} is required")
+        unexpected = set(record).difference(required | optional)
+        if unexpected:
+            field = min(unexpected)
+            raise RuntimeError(
+                f"{context}.{field} is not part of the first-release contract"
+            )
+
+    @staticmethod
+    def _require_kaigi_exact_string(value: Any, *, context: str) -> str:
+        """Parse one non-empty response string without normalizing wire bytes."""
+
+        try:
+            return _require_exact_non_empty_string(value, context)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(str(exc)) from exc
+
+    @staticmethod
+    def _require_kaigi_canonical_account_id(value: Any, *, context: str) -> str:
+        """Require a canonical I105 account literal emitted by Torii."""
+
+        literal = ToriiClient._require_kaigi_exact_string(value, context=context)
+        if "@" in literal:
+            raise RuntimeError(f"{context} must be a canonical I105 account id")
+        try:
+            _decode_canonical_i105_string(literal)
+        except ValueError as exc:
+            raise RuntimeError(f"{context} must be a canonical I105 account id") from exc
+        return literal
+
+    @staticmethod
+    def _require_kaigi_lower_hex_32(value: Any, *, context: str) -> str:
+        """Require the exact lowercase 32-byte fingerprint spelling from Torii."""
+
+        literal = ToriiClient._require_kaigi_exact_string(value, context=context)
+        if re.fullmatch(r"[0-9a-f]{64}", literal) is None:
+            raise RuntimeError(
+                f"{context} must contain exactly 64 lowercase hex characters"
+            )
+        return literal
+
+    @staticmethod
+    def _decode_kaigi_exact_base64(value: Any, *, context: str) -> Tuple[str, bytes]:
+        """Decode one non-empty canonical standard-base64 response field."""
+
+        literal = ToriiClient._require_kaigi_exact_string(value, context=context)
+        if any(character.isspace() for character in literal):
+            raise RuntimeError(f"{context} must be exact standard-base64")
+        try:
+            decoded = base64.b64decode(literal, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise RuntimeError(f"{context} must be exact standard-base64") from exc
+        if not decoded or base64.b64encode(decoded).decode("ascii") != literal:
+            raise RuntimeError(f"{context} must be exact non-empty standard-base64")
+        return literal, decoded
+
+    @staticmethod
+    def _parse_kaigi_unsigned(value: Any, *, context: str) -> int:
+        """Parse an exact unsigned Kaigi JSON integer without coercion."""
+
+        if isinstance(value, bool) or not isinstance(value, int):
             raise RuntimeError(f"{context} must be an unsigned integer")
-        if isinstance(value, int):
-            number = value
-        elif isinstance(value, str) and re.fullmatch(r"(?:0|[1-9][0-9]*)", value):
-            number = int(value, 10)
-        else:
-            raise RuntimeError(f"{context} must be an unsigned integer")
-        if not 0 <= number <= KAIGI_U64_MAX:
+        if not 0 <= value <= KAIGI_U64_MAX:
             raise RuntimeError(f"{context} must fit in a u64")
-        return number
+        return value
 
     @staticmethod
     def _parse_kaigi_relay_summary_list(
@@ -15615,8 +15694,11 @@ class ToriiClient(
         context: str,
     ) -> KaigiRelaySummaryList:
         record = ToriiClient._ensure_mapping(payload, context)
-        if "items" not in record:
-            raise RuntimeError(f"{context}.items is required")
+        ToriiClient._require_kaigi_fields(
+            record,
+            required=frozenset({"items", "total"}),
+            context=context,
+        )
         items_value = record["items"]
         if not isinstance(items_value, list):
             raise RuntimeError(f"{context}.items must be a list")
@@ -15628,61 +15710,66 @@ class ToriiClient(
             ToriiClient._parse_kaigi_relay_summary(entry, context=f"{context}.items[{index}]")
             for index, entry in enumerate(items_value)
         ]
-        if "total" not in record:
-            raise RuntimeError(f"{context}.total is required")
-        return KaigiRelaySummaryList(
-            total=ToriiClient._parse_kaigi_unsigned(
-                record["total"],
-                context=f"{context}.total",
-            ),
-            items=items,
+        total = ToriiClient._parse_kaigi_unsigned(
+            record["total"],
+            context=f"{context}.total",
         )
+        if total != len(items):
+            raise RuntimeError(f"{context}.total must equal the number of items")
+        relay_ids = [item.relay_id for item in items]
+        if len(set(relay_ids)) != len(relay_ids):
+            raise RuntimeError(f"{context}.items contains duplicate relay ids")
+        return KaigiRelaySummaryList(total=total, items=items)
 
     @staticmethod
     def _parse_kaigi_relay_summary(payload: Any, *, context: str) -> KaigiRelaySummary:
         record = ToriiClient._ensure_mapping(payload, context)
-        relay_id = record.get("relay_id")
-        domain = record.get("domain")
-        if "bandwidth_class" not in record:
-            raise RuntimeError(f"{context}.bandwidth_class is required")
-        bandwidth_value = record.get("bandwidth_class")
+        ToriiClient._require_kaigi_fields(
+            record,
+            required=_KAIGI_RELAY_SUMMARY_REQUIRED_FIELDS,
+            optional=_KAIGI_RELAY_SUMMARY_OPTIONAL_FIELDS,
+            context=context,
+        )
+        bandwidth_value = record["bandwidth_class"]
         if isinstance(bandwidth_value, bool) or not isinstance(bandwidth_value, int):
             raise RuntimeError(f"{context}.bandwidth_class must be an integer")
         if not 1 <= bandwidth_value <= 0xFF:
             raise RuntimeError(f"{context}.bandwidth_class must be within 1..=255")
-        fingerprint_value = record.get("hpke_fingerprint_hex")
-        status_value = record.get("status")
+        has_status = "status" in record
+        has_reported_at = "reported_at_ms" in record
+        if has_status != has_reported_at:
+            raise RuntimeError(
+                f"{context}.status and reported_at_ms must be present together"
+            )
         status: Optional[str] = None
-        if status_value is not None:
-            status_literal = ToriiClient._require_non_empty_string(
-                status_value,
-                f"{context}.status",
-            ).lower()
+        reported_at_ms: Optional[int] = None
+        if has_status:
+            status_literal = ToriiClient._require_kaigi_exact_string(
+                record["status"],
+                context=f"{context}.status",
+            )
             if status_literal not in _KAIGI_HEALTH_STATUSES:
                 raise RuntimeError(
                     f"{context}.status must be one of {sorted(_KAIGI_HEALTH_STATUSES)}"
                 )
             status = status_literal
-        reported_at = record.get("reported_at_ms")
-        reported_at_ms = (
-            ToriiClient._parse_kaigi_unsigned(
-                reported_at,
+            reported_at_ms = ToriiClient._parse_kaigi_unsigned(
+                record["reported_at_ms"],
                 context=f"{context}.reported_at_ms",
             )
-            if reported_at is not None
-            else None
-        )
         return KaigiRelaySummary(
-            relay_id=ToriiClient._require_non_empty_string(relay_id, f"{context}.relay_id"),
-            domain=ToriiClient._require_non_empty_string(domain, f"{context}.domain"),
+            relay_id=ToriiClient._require_kaigi_canonical_account_id(
+                record["relay_id"],
+                context=f"{context}.relay_id",
+            ),
+            domain=ToriiClient._require_kaigi_exact_string(
+                record["domain"],
+                context=f"{context}.domain",
+            ),
             bandwidth_class=bandwidth_value,
-            hpke_fingerprint_hex=ToriiClient._normalize_hex_string(
-                ToriiClient._require_hex_string(
-                    fingerprint_value,
-                    f"{context}.hpke_fingerprint_hex",
-                ),
+            hpke_fingerprint_hex=ToriiClient._require_kaigi_lower_hex_32(
+                record["hpke_fingerprint_hex"],
                 context=f"{context}.hpke_fingerprint_hex",
-                expected_length=64,
             ),
             status=status,
             reported_at_ms=reported_at_ms,
@@ -15695,42 +15782,81 @@ class ToriiClient(
         context: str,
     ) -> KaigiRelayDetail:
         record = ToriiClient._ensure_mapping(payload, context)
+        ToriiClient._require_kaigi_fields(
+            record,
+            required=frozenset({"relay", "hpke_public_key_b64"}),
+            optional=frozenset({"reported_call", "reported_by", "notes", "metrics"}),
+            context=context,
+        )
         relay_summary = ToriiClient._parse_kaigi_relay_summary(
             record.get("relay"),
             context=f"{context}.relay",
         )
-        hpke_public_key = record.get("hpke_public_key_b64")
+        hpke_public_key, hpke_bytes = ToriiClient._decode_kaigi_exact_base64(
+            record["hpke_public_key_b64"],
+            context=f"{context}.hpke_public_key_b64",
+        )
         reported_call_value = record.get("reported_call")
         metrics_value = record.get("metrics")
         reported_by_value = record.get("reported_by")
         notes_value = record.get("notes")
-        if notes_value is not None and not isinstance(notes_value, str):
-            raise RuntimeError(f"{context}.notes must be a string")
+        if "notes" in record:
+            if not isinstance(notes_value, str):
+                raise RuntimeError(f"{context}.notes must be a string")
+        if "reported_call" in record and not isinstance(reported_call_value, Mapping):
+            raise RuntimeError(f"{context}.reported_call must be an object")
+        if "metrics" in record and not isinstance(metrics_value, Mapping):
+            raise RuntimeError(f"{context}.metrics must be an object")
+        reported_by = (
+            ToriiClient._require_kaigi_canonical_account_id(
+                reported_by_value,
+                context=f"{context}.reported_by",
+            )
+            if "reported_by" in record
+            else None
+        )
+        expected_fingerprint = _iroha_hash_bytes(hpke_bytes).hex()
+        if relay_summary.hpke_fingerprint_hex != expected_fingerprint:
+            raise RuntimeError(
+                f"{context}.hpke_public_key_b64 does not match the relay fingerprint"
+            )
+        has_reported_call = "reported_call" in record
+        has_reported_by = "reported_by" in record
+        if has_reported_call != has_reported_by:
+            raise RuntimeError(
+                f"{context}.reported_call and reported_by must be present together"
+            )
+        has_feedback = relay_summary.status is not None
+        if has_feedback != has_reported_call:
+            raise RuntimeError(
+                f"{context} feedback fields must agree with the relay health summary"
+            )
+        if "notes" in record and not has_feedback:
+            raise RuntimeError(f"{context}.notes requires relay health feedback")
+        metrics = (
+            ToriiClient._parse_kaigi_relay_domain_metrics(
+                metrics_value,
+                context=f"{context}.metrics",
+            )
+            if "metrics" in record
+            else None
+        )
+        if metrics is not None and metrics.domain != relay_summary.domain:
+            raise RuntimeError(
+                f"{context}.metrics.domain must match the relay domain"
+            )
         return KaigiRelayDetail(
             relay=relay_summary,
-            hpke_public_key_b64=ToriiClient._normalize_required_exact_base64_payload(
-                hpke_public_key,
-                f"{context}.hpke_public_key_b64",
-            ),
+            hpke_public_key_b64=hpke_public_key,
             reported_call=ToriiClient._parse_kaigi_relay_reported_call(
                 reported_call_value,
                 context=f"{context}.reported_call",
             )
-            if reported_call_value is not None
+            if has_reported_call
             else None,
-            reported_by=ToriiClient._optional_string(
-                reported_by_value,
-                f"{context}.reported_by",
-            )
-            if reported_by_value is not None
-            else None,
+            reported_by=reported_by,
             notes=notes_value,
-            metrics=ToriiClient._parse_kaigi_relay_domain_metrics(
-                metrics_value,
-                context=f"{context}.metrics",
-            )
-            if metrics_value is not None
-            else None,
+            metrics=metrics,
         )
 
     @staticmethod
@@ -15740,11 +15866,20 @@ class ToriiClient(
         context: str,
     ) -> KaigiRelayReportedCall:
         record = ToriiClient._ensure_mapping(payload, context)
-        domain = record.get("domain_id")
-        name = record.get("call_name")
+        ToriiClient._require_kaigi_fields(
+            record,
+            required=frozenset({"domain_id", "call_name"}),
+            context=context,
+        )
         return KaigiRelayReportedCall(
-            domain_id=ToriiClient._require_non_empty_string(domain, f"{context}.domain_id"),
-            call_name=ToriiClient._require_non_empty_string(name, f"{context}.call_name"),
+            domain_id=ToriiClient._require_kaigi_exact_string(
+                record["domain_id"],
+                context=f"{context}.domain_id",
+            ),
+            call_name=ToriiClient._require_kaigi_exact_string(
+                record["call_name"],
+                context=f"{context}.call_name",
+            ),
         )
 
     @staticmethod
@@ -15754,7 +15889,19 @@ class ToriiClient(
         context: str,
     ) -> KaigiRelayDomainMetrics:
         record = ToriiClient._ensure_mapping(payload, context)
-        domain = record.get("domain")
+        ToriiClient._require_kaigi_fields(
+            record,
+            required=frozenset(
+                {
+                    "domain",
+                    "registrations_total",
+                    "manifest_updates_total",
+                    "failovers_total",
+                    "health_reports_total",
+                }
+            ),
+            context=context,
+        )
 
         def required_counter(name: str) -> int:
             if name not in record:
@@ -15765,7 +15912,10 @@ class ToriiClient(
             )
 
         return KaigiRelayDomainMetrics(
-            domain=ToriiClient._require_non_empty_string(domain, f"{context}.domain"),
+            domain=ToriiClient._require_kaigi_exact_string(
+                record["domain"],
+                context=f"{context}.domain",
+            ),
             registrations_total=required_counter("registrations_total"),
             manifest_updates_total=required_counter("manifest_updates_total"),
             failovers_total=required_counter("failovers_total"),
@@ -15779,8 +15929,21 @@ class ToriiClient(
         context: str,
     ) -> KaigiRelayHealthSnapshot:
         record = ToriiClient._ensure_mapping(payload, context)
-        if "domains" not in record:
-            raise RuntimeError(f"{context}.domains is required")
+        ToriiClient._require_kaigi_fields(
+            record,
+            required=frozenset(
+                {
+                    "healthy_total",
+                    "degraded_total",
+                    "unavailable_total",
+                    "reports_total",
+                    "registrations_total",
+                    "failovers_total",
+                    "domains",
+                }
+            ),
+            context=context,
+        )
         domains_value = record["domains"]
         if not isinstance(domains_value, list):
             raise RuntimeError(f"{context}.domains must be a list")
@@ -15795,6 +15958,9 @@ class ToriiClient(
             )
             for index, entry in enumerate(domains_value)
         ]
+        domain_ids = [entry.domain for entry in domains]
+        if len(set(domain_ids)) != len(domain_ids):
+            raise RuntimeError(f"{context}.domains contains duplicate domains")
 
         def required_counter(name: str) -> int:
             if name not in record:
@@ -15804,7 +15970,7 @@ class ToriiClient(
                 context=f"{context}.{name}",
             )
 
-        return KaigiRelayHealthSnapshot(
+        snapshot = KaigiRelayHealthSnapshot(
             healthy_total=required_counter("healthy_total"),
             degraded_total=required_counter("degraded_total"),
             unavailable_total=required_counter("unavailable_total"),
@@ -15813,6 +15979,39 @@ class ToriiClient(
             failovers_total=required_counter("failovers_total"),
             domains=domains,
         )
+        current_status_total = (
+            snapshot.healthy_total
+            + snapshot.degraded_total
+            + snapshot.unavailable_total
+        )
+        if current_status_total > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS:
+            raise RuntimeError(
+                f"{context} current status totals exceed the relay diagnostic cap"
+            )
+        aggregate_checks = (
+            (
+                "reports_total",
+                snapshot.reports_total,
+                sum(entry.health_reports_total for entry in domains),
+            ),
+            (
+                "registrations_total",
+                snapshot.registrations_total,
+                sum(entry.registrations_total for entry in domains),
+            ),
+            (
+                "failovers_total",
+                snapshot.failovers_total,
+                sum(entry.failovers_total for entry in domains),
+            ),
+        )
+        for field, actual, summed in aggregate_checks:
+            expected = min(summed, KAIGI_U64_MAX)
+            if actual != expected:
+                raise RuntimeError(
+                    f"{context}.{field} must equal the saturated domain total"
+                )
+        return snapshot
 
     @staticmethod
     def _parse_sumeragi_pacemaker(payload: Mapping[str, Any], *, context: str) -> SumeragiPacemakerSnapshot:

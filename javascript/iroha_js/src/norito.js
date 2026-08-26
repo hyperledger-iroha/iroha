@@ -287,6 +287,16 @@ const RECORD_KAIGI_USAGE_WIRE_ID = "iroha_data_model::isi::kaigi::RecordKaigiUsa
 const SET_KAIGI_RELAY_MANIFEST_WIRE_ID = "iroha_data_model::isi::kaigi::SetKaigiRelayManifest";
 const REGISTER_KAIGI_RELAY_WIRE_ID = "iroha_data_model::isi::kaigi::RegisterKaigiRelay";
 const REPORT_KAIGI_RELAY_HEALTH_WIRE_ID = "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth";
+const KAIGI_WIRE_IDS = new Set([
+  CREATE_KAIGI_WIRE_ID,
+  JOIN_KAIGI_WIRE_ID,
+  LEAVE_KAIGI_WIRE_ID,
+  END_KAIGI_WIRE_ID,
+  RECORD_KAIGI_USAGE_WIRE_ID,
+  SET_KAIGI_RELAY_MANIFEST_WIRE_ID,
+  REGISTER_KAIGI_RELAY_WIRE_ID,
+  REPORT_KAIGI_RELAY_HEALTH_WIRE_ID,
+]);
 const PROPOSE_DEPLOY_CONTRACT_WIRE_ID = "iroha_data_model::isi::governance::ProposeDeployContract";
 const CAST_ZK_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastZkBallot";
 const CAST_PLAIN_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastPlainBallot";
@@ -560,6 +570,11 @@ function encodeNormalizedInstruction(normalized) {
   rejectRetiredGenericZkInstruction(normalized);
   validateGovernanceInstructionBoundary(normalized);
   let encoded;
+  if (kaigiInstructionNeedsLosslessPureCodec(normalized)) {
+    encoded = encodePureJsInstruction(normalized);
+    cacheInstructionRoundTrip(encoded, normalized);
+    return encoded;
+  }
   try {
     const native = resolveNative("noritoEncodeInstruction");
     encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
@@ -578,6 +593,47 @@ function encodeNormalizedInstruction(normalized) {
   }
   cacheInstructionRoundTrip(encoded, normalized);
   return encoded;
+}
+
+function kaigiU64NeedsLosslessPureCodec(value) {
+  return typeof value === JS_TYPE_BIGINT || typeof value === JS_TYPE_STRING;
+}
+
+function kaigiManifestNeedsLosslessPureCodec(manifest) {
+  return isPlainObject(manifest) && kaigiU64NeedsLosslessPureCodec(manifest.expiry_ms);
+}
+
+function kaigiInstructionNeedsLosslessPureCodec(instruction) {
+  if (!isPlainObject(instruction) || !isPlainObject(instruction.Kaigi)) {
+    return false;
+  }
+  const kaigi = instruction.Kaigi;
+  if (isPlainObject(kaigi.CreateKaigi)) {
+    const call = kaigi.CreateKaigi.call;
+    return isPlainObject(call) && (
+      kaigiU64NeedsLosslessPureCodec(call.gas_rate_per_minute) ||
+      kaigiU64NeedsLosslessPureCodec(call.scheduled_start_ms) ||
+      kaigiManifestNeedsLosslessPureCodec(call.relay_manifest)
+    );
+  }
+  if (isPlainObject(kaigi.EndKaigi)) {
+    return kaigiU64NeedsLosslessPureCodec(kaigi.EndKaigi.ended_at_ms);
+  }
+  if (isPlainObject(kaigi.RecordKaigiUsage)) {
+    return kaigiU64NeedsLosslessPureCodec(kaigi.RecordKaigiUsage.duration_ms) ||
+      kaigiU64NeedsLosslessPureCodec(kaigi.RecordKaigiUsage.billed_gas);
+  }
+  if (isPlainObject(kaigi.SetKaigiRelayManifest)) {
+    return kaigiManifestNeedsLosslessPureCodec(
+      kaigi.SetKaigiRelayManifest.relay_manifest,
+    );
+  }
+  if (isPlainObject(kaigi.ReportKaigiRelayHealth)) {
+    return kaigiU64NeedsLosslessPureCodec(
+      kaigi.ReportKaigiRelayHealth.reported_at_ms,
+    );
+  }
+  return false;
 }
 
 function isPureJsUnsupportedInstructionError(error) {
@@ -1456,6 +1512,16 @@ export function noritoDecodeInstructionBoxArchive(bytes) {
  */
 export function noritoDecodeInstruction(bytes, options = {}) {
   const buffer = toBuffer(bytes);
+  try {
+    const { wireId } = decodeInstructionEnvelope(buffer);
+    if (KAIGI_WIRE_IDS.has(wireId)) {
+      const decoded = decodePureJsInstruction(buffer);
+      validateDecodedInstructionProofAttachments(decoded);
+      return options.parseJson === false ? JSON.stringify(decoded) : decoded;
+    }
+  } catch {
+    // Let the native decoder below report malformed or non-instruction frames.
+  }
   let json;
   try {
     const native = resolveNative("noritoDecodeInstruction");
@@ -4636,7 +4702,7 @@ function encodeU64NumberValue(value, context) {
 
 function decodeU64NumberValue(payload, context) {
   const value = BigInt(decodeU64Value(payload, context));
-  return bigintToSafeNumber(value, context);
+  return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString(10);
 }
 
 function encodeU128Value(value, context) {

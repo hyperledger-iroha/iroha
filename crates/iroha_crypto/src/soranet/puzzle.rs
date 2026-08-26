@@ -253,9 +253,22 @@ impl Parameters {
         self.min_ticket_ttl
     }
     /// Clone the parameter set with a different difficulty value.
+    ///
+    /// Invalid difficulty values produce the same fail-closed timing policy as
+    /// [`Self::new`].
     #[must_use]
     pub fn with_difficulty(self, difficulty: u8) -> Self {
-        Self { difficulty, ..self }
+        Self::try_new(
+            self.memory_kib,
+            self.time_cost,
+            self.lanes,
+            difficulty,
+            self.max_future_skew,
+            self.min_ticket_ttl,
+        )
+        .unwrap_or_else(|_| {
+            Self::fail_closed(self.memory_kib, self.time_cost, self.lanes, difficulty)
+        })
     }
 }
 /// Errors surfaced while verifying puzzle tickets.
@@ -975,6 +988,29 @@ mod tests {
             verify_err,
             Error::ExpiryWindowTooSmall(Duration::MAX)
         ));
+    }
+    #[test]
+    fn with_difficulty_cannot_create_zero_work_policy() {
+        let params = test_parameters().with_difficulty(0);
+        assert_eq!(params.max_future_skew(), Duration::ZERO);
+        assert_eq!(params.min_ticket_ttl(), Duration::MAX);
+
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let binding = binding();
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: params.difficulty(),
+            expires_at: 1_700_000_010,
+            client_nonce: ticket_binding_commitment(
+                binding.descriptor_commit,
+                binding.relay_id,
+                binding.transcript_hash,
+            ),
+            solution: [0xA5; 32],
+        };
+        let error = verify_at(&ticket, &binding, &params, now)
+            .expect_err("zero adaptive difficulty must fail closed before Argon2 work");
+        assert!(matches!(error, Error::ExpiryWindowTooSmall(Duration::MAX)));
     }
     fn binding() -> ChallengeBinding<'static> {
         ChallengeBinding::new(&DESCRIPTOR, &RELAY, &TRANSCRIPT)

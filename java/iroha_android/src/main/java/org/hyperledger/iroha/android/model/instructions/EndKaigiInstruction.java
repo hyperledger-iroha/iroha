@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -32,7 +33,7 @@ public final class EndKaigiInstruction implements InstructionTemplate {
     this.nullifierIssuedAtMs = builder.nullifierIssuedAtMs;
     this.rosterRoot = builder.rosterRoot;
     this.proofBase64 = builder.proofBase64;
-    this.arguments = Map.copyOf(argumentOrder);
+    this.arguments = Collections.unmodifiableMap(new LinkedHashMap<>(argumentOrder));
   }
 
   public KaigiInstructionUtils.CallId callId() {
@@ -78,6 +79,7 @@ public final class EndKaigiInstruction implements InstructionTemplate {
   }
 
   public static EndKaigiInstruction fromArguments(final Map<String, String> arguments) {
+    KaigiInstructionUtils.requireAction(arguments, ACTION);
     final Builder builder = builder();
     builder.setCallId(KaigiInstructionUtils.parseCallId(arguments, "call"));
     final Long ended =
@@ -98,6 +100,9 @@ public final class EndKaigiInstruction implements InstructionTemplate {
     if (nullifierIssuedAt != null && nullifierIssuedAt.longValue() != 0L) {
       throw new IllegalArgumentException(
           "nullifier issuedAtMs is off-chain only and must be zero when provided");
+    }
+    if (nullifierIssuedAt != null && nullifier == null) {
+      throw new IllegalArgumentException("nullifier issuedAtMs requires nullifier digest");
     }
     if (nullifier != null) {
       builder.setNullifierDigestLiteral(nullifier);
@@ -168,9 +173,6 @@ public final class EndKaigiInstruction implements InstructionTemplate {
     }
 
     public Builder setEndedAtMs(final Long endedAtMs) {
-      if (endedAtMs != null && endedAtMs < 0) {
-        throw new IllegalArgumentException("endedAtMs must be non-negative");
-      }
       this.endedAtMs = endedAtMs;
       return this;
     }
@@ -252,6 +254,9 @@ public final class EndKaigiInstruction implements InstructionTemplate {
     public EndKaigiInstruction build() {
       if (callId == null) {
         throw new IllegalStateException("callId must be provided");
+      }
+      if (nullifierIssuedAtMs != null && nullifierDigest == null) {
+        throw new IllegalStateException("nullifier issuedAtMs requires nullifier digest");
       }
       return new EndKaigiInstruction(this);
     }

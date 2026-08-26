@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import textwrap
 from pathlib import Path
@@ -10,6 +11,52 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "taikai_ingest_smoke.sh"
+
+
+def _minimal_fixture(label: str) -> dict[str, object]:
+    return {
+        "label": label,
+        "payload_hex": "00",
+        "args": {
+            "event_id": "event",
+            "stream_id": "stream",
+            "rendition_id": "rendition",
+            "track_kind": "data",
+            "codec": "custom:test",
+            "bitrate_kbps": 1,
+            "segment_sequence": 0,
+            "segment_start_pts": 0,
+            "segment_duration": 1,
+            "wallclock_unix_ms": 1,
+            "manifest_hash": "11" * 32,
+            "storage_ticket": "22" * 32,
+        },
+    }
+
+
+def _write_successful_fake_bundler(path: Path) -> None:
+    path.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env python3
+            import json
+            import pathlib
+            import sys
+
+            args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
+            pathlib.Path(args["--car-out"]).write_bytes(b"car")
+            pathlib.Path(args["--envelope-out"]).write_bytes(b"envelope")
+            pathlib.Path(args["--indexes-out"]).write_text(
+                json.dumps({"cid_key": {}, "time_key": {}}), encoding="utf-8"
+            )
+            pathlib.Path(args["--ingest-metadata-out"]).write_text(
+                "{}", encoding="utf-8"
+            )
+            """
+        ),
+        encoding="utf-8",
+    )
+    path.chmod(0o700)
 
 
 def test_fixture_label_cannot_escape_output_directory(tmp_path: Path) -> None:
@@ -417,3 +464,86 @@ def test_symlinked_path_ancestors_are_canonicalized(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert (workspace / "new" / "nested" / "output" / "canonical-path").is_dir()
+
+
+def test_duplicate_fixture_labels_are_rejected(tmp_path: Path) -> None:
+    """Two fixtures must not silently overwrite the same result directory."""
+
+    workspace = tmp_path / "workspace"
+    fixtures = workspace / "fixtures"
+    output = workspace / "output"
+    fixtures.mkdir(parents=True)
+    (fixtures / "first.json").write_text(
+        json.dumps(_minimal_fixture("duplicate")), encoding="utf-8"
+    )
+    (fixtures / "second.json").write_text(
+        json.dumps(_minimal_fixture("duplicate")), encoding="utf-8"
+    )
+    fake_bundler = workspace / "taikai_car"
+    _write_successful_fake_bundler(fake_bundler)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--workspace",
+            str(workspace),
+            "--fixtures",
+            str(fixtures),
+            "--out",
+            str(output),
+            "--taikai-car",
+            str(fake_bundler),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "duplicate Taikai fixture label 'duplicate'" in result.stderr
+
+
+def test_cleanup_never_deletes_selected_bundler_alias(tmp_path: Path) -> None:
+    """An allowlisted output hard link must not authorize deleting the bundler."""
+
+    workspace = tmp_path / "workspace"
+    fixtures = workspace / "fixtures"
+    output = workspace / "output"
+    run_dir = output / "protected"
+    fixtures.mkdir(parents=True)
+    run_dir.mkdir(parents=True)
+    (run_dir / ".taikai_ingest_smoke_owned_v1").write_text(
+        "taikai-ingest-smoke-owned-v1\n", encoding="utf-8"
+    )
+    (fixtures / "protected.json").write_text(
+        json.dumps(_minimal_fixture("protected")), encoding="utf-8"
+    )
+    real_bundler = workspace / "taikai_car"
+    _write_successful_fake_bundler(real_bundler)
+    generated_alias = run_dir / "segment.car"
+    os.link(real_bundler, generated_alias)
+    original = real_bundler.read_bytes()
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--workspace",
+            str(workspace),
+            "--fixtures",
+            str(fixtures),
+            "--out",
+            str(output),
+            "--taikai-car",
+            str(real_bundler),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "aliases the taikai_car executable" in result.stderr
+    assert real_bundler.read_bytes() == original
+    assert generated_alias.read_bytes() == original

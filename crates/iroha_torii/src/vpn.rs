@@ -815,14 +815,10 @@ fn default_lease_id_hex(record: &VpnSessionRecord) -> String {
     hex::encode(record.lease_id)
 }
 fn tx_instr_from_box(boxed: InstructionBox) -> VpnTxInstructionDto {
-    use iroha_data_model::isi::Instruction;
-    let type_name = Instruction::id(&*boxed);
-    let wire_id = type_name.to_string();
-    let payload = Instruction::dyn_encode(&*boxed);
-    let framed = iroha_data_model::isi::frame_instruction_payload(type_name, &payload)
-        .expect("instruction payload must use canonical Norito framing");
+    let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(&boxed)
+        .expect("instruction must have a canonical V1 wire identifier and Norito frame");
     VpnTxInstructionDto {
-        wire_id,
+        wire_id: wire_id.to_owned(),
         payload_hex: hex::encode(framed),
     }
 }

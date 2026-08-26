@@ -32,6 +32,7 @@ use norito::{
 };
 use soranet_pq::MlDsaSuite;
 use std::{
+    collections::BTreeSet,
     fmt,
     fs::{self, File, Metadata as FsMetadata, OpenOptions},
     io::{self, Read as _},
@@ -1691,7 +1692,8 @@ impl VpnConfig {
     }
     pub(crate) fn parse_route_push(&self) -> Result<Vec<VpnRouteV1>, ConfigError> {
         let mut parsed = Vec::with_capacity(self.route_push.len());
-        for route in &self.route_push {
+        let mut seen = BTreeSet::new();
+        for (index, route) in self.route_push.iter().enumerate() {
             let trimmed = route.trim();
             if trimmed.is_empty() {
                 return Err(ConfigError::Vpn(
@@ -1720,6 +1722,34 @@ impl VpnConfig {
                     "vpn.route_push CIDR prefix `{prefix}` exceeds maximum {max_prefix} for `{addr}`"
                 )));
             }
+            let network = match addr {
+                IpAddr::V4(addr) => {
+                    let mask = if prefix == 0 {
+                        0
+                    } else {
+                        u32::MAX << (32 - prefix)
+                    };
+                    IpAddr::V4((u32::from(addr) & mask).into())
+                }
+                IpAddr::V6(addr) => {
+                    let mask = if prefix == 0 {
+                        0
+                    } else {
+                        u128::MAX << (128 - prefix)
+                    };
+                    IpAddr::V6((u128::from(addr) & mask).into())
+                }
+            };
+            if addr != network {
+                return Err(ConfigError::Vpn(format!(
+                    "vpn.route_push[{index}] must clear all host bits; canonical network prefix is {network}/{prefix}"
+                )));
+            }
+            if !seen.insert((network, prefix)) {
+                return Err(ConfigError::Vpn(
+                    "vpn.route_push must not contain semantically duplicate entries".to_string(),
+                ));
+            }
             parsed.push(VpnRouteV1 {
                 cidr: format!("{addr}/{prefix}"),
                 via: None,
@@ -1730,7 +1760,8 @@ impl VpnConfig {
     }
     pub(crate) fn parse_dns_overrides(&self) -> Result<Vec<String>, ConfigError> {
         let mut parsed = Vec::with_capacity(self.dns_overrides.len());
-        for dns in &self.dns_overrides {
+        let mut seen = BTreeSet::new();
+        for (index, dns) in self.dns_overrides.iter().enumerate() {
             let trimmed = dns.trim();
             if trimmed.is_empty() {
                 return Err(ConfigError::Vpn(
@@ -1742,6 +1773,22 @@ impl VpnConfig {
                     "vpn.dns_overrides entry `{trimmed}` is not a valid IP address: {err}"
                 ))
             })?;
+            let normalized = match addr {
+                IpAddr::V6(addr) => addr.to_ipv4_mapped().map_or(IpAddr::V6(addr), IpAddr::V4),
+                IpAddr::V4(_) => addr,
+            };
+            let limited_broadcast =
+                matches!(normalized, IpAddr::V4(addr) if addr == std::net::Ipv4Addr::BROADCAST);
+            if normalized.is_unspecified() || normalized.is_multicast() || limited_broadcast {
+                return Err(ConfigError::Vpn(format!(
+                    "vpn.dns_overrides[{index}] must be a unicast IP address"
+                )));
+            }
+            if !seen.insert(normalized) {
+                return Err(ConfigError::Vpn(
+                    "vpn.dns_overrides must not contain semantically duplicate entries".to_string(),
+                ));
+            }
             parsed.push(addr.to_string());
         }
         Ok(parsed)

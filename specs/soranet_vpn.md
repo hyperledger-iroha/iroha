@@ -118,7 +118,10 @@ the same deterministic framing.
   normalized CIDRs and the exact same CIDR in both route lists are rejected;
   a more-specific exclusion beneath a pushed default route remains intentional
   and valid. All string/list/signature bounds precede allocation-free encoded-size
-  counting, and the same static validator runs during WSV reconstruction.
+  counting, and the same static validator runs during WSV reconstruction. Relay
+  configuration rejects route prefixes with host bits, duplicate normalized
+  routes or resolvers (including mapped/native IPv4 aliases), and non-unicast
+  resolvers before advertising the policy.
 - **Helper tickets:** Helper tickets are fixed 788-byte v1 capabilities. Each tariff
   component occupies a fixed slot containing a canonical exact `Quantity`
   frame, so no implicit integer nano-XOR unit crosses the helper boundary.

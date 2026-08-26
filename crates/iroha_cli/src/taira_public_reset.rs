@@ -1158,7 +1158,7 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
         ),
         ("next genesis hash", inventory.next_genesis_hash.as_str()),
     ] {
-        validate_lower_hex(label, value, 64)?;
+        validate_canonical_iroha_hash(label, value)?;
     }
     if inventory.previous_genesis_hash == inventory.next_genesis_hash {
         return Err(eyre!(
@@ -1526,9 +1526,7 @@ fn validate_validator(validator: &ValidatorV1, slug: &str, revision: &RevisionV1
             &validator.config_fingerprint,
         ),
     ] {
-        value
-            .parse::<iroha_crypto::Hash>()
-            .wrap_err_with(|| format!("{label} is not a canonical Iroha hash"))?;
+        validate_canonical_iroha_hash(label, value)?;
     }
     let service_root = format!("/srv/taira/{slug}");
     let state_root = format!("/var/lib/taira/{slug}");
@@ -1783,14 +1781,10 @@ fn validate_inrou(canary: &InrouCanaryV1) -> Result<()> {
                 "Inrou canary service version must use the canonical first-release artifact identity"
             )
         })?;
-    // The inventory admits the closed V1 spelling here. Apply separately loads the complete
-    // retained stage and recomputes the bundle-derived Blake2b-256 service version before any
-    // host mutation; the inventory does not contain enough bundle material to reproduce it.
-    validate_lower_hex(
-        "Inrou canary service artifact revision",
-        service_revision,
-        64,
-    )?;
+    // The inventory admits only a canonical Iroha hash spelling here. Apply separately loads the
+    // complete retained stage and recomputes the bundle-derived Blake2b-256 service version before
+    // any host mutation; the inventory does not contain enough bundle material to reproduce it.
+    validate_canonical_iroha_hash("Inrou canary service artifact revision", service_revision)?;
     validate_lower_hex("Inrou stage tree SHA-256", &canary.stage_tree_sha256, 64)?;
     for (label, value) in [
         (
@@ -1829,12 +1823,7 @@ fn validate_inrou(canary: &InrouCanaryV1) -> Result<()> {
             canary.service_manifest_hash.as_str(),
         ),
     ] {
-        let parsed = value
-            .parse::<Hash>()
-            .wrap_err_with(|| format!("{label} is not a canonical Iroha hash"))?;
-        if parsed.to_string() != value {
-            return Err(eyre!("{label} is not a canonical Iroha hash"));
-        }
+        validate_canonical_iroha_hash(label, value)?;
     }
     validate_lower_hex("Inrou receipt SHA-256", &canary.receipt_sha256, 64)?;
     for (label, value) in [
@@ -2267,6 +2256,16 @@ fn validate_lower_hex(label: &str, value: &str, length: usize) -> Result<()> {
         return Err(eyre!(
             "{label} must be exactly {length} lowercase hexadecimal characters"
         ));
+    }
+    Ok(())
+}
+
+fn validate_canonical_iroha_hash(label: &str, value: &str) -> Result<()> {
+    let hash = value
+        .parse::<Hash>()
+        .wrap_err_with(|| format!("{label} is not a canonical Iroha hash"))?;
+    if hash.to_string() != value {
+        return Err(eyre!("{label} is not a canonical Iroha hash"));
     }
     Ok(())
 }
@@ -4738,6 +4737,28 @@ mod executor_model {
             }
         }
 
+        fn unmarked_iroha_hash(seed: &[u8]) -> String {
+            let mut bytes = *Hash::new(seed).as_ref();
+            bytes[Hash::LENGTH - 1] &= !1_u8;
+            hex::encode(bytes)
+        }
+
+        #[test]
+        fn canonical_iroha_hash_validation_preserves_raw_sha256_semantics() {
+            let canonical = Hash::new(b"canonical Iroha hash fixture").to_string();
+            validate_canonical_iroha_hash("fixture hash", &canonical)
+                .expect("canonical marked Iroha hash");
+
+            let unmarked = unmarked_iroha_hash(b"unmarked Iroha hash fixture");
+            validate_lower_hex("raw SHA-256 fixture", &unmarked, 64)
+                .expect("raw SHA-256 does not impose Iroha marker semantics");
+            validate_canonical_iroha_hash("fixture hash", &unmarked)
+                .expect_err("an Iroha hash must carry its marker bit");
+
+            validate_canonical_iroha_hash("fixture hash", &canonical.to_ascii_uppercase())
+                .expect_err("an Iroha hash must use its canonical lowercase spelling");
+        }
+
         #[test]
         fn recovery_intent_rejects_noncanonical_idempotency_digests() {
             let canonical = test_recovery_intent(ExecutionStep::Canary);
@@ -4891,12 +4912,64 @@ mod executor_model {
         }
 
         #[test]
+        fn inventory_genesis_hashes_require_the_iroha_marker_bit() {
+            let unmarked = unmarked_iroha_hash(b"unmarked Taira genesis fixture");
+            for field in ["previous", "next"] {
+                let mut inventory = sample_inventory();
+                let expected_label = match field {
+                    "previous" => {
+                        inventory.previous_genesis_hash = unmarked.clone();
+                        "previous genesis hash"
+                    }
+                    "next" => {
+                        inventory.next_genesis_hash = unmarked.clone();
+                        "next genesis hash"
+                    }
+                    _ => unreachable!("closed genesis-hash fixture field"),
+                };
+                let error = validate_inventory(&inventory)
+                    .expect_err("an unmarked genesis hash must fail inventory admission");
+                assert!(format!("{error:#}").contains(expected_label));
+            }
+        }
+
+        #[test]
+        fn validator_fingerprints_require_the_iroha_marker_bit() {
+            let inventory = sample_inventory();
+            let unmarked = unmarked_iroha_hash(b"unmarked validator fingerprint fixture");
+            for field in ["node", "build", "config"] {
+                let mut validator = inventory.validators[0].clone();
+                let expected_label = match field {
+                    "node" => {
+                        validator.node_fingerprint = unmarked.clone();
+                        "validator node fingerprint"
+                    }
+                    "build" => {
+                        validator.build_fingerprint = unmarked.clone();
+                        "validator build fingerprint"
+                    }
+                    "config" => {
+                        validator.config_fingerprint = unmarked.clone();
+                        "validator config fingerprint"
+                    }
+                    _ => unreachable!("closed validator-fingerprint fixture field"),
+                };
+                let error = validate_validator(&validator, VALIDATOR_SLUGS[0], &inventory.revision)
+                    .expect_err("an unmarked validator fingerprint must fail admission");
+                assert!(format!("{error:#}").contains(expected_label));
+            }
+        }
+
+        #[test]
         fn inrou_canary_requires_exact_first_release_service_version_format() {
             let canonical = sample_inventory().inrou_canary;
             validate_inrou(&canonical).expect("canonical artifact-version format");
 
             let mut another_canonical_digest = canonical.clone();
-            another_canonical_digest.service_version = format!("artifact-{}", "8".repeat(64));
+            another_canonical_digest.service_version = format!(
+                "artifact-{}",
+                Hash::new(b"another fixture Inrou bundle").to_string()
+            );
             validate_inrou(&another_canonical_digest)
                 .expect("format admission defers bundle derivation to retained-stage apply");
 
@@ -4906,6 +4979,7 @@ mod executor_model {
                 format!("artifact-{}", "a".repeat(63)),
                 format!("artifact-{}", "a".repeat(65)),
                 format!("release-{}", "a".repeat(64)),
+                format!("artifact-{}", "8".repeat(64)),
             ] {
                 let mut canary = canonical.clone();
                 canary.service_version = malformed;
@@ -4930,6 +5004,37 @@ mod executor_model {
                 mutate(&mut malformed);
                 validate_inrou(&malformed)
                     .expect_err("printable legacy hash spellings must fail closed");
+            }
+        }
+
+        #[test]
+        fn inrou_hash_fields_require_the_iroha_marker_bit() {
+            let canonical = sample_inventory().inrou_canary;
+            let unmarked = unmarked_iroha_hash(b"unmarked Inrou hash fixture");
+            for field in ["service_revision", "bundle", "container", "service"] {
+                let mut malformed = canonical.clone();
+                let expected_label = match field {
+                    "service_revision" => {
+                        malformed.service_version = format!("artifact-{unmarked}");
+                        "Inrou canary service artifact revision"
+                    }
+                    "bundle" => {
+                        malformed.bundle_hash = unmarked.clone();
+                        "Inrou bundle hash"
+                    }
+                    "container" => {
+                        malformed.container_manifest_hash = unmarked.clone();
+                        "Inrou container manifest hash"
+                    }
+                    "service" => {
+                        malformed.service_manifest_hash = unmarked.clone();
+                        "Inrou service manifest hash"
+                    }
+                    _ => unreachable!("closed Inrou hash fixture field"),
+                };
+                let error = validate_inrou(&malformed)
+                    .expect_err("an unmarked Inrou hash must fail admission");
+                assert!(format!("{error:#}").contains(expected_label));
             }
         }
 
@@ -5996,8 +6101,8 @@ mod executor_model {
                 deployment_id: "taira-public".to_owned(),
                 chain_id: CHAIN_ID.to_owned(),
                 chain_discriminant: CHAIN_DISCRIMINANT,
-                previous_genesis_hash: "4".repeat(64),
-                next_genesis_hash: "5".repeat(64),
+                previous_genesis_hash: Hash::new(b"fixture previous Taira genesis").to_string(),
+                next_genesis_hash: Hash::new(b"fixture next Taira genesis").to_string(),
                 authorization_nonce: "abcdefghijklmnopqrstuvwx12345678".to_owned(),
                 revision: revision.clone(),
                 validators,
@@ -6030,7 +6135,10 @@ mod executor_model {
                 inrou_canary: InrouCanaryV1 {
                     public_root: PUBLIC_ROOT.to_owned(),
                     service_name: "taira_inrou_canary".to_owned(),
-                    service_version: format!("artifact-{}", "7".repeat(64)),
+                    service_version: format!(
+                        "artifact-{}",
+                        Hash::new(b"fixture Inrou service revision")
+                    ),
                     replicas: 4,
                     route_host: "taira-inrou-canary.sora".to_owned(),
                     route_path_prefix: "/api/v1".to_owned(),

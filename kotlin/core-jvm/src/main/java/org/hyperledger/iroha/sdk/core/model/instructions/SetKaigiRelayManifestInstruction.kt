@@ -43,9 +43,6 @@ class SetKaigiRelayManifestInstruction internal constructor(
         }
 
         fun setRelayManifestExpiryMs(expiryMs: Long?) = apply {
-            if (expiryMs != null && expiryMs < 0) {
-                throw IllegalArgumentException("relay manifest expiry must be non-negative")
-            }
             this.relayManifestExpiry = expiryMs
         }
 
@@ -111,6 +108,7 @@ class SetKaigiRelayManifestInstruction internal constructor(
 
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): SetKaigiRelayManifestInstruction {
+            KaigiInstructionUtils.requireAction(arguments, ACTION)
             val callId = KaigiInstructionUtils.parseCallId(arguments, "call")
             val relayManifest = KaigiInstructionUtils.parseRelayManifest(arguments, "relay_manifest")
             return SetKaigiRelayManifestInstruction(callId, relayManifest, LinkedHashMap(arguments))

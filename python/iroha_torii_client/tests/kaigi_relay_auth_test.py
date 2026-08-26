@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -23,6 +24,9 @@ from iroha_torii_client import (  # noqa: E402
 )
 
 NETWORK_ID = canonical_hash(0xA5)
+HPKE_PUBLIC_KEY = b"ABCD"
+HPKE_PUBLIC_KEY_B64 = "QUJDRA=="
+HPKE_FINGERPRINT_HEX = "58c7dab691f514e0bd6f4082852ac0f1e08df24b5864038ff70ecd68419f4a23"
 
 
 def _operator_context(captured: Optional[List[bytes]] = None) -> ToriiOperatorSigningContext:
@@ -40,7 +44,7 @@ def _operator_context(captured: Optional[List[bytes]] = None) -> ToriiOperatorSi
 
 def _relay_summary_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
-        "relay_id": "relay-alpha",
+        "relay_id": CANONICAL_OWNER,
         "domain": "kaigi.core",
         "bandwidth_class": 3,
         "hpke_fingerprint_hex": "ab" * 32,
@@ -49,6 +53,31 @@ def _relay_summary_payload(**overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
+
+
+def _relay_detail_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "relay": _relay_summary_payload(
+            hpke_fingerprint_hex=HPKE_FINGERPRINT_HEX,
+        ),
+        "hpke_public_key_b64": HPKE_PUBLIC_KEY_B64,
+        "reported_call": {"domain_id": "kaigi.core", "call_name": "health"},
+        "reported_by": CANONICAL_OWNER,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_kaigi_hpke_fingerprint_matches_iroha_hash_new_fixture() -> None:
+    raw_digest = hashlib.blake2b(HPKE_PUBLIC_KEY, digest_size=32).digest()
+
+    assert raw_digest.hex() == ("58c7dab691f514e0bd6f4082852ac0f1e08df24b5864038ff70ecd68419f4a22")
+    assert raw_digest[-1] & 1 == 0
+    detail = ToriiClient._parse_kaigi_relay_detail(
+        _relay_detail_payload(),
+        context="kaigi relay detail",
+    )
+    assert detail.relay.hpke_fingerprint_hex == HPKE_FINGERPRINT_HEX
 
 
 @pytest.mark.parametrize("bandwidth_class", [1, 255])
@@ -103,9 +132,56 @@ def test_kaigi_relay_summary_rejects_lossy_or_out_of_range_timestamps(
 
 @pytest.mark.parametrize("fingerprint", ["ab", ["ab"]])
 def test_kaigi_relay_summary_requires_a_32_byte_fingerprint(fingerprint: object) -> None:
-    with pytest.raises(RuntimeError, match=r"(?:64 hex characters|hex string)"):
+    with pytest.raises(RuntimeError, match=r"(?:64 lowercase hex characters|string)"):
         ToriiClient._parse_kaigi_relay_summary(
             _relay_summary_payload(hpke_fingerprint_hex=fingerprint),
+            context="kaigi relay summary",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("reported_at_ms", "123"),
+        ("status", "HEALTHY"),
+        ("hpke_fingerprint_hex", "AB" * 32),
+    ],
+)
+def test_kaigi_relay_summary_rejects_noncanonical_wire_values(
+    field: str,
+    value: object,
+) -> None:
+    with pytest.raises(RuntimeError):
+        ToriiClient._parse_kaigi_relay_summary(
+            _relay_summary_payload(**{field: value}),
+            context="kaigi relay summary",
+        )
+
+
+@pytest.mark.parametrize("missing", ["status", "reported_at_ms"])
+def test_kaigi_relay_summary_requires_health_fields_as_a_pair(missing: str) -> None:
+    payload = _relay_summary_payload()
+    del payload[missing]
+
+    with pytest.raises(RuntimeError, match="present together"):
+        ToriiClient._parse_kaigi_relay_summary(
+            payload,
+            context="kaigi relay summary",
+        )
+
+
+def test_kaigi_relay_summary_rejects_unknown_fields() -> None:
+    with pytest.raises(RuntimeError, match="not part of the first-release contract"):
+        ToriiClient._parse_kaigi_relay_summary(
+            _relay_summary_payload(alias_tag="private"),
+            context="kaigi relay summary",
+        )
+
+
+def test_kaigi_relay_summary_requires_canonical_i105_output() -> None:
+    with pytest.raises(RuntimeError, match="canonical I105"):
+        ToriiClient._parse_kaigi_relay_summary(
+            _relay_summary_payload(relay_id="relay-alpha"),
             context="kaigi relay summary",
         )
 
@@ -128,14 +204,24 @@ def test_kaigi_relay_summary_list_rejects_malformed_or_oversized_envelopes(
         )
 
 
+def test_kaigi_relay_summary_list_rejects_partial_or_duplicate_results() -> None:
+    item = _relay_summary_payload()
+    with pytest.raises(RuntimeError, match="total must equal"):
+        ToriiClient._parse_kaigi_relay_summary_list(
+            {"total": 2, "items": [item]},
+            context="kaigi relay summary response",
+        )
+    with pytest.raises(RuntimeError, match="duplicate relay ids"):
+        ToriiClient._parse_kaigi_relay_summary_list(
+            {"total": 2, "items": [item, item]},
+            context="kaigi relay summary response",
+        )
+
+
 def test_kaigi_relay_detail_rejects_non_string_notes() -> None:
     with pytest.raises(RuntimeError, match=r"notes must be a string"):
         ToriiClient._parse_kaigi_relay_detail(
-            {
-                "relay": _relay_summary_payload(),
-                "hpke_public_key_b64": "QUJDRA==",
-                "notes": 7,
-            },
+            _relay_detail_payload(notes=7),
             context="kaigi relay detail",
         )
 
@@ -144,10 +230,59 @@ def test_kaigi_relay_detail_rejects_non_string_notes() -> None:
 def test_kaigi_relay_detail_requires_exact_base64_public_key(public_key: object) -> None:
     with pytest.raises((TypeError, ValueError, RuntimeError), match=r"(?:string|empty|base64)"):
         ToriiClient._parse_kaigi_relay_detail(
-            {
-                "relay": _relay_summary_payload(),
-                "hpke_public_key_b64": public_key,
-            },
+            _relay_detail_payload(hpke_public_key_b64=public_key),
+            context="kaigi relay detail",
+        )
+
+
+def test_kaigi_relay_detail_binds_public_key_to_fingerprint() -> None:
+    with pytest.raises(RuntimeError, match="does not match the relay fingerprint"):
+        ToriiClient._parse_kaigi_relay_detail(
+            _relay_detail_payload(relay=_relay_summary_payload(hpke_fingerprint_hex="ab" * 32)),
+            context="kaigi relay detail",
+        )
+
+
+def test_kaigi_relay_detail_preserves_empty_notes() -> None:
+    detail = ToriiClient._parse_kaigi_relay_detail(
+        _relay_detail_payload(notes=""),
+        context="kaigi relay detail",
+    )
+
+    assert detail.notes == ""
+
+
+def test_kaigi_relay_detail_metrics_must_match_relay_domain() -> None:
+    with pytest.raises(RuntimeError, match="metrics.domain must match"):
+        ToriiClient._parse_kaigi_relay_detail(
+            _relay_detail_payload(
+                metrics={
+                    "domain": "other.core",
+                    "registrations_total": 0,
+                    "manifest_updates_total": 0,
+                    "failovers_total": 0,
+                    "health_reports_total": 0,
+                }
+            ),
+            context="kaigi relay detail",
+        )
+
+
+def test_kaigi_relay_detail_requires_consistent_feedback_fields() -> None:
+    payload = _relay_detail_payload()
+    del payload["reported_by"]
+    with pytest.raises(RuntimeError, match="present together"):
+        ToriiClient._parse_kaigi_relay_detail(
+            payload,
+            context="kaigi relay detail",
+        )
+
+    relay_without_feedback = _relay_summary_payload(hpke_fingerprint_hex=HPKE_FINGERPRINT_HEX)
+    del relay_without_feedback["status"]
+    del relay_without_feedback["reported_at_ms"]
+    with pytest.raises(RuntimeError, match="agree with the relay health summary"):
+        ToriiClient._parse_kaigi_relay_detail(
+            _relay_detail_payload(relay=relay_without_feedback),
             context="kaigi relay detail",
         )
 
@@ -184,6 +319,22 @@ def test_kaigi_relay_health_rejects_malformed_required_fields(
         )
 
 
+def test_kaigi_relay_health_rejects_impossible_current_status_total() -> None:
+    with pytest.raises(RuntimeError, match="status totals exceed"):
+        ToriiClient._parse_kaigi_relay_health_snapshot(
+            {
+                "healthy_total": 501,
+                "degraded_total": 0,
+                "unavailable_total": 0,
+                "reports_total": 0,
+                "registrations_total": 0,
+                "failovers_total": 0,
+                "domains": [],
+            },
+            context="kaigi relay health snapshot",
+        )
+
+
 def test_list_kaigi_relays_parses_summary() -> None:
     signed_messages: List[bytes] = []
     session = RecordingSession()
@@ -193,7 +344,7 @@ def test_list_kaigi_relays_parses_summary() -> None:
                 "total": 1,
                 "items": [
                     {
-                        "relay_id": "relay-alpha",
+                        "relay_id": CANONICAL_OWNER,
                         "domain": "kaigi.core",
                         "bandwidth_class": 3,
                         "hpke_fingerprint_hex": "ab" * 32,
@@ -215,7 +366,7 @@ def test_list_kaigi_relays_parses_summary() -> None:
     assert summary.total == 1
     assert len(summary.items) == 1
     relay = summary.items[0]
-    assert relay.relay_id == "relay-alpha"
+    assert relay.relay_id == CANONICAL_OWNER
     assert relay.status == "healthy"
     assert session.calls[0]["url"].endswith("/v1/kaigi/relays")
     assert session.calls[0]["headers"]["Accept"] == "application/json"
@@ -254,11 +405,13 @@ def test_get_kaigi_relay_returns_detail_and_none_on_404() -> None:
                     "relay_id": relay_id,
                     "domain": "kaigi.core",
                     "bandwidth_class": 3,
-                    "hpke_fingerprint_hex": "cd" * 32,
+                    "hpke_fingerprint_hex": HPKE_FINGERPRINT_HEX,
+                    "status": "healthy",
+                    "reported_at_ms": 123,
                 },
-                "hpke_public_key_b64": "QUJDRA==",
+                "hpke_public_key_b64": HPKE_PUBLIC_KEY_B64,
                 "reported_call": {"domain_id": "kaigi.core", "call_name": "register"},
-                "reported_by": "ops@example",
+                "reported_by": relay_id,
                 "notes": "Primary relay",
                 "metrics": {
                     "domain": "kaigi.core",
@@ -295,8 +448,8 @@ def test_get_kaigi_relays_health_snapshot() -> None:
                 "healthy_total": 2,
                 "degraded_total": 1,
                 "unavailable_total": 0,
-                "reports_total": 5,
-                "registrations_total": 7,
+                "reports_total": 4,
+                "registrations_total": 5,
                 "failovers_total": 1,
                 "domains": [
                     {
@@ -341,6 +494,17 @@ def test_kaigi_relay_reads_require_fresh_operator_auth_before_dispatch() -> None
         precomputed.get_kaigi_relays_health()
     assert precomputed_session.calls == []
 
+    cookie_session = RecordingSession()
+    cookie_client = ToriiClient(
+        "http://node.test",
+        session=cookie_session,
+        operator_signing_context=_operator_context(),
+    )
+    cookie_session.cookies.set("session", "ambient-authority")
+    with pytest.raises(ValueError, match="Session.cookies"):
+        cookie_client.list_kaigi_relays()
+    assert cookie_session.calls == []
+
 
 def test_kaigi_relay_operator_read_is_one_shot() -> None:
     session = RecordingSession()
@@ -355,3 +519,16 @@ def test_kaigi_relay_operator_read_is_one_shot() -> None:
         client.list_kaigi_relays()
     assert len(session.calls) == 1
     assert session.calls[0]["allow_redirects"] is False
+
+
+def test_kaigi_detail_empty_success_is_not_treated_as_not_found() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(status_code=200))
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
+
+    with pytest.raises(RuntimeError, match="empty success response"):
+        client.get_kaigi_relay(CANONICAL_OWNER)

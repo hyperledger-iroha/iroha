@@ -10,7 +10,7 @@ use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use iroha_data_model::taikai::{
     GuardDirectoryId, TaikaiEventId, TaikaiRenditionId, TaikaiSegmentEnvelopeV1, TaikaiStreamId,
 };
-use iroha_telemetry::metrics::global_or_default;
+use iroha_telemetry::metrics::{Metrics, global_or_default};
 use norito::{
     core::Error as NoritoError,
     derive::{NoritoDeserialize, NoritoSerialize},
@@ -930,6 +930,30 @@ impl TaikaiCache {
         segment: Arc<CachedSegment>,
         now: Instant,
     ) -> TaikaiCacheInsertOutcome {
+        let metrics = global_or_default();
+        self.insert_shared_through(segment, now, CacheTierKind::Cold, &metrics)
+    }
+    fn promote_shared(
+        &mut self,
+        segment: Arc<CachedSegment>,
+        now: Instant,
+        origin: CacheTierKind,
+        metrics: &Metrics,
+    ) -> TaikaiCacheInsertOutcome {
+        let lowest_target = match origin {
+            CacheTierKind::Hot => return TaikaiCacheInsertOutcome::default(),
+            CacheTierKind::Warm => CacheTierKind::Hot,
+            CacheTierKind::Cold => CacheTierKind::Warm,
+        };
+        self.insert_shared_through(segment, now, lowest_target, metrics)
+    }
+    fn insert_shared_through(
+        &mut self,
+        segment: Arc<CachedSegment>,
+        now: Instant,
+        lowest_target: CacheTierKind,
+        metrics: &Metrics,
+    ) -> TaikaiCacheInsertOutcome {
         let mut outcome = TaikaiCacheInsertOutcome::default();
         let CacheTierInsertResult {
             inserted,
@@ -937,12 +961,25 @@ impl TaikaiCache {
             expired,
         } = self.hot.insert(segment.clone(), now);
         outcome.record_expirations(CacheTierKind::Hot, expired);
-        let mut to_demote = outcome.record_capacity_evictions(CacheTierKind::Hot, demoted);
+        let mut to_demote: Vec<_> = outcome
+            .record_capacity_evictions(CacheTierKind::Hot, demoted)
+            .into_iter()
+            .map(|(key, segment)| (key, segment, true))
+            .collect();
         if inserted {
             outcome.record_insert(CacheTierKind::Hot);
             self.stats.record_insert(CacheTierKind::Hot);
+        } else if lowest_target != CacheTierKind::Hot {
+            let key = segment.key();
+            // A tier can reject a new object because it is disabled or the object exceeds that
+            // tier's capacity. Continue down the hierarchy unless an older value for the same key
+            // remains resident in this tier; storing a conflicting replacement below it would be
+            // unreachable while the older hot entry shadows it.
+            if !self.hot.entries.contains_key(&key) {
+                to_demote.push((key, segment.clone(), lowest_target == CacheTierKind::Cold));
+            }
         }
-        while let Some((key, demoted_segment)) = to_demote.pop() {
+        while let Some((key, demoted_segment, may_fall_to_cold)) = to_demote.pop() {
             let CacheTierInsertResult {
                 inserted: warm_inserted,
                 demoted: warm_demoted,
@@ -955,7 +992,7 @@ impl TaikaiCache {
                 outcome.record_insert(CacheTierKind::Warm);
                 self.stats.record_insert(CacheTierKind::Warm);
             }
-            if !warm_inserted {
+            if !warm_inserted && may_fall_to_cold && !self.warm.entries.contains_key(&key) {
                 next_demote.push((key, demoted_segment.clone()));
             }
             while let Some((_cold_key, cold_segment)) = next_demote.pop() {
@@ -972,13 +1009,22 @@ impl TaikaiCache {
                 }
             }
         }
-        record_taikai_cache_insert_metrics(&segment, &outcome);
+        record_taikai_cache_insert_metrics_with(metrics, &segment, &outcome);
         for eviction in &outcome.evicted {
             self.stats.record_eviction(eviction.from, eviction.reason);
         }
         outcome
     }
     pub fn get(&mut self, key: &SegmentKey, now: Instant) -> TaikaiCacheQueryOutcome {
+        let metrics = global_or_default();
+        self.get_with_metrics(key, now, &metrics)
+    }
+    fn get_with_metrics(
+        &mut self,
+        key: &SegmentKey,
+        now: Instant,
+        metrics: &Metrics,
+    ) -> TaikaiCacheQueryOutcome {
         let mut outcome = TaikaiCacheQueryOutcome::default();
         if let Some(segment) = self.hot.get(key, now) {
             outcome.hit_tier = Some(CacheTierKind::Hot);
@@ -986,36 +1032,41 @@ impl TaikaiCache {
             self.stats.record_hit(CacheTierKind::Hot);
         } else if let Some(segment) = self.warm.get(key, now) {
             outcome.hit_tier = Some(CacheTierKind::Warm);
-            outcome.promotions.push(CachePromotion {
-                from: CacheTierKind::Warm,
-                to: CacheTierKind::Hot,
-                key: key.clone(),
-            });
             let shared = segment.clone();
-            self.insert_shared(shared.clone(), now);
+            let promotion = self.promote_shared(shared, now, CacheTierKind::Warm, metrics);
+            if promotion.inserted_into.contains(&CacheTierKind::Hot) {
+                outcome.promotions.push(CachePromotion {
+                    from: CacheTierKind::Warm,
+                    to: CacheTierKind::Hot,
+                    key: key.clone(),
+                });
+            }
             outcome.segment = Some(segment);
             self.stats.record_hit(CacheTierKind::Warm);
         } else if let Some(segment) = self.cold.get(key, now) {
             outcome.hit_tier = Some(CacheTierKind::Cold);
-            outcome.promotions.push(CachePromotion {
-                from: CacheTierKind::Cold,
-                to: CacheTierKind::Warm,
-                key: key.clone(),
-            });
-            outcome.promotions.push(CachePromotion {
-                from: CacheTierKind::Warm,
-                to: CacheTierKind::Hot,
-                key: key.clone(),
-            });
             let shared = segment.clone();
-            self.warm.insert(shared.clone(), now);
-            self.insert_shared(shared.clone(), now);
+            let promotion = self.promote_shared(shared, now, CacheTierKind::Cold, metrics);
+            let promoted_to = if promotion.inserted_into.contains(&CacheTierKind::Hot) {
+                Some(CacheTierKind::Hot)
+            } else if promotion.inserted_into.contains(&CacheTierKind::Warm) {
+                Some(CacheTierKind::Warm)
+            } else {
+                None
+            };
+            if let Some(to) = promoted_to {
+                outcome.promotions.push(CachePromotion {
+                    from: CacheTierKind::Cold,
+                    to,
+                    key: key.clone(),
+                });
+            }
             outcome.segment = Some(segment);
             self.stats.record_hit(CacheTierKind::Cold);
         } else {
             self.stats.record_miss();
         }
-        record_taikai_cache_query_metrics(&outcome);
+        record_taikai_cache_query_metrics_with(metrics, &outcome);
         for promotion in &outcome.promotions {
             self.stats.record_promotion(promotion.from, promotion.to);
         }
@@ -1708,14 +1759,14 @@ impl TaikaiCacheHandle {
         Ok(queue.fail_at(ticket, Instant::now()))
     }
 }
-fn record_taikai_cache_insert_metrics(
+fn record_taikai_cache_insert_metrics_with(
+    metrics: &Metrics,
     segment: &Arc<CachedSegment>,
     outcome: &TaikaiCacheInsertOutcome,
 ) {
     if outcome.inserted_into.is_empty() && outcome.evicted.is_empty() {
         return;
     }
-    let metrics = global_or_default();
     let bytes = segment.size_bytes();
     for tier in &outcome.inserted_into {
         metrics.record_taikai_cache_insert(tier.label(), bytes);
@@ -1724,8 +1775,7 @@ fn record_taikai_cache_insert_metrics(
         metrics.record_taikai_cache_eviction(eviction.from.label(), eviction.reason.label());
     }
 }
-fn record_taikai_cache_query_metrics(outcome: &TaikaiCacheQueryOutcome) {
-    let metrics = global_or_default();
+fn record_taikai_cache_query_metrics_with(metrics: &Metrics, outcome: &TaikaiCacheQueryOutcome) {
     match (&outcome.segment, outcome.hit_tier) {
         (Some(segment), Some(tier)) => {
             let label = tier.label();
@@ -2318,10 +2368,16 @@ impl CacheAdmissionTracker {
         }
         let body = gossip.body();
         let record = body.envelope().body();
-        self.active_shards
-            .entry(record.shard_id)
-            .and_modify(|expires| *expires = (*expires).max(body.expires_unix_ms()))
-            .or_insert_with(|| body.expires_unix_ms());
+        // Eviction gossip describes the loss of a cached object; it must never advertise a new
+        // routing destination or prolong a shard lease established by prior admissions. The
+        // coarse shard tracker conservatively lets an existing admission age out because one
+        // segment eviction does not prove that the shard has no other cached segments.
+        if record.action == CacheAdmissionAction::Admit {
+            self.active_shards
+                .entry(record.shard_id)
+                .and_modify(|expires| *expires = (*expires).max(body.expires_unix_ms()))
+                .or_insert_with(|| body.expires_unix_ms());
+        }
         let _ = self.evict_expired(now_unix_ms);
         self.refresh_ring();
         Ok(true)
@@ -2442,6 +2498,32 @@ mod tests {
     ) -> CacheAdmissionGossip {
         let key_pair = cache_admission_fixture_keypair();
         cache_admission_gossip_with_key_pair(shard, sequence, issued_ms, ttl, &key_pair)
+    }
+    fn cache_admission_gossip_with_action(
+        shard: TaikaiShardId,
+        sequence: u64,
+        action: CacheAdmissionAction,
+        issued_ms: u64,
+        ttl: Duration,
+    ) -> CacheAdmissionGossip {
+        let key_pair = cache_admission_fixture_keypair();
+        let issuer = GuardDirectoryId::new("soranet/cache");
+        let cached = dummy_segment(sequence, 512, QosClass::Priority);
+        let record = CacheAdmissionRecord::from_segment(
+            shard,
+            issuer,
+            &cached,
+            CacheTierKind::Hot,
+            action,
+            issued_ms,
+            ttl,
+        )
+        .expect("record");
+        let envelope = CacheAdmissionEnvelope::sign(record, &key_pair).expect("envelope");
+        let mut rng = StdRng::seed_from_u64(sequence);
+        let body = CacheAdmissionGossipBody::with_nonce(envelope, issued_ms, ttl, &mut rng)
+            .expect("gossip body");
+        CacheAdmissionGossip::sign(body, &key_pair).expect("gossip")
     }
     fn cache_admission_gossip_with_key_pair(
         shard: TaikaiShardId,
@@ -2946,6 +3028,104 @@ mod tests {
                 .promotions
                 .iter()
                 .any(|promo| promo.from == CacheTierKind::Warm && promo.to == CacheTierKind::Hot)
+        );
+    }
+    #[test]
+    fn oversized_hot_entry_falls_back_to_warm_without_false_promotion() {
+        let mut cache = TaikaiCache::new(TaikaiCacheConfig {
+            hot_capacity_bytes: 4,
+            hot_retention: Duration::from_secs(10),
+            warm_capacity_bytes: 16,
+            warm_retention: Duration::from_mins(10),
+            cold_capacity_bytes: 32,
+            cold_retention: Duration::from_hours(1),
+            qos: QosConfig::balanced(),
+            reliability: ReliabilityTuning::default(),
+        });
+        let now = Instant::now();
+        let segment = dummy_segment(4, 8, QosClass::Standard);
+        let key = segment.key();
+
+        let inserted = cache.insert(segment, now);
+
+        assert_eq!(inserted.inserted_into, vec![CacheTierKind::Warm]);
+        let insert_stats_before_hit = cache.stats().inserts;
+        let metrics = Metrics::default();
+        let query = cache.get_with_metrics(&key, now + Duration::from_millis(1), &metrics);
+        assert_eq!(query.hit_tier, Some(CacheTierKind::Warm));
+        assert!(
+            query.promotions.is_empty(),
+            "an object that does not fit hot was not promoted"
+        );
+        assert_eq!(
+            cache.stats().inserts,
+            insert_stats_before_hit,
+            "an unpromotable warm hit must not be counted as another insertion"
+        );
+        assert_eq!(
+            metrics
+                .sorafs_taikai_cache_insert_total
+                .with_label_values(&["warm"])
+                .get(),
+            0,
+            "an unpromotable warm hit must not emit warm insertion telemetry"
+        );
+        assert_eq!(
+            metrics
+                .sorafs_taikai_cache_query_total
+                .with_label_values(&["hit", "warm"])
+                .get(),
+            1,
+            "the isolated metrics sink must still record the warm hit"
+        );
+    }
+    #[test]
+    fn entry_that_exceeds_hot_and_warm_falls_back_to_cold() {
+        let mut cache = TaikaiCache::new(TaikaiCacheConfig {
+            hot_capacity_bytes: 4,
+            hot_retention: Duration::from_secs(10),
+            warm_capacity_bytes: 6,
+            warm_retention: Duration::from_mins(10),
+            cold_capacity_bytes: 16,
+            cold_retention: Duration::from_hours(1),
+            qos: QosConfig::balanced(),
+            reliability: ReliabilityTuning::default(),
+        });
+        let now = Instant::now();
+        let segment = dummy_segment(5, 8, QosClass::Bulk);
+        let key = segment.key();
+
+        let inserted = cache.insert(segment, now);
+
+        assert_eq!(inserted.inserted_into, vec![CacheTierKind::Cold]);
+        let insert_stats_before_hit = cache.stats().inserts;
+        let metrics = Metrics::default();
+        let query = cache.get_with_metrics(&key, now + Duration::from_millis(1), &metrics);
+        assert_eq!(query.hit_tier, Some(CacheTierKind::Cold));
+        assert!(
+            query.promotions.is_empty(),
+            "an object that fits neither hotter tier was not promoted"
+        );
+        assert_eq!(
+            cache.stats().inserts,
+            insert_stats_before_hit,
+            "an unpromotable cold hit must not be counted as another insertion"
+        );
+        assert_eq!(
+            metrics
+                .sorafs_taikai_cache_insert_total
+                .with_label_values(&["cold"])
+                .get(),
+            0,
+            "an unpromotable cold hit must not emit cold insertion telemetry"
+        );
+        assert_eq!(
+            metrics
+                .sorafs_taikai_cache_query_total
+                .with_label_values(&["hit", "cold"])
+                .get(),
+            1,
+            "the isolated metrics sink must still record the cold hit"
         );
     }
     #[test]
@@ -4000,6 +4180,56 @@ mod tests {
         );
         assert_eq!(tracker.active_shards(), vec![shard]);
         assert!(tracker.evict_expired(issued_ms + 1_000));
+    }
+    #[test]
+    fn cache_admission_eviction_does_not_activate_or_extend_shard() {
+        let handle = TaikaiCacheHandle::from_config(TaikaiCacheConfig::default());
+        let replay =
+            CacheAdmissionReplayFilter::new(Duration::from_secs(5), 8).expect("replay filter");
+        let mut tracker = CacheAdmissionTracker::new(handle, replay);
+        let issued_ms = 1_726_000_500_000;
+        let shard = TaikaiShardId(8);
+        let eviction_only = cache_admission_gossip_with_action(
+            shard,
+            71,
+            CacheAdmissionAction::Evict,
+            issued_ms,
+            Duration::from_secs(1),
+        );
+        assert!(
+            tracker
+                .ingest(&eviction_only, issued_ms)
+                .expect("eviction gossip verifies")
+        );
+        assert!(
+            tracker.active_shards().is_empty(),
+            "an eviction must not create a shard lease"
+        );
+
+        let admission =
+            cache_admission_gossip(shard, 72, issued_ms + 10, Duration::from_millis(200));
+        assert!(
+            tracker
+                .ingest(&admission, issued_ms + 10)
+                .expect("admission gossip verifies")
+        );
+        let long_eviction = cache_admission_gossip_with_action(
+            shard,
+            72,
+            CacheAdmissionAction::Evict,
+            issued_ms + 20,
+            Duration::from_secs(1),
+        );
+        assert!(
+            tracker
+                .ingest(&long_eviction, issued_ms + 20)
+                .expect("later eviction gossip verifies")
+        );
+        assert!(tracker.evict_expired(issued_ms + 210));
+        assert!(
+            tracker.active_shards().is_empty(),
+            "eviction TTL must not prolong the prior admission lease"
+        );
     }
     #[test]
     fn cache_admission_replay_filter_reopens_at_exact_window_expiry() {

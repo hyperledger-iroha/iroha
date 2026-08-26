@@ -41,7 +41,8 @@ fn publish_temp_recovery_catalog_baseline(kura: &Kura, catalog: &LaneCatalog) {
     .expect("publish temp-recovery configured catalog baseline");
 }
 fn assert_retained_publication_quarantine(path: &Path, expected: &[u8]) {
-    let metadata = fs::symlink_metadata(path).expect("stat retained publication quarantine");
+    let metadata = crate::secure_file_metadata::from_path(path)
+        .expect("stat retained publication quarantine");
     assert!(
         metadata.file_type().is_file()
             && !metadata.file_type().is_symlink()

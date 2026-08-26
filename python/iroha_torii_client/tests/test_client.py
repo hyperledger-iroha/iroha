@@ -3302,7 +3302,7 @@ def test_propose_contract_deploy_uses_canonical_first_release_contract() -> None
                 "proposal_id": "11" * 32,
                 "tx_instructions": [
                     {
-                        "wire_id": "iroha_data_model::isi::governance::ProposeDeployContract",
+"wire_id": "iroha.instruction.v1::governance::ProposeDeployContract",
                         "payload_hex": "00ff",
                     }
                 ],
@@ -3392,7 +3392,7 @@ def test_propose_contract_deploy_rejects_noncanonical_instruction_payload(
                 "proposal_id": "11" * 32,
                 "tx_instructions": [
                     {
-                        "wire_id": "iroha_data_model::isi::governance::ProposeDeployContract",
+                        "wire_id": "iroha.instruction.v1::governance::ProposeDeployContract",
                         "payload_hex": payload_hex,
                     }
                 ],

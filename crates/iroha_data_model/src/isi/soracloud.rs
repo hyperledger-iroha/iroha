@@ -2463,22 +2463,17 @@ mod tests {
             .expect_err("Inrou placement reconciliation must reject object fields");
     }
     #[test]
-    fn soracloud_default_registry_decodes_type_names_and_stable_ids() {
+    fn soracloud_default_registry_decodes_only_stable_ids() {
         let registry = crate::isi::registry::default();
         let rollback = RollbackSoracloudService {
             service_name: name("portal"),
             target_version: "2026.5".to_owned(),
             provenance: provenance(9),
         };
-        assert_registry_decodes(
-            &registry,
-            std::any::type_name::<RollbackSoracloudService>(),
-            rollback.clone(),
-        );
         assert_registry_decodes(&registry, "soracloud::RollbackSoracloudService", rollback);
         assert_registry_decodes(
             &registry,
-            std::any::type_name::<SetSoracloudServiceConfig>(),
+            "iroha.instruction.v1::soracloud::SetSoracloudServiceConfig",
             SetSoracloudServiceConfig {
                 service_name: name("portal"),
                 config_name: "replicas".to_owned(),
@@ -2488,13 +2483,15 @@ mod tests {
         );
         assert_registry_decodes(
             &registry,
-            std::any::type_name::<ReconcileSoracloudInrouPlacements>(),
-            ReconcileSoracloudInrouPlacements,
-        );
-        assert_registry_decodes(
-            &registry,
             "soracloud::ReconcileSoracloudInrouPlacements",
             ReconcileSoracloudInrouPlacements,
         );
+        for type_name in [
+            std::any::type_name::<RollbackSoracloudService>(),
+            std::any::type_name::<SetSoracloudServiceConfig>(),
+            std::any::type_name::<ReconcileSoracloudInrouPlacements>(),
+        ] {
+            assert!(registry.decode(type_name, &[]).is_none());
+        }
     }
 }

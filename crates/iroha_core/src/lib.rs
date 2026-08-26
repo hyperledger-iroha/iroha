@@ -139,6 +139,7 @@ pub mod query;
 /// Transaction queue and mempool logic.
 pub mod queue;
 pub(crate) mod receiver_snapshot;
+mod secure_file_metadata;
 /// Unified XOR settlement engine.
 pub mod settlement;
 /// Smart contracts and host ABI.

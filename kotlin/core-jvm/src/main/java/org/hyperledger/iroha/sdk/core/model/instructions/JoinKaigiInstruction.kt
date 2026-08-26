@@ -20,6 +20,9 @@ class JoinKaigiInstruction(
         require(nullifierIssuedAtMs == null || nullifierIssuedAtMs == 0L) {
             "nullifier issuedAtMs is off-chain only and must be zero when provided"
         }
+        require(nullifierIssuedAtMs == null || nullifierDigest != null) {
+            "nullifier issuedAtMs requires nullifier digest"
+        }
         if (proofBase64 != null) {
             KaigiInstructionUtils.requireBase64(proofBase64, "proof")
         }
@@ -80,6 +83,7 @@ class JoinKaigiInstruction(
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): JoinKaigiInstruction {
+            KaigiInstructionUtils.requireAction(arguments, "JoinKaigi")
             val callId = KaigiInstructionUtils.parseCallId(arguments, "call")
             val participant = KaigiInstructionUtils.require(arguments, "participant")
 
@@ -95,6 +99,9 @@ class JoinKaigiInstruction(
             )
             require(parsedNullifierIssuedAt == null || parsedNullifierIssuedAt == 0L) {
                 "nullifier issuedAtMs is off-chain only and must be zero when provided"
+            }
+            require(parsedNullifierIssuedAt == null || nullifier != null) {
+                "nullifier issuedAtMs requires nullifier digest"
             }
             val nullifierIssuedAt = parsedNullifierIssuedAt.takeIf { nullifier != null }
 

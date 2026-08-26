@@ -35,7 +35,7 @@ const MUTATION_RESPONSE = Object.freeze({
   signed_by: PUBLIC_KEY,
   tx_instructions: Object.freeze([
     Object.freeze({
-      wire_id: "iroha_data_model::isi::soracloud::DeploySoracloudAppInfra",
+wire_id: "iroha.instruction.v1::soracloud::DeploySoracloudAppInfra",
       payload_hex: "00",
     }),
   ]),

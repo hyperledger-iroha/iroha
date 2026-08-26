@@ -23,7 +23,7 @@ use soranet_pq::{
     MlDsaError, MlDsaKeyPair, MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair,
 };
 use std::{
-    collections::{HashMap, TryReserveError},
+    collections::{HashMap, HashSet, TryReserveError},
     fmt, fs,
     path::{Path, PathBuf},
 };
@@ -343,6 +343,9 @@ pub enum DirectoryBuildError {
     IssuerMissingMlDsa { label: String },
     #[error("duplicate issuer fingerprint {fingerprint}")]
     DuplicateIssuer { fingerprint: String },
+    /// Multiple configured bundles advertise the same relay identity.
+    #[error("duplicate relay id {relay_id} in certificate bundle {path}")]
+    DuplicateRelay { relay_id: String, path: PathBuf },
     #[error("issuer {label} contained an invalid Ed25519 public key: {source}")]
     InvalidIssuerEd25519 {
         label: String,
@@ -695,6 +698,13 @@ fn build_snapshot(
             source,
         })?;
     let mut retained_bundle_bytes = 0_usize;
+    let mut relay_ids = HashSet::new();
+    relay_ids
+        .try_reserve(config.bundles.len())
+        .map_err(|source| DirectoryBuildError::Allocation {
+            artifact: "guard directory relay identity index",
+            source,
+        })?;
     let mut directory_hash = parse_optional_hash(config.directory_hash_hex.as_deref())?;
     let mut published_at = config.published_at_unix;
     let mut valid_after = config.valid_after_unix;
@@ -721,6 +731,12 @@ fn build_snapshot(
                 source,
             }
         })?;
+        if !relay_ids.insert(bundle.certificate.relay_id) {
+            return Err(DirectoryBuildError::DuplicateRelay {
+                relay_id: hex::encode(bundle.certificate.relay_id),
+                path: absolute_path,
+            });
+        }
         let fingerprint = bundle.certificate.issuer_fingerprint;
         let issuer_index = issuer_map.get(&fingerprint).ok_or_else(|| {
             DirectoryBuildError::UnknownIssuerForCertificate {
@@ -1851,7 +1867,7 @@ mod tests {
         )
         .expect("write bundle");
         let config_path = dir.path().join("directory.json");
-        let config = DirectoryBuildConfig {
+        let mut config = DirectoryBuildConfig {
             directory_hash_hex: Some(hex::encode(bundle.certificate.directory_hash)),
             published_at_unix: Some(bundle.certificate.published_at),
             valid_after_unix: Some(bundle.certificate.valid_after),
@@ -1879,6 +1895,22 @@ mod tests {
         assert_eq!(
             bundle.metadata.issuers[0].fingerprint_hex,
             hex::encode(fingerprint)
+        );
+
+        config.bundles.push(BundleConfig {
+            path: bundle_path.clone(),
+        });
+        write_directory_config(&config_path, &config);
+        let error = build_snapshot_from_config(&config_path)
+            .expect_err("duplicate relay identities must be rejected by the producer");
+        let expected_relay_id = hex::encode(certificate.relay_id);
+        assert!(
+            matches!(
+                &error,
+                DirectoryBuildError::DuplicateRelay { relay_id, path }
+                    if relay_id == &expected_relay_id && path == &bundle_path
+            ),
+            "unexpected duplicate relay error: {error:?}"
         );
     }
     #[test]

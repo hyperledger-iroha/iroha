@@ -273,10 +273,10 @@ fn print_usage() {
         "    Scan the Taikai spool for anchor artefacts, emit a JSON summary (pending + delivered), optionally copy files into a bundle dir, and sign the report with an Ed25519 key."
     );
     eprintln!(
-        "  cargo xtask taikai-rpt-verify --envelope <path> [--gar <path>] [--cek-receipt <path>] [--bundle <path>] [--json-out <path|->]"
+        "  cargo xtask taikai-rpt-verify --envelope <path> --gar <path> --cek-receipt <path> --bundle <path> [--json-out <path|->]"
     );
     eprintln!(
-        "    Decode a replication proof token (.to or JSON) and optionally verify the referenced GAR, CEK receipt, and bundle digests. Use --json-out - to emit the structured report on stdout."
+        "    Decode a replication proof token (.to or JSON) and verify every referenced GAR, CEK receipt, and bundle digest. Use --json-out - to emit the structured report on stdout."
     );
     eprintln!(
         "  cargo xtask sorafs-burn-in-check --log <telemetry.log> [--log <telemetry.log>] [--window-days <days>] [--min-pq-ratio <ratio>] [--max-brownout-ratio <ratio>] [--max-no-provider-errors <count>] [--min-fetches <count>] [--out <path>]"

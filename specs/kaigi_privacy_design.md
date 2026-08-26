@@ -173,7 +173,6 @@ Parameters:
   circuit does not attest that this witness is the signed caller.
 - `commitment: FixedBinary<32>`
 - `nullifier: FixedBinary<32>`
-- `relay_hint: Option<KaigiRelayHop>` – optional per-participant override for the next hop.
 
 Execution steps:
 
@@ -207,7 +206,10 @@ must not be reused for that purpose.
 Extends payload with:
 
 - `usage_commitment: FixedBinary<32>` – commitment to the raw usage tuple (duration, gas, segment ID).
-- Optional ZK proof verifying the delta matches encrypted logs provided off-ledger.
+- A mandatory ZK proof in privacy mode that binds the public commitment to the
+  supplied duration, billed gas, and segment index. The V1 circuit does not
+  attest any encrypted-log payload; such a binding requires a future versioned
+  statement.
 
 Hosts can still submit transparent totals; privacy mode only makes the commitment field mandatory.
 

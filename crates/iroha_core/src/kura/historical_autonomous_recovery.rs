@@ -26,7 +26,7 @@ fn bounded_historical_autonomous_recovery_entries<T>(
     directory: &Path,
     record_limit: usize,
     aggregate_byte_limit: u64,
-    mut bind: impl FnMut(&Path) -> Result<(T, std::fs::Metadata)>,
+    mut bind: impl FnMut(&Path) -> Result<(T, SecureMetadata)>,
 ) -> Result<(Vec<(PathBuf, T)>, u64)> {
     if record_limit > HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS
         || aggregate_byte_limit > HISTORICAL_AUTONOMOUS_RECOVERY_HARD_MAX_AGGREGATE_BYTES
@@ -39,7 +39,7 @@ fn bounded_historical_autonomous_recovery_entries<T>(
             directory.to_path_buf(),
         ));
     }
-    let before = std::fs::symlink_metadata(directory)
+    let before = secure_file_metadata::from_path(directory)
         .map_err(|error| Error::IO(error, directory.to_path_buf()))?;
     if before.file_type().is_symlink() || !before.file_type().is_dir() {
         return Err(Error::IO(
@@ -104,8 +104,8 @@ fn bounded_historical_autonomous_recovery_entries<T>(
                     directory.to_path_buf(),
                 )
             })?;
-        let after_bind =
-            std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+        let after_bind = secure_file_metadata::from_path(&path)
+            .map_err(|error| Error::IO(error, path.clone()))?;
         if !Kura::sidecar_file_metadata_unchanged(&metadata, &after_bind) {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -117,7 +117,7 @@ fn bounded_historical_autonomous_recovery_entries<T>(
         }
         bounded.push((path, bound, metadata));
     }
-    let after = std::fs::symlink_metadata(directory)
+    let after = secure_file_metadata::from_path(directory)
         .map_err(|error| Error::IO(error, directory.to_path_buf()))?;
     if after.file_type().is_symlink()
         || !after.file_type().is_dir()
@@ -132,8 +132,8 @@ fn bounded_historical_autonomous_recovery_entries<T>(
         ));
     }
     for (path, _, accounted) in &bounded {
-        let current =
-            std::fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.clone()))?;
+        let current = secure_file_metadata::from_path(path)
+            .map_err(|error| Error::IO(error, path.clone()))?;
         if !Kura::sidecar_file_metadata_unchanged(accounted, &current) {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -167,7 +167,7 @@ fn accumulate_historical_autonomous_recovery_bytes(
         .filter(|total| *total <= aggregate_byte_limit)
 }
 fn historical_autonomous_recovery_read_matches_accounting(
-    accounted: &std::fs::Metadata,
+    accounted: &SecureMetadata,
     read: &StableSidecarRead,
 ) -> bool {
     u64::try_from(read.bytes.len()).ok() == Some(accounted.len())
@@ -407,7 +407,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             &self,
             path: &Path,
             directory: &Path,
-            accounted: Option<&std::fs::Metadata>,
+            accounted: Option<&SecureMetadata>,
         ) -> Result<Option<HistoricalAutonomousLaneRecoveryRecordV1>> {
             let Some(snapshot) = self.read_regular_sidecar_snapshot(
                 path,
@@ -678,7 +678,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                         remaining_records,
                         remaining_bytes,
                         |path| {
-                            let metadata = std::fs::symlink_metadata(path)
+                            let metadata = secure_file_metadata::from_path(path)
                                 .map_err(|error| Error::IO(error, path.to_path_buf()))?;
                             Ok((metadata.clone(), metadata))
                         },
@@ -1717,7 +1717,7 @@ mod historical_autonomous_recovery_bound_tests {
             record_limit,
             aggregate_byte_limit,
             |path| {
-                let metadata = std::fs::symlink_metadata(path)
+                let metadata = secure_file_metadata::from_path(path)
                     .map_err(|error| Error::IO(error, path.to_path_buf()))?;
                 Ok(((), metadata))
             },
@@ -1779,7 +1779,7 @@ mod historical_autonomous_recovery_bound_tests {
             1,
             TEST_AGGREGATE_BYTE_LIMIT,
             |path| {
-                let accounted = std::fs::symlink_metadata(path)
+                let accounted = secure_file_metadata::from_path(path)
                     .map_err(|error| Error::IO(error, path.to_path_buf()))?;
                 std::fs::write(path, [0_u8, 1_u8])
                     .map_err(|error| Error::IO(error, path.to_path_buf()))?;
@@ -1801,7 +1801,7 @@ mod historical_autonomous_recovery_bound_tests {
             2,
             TEST_AGGREGATE_BYTE_LIMIT,
             |path| {
-                let accounted = std::fs::symlink_metadata(path)
+                let accounted = secure_file_metadata::from_path(path)
                     .map_err(|error| Error::IO(error, path.to_path_buf()))?;
                 if let Some(first) = &first_accounted_path {
                     std::fs::write(first, [0_u8, 1_u8])
@@ -1821,9 +1821,10 @@ mod historical_autonomous_recovery_bound_tests {
         let temp = tempfile::tempdir().expect("temporary decode-accounting namespace");
         let path = temp.path().join(canonical_record_name(0));
         std::fs::write(&path, [0_u8]).expect("write accounted historical recovery record");
-        let accounted = std::fs::symlink_metadata(&path).expect("accounted record metadata");
-        let directory =
-            std::fs::symlink_metadata(temp.path()).expect("recovery directory metadata");
+        let accounted =
+            secure_file_metadata::from_path(&path).expect("accounted record metadata");
+        let directory = secure_file_metadata::from_path(temp.path())
+            .expect("recovery directory metadata");
         let canonical_path = std::fs::canonicalize(&path).expect("canonical recovery path");
         let length_drift = vec![0_u8, 1_u8];
         let length_mismatch = StableSidecarRead {
@@ -1849,7 +1850,8 @@ mod historical_autonomous_recovery_bound_tests {
             bytes: replacement_bytes,
             metadata: StableSidecarMetadata {
                 canonical_path,
-                file: std::fs::symlink_metadata(&path).expect("replacement record metadata"),
+                file: secure_file_metadata::from_path(&path)
+                    .expect("replacement record metadata"),
                 directory,
             },
         };

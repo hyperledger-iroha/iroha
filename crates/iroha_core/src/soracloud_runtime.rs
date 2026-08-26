@@ -1780,15 +1780,6 @@ mod tests {
         assert!(rendered.contains("request_body_len: 27"));
         assert!(rendered.contains("response_bytes_len: 28"));
     }
-    fn checked_validator_host() -> SoraRuntimeDeterministicValidatorHostV1 {
-        let validator_account_id = checked_account_id();
-        SoraRuntimeDeterministicValidatorHostV1 {
-            lane_id: LaneId::SINGLE,
-            peer_id: PeerId::from(validator_account_id.expect_single_signatory().clone())
-                .to_string(),
-            validator_account_id,
-        }
-    }
     fn sample_ordered_mailbox_result() -> SoraOrderedMailboxResultV1 {
         let service_name: Name = "mailbox_service".parse().expect("valid service name");
         let handler_name: Name = "update".parse().expect("valid handler name");

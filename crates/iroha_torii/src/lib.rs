@@ -39338,7 +39338,7 @@ const ALIAS_LIFECYCLE_PLAN_TTL_MS: u64 = 60_000;
 fn alias_lifecycle_instruction_frame(
     instruction: &iroha_data_model::isi::InstructionBox,
 ) -> Result<iroha_data_model::alias_setup::AliasFramedInstructionV1, Error> {
-    let (wire_id, framed_payload) = iroha_data_model::isi::framed_instruction_payload(instruction)
+let (wire_id, framed_payload) = iroha.instruction.v1::framed_instruction_payload(instruction)
         .ok_or_else(|| {
             Error::Query(iroha_data_model::ValidationFail::InternalError(
                 "alias lifecycle instruction is missing from the instruction registry".to_owned(),

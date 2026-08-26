@@ -14,6 +14,45 @@ fn default_args() {
             .write_kagemusha_validator_qualification_seal
             .is_none()
     );
+    #[cfg(feature = "test-network-parliament-signers")]
+    assert_eq!(
+        args.test_network_parliament_beacon_signer_mode,
+        TestNetworkParliamentBeaconSignerMode::Valid,
+    );
+}
+
+#[cfg(feature = "test-network-parliament-signers")]
+#[test]
+fn feature_only_parliament_beacon_signer_mode_is_exact_and_hidden() {
+    for (value, expected) in [
+        ("valid", TestNetworkParliamentBeaconSignerMode::Valid),
+        ("absent", TestNetworkParliamentBeaconSignerMode::Absent),
+        ("invalid", TestNetworkParliamentBeaconSignerMode::Invalid),
+    ] {
+        let args = Args::try_parse_from([
+            "test",
+            "--test-network-parliament-beacon-signer-mode",
+            value,
+        ])
+        .expect("parse exact feature-only beacon signer mode");
+        assert_eq!(args.test_network_parliament_beacon_signer_mode, expected);
+    }
+    assert!(
+        Args::try_parse_from([
+            "test",
+            "--test-network-parliament-beacon-signer-mode",
+            "faulty",
+        ])
+        .is_err(),
+        "unknown feature-only modes must fail closed",
+    );
+    let help = Args::try_parse_from(["test", "--help"])
+        .expect_err("help exits through clap")
+        .to_string();
+    assert!(
+        !help.contains("test-network-parliament-beacon-signer-mode"),
+        "the feature-only child-process argument must remain hidden",
+    );
 }
 #[test]
 fn check_config_flag_is_opt_in() {

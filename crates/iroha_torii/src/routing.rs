@@ -1478,9 +1478,9 @@ pub struct KaigiRelaySummaryDto {
     pub bandwidth_class: u8,
     /// Hex-encoded fingerprint of the HPKE public key.
     pub hpke_fingerprint_hex: String,
-    /// Latest health status, if reported.
+    /// Latest lowercase health-status label, if reported.
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub status: Option<KaigiRelayHealthStatus>,
+    pub status: Option<String>,
     /// Timestamp (ms since epoch) of the latest health report, when available.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub reported_at_ms: Option<u64>,
@@ -42769,7 +42769,10 @@ pub async fn handle_v1_kaigi_relays(
     let mut items = Vec::with_capacity(KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS);
     let total = visit_kaigi_relays_bounded(&state, |snapshot| {
         let domain_label = snapshot.domain.to_string();
-        let status = snapshot.feedback.as_ref().map(|fb| fb.status);
+        let status = snapshot
+            .feedback
+            .as_ref()
+            .map(|feedback| feedback.status.label().to_owned());
         let reported_at_ms = snapshot.feedback.as_ref().map(|fb| fb.reported_at_ms);
         let fingerprint = Hash::new(&snapshot.registration.hpke_public_key);
         items.push(KaigiRelaySummaryDto {
@@ -42836,7 +42839,10 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
     };
     let metrics = telemetry.metrics().await;
     let domain_label = snapshot.domain.to_string();
-    let status = snapshot.feedback.as_ref().map(|fb| fb.status);
+    let status = snapshot
+        .feedback
+        .as_ref()
+        .map(|feedback| feedback.status.label().to_owned());
     let reported_at_ms = snapshot.feedback.as_ref().map(|fb| fb.reported_at_ms);
     let fingerprint = Hash::new(&snapshot.registration.hpke_public_key);
     let relay_summary = KaigiRelaySummaryDto {

@@ -14,7 +14,7 @@ use iroha_data_model::{
     asset::{AssetBalancePolicy, AssetDefinition},
     isi::{
         Instruction, InstructionBox, InstructionRegistry, Register, decode_instruction_from_pair,
-        frame_instruction_payload,
+        frame_instruction_payload, framed_instruction_payload,
     },
     metadata::Metadata,
     name::Name,
@@ -1548,9 +1548,11 @@ fn wire_payloads_from_encoded(encoded: &[u8]) -> Result<Vec<WireInstructionPaylo
     for instruction in payload.instructions().explicit_instructions() {
         let type_name = Instruction::id(&**instruction);
         let wire_name = required_instruction_wire_id(&registry, type_name)?;
-        let payload = Instruction::dyn_encode(&**instruction);
-        let framed =
-            frame_instruction_payload(type_name, &payload).map_err(|err| eyre!(err.to_string()))?;
+        let (framed_wire_name, framed) = framed_instruction_payload(instruction)
+            .ok_or_else(|| eyre!("instruction type `{type_name}` cannot be framed"))?;
+        if framed_wire_name != wire_name {
+            bail!("instruction registry returned inconsistent V1 wire identifiers");
+        }
         out.push(WireInstructionPayload {
             wire_name: wire_name.to_owned(),
             payload_base64: BASE64.encode(framed),
@@ -3477,7 +3479,8 @@ mod tests {
             .into();
         let type_name = Instruction::id(&*instruction).to_owned();
         let payload = Instruction::dyn_encode(&*instruction);
-        let framed = frame_instruction_payload(&type_name, &payload).expect("frame instruction");
+        let framed = frame_instruction_payload("iroha.register", &payload)
+            .expect("frame instruction by canonical wire identifier");
         let decoded =
             decode_instruction_from_pair("iroha.register", &framed).expect("decode instruction");
         assert_eq!(Instruction::id(&*decoded), type_name);

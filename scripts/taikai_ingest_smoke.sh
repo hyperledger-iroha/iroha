@@ -22,6 +22,7 @@ validate_fixture_label() {
 
 prepare_run_dir() {
   local run_dir="$1"
+  local protected_executable="$2"
   local marker="$run_dir/.taikai_ingest_smoke_owned_v1"
   local marker_value="taikai-ingest-smoke-owned-v1"
   local name path
@@ -51,6 +52,10 @@ prepare_run_dir() {
 
   for name in "${generated[@]}"; do
     path="$run_dir/$name"
+    if [[ -e "$path" && "$path" -ef "$protected_executable" ]]; then
+      echo "error: refusing to remove generated path $path because it aliases the taikai_car executable" >&2
+      return 1
+    fi
     if [[ -d "$path" && ! -L "$path" ]]; then
       echo "error: refusing to remove unexpected directory $path" >&2
       return 1
@@ -174,6 +179,7 @@ echo "Running Taikai ingest smoke harness with $(basename "$TAIKAI_CAR_BIN")"
 echo "Fixtures: $FIXTURE_DIR"
 echo "Output:   $OUT_DIR"
 
+seen_labels=$'\n'
 for fixture in "${fixtures[@]}"; do
   label="$(python3 - <<'PY' "$fixture"
 import json, sys, pathlib
@@ -182,10 +188,17 @@ data = json.loads(path.read_text())
 label = data.get("label") or path.stem
 print(label)
 PY
-)"
+  )"
   label="$(validate_fixture_label "$label" "$fixture")"
+  case "$seen_labels" in
+    *$'\n'"$label"$'\n'*)
+      echo "error: duplicate Taikai fixture label '$label' in $fixture" >&2
+      exit 1
+      ;;
+  esac
+  seen_labels+="$label"$'\n'
   run_dir="$OUT_DIR/$label"
-  prepare_run_dir "$run_dir"
+  prepare_run_dir "$run_dir" "$TAIKAI_CAR_BIN"
   payload_path="$run_dir/payload.bin"
   args_file="$run_dir/cli_args.nul"
   stdout_path="$run_dir/bundle_stdout.txt"

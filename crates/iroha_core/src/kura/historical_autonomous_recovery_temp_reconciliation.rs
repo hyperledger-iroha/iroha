@@ -19,7 +19,7 @@ struct HistoricalAutonomousRecoveryPublicationSnapshot {
     directory: PathBuf,
     path: PathBuf,
     stable_path: PathBuf,
-    metadata: std::fs::Metadata,
+    metadata: SecureMetadata,
     record: HistoricalAutonomousLaneRecoveryRecordV1,
     links: u64,
     identity: HistoricalAutonomousRecoveryPublicationIdentity,
@@ -27,14 +27,14 @@ struct HistoricalAutonomousRecoveryPublicationSnapshot {
 }
 struct BoundHistoricalAutonomousRecoveryPublicationArtifact {
     path: PathBuf,
-    metadata: std::fs::Metadata,
+    metadata: SecureMetadata,
     file: std::fs::File,
     record: HistoricalAutonomousLaneRecoveryRecordV1,
     links: u64,
 }
 struct HistoricalAutonomousRecoveryPublicationDirectorySnapshot {
     path: PathBuf,
-    metadata: std::fs::Metadata,
+    metadata: SecureMetadata,
 }
 struct HistoricalAutonomousRecoveryPublicationInventory {
     artifacts: Vec<HistoricalAutonomousRecoveryPublicationSnapshot>,
@@ -55,7 +55,7 @@ impl Kura {
             .then_some(HistoricalAutonomousRecoveryPublicationKind::Temporary)
     }
     fn historical_autonomous_recovery_publication_link_count(
-        metadata: &std::fs::Metadata,
+        metadata: &SecureMetadata,
     ) -> Option<u64> {
         if Self::sidecar_has_link_count(metadata, 1) {
             Some(1)
@@ -66,7 +66,7 @@ impl Kura {
         }
     }
     fn historical_autonomous_recovery_publication_identity(
-        metadata: &std::fs::Metadata,
+        metadata: &SecureMetadata,
         synthetic_index: usize,
     ) -> HistoricalAutonomousRecoveryPublicationIdentity {
         #[cfg(unix)]
@@ -80,7 +80,6 @@ impl Kura {
         }
         #[cfg(windows)]
         {
-            use std::os::windows::fs::MetadataExt as _;
             match (metadata.volume_serial_number(), metadata.file_index()) {
                 (Some(volume), Some(index)) => {
                     HistoricalAutonomousRecoveryPublicationIdentity::Windows { volume, index }
@@ -96,8 +95,8 @@ impl Kura {
     }
     #[cfg(unix)]
     fn historical_autonomous_recovery_publication_metadata_unchanged(
-        left: &std::fs::Metadata,
-        right: &std::fs::Metadata,
+        left: &SecureMetadata,
+        right: &SecureMetadata,
         links: u64,
     ) -> bool {
         use std::os::unix::fs::MetadataExt as _;
@@ -112,11 +111,10 @@ impl Kura {
     }
     #[cfg(windows)]
     fn historical_autonomous_recovery_publication_metadata_unchanged(
-        left: &std::fs::Metadata,
-        right: &std::fs::Metadata,
+        left: &SecureMetadata,
+        right: &SecureMetadata,
         links: u64,
     ) -> bool {
-        use std::os::windows::fs::MetadataExt as _;
         u32::try_from(links).ok().is_some_and(|links| {
             Self::sidecar_metadata_same_object(left, right)
                 && left.number_of_links() == Some(links)
@@ -128,8 +126,8 @@ impl Kura {
     }
     #[cfg(all(not(unix), not(windows)))]
     fn historical_autonomous_recovery_publication_metadata_unchanged(
-        _left: &std::fs::Metadata,
-        _right: &std::fs::Metadata,
+        _left: &SecureMetadata,
+        _right: &SecureMetadata,
         _links: u64,
     ) -> bool {
         false
@@ -151,7 +149,7 @@ impl Kura {
                 "historical recovery publication artifact escapes its bound directory",
             ));
         }
-        let before = match std::fs::symlink_metadata(path) {
+        let before = match secure_file_metadata::from_path(path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(Error::IO(error, path.to_path_buf())),
@@ -211,8 +209,7 @@ impl Kura {
                 .open(path)
                 .map_err(|error| Error::IO(error, path.to_path_buf()))?
         };
-        let opened_before = file
-            .metadata()
+        let opened_before = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         if !opened_before.is_file()
             || !Self::historical_autonomous_recovery_publication_metadata_unchanged(
@@ -231,10 +228,9 @@ impl Kura {
             .take(u64::try_from(HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES)?.saturating_add(1))
             .read_to_end(&mut bytes)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let opened_after = file
-            .metadata()
+        let opened_after = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let after = std::fs::symlink_metadata(path)
+        let after = secure_file_metadata::from_path(path)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         if bytes.len() != usize::try_from(before.len())?
             || !Self::historical_autonomous_recovery_publication_metadata_unchanged(
@@ -455,7 +451,7 @@ impl Kura {
         inventory: &HistoricalAutonomousRecoveryPublicationInventory,
     ) -> Result<()> {
         for directory in &inventory.directories {
-            let current = std::fs::symlink_metadata(&directory.path)
+            let current = secure_file_metadata::from_path(&directory.path)
                 .map_err(|error| Error::IO(error, directory.path.clone()))?;
             if current.file_type().is_symlink()
                 || !current.file_type().is_dir()
@@ -468,7 +464,7 @@ impl Kura {
             }
         }
         for artifact in &inventory.artifacts {
-            let current = std::fs::symlink_metadata(&artifact.path)
+            let current = secure_file_metadata::from_path(&artifact.path)
                 .map_err(|error| Error::IO(error, artifact.path.clone()))?;
             if !Self::historical_autonomous_recovery_publication_metadata_unchanged(
                 &artifact.metadata,
@@ -505,7 +501,7 @@ impl Kura {
                 index_path: directory.clone(),
                 directories: vec![namespace_directory],
             };
-            let directory_before = std::fs::symlink_metadata(&directory)
+            let directory_before = secure_file_metadata::from_path(&directory)
                 .map_err(|error| Error::IO(error, directory.clone()))?;
             let mut paths = Vec::new();
             for child in std::fs::read_dir(&directory)
@@ -605,7 +601,7 @@ impl Kura {
                     ));
                 }
             }
-            let directory_after = std::fs::symlink_metadata(&directory)
+            let directory_after = secure_file_metadata::from_path(&directory)
                 .map_err(|error| Error::IO(error, directory.clone()))?;
             if !Self::sidecar_directory_metadata_unchanged(&directory_before, &directory_after)
                 || !Self::progress_mutation_namespace_unchanged(&namespace)
@@ -666,9 +662,7 @@ impl Kura {
                 "historical recovery publication removal target has no direct name",
             )
         })?;
-        let opened = artifact
-            .file
-            .metadata()
+        let opened = secure_file_metadata::from_file(&artifact.file)
             .map_err(|error| Error::IO(error, artifact.path.clone()))?;
         if !Self::historical_autonomous_recovery_publication_metadata_unchanged(
             &artifact.metadata,
@@ -704,7 +698,7 @@ impl Kura {
         }
         #[cfg(not(unix))]
         {
-            let current = std::fs::symlink_metadata(&artifact.path)
+            let current = secure_file_metadata::from_path(&artifact.path)
                 .map_err(|error| Error::IO(error, artifact.path.clone()))?;
             if current.file_type().is_symlink()
                 || !current.file_type().is_file()

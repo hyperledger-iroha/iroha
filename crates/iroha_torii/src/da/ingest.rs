@@ -447,6 +447,14 @@ pub async fn handler_post_da_ingest(
             format,
         ))
     })? {
+        ensure_taikai_anchor_ready(&app.da_ingest.manifest_store_dir, &request, &manifest)
+            .map_err(|err| {
+                ResponseError::from(build_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("failed to publish durable Taikai anchor readiness: {err}"),
+                    format,
+                ))
+            })?;
         return duplicate_da_ingest_response_from_artifacts(
             &telemetry,
             lane_epoch,
@@ -785,10 +793,14 @@ pub async fn handler_post_da_ingest(
                     "accepted Taikai signing manifest"
                 );
                 if let Some(trm_bytes) = taikai_trm_payload.take() {
-                    let routing_manifest = taikai::validate_taikai_trm(&trm_bytes, &taikai)
-                        .map_err(|(status, message): (StatusCode, String)| {
-                            ResponseError::from(build_error_response(status, &message, format))
-                        })?;
+                    let routing_manifest = taikai::validate_taikai_trm(
+                        &trm_bytes,
+                        &taikai,
+                        &ssm_outcome.alias_binding,
+                    )
+                    .map_err(|(status, message): (StatusCode, String)| {
+                        ResponseError::from(build_error_response(status, &message, format))
+                    })?;
                     let manifest_digest_hex = hex::encode(blake3_hash(&trm_bytes).as_bytes());
                     let mut lineage_guard = taikai_ingest::TrmLineageGuard::new(
                         &app.da_ingest.manifest_store_dir,
@@ -851,6 +863,16 @@ pub async fn handler_post_da_ingest(
                 let receipt = receipt.clone();
                 let sequence = request.sequence;
                 let mut replay_reservation = replay_reservation;
+                let taikai_ready =
+                    matches!(request.blob_class, BlobClass::TaikaiSegment).then(|| {
+                        (
+                            app.da_ingest.manifest_store_dir.clone(),
+                            request.lane_id,
+                            request.epoch,
+                            request.sequence,
+                            manifest.storage_ticket,
+                        )
+                    });
                 // The durable receipt and replay cursor commit only after every
                 // artifact required by this ingest has been written successfully. Moving the
                 // reservation into the queued action keeps it live if the HTTP future is
@@ -859,6 +881,23 @@ pub async fn handler_post_da_ingest(
                     let outcome = receipt_log
                         .append(lane_epoch, sequence, receipt, fingerprint)
                         .map_err(|err| err.to_string())?;
+                    if matches!(
+                        &outcome,
+                        ReceiptInsertOutcome::Stored { .. }
+                            | ReceiptInsertOutcome::Duplicate { .. }
+                    ) && let Some((spool_dir, lane_id, epoch, sequence, storage_ticket)) =
+                        taikai_ready
+                    {
+                        taikai_ingest::persist_anchor_ready(
+                            &spool_dir,
+                            lane_id,
+                            epoch,
+                            sequence,
+                            &storage_ticket,
+                            &fingerprint,
+                        )
+                        .map_err(|err| err.to_string())?;
+                    }
                     replay_reservation.resolve_receipt_outcome(&outcome);
                     Ok(DaSpoolActionOutput::ReceiptOutcome(outcome))
                 }));
@@ -1025,13 +1064,12 @@ fn handle_duplicate_da_ingest(
     lane_epoch: LaneEpoch,
     format: ResponseFormat,
 ) -> Result<Response, ResponseError> {
-    let artifacts = load_duplicate_da_artifacts(
+    let artifacts = load_duplicate_da_artifacts_and_publish_taikai_ready(
         app.da_receipt_log.as_ref(),
         &app.da_ingest.manifest_store_dir,
+        request,
+        manifest,
         lane_epoch,
-        request.sequence,
-        &manifest.storage_ticket,
-        manifest.fingerprint,
     )
     .map_err(|err| {
         ResponseError::from(build_error_response(
@@ -1047,6 +1085,45 @@ fn handle_duplicate_da_ingest(
         artifacts,
         format,
     )
+}
+fn load_duplicate_da_artifacts_and_publish_taikai_ready(
+    receipt_log: &persistence::DaReceiptLog,
+    spool_dir: &Path,
+    request: &DaIngestRequest,
+    manifest: &ManifestArtifacts,
+    lane_epoch: LaneEpoch,
+) -> eyre::Result<DuplicateDaArtifacts> {
+    let artifacts = load_duplicate_da_artifacts(
+        receipt_log,
+        spool_dir,
+        lane_epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        manifest.fingerprint,
+    )?;
+    // Publish readiness only after every durable duplicate artifact, including
+    // its receipt, has been reloaded and cross-checked successfully.
+    ensure_taikai_anchor_ready(spool_dir, request, manifest)?;
+    Ok(artifacts)
+}
+fn ensure_taikai_anchor_ready(
+    spool_dir: &Path,
+    request: &DaIngestRequest,
+    manifest: &ManifestArtifacts,
+) -> eyre::Result<()> {
+    if !matches!(request.blob_class, BlobClass::TaikaiSegment) {
+        return Ok(());
+    }
+    taikai_ingest::persist_anchor_ready(
+        spool_dir,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .wrap_err("failed to persist Taikai anchor readiness marker")?;
+    Ok(())
 }
 fn duplicate_da_ingest_response_from_artifacts(
     telemetry: &MaybeTelemetry,

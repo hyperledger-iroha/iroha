@@ -2604,6 +2604,42 @@ fn vpn_route_push_rejects_invalid_cidr() {
     }
 }
 #[test]
+fn vpn_route_push_rejects_host_bits() {
+    let mut cfg = VpnConfig {
+        enabled: true,
+        route_push: vec!["10.1.2.3/24".to_string()],
+        ..VpnConfig::default()
+    };
+    let err = cfg
+        .validate()
+        .expect_err("route prefixes with host bits must fail");
+    match err {
+        ConfigError::Vpn(message) => {
+            assert!(message.contains("host bits"), "unexpected error: {message}");
+            assert!(
+                message.contains("10.1.2.0/24"),
+                "unexpected error: {message}"
+            );
+        }
+        other => panic!("unexpected error {other:?}"),
+    }
+}
+#[test]
+fn vpn_route_push_rejects_semantic_duplicates() {
+    let mut cfg = VpnConfig {
+        enabled: true,
+        route_push: vec!["2001:0db8::/64".to_string(), "2001:db8::/64".to_string()],
+        ..VpnConfig::default()
+    };
+    let err = cfg
+        .validate()
+        .expect_err("semantically duplicate route prefixes must fail");
+    assert!(
+        matches!(&err, ConfigError::Vpn(message) if message.contains("duplicate")),
+        "unexpected error: {err:?}"
+    );
+}
+#[test]
 fn vpn_dns_override_rejects_non_ip() {
     let mut cfg = VpnConfig {
         enabled: true,
@@ -2620,6 +2656,62 @@ fn vpn_dns_override_rejects_non_ip() {
         }
         other => panic!("unexpected error {other:?}"),
     }
+}
+#[test]
+fn vpn_dns_override_rejects_non_unicast_addresses() {
+    for dns in [
+        "0.0.0.0",
+        "224.0.0.1",
+        "255.255.255.255",
+        "::",
+        "ff02::1",
+        "::ffff:0.0.0.0",
+        "::ffff:224.0.0.1",
+        "::ffff:255.255.255.255",
+    ] {
+        let mut cfg = VpnConfig {
+            enabled: true,
+            dns_overrides: vec![dns.to_string()],
+            ..VpnConfig::default()
+        };
+        let err = cfg
+            .validate()
+            .expect_err("non-unicast DNS overrides must fail");
+        assert!(
+            matches!(&err, ConfigError::Vpn(message) if message.contains("unicast")),
+            "unexpected error for {dns}: {err:?}"
+        );
+    }
+}
+#[test]
+fn vpn_dns_override_rejects_semantic_duplicates() {
+    let mut cfg = VpnConfig {
+        enabled: true,
+        dns_overrides: vec!["2001:0db8::1".to_string(), "2001:db8::1".to_string()],
+        ..VpnConfig::default()
+    };
+    let err = cfg
+        .validate()
+        .expect_err("semantically duplicate DNS overrides must fail");
+    assert!(
+        matches!(&err, ConfigError::Vpn(message) if message.contains("duplicate")),
+        "unexpected error: {err:?}"
+    );
+}
+#[test]
+fn vpn_dns_override_rejects_mapped_ipv4_duplicates() {
+    let mut cfg = VpnConfig {
+        enabled: true,
+        dns_overrides: vec!["1.1.1.1".to_string(), "::ffff:1.1.1.1".to_string()],
+        ..VpnConfig::default()
+    };
+    let err = cfg
+        .validate()
+        .expect_err("mapped and native IPv4 DNS overrides must be semantic duplicates");
+    assert!(
+        matches!(&err, ConfigError::Vpn(message) if message.contains("duplicate")),
+        "unexpected error: {err:?}"
+    );
 }
 #[test]
 fn vpn_cover_ratio_allows_zero_when_enabled() {

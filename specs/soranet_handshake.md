@@ -444,7 +444,9 @@ retain a full audit trail.
   handshake engine or performing any relay-side ML-KEM operation.
 - The relay/node loads a bounded Norito revocation store on startup using
   `pow.revocation_store_capacity`, `pow.revocation_store_ttl_secs`, and
-  `pow.revocation_store_path`. Each verified PoW or puzzle ticket is inserted
+  `pow.revocation_store_path`. The revocation TTL must be at least
+  `pow.max_future_skew_secs` so every ticket admitted by the verifier can remain
+  consumed through its expiry. Each verified PoW or puzzle ticket is inserted
   into the store; replays return `pow::Error::Replay` and the handshake fails.
 - The store is pruned on load and can be purged in-process via the
   `purge_expired_revocations` helper. Active records are never evicted to make

@@ -3426,6 +3426,34 @@ mod tests {
         }
     }
     #[test]
+    fn runtime_configuration_rejects_inconsistent_capability_selection_and_descriptor() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let unadvertised_kem = RuntimeParams {
+            kem_id: MlKemSuite::MlKem512.kem_id(),
+            ..defaults.clone()
+        };
+        let error = validate_runtime_configuration(&unadvertised_kem)
+            .expect_err("selected KEM must be advertised by both roles");
+        assert!(matches!(
+            error,
+            HarnessError::Downgrade { warnings, .. }
+                if warnings.iter().any(|warning| warning.message.contains("selected id 0x00"))
+        ));
+
+        let mismatched_descriptor = [0xA5; TRANSCRIPT_BINDING_LEN];
+        let inconsistent_descriptor = RuntimeParams {
+            descriptor_commit: &mismatched_descriptor,
+            ..defaults
+        };
+        let error = validate_runtime_configuration(&inconsistent_descriptor)
+            .expect_err("relay transcript commitment must match runtime configuration");
+        assert!(matches!(
+            error,
+            HarnessError::Validation(message)
+                if message.contains("snnet.transcript_commit does not match")
+        ));
+    }
+    #[test]
     fn build_client_hello_reports_rng_failure() {
         let params = RuntimeParams::soranet_defaults();
         let mut rng = FailingTryRng;

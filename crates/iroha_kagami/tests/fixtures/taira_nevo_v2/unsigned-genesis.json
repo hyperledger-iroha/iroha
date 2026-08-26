@@ -448,7 +448,7 @@
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest"
+"wire_id": "iroha.instruction.v1::space_directory::PublishSpaceDirectoryManifest"
                       }
                     },
                     {
@@ -460,25 +460,25 @@
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk"
+                        "wire_id": "iroha.instruction.v1::smart_contract_code::UploadSmartContractCodeChunk"
                       }
                     },
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload"
+                        "wire_id": "iroha.instruction.v1::smart_contract_code::FinalizeSmartContractCodeUpload"
                       }
                     },
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode"
+                        "wire_id": "iroha.instruction.v1::smart_contract_code::RegisterSmartContractCode"
                       }
                     },
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "iroha_data_model::isi::smart_contract_code::CommitContractDeployment"
+                        "wire_id": "iroha.instruction.v1::smart_contract_code::CommitContractDeployment"
                       }
                     },
                     {
@@ -490,7 +490,7 @@
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "iroha_data_model::isi::sorafs::RegisterCapacityDeclaration"
+                        "wire_id": "iroha.instruction.v1::sorafs::RegisterCapacityDeclaration"
                       }
                     },
                     {

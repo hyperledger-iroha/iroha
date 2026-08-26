@@ -19,6 +19,14 @@ final class KaigiInstructionUtils {
 
   private KaigiInstructionUtils() {}
 
+  static void requireAction(final Map<String, String> arguments, final String expected) {
+    final String actual = require(arguments, "action");
+    if (!expected.equals(actual)) {
+      throw new IllegalArgumentException(
+          "Instruction action must be '" + expected + "', got '" + actual + "'");
+    }
+  }
+
   static CallId parseCallId(final Map<String, String> arguments, final String prefix) {
     final String domain = require(arguments, prefixKey(prefix, DOMAIN_KEY));
     final String callName = require(arguments, prefixKey(prefix, CALL_NAME_KEY));
@@ -77,11 +85,16 @@ final class KaigiInstructionUtils {
   }
 
   static long parseUnsignedLong(final String value, final String fieldName) {
-    Objects.requireNonNull(value, fieldName);
+    if (value == null) {
+      throw new IllegalArgumentException(fieldName + " is required");
+    }
     try {
+      // long is the JVM carrier for Rust u64 fields. Values in the upper half of the
+      // unsigned range intentionally have a negative signed representation.
       final long parsed = Long.parseUnsignedLong(value);
-      if (parsed < 0) {
-        throw new IllegalArgumentException(fieldName + " must be unsigned");
+      if (!Long.toUnsignedString(parsed).equals(value)) {
+        throw new IllegalArgumentException(
+            fieldName + " must use canonical unsigned decimal syntax");
       }
       return parsed;
     } catch (final NumberFormatException ex) {
@@ -90,7 +103,7 @@ final class KaigiInstructionUtils {
   }
 
   static Long parseOptionalUnsignedLong(final String value, final String fieldName) {
-    if (isBlank(value)) {
+    if (value == null) {
       return null;
     }
     return parseUnsignedLong(value, fieldName);
@@ -100,8 +113,14 @@ final class KaigiInstructionUtils {
     Objects.requireNonNull(value, fieldName);
     try {
       final int parsed = Integer.parseUnsignedInt(value);
-      if (parsed <= 0) {
+      // int is the JVM carrier for Rust u32 fields, so only the all-zero bit pattern is
+      // invalid here. High-bit values are valid positive u32 values.
+      if (parsed == 0) {
         throw new IllegalArgumentException(fieldName + " must be greater than zero");
+      }
+      if (!Integer.toUnsignedString(parsed).equals(value)) {
+        throw new IllegalArgumentException(
+            fieldName + " must use canonical unsigned decimal syntax");
       }
       return parsed;
     } catch (final NumberFormatException ex) {
@@ -110,7 +129,7 @@ final class KaigiInstructionUtils {
   }
 
   static Integer parseOptionalPositiveInt(final String value, final String fieldName) {
-    if (isBlank(value)) {
+    if (value == null) {
       return null;
     }
     return parsePositiveInt(value, fieldName);
@@ -120,8 +139,9 @@ final class KaigiInstructionUtils {
     Objects.requireNonNull(value, fieldName);
     try {
       final int parsed = Integer.parseUnsignedInt(value);
-      if (parsed < 0) {
-        throw new IllegalArgumentException(fieldName + " must be non-negative");
+      if (!Integer.toUnsignedString(parsed).equals(value)) {
+        throw new IllegalArgumentException(
+            fieldName + " must use canonical unsigned decimal syntax");
       }
       return parsed;
     } catch (final NumberFormatException ex) {
@@ -210,6 +230,10 @@ final class KaigiInstructionUtils {
         throw new IllegalArgumentException(
             "Relay manifest hop index must be numeric: " + key, ex);
       }
+      if (!Integer.toString(index).equals(tail.substring(0, separator))) {
+        throw new IllegalArgumentException(
+            "Relay manifest hop index must be canonical: " + key);
+      }
       if (index < 0 || index >= hopArgumentCount) {
         throw new IllegalArgumentException("Relay manifest hop index is out of bounds: " + key);
       }
@@ -285,9 +309,6 @@ final class KaigiInstructionUtils {
     if (manifest.expiryMs() == null) {
       throw new IllegalArgumentException("relay manifest expiry_ms is required");
     }
-    if (manifest.expiryMs() < 0) {
-      throw new IllegalArgumentException("relay manifest expiry must be non-negative");
-    }
     if (manifest.hops().size() < 3) {
       throw new IllegalArgumentException("relay manifest must contain at least 3 hops");
     }
@@ -345,8 +366,14 @@ final class KaigiInstructionUtils {
     private final String callName;
 
     CallId(final String domainId, final String callName) {
-      this.domainId = Objects.requireNonNull(domainId, "domainId");
-      this.callName = Objects.requireNonNull(callName, "callName");
+      if (isBlank(domainId)) {
+        throw new IllegalArgumentException("Kaigi call domainId must not be blank");
+      }
+      if (isBlank(callName)) {
+        throw new IllegalArgumentException("Kaigi callName must not be blank");
+      }
+      this.domainId = domainId;
+      this.callName = callName;
     }
 
     String domainId() {
@@ -371,8 +398,11 @@ final class KaigiInstructionUtils {
       if (!"Transparent".equals(normalized) && !"ZkRosterV1".equals(normalized)) {
         throw new IllegalArgumentException("privacy mode must be Transparent or ZkRosterV1");
       }
+      if (state != null) {
+        throw new IllegalArgumentException("Kaigi privacy mode variants do not accept state");
+      }
       this.mode = normalized;
-      this.state = isBlank(state) ? null : state;
+      this.state = null;
     }
 
     String mode() {
@@ -397,8 +427,11 @@ final class KaigiInstructionUtils {
       if (!"Public".equals(normalized) && !"Authenticated".equals(normalized)) {
         throw new IllegalArgumentException("room policy must be Public or Authenticated");
       }
+      if (state != null) {
+        throw new IllegalArgumentException("Kaigi room policy variants do not accept state");
+      }
       this.policy = normalized;
-      this.state = isBlank(state) ? null : state;
+      this.state = null;
     }
 
     String policy() {

@@ -67,19 +67,6 @@
         }
       },
       {
-        "name": "protocol",
-        "label": "Ingest Protocol",
-        "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(taikai_ingest_edge_total, protocol)",
-        "refresh": 1,
-        "includeAll": true,
-        "current": {
-          "text": "All",
-          "value": ""
-        }
-      },
-      {
         "name": "lane",
         "label": "PQ Lane",
         "type": "query",
@@ -106,21 +93,6 @@
           "text": "All",
           "value": ".*"
         }
-      },
-      {
-        "name": "tier",
-        "label": "PoTR tier",
-        "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(sorafs_potr_latency_ms_bucket, tier)",
-        "refresh": 1,
-        "includeAll": true,
-        "multi": true,
-        "allValue": ".*",
-        "current": {
-          "text": "All",
-          "value": ".*"
-        }
       }
     ]
   },
@@ -136,7 +108,7 @@
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(taikai_ingest_segment_latency_ms_bucket{cluster=~\"$cluster\", stream=~\"$stream\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (cluster, stream, le) (rate(taikai_ingest_segment_latency_ms_bucket{cluster=~\"$cluster\", stream=~\"$stream\"}[5m])))",
           "legendFormat": "cluster={{cluster}} stream={{stream}}",
           "refId": "A"
         }
@@ -152,12 +124,12 @@
     {
       "type": "timeseries",
       "title": "Live-edge drift p99 (ms)",
-      "description": "Positive = ingest ahead of viewer; negative = behind.",
+      "description": "Absolute encoder-to-ingest drift magnitude; use the signed-drift panel for direction.",
       "id": 2,
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(taikai_ingest_live_edge_drift_ms_bucket{cluster=~\"$cluster\", stream=~\"$stream\"}[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (cluster, stream, le) (rate(taikai_ingest_live_edge_drift_ms_bucket{cluster=~\"$cluster\", stream=~\"$stream\"}[5m])))",
           "legendFormat": "{{stream}} p99 drift",
           "refId": "A"
         }
@@ -171,34 +143,34 @@
     },
     {
       "type": "timeseries",
-      "title": "Ingest edge outcomes (per minute)",
-      "description": "Rate of SRT/RTMP connects grouped by protocol/outcome.",
+      "title": "Signed live-edge drift (ms)",
+      "description": "Latest signed drift per stream; negative values are ahead of the live edge.",
       "id": 3,
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "sum by (protocol, outcome) (rate(taikai_ingest_edge_total{cluster=~\"$cluster\", protocol=~\"$protocol\"}[5m]))",
-          "legendFormat": "{{protocol}}/{{outcome}}",
+          "expr": "taikai_ingest_live_edge_drift_signed_ms{cluster=~\"$cluster\", stream=~\"$stream\"}",
+          "legendFormat": "{{cluster}}/{{stream}}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "1/min",
-          "min": 0
+          "unit": "ms"
         },
         "overrides": []
       }
     },
     {
       "type": "timeseries",
-      "title": "Segment errors by reason (5m rate)",
+      "title": "Segment errors by reason (per minute)",
+      "description": "Five-minute rate converted to errors per minute and grouped by stream and reason.",
       "id": 4,
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "sum by (reason) (rate(taikai_ingest_segment_errors_total{cluster=~\"$cluster\", stream=~\"$stream\"}[5m]))",
-          "legendFormat": "{{reason}}",
+          "expr": "60 * sum by (cluster, stream, reason) (rate(taikai_ingest_errors_total{cluster=~\"$cluster\", stream=~\"$stream\"}[5m]))",
+          "legendFormat": "{{cluster}}/{{stream}} {{reason}}",
           "refId": "A"
         }
       ],
@@ -218,7 +190,7 @@
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "sum(rate(taikai_viewer_rebuffer_events_total{cluster=~\"$cluster\", stream=~\"$stream\"}[5m])) / sum(rate(taikai_viewer_playback_segments_total{cluster=~\"$cluster\", stream=~\"$stream\"}[5m]))",
+          "expr": "sum(rate(taikai_viewer_rebuffer_events_total{cluster=~\"$cluster\", stream=~\"$stream\"}[5m])) / clamp_min(sum(rate(taikai_viewer_playback_segments_total{cluster=~\"$cluster\", stream=~\"$stream\"}[5m])), 1e-9)",
           "refId": "A"
         }
       ],
@@ -262,8 +234,8 @@
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(taikai_viewer_cek_fetch_duration_ms_bucket{cluster=~\"$cluster\", lane=~\"$lane\"}[5m])))",
-          "legendFormat": "{{lane}} lane",
+          "expr": "histogram_quantile(0.95, sum by (cluster, lane, le) (rate(taikai_viewer_cek_fetch_duration_ms_bucket{cluster=~\"$cluster\", lane=~\"$lane\"}[5m])))",
+          "legendFormat": "{{cluster}}/{{lane}} lane",
           "refId": "A"
         }
       ],
@@ -503,8 +475,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Alias rotations (5m)",
-      "description": "Rate of Taikai routing manifest activations grouped by alias.",
+      "title": "Alias rotations (last 5m)",
+      "description": "Count of Taikai routing manifest activations during the last five minutes, grouped by alias.",
       "id": 12,
       "datasource": "Prometheus",
       "targets": [
@@ -516,7 +488,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "1/min",
+          "unit": "short",
           "min": 0
         },
         "overrides": []

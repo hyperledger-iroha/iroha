@@ -7,17 +7,18 @@ use iroha_data_model::taikai::{
 use norito::{derive::JsonSerialize, json};
 use sorafs_car::taikai::validate_distinct_artifact_paths;
 use std::{
-    fs,
-    io::Read,
+    fs::{self, OpenOptions},
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 const TAIKAI_BUNDLE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.taikai.bundle.v1";
+const MAX_TAIKAI_POLICY_DOCUMENT_BYTES: u64 = 1024 * 1024;
 #[derive(Debug)]
 pub struct RptVerifyOptions {
     pub envelope_path: PathBuf,
-    pub gar_path: Option<PathBuf>,
-    pub cek_receipt_path: Option<PathBuf>,
-    pub bundle_path: Option<PathBuf>,
+    pub gar_path: PathBuf,
+    pub cek_receipt_path: PathBuf,
+    pub bundle_path: PathBuf,
     pub output: Option<JsonTarget>,
 }
 #[derive(Debug, JsonSerialize)]
@@ -52,47 +53,33 @@ pub fn run_rpt_verify(options: RptVerifyOptions) -> Result<()> {
             envelope_path.display()
         )
     })?;
-    let gar_verified = if let Some(path) = options.gar_path {
-        let digest = compute_file_digest(&path)
-            .wrap_err_with(|| format!("failed to hash GAR `{}`", path.display()))?;
-        ensure!(
-            digest == rpt.gar_digest,
-            "GAR digest mismatch for `{}` (expected {}, got {})",
-            path.display(),
-            to_hex(&rpt.gar_digest),
-            to_hex(&digest)
-        );
-        Some(path)
-    } else {
-        None
-    };
-    let cek_verified = if let Some(path) = options.cek_receipt_path {
-        let digest = validate_cek_receipt_binding(&path, &rpt.event_id, &rpt.stream_id)?;
-        ensure!(
-            digest == rpt.cek_receipt_digest,
-            "CEK receipt digest mismatch for `{}` (expected {}, got {})",
-            path.display(),
-            to_hex(&rpt.cek_receipt_digest),
-            to_hex(&digest)
-        );
-        Some(path)
-    } else {
-        None
-    };
-    let bundle_verified = if let Some(path) = options.bundle_path {
-        let digest = compute_bundle_digest(&path)
-            .wrap_err_with(|| format!("failed to hash bundle `{}`", path.display()))?;
-        ensure!(
-            digest == rpt.distribution_bundle_digest,
-            "bundle digest mismatch for `{}` (expected {}, got {})",
-            path.display(),
-            to_hex(&rpt.distribution_bundle_digest),
-            to_hex(&digest)
-        );
-        Some(path)
-    } else {
-        None
-    };
+    let gar_digest = compute_file_digest(&options.gar_path)
+        .wrap_err_with(|| format!("failed to hash GAR `{}`", options.gar_path.display()))?;
+    ensure!(
+        gar_digest == rpt.gar_digest,
+        "GAR digest mismatch for `{}` (expected {}, got {})",
+        options.gar_path.display(),
+        to_hex(&rpt.gar_digest),
+        to_hex(&gar_digest)
+    );
+    let cek_digest =
+        validate_cek_receipt_binding(&options.cek_receipt_path, &rpt.event_id, &rpt.stream_id)?;
+    ensure!(
+        cek_digest == rpt.cek_receipt_digest,
+        "CEK receipt digest mismatch for `{}` (expected {}, got {})",
+        options.cek_receipt_path.display(),
+        to_hex(&rpt.cek_receipt_digest),
+        to_hex(&cek_digest)
+    );
+    let bundle_digest = compute_bundle_digest(&options.bundle_path)
+        .wrap_err_with(|| format!("failed to hash bundle `{}`", options.bundle_path.display()))?;
+    ensure!(
+        bundle_digest == rpt.distribution_bundle_digest,
+        "bundle digest mismatch for `{}` (expected {}, got {})",
+        options.bundle_path.display(),
+        to_hex(&rpt.distribution_bundle_digest),
+        to_hex(&bundle_digest)
+    );
     let report = RptVerificationReport {
         envelope_path: envelope_path.display().to_string(),
         schema_version: rpt.schema_version,
@@ -101,17 +88,15 @@ pub fn run_rpt_verify(options: RptVerifyOptions) -> Result<()> {
         rendition_id: rpt.rendition_id.as_name().to_string(),
         gar: DigestCheck {
             expected: to_hex(&rpt.gar_digest),
-            verified_from: gar_verified.as_ref().map(|path| path.display().to_string()),
+            verified_from: Some(options.gar_path.display().to_string()),
         },
         cek_receipt: DigestCheck {
             expected: to_hex(&rpt.cek_receipt_digest),
-            verified_from: cek_verified.as_ref().map(|path| path.display().to_string()),
+            verified_from: Some(options.cek_receipt_path.display().to_string()),
         },
         distribution_bundle: DigestCheck {
             expected: to_hex(&rpt.distribution_bundle_digest),
-            verified_from: bundle_verified
-                .as_ref()
-                .map(|path| path.display().to_string()),
+            verified_from: Some(options.bundle_path.display().to_string()),
         },
         policy_labels: rpt.policy_labels.clone(),
         valid_from_unix: rpt.valid_from_unix,
@@ -120,7 +105,7 @@ pub fn run_rpt_verify(options: RptVerifyOptions) -> Result<()> {
     };
     if let Some(target) = options.output {
         let value = json::to_value(&report)?;
-        write_json_output(&value, target).map_err(|err| eyre!(err.to_string()))?;
+        write_report_output(&value, target)?;
     } else {
         print_report(&report);
     }
@@ -131,20 +116,12 @@ fn validate_report_output_path(options: &RptVerifyOptions) -> Result<()> {
         return Ok(());
     };
     validate_direct_report_output_path(output)?;
-    let inputs = std::iter::once(("RPT envelope", options.envelope_path.as_path()))
-        .chain(options.gar_path.as_deref().map(|path| ("GAR input", path)))
-        .chain(
-            options
-                .cek_receipt_path
-                .as_deref()
-                .map(|path| ("CEK receipt input", path)),
-        )
-        .chain(
-            options
-                .bundle_path
-                .as_deref()
-                .map(|path| ("distribution bundle input", path)),
-        );
+    let inputs = [
+        ("RPT envelope", options.envelope_path.as_path()),
+        ("GAR input", options.gar_path.as_path()),
+        ("CEK receipt input", options.cek_receipt_path.as_path()),
+        ("distribution bundle input", options.bundle_path.as_path()),
+    ];
     for (input_label, input) in inputs {
         validate_distinct_artifact_paths(&[
             ("RPT verification report output", output.as_path()),
@@ -207,8 +184,255 @@ fn validate_direct_report_output_path(path: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+fn write_report_output(value: &json::Value, target: JsonTarget) -> Result<()> {
+    match target {
+        JsonTarget::Stdout => {
+            write_json_output(value, JsonTarget::Stdout).map_err(|err| eyre!(err.to_string()))
+        }
+        JsonTarget::File(path) => {
+            let mut rendered = json::to_string_pretty(value)
+                .map_err(|err| eyre!("failed to render RPT verification report: {err}"))?;
+            rendered.push('\n');
+            publish_report_file_with_hook(&path, rendered.as_bytes(), || Ok(()))
+        }
+    }
+}
+
+fn publish_report_file_with_hook<F>(path: &Path, bytes: &[u8], before_publish: F) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    let parent = report_output_parent(path);
+    fs::create_dir_all(parent).wrap_err_with(|| {
+        format!(
+            "failed to create RPT verification report parent `{}`",
+            parent.display()
+        )
+    })?;
+    validate_direct_report_output_path(path)?;
+
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".taikai-rpt-report-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        builder.permissions(fs::Permissions::from_mode(0o666));
+    }
+    let mut staged = builder.tempfile_in(parent).wrap_err_with(|| {
+        format!(
+            "failed to create staging file for RPT verification report `{}`",
+            path.display()
+        )
+    })?;
+    staged.write_all(bytes).wrap_err_with(|| {
+        format!(
+            "failed to stage RPT verification report `{}`",
+            path.display()
+        )
+    })?;
+    before_publish()?;
+    validate_direct_report_output_path(path)?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            fs::set_permissions(staged.path(), metadata.permissions()).wrap_err_with(|| {
+                format!(
+                    "failed to preserve permissions for RPT verification report `{}`",
+                    path.display()
+                )
+            })?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(eyre!(
+                "failed to inspect RPT verification report `{}` before publication: {error}",
+                path.display()
+            ));
+        }
+    }
+    staged.as_file_mut().sync_all().wrap_err_with(|| {
+        format!(
+            "failed to sync staged RPT verification report `{}`",
+            path.display()
+        )
+    })?;
+    staged.persist(path).map_err(|error| {
+        eyre!(
+            "failed to atomically publish RPT verification report `{}`: {}",
+            path.display(),
+            error.error
+        )
+    })?;
+    sync_report_directory_chain(parent)?;
+    Ok(())
+}
+
+fn report_output_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+#[cfg(unix)]
+fn sync_report_directory_chain(parent: &Path) -> Result<()> {
+    let canonical_parent = fs::canonicalize(parent).wrap_err_with(|| {
+        format!(
+            "failed to resolve RPT verification report parent `{}` for directory sync",
+            parent.display()
+        )
+    })?;
+    for directory in canonical_parent.ancestors() {
+        fs::File::open(directory)
+            .and_then(|file| file.sync_all())
+            .wrap_err_with(|| {
+                format!(
+                    "failed to sync RPT verification report directory `{}`",
+                    directory.display()
+                )
+            })?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_report_directory_chain(_parent: &Path) -> Result<()> {
+    Ok(())
+}
+
+fn open_regular_input(path: &Path, label: &str) -> Result<fs::File> {
+    let path_metadata = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("failed to inspect {label} `{}`", path.display()))?;
+    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
+        return Err(eyre!(
+            "{label} `{}` must be a regular file and must not be a symlink",
+            path.display()
+        ));
+    }
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    set_input_no_follow(&mut options);
+    let file = options
+        .open(path)
+        .wrap_err_with(|| format!("failed to open {label} `{}`", path.display()))?;
+    let opened_metadata = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect opened {label} `{}`", path.display()))?;
+    if !opened_metadata.is_file() {
+        return Err(eyre!(
+            "{label} `{}` changed to a non-regular file while opening it",
+            path.display()
+        ));
+    }
+    ensure_same_file(&path_metadata, &opened_metadata, path, label)?;
+    Ok(file)
+}
+
+fn read_policy_document(file: &mut fs::File, path: &Path, label: &str) -> Result<Vec<u8>> {
+    let advertised_len = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect opened {label} `{}`", path.display()))?
+        .len();
+    if advertised_len > MAX_TAIKAI_POLICY_DOCUMENT_BYTES {
+        return Err(eyre!(
+            "{label} `{}` exceeds the {}-byte policy document limit",
+            path.display(),
+            MAX_TAIKAI_POLICY_DOCUMENT_BYTES
+        ));
+    }
+    let capacity = usize::try_from(advertised_len).expect("bounded document length fits usize");
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take(MAX_TAIKAI_POLICY_DOCUMENT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .wrap_err_with(|| format!("failed to read {label} `{}`", path.display()))?;
+    if u64::try_from(bytes.len()).expect("bounded document length fits u64")
+        > MAX_TAIKAI_POLICY_DOCUMENT_BYTES
+    {
+        return Err(eyre!(
+            "{label} `{}` grew beyond the {}-byte policy document limit while reading",
+            path.display(),
+            MAX_TAIKAI_POLICY_DOCUMENT_BYTES
+        ));
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn ensure_same_file(
+    expected: &fs::Metadata,
+    opened: &fs::Metadata,
+    path: &Path,
+    label: &str,
+) -> Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    ensure!(
+        expected.dev() == opened.dev() && expected.ino() == opened.ino(),
+        "{label} `{}` changed while it was being opened",
+        path.display()
+    );
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_same_file(
+    _expected: &fs::Metadata,
+    _opened: &fs::Metadata,
+    _path: &Path,
+    _label: &str,
+) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_input_no_follow(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    options.custom_flags(input_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_input_no_follow(_options: &mut OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const fn input_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+const fn input_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+const fn input_no_follow_flag() -> i32 {
+    0
+}
+
 fn load_rpt(path: &Path) -> Result<ReplicationProofTokenV1> {
-    let bytes = fs::read(path).wrap_err_with(|| format!("failed to read `{}`", path.display()))?;
+    let mut file = open_regular_input(path, "RPT envelope")?;
+    let bytes = read_policy_document(&mut file, path, "RPT envelope")?;
     if let Ok(rpt) = norito::decode_from_bytes::<ReplicationProofTokenV1>(&bytes) {
         return Ok(rpt);
     }
@@ -225,16 +449,8 @@ fn validate_cek_receipt_binding(
     event_id: &TaikaiEventId,
     stream_id: &TaikaiStreamId,
 ) -> Result<[u8; 32]> {
-    let metadata = fs::symlink_metadata(path)
-        .wrap_err_with(|| format!("failed to stat CEK receipt `{}`", path.display()))?;
-    if !metadata.is_file() {
-        return Err(eyre!(
-            "CEK receipt `{}` is not a regular file",
-            path.display()
-        ));
-    }
-    let bytes = fs::read(path)
-        .wrap_err_with(|| format!("failed to read CEK receipt `{}`", path.display()))?;
+    let mut file = open_regular_input(path, "CEK receipt")?;
+    let bytes = read_policy_document(&mut file, path, "CEK receipt")?;
     let receipt = norito::decode_from_bytes::<CekRotationReceiptV1>(&bytes).map_err(|err| {
         eyre!(
             "failed to decode CEK receipt `{}` as canonical framed Norito: {err}",
@@ -256,13 +472,9 @@ fn validate_cek_receipt_binding(
     Ok(*blake3::hash(&bytes).as_bytes())
 }
 fn compute_file_digest(path: &Path) -> Result<[u8; 32]> {
-    let metadata = fs::symlink_metadata(path)
-        .wrap_err_with(|| format!("failed to stat `{}`", path.display()))?;
-    if !metadata.is_file() {
-        return Err(eyre!("`{}` is not a regular file", path.display()));
-    }
+    let mut file = open_regular_input(path, "policy input")?;
     let mut hasher = Hasher::new();
-    hash_file_contents(path, &mut hasher)?;
+    hash_file_contents(&mut file, path, &mut hasher)?;
     Ok(*hasher.finalize().as_bytes())
 }
 fn compute_bundle_digest(path: &Path) -> Result<[u8; 32]> {
@@ -301,8 +513,7 @@ fn hash_path_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<
 }
 fn hash_file_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
     update_path_marker(relative, b'F', hasher)?;
-    let mut file =
-        fs::File::open(path).wrap_err_with(|| format!("failed to open `{}`", path.display()))?;
+    let mut file = open_regular_input(path, "bundle file")?;
     let expected_len = file
         .metadata()
         .wrap_err_with(|| format!("failed to inspect `{}`", path.display()))?
@@ -334,9 +545,7 @@ fn hash_file_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<
     );
     Ok(())
 }
-fn hash_file_contents(path: &Path, hasher: &mut Hasher) -> Result<()> {
-    let mut file =
-        fs::File::open(path).wrap_err_with(|| format!("failed to open `{}`", path.display()))?;
+fn hash_file_contents(file: &mut fs::File, path: &Path, hasher: &mut Hasher) -> Result<()> {
     let mut buffer = [0u8; 8192];
     loop {
         let read = file
@@ -505,14 +714,38 @@ mod tests {
         let rpt = build_rpt(gar_digest, cek_digest, bundle_digest);
         let envelope_path = dir.path().join("attestation.to");
         fs::write(&envelope_path, norito::to_bytes(&rpt).unwrap()).unwrap();
+        let report_path = dir.path().join("verification.json");
+        fs::write(&report_path, b"old report").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&report_path, fs::Permissions::from_mode(0o640)).unwrap();
+        }
         run_rpt_verify(RptVerifyOptions {
             envelope_path,
-            gar_path: Some(gar_path),
-            cek_receipt_path: Some(cek_path),
-            bundle_path: Some(bundle_dir),
-            output: None,
+            gar_path,
+            cek_receipt_path: cek_path,
+            bundle_path: bundle_dir.clone(),
+            output: Some(JsonTarget::File(report_path.clone())),
         })
         .expect("verification should pass");
+        let report: json::Value =
+            json::from_slice(&fs::read(&report_path).unwrap()).expect("report JSON");
+        assert_eq!(
+            report
+                .get("distribution_bundle")
+                .and_then(|value| value.get("verified_from"))
+                .and_then(json::Value::as_str),
+            Some(bundle_dir.to_str().expect("UTF-8 fixture path"))
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                fs::metadata(&report_path).unwrap().permissions().mode() & 0o777,
+                0o640
+            );
+        }
     }
     #[test]
     fn rpt_verify_rejects_mismatch() {
@@ -532,9 +765,9 @@ mod tests {
         fs::write(&gar_path, b"{\"gar\":\"drift\"}").unwrap();
         let err = run_rpt_verify(RptVerifyOptions {
             envelope_path,
-            gar_path: Some(gar_path.clone()),
-            cek_receipt_path: Some(cek_path),
-            bundle_path: Some(bundle_path),
+            gar_path: gar_path.clone(),
+            cek_receipt_path: cek_path,
+            bundle_path,
             output: None,
         })
         .expect_err("mismatched digest must fail");
@@ -592,16 +825,22 @@ mod tests {
         let dir = tempdir().unwrap();
         let cek_path = dir.path().join("cek_receipt.to");
         write_cek_receipt(&cek_path, "other-event", "stage-a");
+        let gar_path = dir.path().join("gar.json");
+        fs::write(&gar_path, b"gar").unwrap();
+        let bundle_path = dir.path().join("bundle.bin");
+        fs::write(&bundle_path, b"bundle").unwrap();
+        let gar_digest = compute_file_digest(&gar_path).unwrap();
         let cek_digest = compute_file_digest(&cek_path).unwrap();
-        let rpt = build_rpt([0x11; 32], cek_digest, [0x33; 32]);
+        let bundle_digest = compute_bundle_digest(&bundle_path).unwrap();
+        let rpt = build_rpt(gar_digest, cek_digest, bundle_digest);
         let envelope_path = dir.path().join("attestation.to");
         fs::write(&envelope_path, norito::to_bytes(&rpt).unwrap()).unwrap();
 
         let err = run_rpt_verify(RptVerifyOptions {
             envelope_path,
-            gar_path: None,
-            cek_receipt_path: Some(cek_path),
-            bundle_path: None,
+            gar_path,
+            cek_receipt_path: cek_path,
+            bundle_path,
             output: None,
         })
         .expect_err("cross-event CEK receipt must fail");
@@ -613,8 +852,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let gar_path = dir.path().join("gar.json");
         fs::write(&gar_path, b"gar-json").unwrap();
-        let cek_path = dir.path().join("cek.json");
-        fs::write(&cek_path, b"cek-json").unwrap();
+        let cek_path = dir.path().join("cek.to");
+        write_cek_receipt(&cek_path, "global-keynote", "stage-a");
         let bundle_path = dir.path().join("bundle.bin");
         fs::write(&bundle_path, b"bytes").unwrap();
         let gar_digest = compute_file_digest(&gar_path).unwrap();
@@ -626,9 +865,9 @@ mod tests {
         fs::write(&envelope_path, json_text).unwrap();
         run_rpt_verify(RptVerifyOptions {
             envelope_path,
-            gar_path: None,
-            cek_receipt_path: None,
-            bundle_path: None,
+            gar_path,
+            cek_receipt_path: cek_path,
+            bundle_path,
             output: None,
         })
         .expect("json verification should pass");
@@ -644,9 +883,9 @@ mod tests {
 
         let err = run_rpt_verify(RptVerifyOptions {
             envelope_path,
-            gar_path: None,
-            cek_receipt_path: None,
-            bundle_path: None,
+            gar_path: dir.path().join("unused-gar"),
+            cek_receipt_path: dir.path().join("unused-cek"),
+            bundle_path: dir.path().join("unused-bundle"),
             output: None,
         })
         .expect_err("empty validity windows must fail");
@@ -659,12 +898,15 @@ mod tests {
         let dir = tempdir().unwrap();
         let envelope_path = dir.path().join("attestation.to");
         fs::write(&envelope_path, b"preserve-envelope").unwrap();
+        let gar_path = dir.path().join("gar.json");
+        let cek_path = dir.path().join("cek.to");
+        let bundle_input = dir.path().join("bundle-input");
 
         let err = run_rpt_verify(RptVerifyOptions {
             envelope_path: envelope_path.clone(),
-            gar_path: None,
-            cek_receipt_path: None,
-            bundle_path: None,
+            gar_path: gar_path.clone(),
+            cek_receipt_path: cek_path.clone(),
+            bundle_path: bundle_input,
             output: Some(JsonTarget::File(envelope_path.clone())),
         })
         .expect_err("report must not overwrite its RPT envelope");
@@ -676,9 +918,9 @@ mod tests {
         let nested_output = bundle.join("verification.json");
         let err = run_rpt_verify(RptVerifyOptions {
             envelope_path,
-            gar_path: None,
-            cek_receipt_path: None,
-            bundle_path: Some(bundle),
+            gar_path,
+            cek_receipt_path: cek_path,
+            bundle_path: bundle,
             output: Some(JsonTarget::File(nested_output.clone())),
         })
         .expect_err("report must not be written inside an attested bundle");
@@ -694,6 +936,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let envelope_path = dir.path().join("attestation.to");
         fs::write(&envelope_path, b"preserve-envelope").unwrap();
+        let gar_path = dir.path().join("gar.json");
+        let cek_path = dir.path().join("cek.to");
         let bundle = dir.path().join("bundle");
         let bundle_link = dir.path().join("bundle-link");
         fs::create_dir(&bundle).unwrap();
@@ -702,9 +946,9 @@ mod tests {
 
         let err = run_rpt_verify(RptVerifyOptions {
             envelope_path,
-            gar_path: None,
-            cek_receipt_path: None,
-            bundle_path: Some(bundle),
+            gar_path,
+            cek_receipt_path: cek_path,
+            bundle_path: bundle,
             output: Some(JsonTarget::File(output.clone())),
         })
         .expect_err("symlinked report parent must fail before reading the envelope");
@@ -712,5 +956,79 @@ mod tests {
         assert!(err.to_string().contains("parent"));
         assert!(err.to_string().contains("must not be a symlink"));
         assert!(!output.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rpt_verify_rejects_symlinked_envelope() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let gar_path = dir.path().join("gar.json");
+        fs::write(&gar_path, b"gar").unwrap();
+        let cek_path = dir.path().join("cek.to");
+        write_cek_receipt(&cek_path, "global-keynote", "stage-a");
+        let bundle_path = dir.path().join("bundle.bin");
+        fs::write(&bundle_path, b"bundle").unwrap();
+        let rpt = build_rpt(
+            compute_file_digest(&gar_path).unwrap(),
+            compute_file_digest(&cek_path).unwrap(),
+            compute_bundle_digest(&bundle_path).unwrap(),
+        );
+        let envelope_target = dir.path().join("attestation-target.to");
+        fs::write(&envelope_target, norito::to_bytes(&rpt).unwrap()).unwrap();
+        let envelope_link = dir.path().join("attestation.to");
+        symlink(&envelope_target, &envelope_link).unwrap();
+
+        let error = run_rpt_verify(RptVerifyOptions {
+            envelope_path: envelope_link,
+            gar_path,
+            cek_receipt_path: cek_path,
+            bundle_path,
+            output: None,
+        })
+        .expect_err("RPT envelope symlinks must fail closed");
+
+        assert!(error.to_string().contains("RPT envelope"));
+        assert!(error.to_string().contains("must not be a symlink"));
+    }
+
+    #[test]
+    fn rpt_loader_rejects_oversized_policy_document() {
+        let dir = tempdir().unwrap();
+        let envelope_path = dir.path().join("oversized.to");
+        fs::File::create(&envelope_path)
+            .unwrap()
+            .set_len(MAX_TAIKAI_POLICY_DOCUMENT_BYTES + 1)
+            .unwrap();
+
+        let error = load_rpt(&envelope_path).expect_err("oversized RPT must fail before decoding");
+
+        assert!(error.to_string().contains("policy document limit"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn report_writer_rechecks_late_symlink_without_touching_victim() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let output = dir.path().join("report.json");
+        let victim = dir.path().join("victim.json");
+        fs::write(&victim, b"preserve-victim").unwrap();
+
+        let error = publish_report_file_with_hook(&output, b"{\"verified\":true}\n", || {
+            symlink(&victim, &output).wrap_err("create late report symlink")?;
+            Ok(())
+        })
+        .expect_err("late output symlink must fail before publication");
+
+        assert!(error.to_string().contains("must not be a symlink"));
+        assert_eq!(fs::read(&victim).unwrap(), b"preserve-victim");
+        assert_eq!(
+            fs::read_dir(dir.path()).unwrap().count(),
+            2,
+            "failed publication must clean its staging file"
+        );
     }
 }

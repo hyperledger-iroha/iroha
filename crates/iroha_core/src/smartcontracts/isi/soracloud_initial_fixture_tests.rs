@@ -497,57 +497,6 @@ fn soracloud_active_validator_authority_rejects_future_created_autoscale_lane_re
     );
     Ok(())
 }
-fn configure_staking_assets_for_validator_slash_test(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    validator: &AccountId,
-    escrow_balance: u64,
-) -> Result<AssetDefinitionId, eyre::Report> {
-    Register::account(Account::new(validator.clone()))
-        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
-    let asset_definition_id = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("wonderland", "universal").expect("domain"),
-        "stake".parse().expect("stake"),
-    );
-    Register::asset_definition(AssetDefinition::numeric(
-        asset_definition_id.clone(),
-        "stake".to_owned(),
-        iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
-    ))
-    .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
-    Mint::asset_quantity(
-        escrow_balance,
-        AssetId::new(asset_definition_id.clone(), ALICE_ID.clone()),
-    )
-    .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
-    state_transaction.nexus.staking.stake_asset_id = asset_definition_id.to_string();
-    state_transaction.nexus.staking.stake_escrow_account_id = ALICE_ID.to_string();
-    state_transaction.nexus.staking.slash_sink_account_id = ALICE_ID.to_string();
-    Ok(asset_definition_id)
-}
-fn sample_hf_shared_lease_pool_record(
-    pool_id: Hash,
-    source_id: Hash,
-    window_started_at_ms: u64,
-) -> SoraHfSharedLeasePoolV1 {
-    SoraHfSharedLeasePoolV1 {
-        schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
-        pool_id,
-        source_id,
-        storage_class: StorageClass::Warm,
-        lease_asset_definition_id: AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").expect("domain"),
-            "xor".parse().expect("asset"),
-        ),
-        base_fee: "0.00001".parse().expect("base fee"),
-        lease_term_ms: 60_000,
-        window_started_at_ms,
-        window_expires_at_ms: window_started_at_ms + 60_000,
-        active_member_count: 1,
-        status: SoraHfSharedLeaseStatusV1::Active,
-        queued_next_window: None,
-    }
-}
 fn sample_bundle(
     service_name: &str,
     service_version: &str,

@@ -36,17 +36,16 @@ class CreateKaigiInstruction internal constructor(
     init {
         require(host.isNotBlank()) { "host must not be blank" }
         if (maxParticipants != null) {
-            require(maxParticipants > 0) { "maxParticipants must be greater than zero when provided" }
-        }
-        require(gasRatePerMinute >= 0) { "gasRatePerMinute must be non-negative" }
-        if (scheduledStartMs != null) {
-            require(scheduledStartMs >= 0) { "scheduledStartMs must be non-negative" }
+            require(maxParticipants != 0) { "maxParticipants must be greater than zero when provided" }
         }
         require(commitmentAliasTag == null) {
             "commitment aliasTag is off-chain only and must be omitted"
         }
         require(nullifierIssuedAtMs == null || nullifierIssuedAtMs == 0L) {
             "nullifier issuedAtMs is off-chain only and must be zero when provided"
+        }
+        require(nullifierIssuedAtMs == null || nullifierDigest != null) {
+            "nullifier issuedAtMs requires nullifier digest"
         }
         if (proofBase64 != null) {
             KaigiInstructionUtils.requireBase64(proofBase64, "proof")
@@ -110,6 +109,7 @@ class CreateKaigiInstruction internal constructor(
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): CreateKaigiInstruction {
+            KaigiInstructionUtils.requireAction(arguments, CREATE_KAIGI_ACTION)
             val callId = KaigiInstructionUtils.parseCallId(arguments, "call")
             val host = KaigiInstructionUtils.require(arguments, "host")
             val title = arguments["title"]
@@ -138,6 +138,9 @@ class CreateKaigiInstruction internal constructor(
             )
             require(parsedNullifierIssuedAt == null || parsedNullifierIssuedAt == 0L) {
                 "nullifier issuedAtMs is off-chain only and must be zero when provided"
+            }
+            require(parsedNullifierIssuedAt == null || nullifier != null) {
+                "nullifier issuedAtMs requires nullifier digest"
             }
             val nullifierIssuedAt = parsedNullifierIssuedAt.takeIf { nullifier != null }
 
@@ -236,7 +239,9 @@ class CreateKaigiInstruction internal constructor(
             args["host"] = host
             if (title != null) args["title"] = title
             if (description != null) args["description"] = description
-            if (maxParticipants != null) args["max_participants"] = maxParticipants.toString()
+            if (maxParticipants != null) {
+                args["max_participants"] = Integer.toUnsignedString(maxParticipants)
+            }
             args["gas_rate_per_minute"] = java.lang.Long.toUnsignedString(gasRatePerMinute)
             KaigiInstructionUtils.appendMetadata(metadata, args, "metadata")
             if (scheduledStartMs != null) {
