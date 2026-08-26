@@ -1936,8 +1936,9 @@ def release_closure_source_errors(
    rp(suite, WORKFLOW, e, rf"(?m)^\s+{re.escape(path)}\s*$",
     f"active Kagemusha release Python test {path}")
  for command in KAGEMUSHA_RELEASE_RUST_TEST_FILTERS:
+  workflow_command = f'"{command}"' if ":: " in command else command
   rp(workflow, WORKFLOW, e,
-   rf"(?m)^\s*-\s+run:\s+{re.escape(command)}\s*$",
+   rf"(?m)^\s*-\s+run:\s+{re.escape(workflow_command)}\s*$",
    f"active Kagemusha release Rust filter {command}")
  return e
 

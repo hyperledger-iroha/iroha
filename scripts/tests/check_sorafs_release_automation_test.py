@@ -689,6 +689,9 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     workflow = (
         REPO_ROOT / ".github" / "workflows" / "pr_csharp.yml"
     ).read_text(encoding="utf-8")
+    build_job_start = workflow.index("  build-test-pack:\n")
+    build_steps_start = workflow.index("    steps:\n", build_job_start)
+    build_job_header = workflow[build_job_start:build_steps_start]
     validator_tests = (
         REPO_ROOT
         / "csharp"
@@ -698,10 +701,20 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     ).read_text(encoding="utf-8")
 
     assert 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"' in workflow
+    assert "Bind authenticated target-native package paths" in workflow
     assert (
-        "LD_LIBRARY_PATH: ${{ runner.temp }}/csharp-native-package/"
-        "runtimes/linux-x64/native"
+        "printf 'LD_LIBRARY_PATH=%s\\n' "
+        '"$RUNNER_TEMP/csharp-native-package/runtimes/linux-x64/native"'
     ) in workflow
+    assert (
+        "printf 'IrohaNativePackageRoot=%s\\n' "
+        '"$RUNNER_TEMP/csharp-native-package"'
+    ) in workflow
+    assert (
+        "printf 'CSHARP_SDK_PACKAGE_CONSUMER_NATIVE_PACKAGE_ROOT=%s\\n' "
+        '"$RUNNER_TEMP/csharp-native-package"'
+    ) in workflow
+    assert "${{ runner.temp }}" not in build_job_header
     assert (
         'cargo build --locked --release -p connect_norito_bridge --target "$target"'
         in workflow
