@@ -20,7 +20,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 
 /**
- * Native bridge ABI 22 for Kagemusha ABI-21/V4 artifact streaming and capabilities.
+ * Native bridge ABI 23 for Kagemusha ABI-21/V4 artifact streaming and capabilities.
  *
  * This is the sole first-release offline-cash surface. It authenticates the opaque eight-file proof
  * artifact set and validates exact typed request/payment/acknowledgement and proof-bound membership
@@ -53,7 +53,7 @@ class KagemushaRecursiveSpendProver private constructor() {
     }
 
     companion object {
-        const val V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 22
+        const val V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 23
         const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
         /** Mandatory sender-final peer-cash handoff/finality contract. */
         const val CASH_HANDOFF_CAPABILITY_V1: String = "cash_handoff_v1"
@@ -77,7 +77,9 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val MAX_ARTIFACT_CHUNK_BYTES: Int = 1024 * 1024
         const val MAX_TRUSTED_RELEASE_POLICY_BYTES: Int = 64 * 1024
         const val MAX_RELEASE_ATTESTATION_BYTES: Int = 1024 * 1024
+        const val MAX_INTERNAL_VALIDATION_RECEIPT_BYTES: Int = 1024 * 1024
         const val MAX_RELEASE_EVIDENCE_BYTES: Int = 16 * 1024 * 1024
+        const val MAX_CRYPTOGRAPHIC_REVIEW_BYTES: Int = 1024 * 1024
         const val MAX_PROMOTION_RECORD_BYTES: Int = 1024 * 1024
         const val MAX_PEER_TEXT_ENVELOPE_BYTES: Int = 12 * 1024
         const val MAX_PEER_TEXT_ARCHIVE_BYTES: Int =
@@ -2275,6 +2277,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             manifestSha256: ByteArray,
             trustedPolicyNorito: ByteArray,
             releaseAttestationNorito: ByteArray,
+            internalValidationReceiptNorito: ByteArray,
             benchmarkEvidence: ByteArray,
             cryptographicReview: ByteArray,
             promotionRecordNorito: ByteArray,
@@ -3764,7 +3767,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 "cashHandoffCapability must be the exact cash_handoff_v1 contract"
             }
             require(requiredBridgeAbiVersion == REQUIRED_NATIVE_BRIDGE_ABI_VERSION) {
-                "requiredBridgeAbiVersion must be 22"
+                "requiredBridgeAbiVersion must be 23"
             }
             require(maximumHops == MAXIMUM_PEER_HOPS) {
                 "maximumHops must match the cash_handoff_v1 bound"
@@ -4095,13 +4098,14 @@ class KagemushaRecursiveSpendProver private constructor() {
      * Locally trusted material required to authenticate one published Kagemusha release.
      *
      * The policy must be provisioned from the deployment trust root, not copied from the
-     * downloaded release. Native verifies signer-role thresholds and hashes both evidence files
-     * before validating the candidate-bound promotion record and consuming any finalized artifact
-     * handle.
+     * downloaded release. Native authenticates the runner-signed internal-validation receipt,
+     * verifies signer-role thresholds, and hashes both external evidence files before validating
+     * the candidate-bound promotion record and consuming any finalized artifact handle.
      */
     class ReleaseAuthentication(
         trustedPolicyNorito: ByteArray,
         releaseAttestationNorito: ByteArray,
+        internalValidationReceiptNorito: ByteArray,
         benchmarkEvidence: ByteArray,
         cryptographicReview: ByteArray,
         promotionRecordNorito: ByteArray,
@@ -4116,6 +4120,11 @@ class KagemushaRecursiveSpendProver private constructor() {
             "releaseAttestationNorito",
             MAX_RELEASE_ATTESTATION_BYTES,
         )
+        internal val internalValidationReceiptNorito = requireBoundedBytes(
+            internalValidationReceiptNorito,
+            "internalValidationReceiptNorito",
+            MAX_INTERNAL_VALIDATION_RECEIPT_BYTES,
+        )
         internal val benchmarkEvidence = requireBoundedBytes(
             benchmarkEvidence,
             "benchmarkEvidence",
@@ -4124,7 +4133,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         internal val cryptographicReview = requireBoundedBytes(
             cryptographicReview,
             "cryptographicReview",
-            MAX_RELEASE_EVIDENCE_BYTES,
+            MAX_CRYPTOGRAPHIC_REVIEW_BYTES,
         )
         internal val promotionRecordNorito = requireBoundedBytes(
             promotionRecordNorito,
@@ -4144,6 +4153,8 @@ class KagemushaRecursiveSpendProver private constructor() {
         private val trustedPolicyNorito = releaseAuthentication.trustedPolicyNorito.copyOf()
         private val releaseAttestationNorito =
             releaseAuthentication.releaseAttestationNorito.copyOf()
+        private val internalValidationReceiptNorito =
+            releaseAuthentication.internalValidationReceiptNorito.copyOf()
         private val benchmarkEvidence = releaseAuthentication.benchmarkEvidence.copyOf()
         private val cryptographicReview = releaseAuthentication.cryptographicReview.copyOf()
         private val promotionRecordNorito = releaseAuthentication.promotionRecordNorito.copyOf()
@@ -4193,6 +4204,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                             manifestSha256,
                             trustedPolicyNorito,
                             releaseAttestationNorito,
+                            internalValidationReceiptNorito,
                             benchmarkEvidence,
                             cryptographicReview,
                             promotionRecordNorito,

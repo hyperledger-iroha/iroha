@@ -2,8 +2,15 @@ use super::{default_oracle, *};
 use norito::codec::{DecodeAll, Encode};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use std::{collections::BTreeMap, marker::PhantomData, sync::OnceLock};
+#[cfg(test)]
+std::thread_local! {
+    static SNAPSHOT_NORITO_CANONICAL_PASSES: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
 enum SnapshotJsonField<'a> {
-    Borrowed(&'a str),
+    Borrowed { raw: &'a str },
     #[cfg(test)]
     Owned(json::Value),
 }
@@ -15,7 +22,7 @@ impl<'a> SnapshotJsonField<'a> {
         let decoded: Result<T, json::Error> = match self {
             #[cfg(test)]
             Self::Owned(value) => json::value::from_value(value),
-            Self::Borrowed(raw) => (|| {
+            Self::Borrowed { raw } => (|| {
                 let value = json::from_str::<T>(raw)?;
                 // TODO: Teach Norito JSON serialization to target a comparison sink so
                 // canonical verification does not need one field-sized temporary String.
@@ -35,7 +42,7 @@ impl<'a> SnapshotJsonField<'a> {
     }
     fn into_object(self, field: &str) -> Result<SnapshotJsonMap<'a>, json::Error> {
         match self {
-            Self::Borrowed(raw) => SnapshotJsonMap::parse(raw, field),
+            Self::Borrowed { raw } => SnapshotJsonMap::parse(raw, field),
             #[cfg(test)]
             Self::Owned(json::Value::Object(map)) => Ok(SnapshotJsonMap::from_owned(map)),
             #[cfg(test)]
@@ -47,7 +54,7 @@ impl<'a> SnapshotJsonField<'a> {
     }
     fn validate_sccp_registry(&self) -> Result<(), json::Error> {
         match self {
-            Self::Borrowed(raw) => validate_sccp_registry_cell_json_str(raw),
+            Self::Borrowed { raw } => validate_sccp_registry_cell_json_str(raw),
             #[cfg(test)]
             Self::Owned(value) => validate_sccp_registry_cell_json(value),
         }
@@ -109,7 +116,12 @@ impl<'a> SnapshotJsonMap<'a> {
                     })?;
                 let end = parser.position();
                 if fields
-                    .insert(key.clone(), SnapshotJsonField::Borrowed(&input[start..end]))
+                    .insert(
+                        key.clone(),
+                        SnapshotJsonField::Borrowed {
+                            raw: &input[start..end],
+                        },
+                    )
                     .is_some()
                 {
                     return Err(json::Error::InvalidField {
@@ -234,6 +246,75 @@ impl KuraSeed {
         let map = SnapshotJsonMap::parse(input, "state")?;
         self.into_state_from_snapshot_map(map, true)
     }
+    /// Construct the deliberately minimal State authenticated by a compact emergency manifest.
+    ///
+    /// The caller has already authenticated the manifest signature. This constructor binds its
+    /// exact height and terminal hash to Kura, maps the matching hash prefix read-only, and leaves
+    /// World, transaction history, consensus topology, and runtime Nexus state unopened. The
+    /// signed SCCP policy hash is retained separately because Fast mode never constructs the
+    /// potentially large governed registry.
+    pub(crate) fn into_state_from_emergency_fast_manifest(
+        self,
+        chain_id: ChainId,
+        network_id: NetworkId,
+        snapshot_height: usize,
+        snapshot_tip: Option<HashOf<BlockHeader>>,
+        sccp_policy_hash: [u8; 32],
+    ) -> Result<State, json::Error> {
+        let block_hashes =
+            emergency_fast_block_hashes(self.kura.as_ref(), snapshot_height, snapshot_tip)?;
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+        let lane_incarnations = derive_static_lane_incarnations(&nexus.lane_catalog);
+        let lane_incarnation_activation_heights = lane_incarnations
+            .keys()
+            .copied()
+            .map(|lane_id| (lane_id, 0))
+            .collect::<BTreeMap<_, _>>();
+        let lane_incarnation_lineage = lane_incarnations
+            .iter()
+            .map(|(&lane_id, &incarnation)| {
+                (
+                    lane_id,
+                    LaneIncarnationLineage {
+                        generation: 0,
+                        incarnation,
+                        activation_height: 0,
+                    },
+                )
+            })
+            .collect();
+        let state = build_state(
+            BuildStateInputs {
+                world: World::default(),
+                block_hashes,
+                transactions: TransactionsStorage::new(),
+                commit_topology: Cell::new(Vec::new()),
+                prev_commit_topology: Cell::new(Vec::new()),
+                ivm: IVM::new(0),
+                nexus,
+                lane_incarnations,
+                lane_incarnation_activation_heights,
+                lane_incarnation_lineage,
+                autoscale_sample_history: VecDeque::new(),
+                chain_id,
+                network_id,
+                snapshot_v2_bootstrap_candidate: None,
+                nexus_runtime_restored_from_snapshot: false,
+                kura: self.kura,
+                query_handle: self.query_handle,
+                #[cfg(feature = "telemetry")]
+                telemetry: self.telemetry,
+            },
+            false,
+            true,
+        )
+        .map_err(|error| json::Error::InvalidField {
+            field: "state.durable_merge_ledger".to_owned(),
+            message: error.to_string(),
+        })?;
+        state.install_emergency_fast_sccp_policy_hash(sccp_policy_hash);
+        Ok(state)
+    }
     /// Decode a State without loading, promoting, truncating, or otherwise
     /// recovering any durable Kura-adjacent journal.
     ///
@@ -318,7 +399,7 @@ impl KuraSeed {
             ivm: &ivm_runtime,
             _marker: PhantomData,
         };
-        let mut world = parse_world(world_map, &ivm_seed)?;
+        let mut world = parse_world(world_map, &ivm_seed, false)?;
         let public_lane_validators: Vec<SnapshotNoritoBlob> =
             take_required(&mut map, "public_lane_validators")?;
         let public_lane_stake_shares: Vec<SnapshotNoritoBlob> =
@@ -333,13 +414,14 @@ impl KuraSeed {
             take_required(&mut map, "nexus_runtime")?;
         let chain_id: ChainId = take_required(&mut map, "chain_id")?;
         let network_id: NetworkId = take_required(&mut map, "network_id")?;
-        let block_hashes_vec: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
+        let block_hashes: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
         let committed_height =
-            u64::try_from(block_hashes_vec.len()).map_err(|_| json::Error::InvalidField {
+            u64::try_from(block_hashes.len()).map_err(|_| json::Error::InvalidField {
                 field: "state.block_hashes".to_owned(),
                 message: "committed height does not fit u64".to_owned(),
             })?;
-        validate_musubi_resolver_checkpoint_anchors(&world, &block_hashes_vec)?;
+        validate_replication_order_completion_anchors(&world, &block_hashes)?;
+        validate_musubi_resolver_checkpoint_anchors(&world, &block_hashes)?;
         world
             .privacy_consensus_policy
             .view()
@@ -363,9 +445,9 @@ impl KuraSeed {
             lane_incarnation_activation_heights,
             lane_incarnation_lineage,
             autoscale_sample_history,
-        ) = nexus_from_snapshot_runtime(snapshot_nexus_runtime, &block_hashes_vec)?;
+        ) = nexus_from_snapshot_runtime(snapshot_nexus_runtime, &block_hashes)?;
         let nexus_runtime_restored_from_snapshot = true;
-        let transactions: TransactionsStorage = take_required(&mut map, "transactions")?;
+        let transactions = take_required(&mut map, "transactions")?;
         let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
         let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
         let snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> =
@@ -383,13 +465,14 @@ impl KuraSeed {
                 message,
             },
         )?;
-        let public_lane_validator_records =
-            decode_public_lane_validator_records(public_lane_validators)?;
-        let public_lane_stake_share_records =
-            decode_public_lane_stake_share_records(public_lane_stake_shares)?;
+        let public_lane_validator_records: Vec<PublicLaneValidatorRecord> =
+            decode_snapshot_records(public_lane_validators, "public_lane_validators", true)?;
+        let public_lane_stake_share_records: Vec<PublicLaneStakeShare> =
+            decode_snapshot_records(public_lane_stake_shares, "public_lane_stake_shares", true)?;
         let public_lane_reward_records = decode_snapshot_records::<PublicLaneRewardRecord>(
             public_lane_rewards,
             "public_lane_rewards",
+            true,
         )?;
         validate_canonical_snapshot_record_order(
             &public_lane_validator_records,
@@ -453,7 +536,7 @@ impl KuraSeed {
             })
             .collect();
         world.space_directory_manifests =
-            decode_space_directory_manifest_sets(space_directory_manifests)?;
+            decode_space_directory_manifest_sets(space_directory_manifests, true)?;
         world
             .validate_quantity_ledger_invariants()
             .map_err(|message| json::Error::InvalidField {
@@ -463,7 +546,7 @@ impl KuraSeed {
         let state = build_state(
             BuildStateInputs {
                 world,
-                block_hashes: BlockHashes::new(block_hashes_vec),
+                block_hashes: BlockHashes::new(block_hashes),
                 transactions,
                 commit_topology,
                 prev_commit_topology,
@@ -483,6 +566,7 @@ impl KuraSeed {
                 telemetry: self.telemetry,
             },
             allow_durable_recovery,
+            false,
         )
         .map_err(|error| json::Error::InvalidField {
             field: "state.durable_merge_ledger".to_owned(),
@@ -496,6 +580,38 @@ impl KuraSeed {
         })?;
         Ok(state)
     }
+
+}
+fn emergency_fast_block_hashes(
+    kura: &Kura,
+    snapshot_height: usize,
+    snapshot_tip: Option<HashOf<BlockHeader>>,
+) -> Result<BlockHashes, json::Error> {
+    let (durable_height, durable_tip) = kura
+        .emergency_fast_snapshot_boundary(snapshot_height)
+        .map_err(|error| json::Error::InvalidField {
+            field: "state.block_hashes".to_owned(),
+            message: format!("failed to bind the Kura Fast boundary: {error}"),
+        })?;
+    if durable_height != snapshot_height || durable_tip != snapshot_tip {
+        return Err(json::Error::InvalidField {
+            field: "state.block_hashes".to_owned(),
+            message: format!(
+                "snapshot boundary ({snapshot_height}, {snapshot_tip:?}) differs from durable Kura ({durable_height}, {durable_tip:?})"
+            ),
+        });
+    }
+    Ok(
+        match kura
+            .emergency_fast_snapshot_hash_mapping(snapshot_height)
+            .map_err(|error| json::Error::InvalidField {
+                field: "state.block_hashes".to_owned(),
+                message: format!("failed to map the Kura Fast hash prefix: {error}"),
+            })? {
+            Some(mapping) => BlockHashes::new_emergency_fast_mapped(mapping, snapshot_height),
+            None => BlockHashes::default(),
+        },
+    )
 }
 fn nexus_from_snapshot_runtime(
     runtime: SnapshotNexusRuntime,
@@ -857,6 +973,7 @@ fn validate_snapshot_autoscale_sample_history(
 fn decode_snapshot_records<T>(
     records: Vec<SnapshotNoritoBlob>,
     field: &str,
+    validate_canonical: bool,
 ) -> Result<Vec<T>, json::Error>
 where
     T: DecodeAll + Encode,
@@ -875,11 +992,15 @@ where
                 field: field.to_owned(),
                 message: format!("record {index} norito decode failed: {err}"),
             })?;
-            if decoded.encode() != bytes {
-                return Err(json::Error::InvalidField {
-                    field: field.to_owned(),
-                    message: format!("record {index} is not canonical Norito"),
-                });
+            if validate_canonical {
+                #[cfg(test)]
+                SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(passes.get() + 1));
+                if decoded.encode() != bytes {
+                    return Err(json::Error::InvalidField {
+                        field: field.to_owned(),
+                        message: format!("record {index} is not canonical Norito"),
+                    });
+                }
             }
             Ok(decoded)
         })
@@ -911,60 +1032,9 @@ where
     }
     Ok(())
 }
-fn decode_public_lane_validator_records(
-    records: Vec<SnapshotNoritoBlob>,
-) -> Result<Vec<PublicLaneValidatorRecord>, json::Error> {
-    let mut decoded = Vec::with_capacity(records.len());
-    for (index, record) in records.into_iter().enumerate() {
-        let bytes = hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
-            field: "public_lane_validators".to_owned(),
-            message: format!("record {index} hex decode failed: {err}"),
-        })?;
-        let mut cursor = bytes.as_slice();
-        let decoded_record = PublicLaneValidatorRecord::decode_all(&mut cursor).map_err(|err| {
-            json::Error::InvalidField {
-                field: "public_lane_validators".to_owned(),
-                message: format!("record {index} norito decode failed: {err}"),
-            }
-        })?;
-        if decoded_record.encode() != bytes {
-            return Err(json::Error::InvalidField {
-                field: "public_lane_validators".to_owned(),
-                message: format!("record {index} is not canonical Norito"),
-            });
-        }
-        decoded.push(decoded_record);
-    }
-    Ok(decoded)
-}
-fn decode_public_lane_stake_share_records(
-    records: Vec<SnapshotNoritoBlob>,
-) -> Result<Vec<PublicLaneStakeShare>, json::Error> {
-    let mut decoded = Vec::with_capacity(records.len());
-    for (index, record) in records.into_iter().enumerate() {
-        let bytes = hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
-            field: "public_lane_stake_shares".to_owned(),
-            message: format!("record {index} hex decode failed: {err}"),
-        })?;
-        let mut cursor = bytes.as_slice();
-        let decoded_record = PublicLaneStakeShare::decode_all(&mut cursor).map_err(|err| {
-            json::Error::InvalidField {
-                field: "public_lane_stake_shares".to_owned(),
-                message: format!("record {index} norito decode failed: {err}"),
-            }
-        })?;
-        if decoded_record.encode() != bytes {
-            return Err(json::Error::InvalidField {
-                field: "public_lane_stake_shares".to_owned(),
-                message: format!("record {index} is not canonical Norito"),
-            });
-        }
-        decoded.push(decoded_record);
-    }
-    Ok(decoded)
-}
 fn decode_space_directory_manifest_sets(
     records: Vec<SnapshotSpaceDirectoryManifestSet>,
+    validate_canonical: bool,
 ) -> Result<Storage<UniversalAccountId, SpaceDirectoryManifestSet>, json::Error> {
     let mut storage = Storage::default();
     for (index, record) in records.into_iter().enumerate() {
@@ -979,11 +1049,15 @@ fn decode_space_directory_manifest_sets(
                 message: format!("record {index} norito decode failed: {err}"),
             }
         })?;
-        if manifest_set.encode() != bytes {
-            return Err(json::Error::InvalidField {
-                field: "space_directory_manifests".to_owned(),
-                message: format!("record {index} is not canonical Norito"),
-            });
+        if validate_canonical {
+            #[cfg(test)]
+            SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(passes.get() + 1));
+            if manifest_set.encode() != bytes {
+                return Err(json::Error::InvalidField {
+                    field: "space_directory_manifests".to_owned(),
+                    message: format!("record {index} is not canonical Norito"),
+                });
+            }
         }
         if storage.insert(record.uaid, manifest_set).is_some() {
             return Err(json::Error::InvalidField {
@@ -1110,6 +1184,206 @@ fn validate_provider_ingest_completion_authorities(
                     hex::encode(provider_id.as_bytes())
                 ),
             });
+        }
+    }
+    Ok(())
+}
+fn validate_capacity_declarations(
+    declarations: &Storage<ProviderId, CapacityDeclarationRecord>,
+    provider_owners: &Storage<ProviderId, AccountId>,
+) -> Result<(), json::Error> {
+    let provider_owners = provider_owners.view();
+    let owner_metadata_key: Name = "sorafs.owner_account_id"
+        .parse()
+        .expect("static capacity owner metadata key");
+    for (provider_id, record) in declarations.view().iter() {
+        let provider_label = hex::encode(provider_id.as_bytes());
+        if record.provider_id != *provider_id {
+            return Err(json::Error::InvalidField {
+                field: "world.capacity_declarations".to_owned(),
+                message: format!(
+                    "capacity declaration key {provider_label} does not match its stored provider"
+                ),
+            });
+        }
+        crate::smartcontracts::isi::sorafs::validate_stored_capacity_declaration(
+            record,
+            &provider_label,
+        )
+        .map_err(|error| json::Error::InvalidField {
+            field: "world.capacity_declarations".to_owned(),
+            message: error.to_string(),
+        })?;
+        let provider_owner = provider_owners.get(provider_id).ok_or_else(|| {
+            json::Error::InvalidField {
+                field: "world.capacity_declarations".to_owned(),
+                message: format!(
+                    "capacity declaration {provider_label} has no governance-established provider owner"
+                ),
+            }
+        })?;
+        let owner_literal = record.metadata.get(&owner_metadata_key).ok_or_else(|| {
+            json::Error::InvalidField {
+                field: "world.capacity_declarations".to_owned(),
+                message: format!(
+                    "capacity declaration {provider_label} omits metadata `sorafs.owner_account_id`"
+                ),
+            }
+        })?;
+        let owner_literal: String = owner_literal.try_into_any().map_err(|error| {
+            json::Error::InvalidField {
+                field: "world.capacity_declarations".to_owned(),
+                message: format!(
+                    "capacity declaration {provider_label} owner metadata must be a canonical account string: {error}"
+                ),
+            }
+        })?;
+        if owner_literal != provider_owner.to_string() {
+            return Err(json::Error::InvalidField {
+                field: "world.capacity_declarations".to_owned(),
+                message: format!(
+                    "capacity declaration {provider_label} owner metadata does not exactly match its governance-established provider owner"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+fn validate_replication_order_completion_anchors(
+    world: &World,
+    block_hashes: &[HashOf<BlockHeader>],
+) -> Result<(), json::Error> {
+    for (order_id, order) in world.replication_orders.view().iter() {
+        let order_label = hex::encode(order_id.as_bytes());
+        for completion in &order.provider_completions {
+            let height = completion.finalized_anchor.height;
+            let index = usize::try_from(height)
+                .ok()
+                .and_then(|height| height.checked_sub(1))
+                .ok_or_else(|| json::Error::InvalidField {
+                    field: "state.world.replication_orders".to_owned(),
+                    message: format!(
+                        "replication order {order_label} completion for provider {} has a finalized anchor height outside the committed block prefix",
+                        hex::encode(completion.provider_id.as_bytes()),
+                    ),
+                })?;
+            let Some(committed_hash) = block_hashes.get(index) else {
+                return Err(json::Error::InvalidField {
+                    field: "state.world.replication_orders".to_owned(),
+                    message: format!(
+                        "replication order {order_label} completion for provider {} anchors unavailable committed height {height}",
+                        hex::encode(completion.provider_id.as_bytes()),
+                    ),
+                });
+            };
+            if *committed_hash.as_ref() != completion.finalized_anchor.block_hash {
+                return Err(json::Error::InvalidField {
+                    field: "state.world.replication_orders".to_owned(),
+                    message: format!(
+                        "replication order {order_label} completion for provider {} finalized anchor hash does not match committed block height {height}",
+                        hex::encode(completion.provider_id.as_bytes()),
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+fn validate_automatic_replication_capacity_state(
+    declarations: &Storage<ProviderId, CapacityDeclarationRecord>,
+    provider_owners: &Storage<ProviderId, AccountId>,
+    completion_authorities: &Storage<ProviderId, ProviderIngestCompletionAuthorityV1>,
+    pin_manifests: &Storage<ManifestDigest, PinManifestRecord>,
+    replication_orders: &Storage<ReplicationOrderId, ReplicationOrderRecord>,
+) -> Result<(), json::Error> {
+    let invalid = |message: String| json::Error::InvalidField {
+        field: "world.replication_orders".to_owned(),
+        message,
+    };
+    let declarations = declarations.view();
+    let provider_owners = provider_owners.view();
+    let completion_authorities = completion_authorities.view();
+    let pin_manifests = pin_manifests.view();
+    let mut allocations = BTreeMap::<(ProviderId, String), u64>::new();
+    for (order_id, order) in replication_orders.view().iter() {
+        if !order_id.is_auto() {
+            continue;
+        }
+        let order_label = hex::encode(order_id.as_bytes());
+        let pin = pin_manifests.get(&order.manifest_digest).ok_or_else(|| {
+            invalid(format!(
+                "automatic replication order {order_label} references a missing pin manifest"
+            ))
+        })?;
+        let payload =
+            crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+                pin,
+                order,
+                &order_label,
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+        if !matches!(pin.status, PinStatus::Approved(_))
+            || !matches!(
+                order.status,
+                ReplicationOrderStatus::Pending | ReplicationOrderStatus::Completed(_)
+            )
+        {
+            continue;
+        }
+        for assignment in &payload.assignments {
+            let provider_id = ProviderId::new(assignment.provider_id);
+            let provider_label = hex::encode(provider_id.as_bytes());
+            let declaration = declarations.get(&provider_id).ok_or_else(|| {
+                invalid(format!(
+                    "automatic replication order {order_label} assigns provider {provider_label} without a retained capacity declaration"
+                ))
+            })?;
+            let Some(profile_capacity) =
+                crate::smartcontracts::isi::sorafs::automatic_replication_profile_capacity_gib(
+                    declaration,
+                    pin,
+                    order.issued_epoch,
+                    order.deadline_epoch,
+                )
+                .map_err(|error| invalid(error.to_string()))?
+            else {
+                return Err(invalid(format!(
+                    "automatic replication order {order_label} assigns provider {provider_label} without exact profile, storage-class, and deadline capacity"
+                )));
+            };
+            let provider_owner = provider_owners.get(&provider_id).ok_or_else(|| {
+                invalid(format!(
+                    "automatic replication order {order_label} assigns provider {provider_label} without a governed owner"
+                ))
+            })?;
+            // A retained completion is immutable self-contained evidence and remains valid across
+            // a later governed owner rotation. Only an assignment that still needs completion
+            // depends on the current owner-bound authority.
+            if order.provider_completion(provider_id).is_none()
+                && !completion_authorities
+                    .get(&provider_id)
+                    .is_some_and(|authority| {
+                        authority.is_valid() && &authority.provider_owner == provider_owner
+                    })
+            {
+                return Err(invalid(format!(
+                    "pending automatic replication order {order_label} assigns provider {provider_label} without a valid owner-bound completion authority"
+                )));
+            }
+            let allocated = allocations
+                .entry((provider_id, payload.chunking_profile.clone()))
+                .or_default();
+            *allocated = allocated.checked_add(assignment.slice_gib).ok_or_else(|| {
+                invalid(format!(
+                    "automatic replication allocation overflowed for provider {provider_label}"
+                ))
+            })?;
+            if *allocated > profile_capacity {
+                return Err(invalid(format!(
+                    "automatic replication allocations oversubscribe provider {provider_label} profile `{}`: allocated {} GiB, committed {profile_capacity} GiB",
+                    payload.chunking_profile, *allocated
+                )));
+            }
         }
     }
     Ok(())
@@ -1372,8 +1646,8 @@ fn take_topology_cell(
         .remove(key)
         .ok_or_else(|| json::Error::missing_field(key))?;
     match value {
-        SnapshotJsonField::Borrowed(raw) if raw.as_bytes().first() == Some(&b'[') => {
-            SnapshotJsonField::Borrowed(raw)
+        SnapshotJsonField::Borrowed { raw } if raw.as_bytes().first() == Some(&b'[') => {
+            SnapshotJsonField::Borrowed { raw }
                 .decode_canonical(key)
                 .map(Cell::new)
         }
@@ -1432,6 +1706,72 @@ pub(crate) fn validate_musubi_location_reverse_indices(
     let by_order = by_order.view();
     let by_provider = by_provider.view();
     for (order, record) in replication_orders.iter() {
+        let pin = pin_manifests
+            .get(&record.manifest_digest)
+            .ok_or_else(|| invalid("replication order targets a missing pin manifest".into()))?;
+        let order_label = hex::encode(order.as_bytes());
+        let approved_epoch =
+            crate::smartcontracts::isi::sorafs::validate_stored_pin_approval_history(
+                pin,
+                &hex::encode(pin.digest.as_bytes()),
+            )
+            .map_err(|error| invalid(error.to_string()))?
+            .ok_or_else(|| {
+                invalid(format!(
+                    "replication order {order_label} targets a pin that was never approved"
+                ))
+            })?;
+        if record.issued_epoch < approved_epoch {
+            return Err(invalid(format!(
+                "replication order {order_label} predates its target pin approval epoch {approved_epoch}"
+            )));
+        }
+        if let PinStatus::Retired(retired_epoch) = pin.status {
+            if record.issued_epoch > retired_epoch
+                || matches!(record.status, ReplicationOrderStatus::Pending)
+                || matches!(record.status, ReplicationOrderStatus::Completed(epoch) | ReplicationOrderStatus::Expired(epoch) if epoch > retired_epoch)
+                || order.is_auto()
+                    && matches!(record.status, ReplicationOrderStatus::Completed(_))
+                    && retired_epoch < pin.policy.retention_epoch
+            {
+                return Err(invalid(format!(
+                    "replication order {order_label} lifecycle falls outside its target pin retirement epoch {retired_epoch}"
+                )));
+            }
+        }
+        let canonical_order = if order.is_auto() {
+            crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+                pin,
+                record,
+                &order_label,
+            )
+        } else {
+            crate::smartcontracts::isi::sorafs::validate_stored_replication_order(
+                record,
+                &order_label,
+            )
+        }
+        .map_err(|error| invalid(error.to_string()))?;
+        if record.order_id != *order
+            || pin.digest != record.manifest_digest
+            || pin.root_cid != record.manifest_root_cid
+            || canonical_order.chunking_profile != pin.chunker.to_handle()
+            || canonical_order.target_replicas < pin.policy.min_replicas
+            || record.deadline_epoch >= pin.policy.retention_epoch
+        {
+            return Err(invalid(
+                "replication order does not match its immutable pin commitment or retention policy"
+                    .into(),
+            ));
+        }
+        if let ReplicationOrderStatus::Cancelled(cancelled_epoch) = record.status
+            && !matches!(pin.status, PinStatus::Retired(retired_epoch) if retired_epoch == cancelled_epoch)
+        {
+            return Err(invalid(
+                "cancelled replication order must exactly match its target pin retirement epoch"
+                    .into(),
+            ));
+        }
         let reference = by_order.get(order);
         match (record.musubi_archive, reference) {
             (None, None) => {}
@@ -1532,7 +1872,7 @@ pub(crate) fn validate_musubi_location_reverse_indices(
                 < iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1
             || canonical_order.target_replicas < pin.policy.min_replicas
             || pin.policy.min_replicas < iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1
-            || order_record.deadline_epoch > pin.policy.retention_epoch
+            || order_record.deadline_epoch >= pin.policy.retention_epoch
         {
             return Err(invalid(
                 "order binding does not match its immutable pin commitment or retention policy"
@@ -1648,6 +1988,46 @@ pub(crate) fn validate_musubi_location_reverse_indices(
                 "current archive location is missing an exact reverse-index entry".into(),
             ));
         }
+    }
+    for (manifest_digest, pin) in pin_manifests.iter() {
+        if manifest_digest != &pin.digest {
+            return Err(invalid(
+                "pin-manifest key does not match its embedded manifest digest".into(),
+            ));
+        }
+        let approval_epoch =
+            crate::smartcontracts::isi::sorafs::validate_stored_pin_approval_history(
+                pin,
+                &hex::encode(manifest_digest.as_bytes()),
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+        let expected_order_id =
+            iroha_data_model::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1(
+                &pin.digest,
+            );
+        if approval_epoch.is_none() {
+            if replication_orders.get(&expected_order_id).is_some() {
+                return Err(invalid(format!(
+                    "never-approved pin manifest {} has an automatic replication order {}",
+                    hex::encode(manifest_digest.as_bytes()),
+                    hex::encode(expected_order_id.as_bytes()),
+                )));
+            }
+            continue;
+        }
+        let record = replication_orders.get(&expected_order_id).ok_or_else(|| {
+            invalid(format!(
+                "approved pin history for manifest {} is missing its mandatory automatic replication order {}",
+                hex::encode(manifest_digest.as_bytes()),
+                hex::encode(expected_order_id.as_bytes()),
+            ))
+        })?;
+        crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+            pin,
+            record,
+            &hex::encode(expected_order_id.as_bytes()),
+        )
+        .map_err(|error| invalid(error.to_string()))?;
     }
     Ok(())
 }

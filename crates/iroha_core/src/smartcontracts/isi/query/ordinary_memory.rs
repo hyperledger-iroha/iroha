@@ -1512,6 +1512,11 @@ mod tests {
             QueryWithParams::new(&query, params).expect("peer query type has a canonical mapping");
         QueryRequest::Start(query)
     }
+    fn peer_params() -> QueryParams {
+        let mut params = QueryParams::default();
+        params.fetch_size = FetchSize::new(Some(nonzero!(16_u64)));
+        params
+    }
     #[test]
     fn singular_source_admission_audit_covers_all_96_variants() {
         assert_eq!(SINGULAR_SOURCE_ADMISSION_AUDIT.len(), 96);
@@ -1843,13 +1848,13 @@ mod tests {
             .with_count_mode(QueryCountMode::Bounded)
             .with_ordinary_execution_limits(ordinary);
         ensure_request_admitted(
-            &peer_start(QueryParams::default()),
+            &peer_start(peer_params()),
             OrdinaryCursorMode::Ephemeral,
             query_limits,
             ordinary,
         )
         .expect("the exact peer pass-through shape must be admitted");
-        let mut offset = QueryParams::default();
+        let mut offset = peer_params();
         offset.pagination = Pagination::new(None, 1);
         assert!(matches!(
             ensure_request_admitted(
@@ -1862,7 +1867,7 @@ mod tests {
         ));
         assert!(matches!(
             ensure_request_admitted(
-                &peer_start(QueryParams::default()),
+                &peer_start(peer_params()),
                 OrdinaryCursorMode::Ephemeral,
                 QueryLimits::new(16).with_ordinary_execution_limits(ordinary),
                 ordinary,
@@ -1871,7 +1876,7 @@ mod tests {
         ));
         assert!(matches!(
             ensure_request_admitted(
-                &peer_start(QueryParams::default()),
+                &peer_start(peer_params()),
                 OrdinaryCursorMode::Stored,
                 query_limits,
                 ordinary,

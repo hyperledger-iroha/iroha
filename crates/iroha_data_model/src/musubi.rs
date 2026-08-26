@@ -4612,7 +4612,113 @@ pub enum MusubiParliamentActionV1 {
     /// Prospectively replace registry admission and alias-pricing policy.
     SetRegistryPolicy(MusubiSetRegistryPolicyActionV1),
 }
+
+fn musubi_package_exact_json_u64_invariant_error(
+    package: &MusubiPackageIdV1,
+    maximum: u64,
+) -> Option<&'static str> {
+    (package.home_dataspace.as_u64() > maximum)
+        .then_some("Musubi proposal package dataspace exceeds the exact JSON integer maximum")
+}
+
+fn musubi_version_exact_json_u64_invariant_error(
+    version: &MusubiVersionV1,
+    maximum: u64,
+) -> Option<&'static str> {
+    if version.major > maximum || version.minor > maximum || version.patch > maximum {
+        return Some("Musubi proposal semantic version exceeds the exact JSON integer maximum");
+    }
+    version
+        .prerelease
+        .iter()
+        .any(|identifier| {
+            matches!(identifier, MusubiPrereleaseIdentifierV1::Numeric(value) if *value > maximum)
+        })
+        .then_some("Musubi proposal numeric prerelease exceeds the exact JSON integer maximum")
+}
+
+fn musubi_release_exact_json_u64_invariant_error(
+    release: &MusubiReleaseIdV1,
+    maximum: u64,
+) -> Option<&'static str> {
+    musubi_package_exact_json_u64_invariant_error(&release.package, maximum)
+        .or_else(|| musubi_version_exact_json_u64_invariant_error(&release.version, maximum))
+}
+
+fn musubi_registry_policy_exact_json_u64_invariant_error(
+    policy: &MusubiRegistryPolicyV1,
+    maximum: u64,
+) -> Option<&'static str> {
+    if policy.revision > maximum {
+        return Some("Musubi proposal policy revision exceeds the exact JSON integer maximum");
+    }
+    if policy
+        .allowlisted_dataspaces
+        .iter()
+        .any(|dataspace| dataspace.as_u64() > maximum)
+    {
+        return Some(
+            "Musubi proposal allowlisted dataspace exceeds the exact JSON integer maximum",
+        );
+    }
+    let pricing = policy.alias_pricing;
+    if pricing.revision > maximum
+        || pricing.length_1_xor > maximum
+        || pricing.length_2_xor > maximum
+        || pricing.length_3_xor > maximum
+        || pricing.length_4_xor > maximum
+        || pricing.length_5_to_32_xor > maximum
+    {
+        return Some("Musubi proposal alias pricing exceeds the exact JSON integer maximum");
+    }
+    None
+}
+
 impl MusubiParliamentActionV1 {
+    /// Return the first action-owned value above the exact JSON integer maximum.
+    pub(crate) fn first_release_exact_json_u64_invariant_error(
+        &self,
+        maximum: u64,
+    ) -> Option<&'static str> {
+        match self {
+            Self::RecoverPackageOwners(recovery) => {
+                musubi_package_exact_json_u64_invariant_error(&recovery.package, maximum).or_else(
+                    || {
+                        (recovery.expected_revision > maximum).then_some(
+                            "Musubi proposal owner revision exceeds the exact JSON integer maximum",
+                        )
+                    },
+                )
+            }
+            Self::RetargetAlias(recovery) => {
+                musubi_package_exact_json_u64_invariant_error(&recovery.target, maximum).or_else(
+                    || {
+                        (recovery.expected_revision > maximum).then_some(
+                            "Musubi proposal alias revision exceeds the exact JSON integer maximum",
+                        )
+                    },
+                )
+            }
+            Self::TakedownArtifact(takedown) => {
+                musubi_release_exact_json_u64_invariant_error(&takedown.release, maximum).or_else(
+                    || {
+                        (takedown.expected_artifact_governance_revision > maximum).then_some(
+                            "Musubi proposal artifact revision exceeds the exact JSON integer maximum",
+                        )
+                    },
+                )
+            }
+            Self::SetRegistryPolicy(replacement) => {
+                musubi_registry_policy_exact_json_u64_invariant_error(&replacement.policy, maximum)
+                    .or_else(|| {
+                        (replacement.expected_revision > maximum).then_some(
+                            "Musubi proposal expected policy revision exceeds the exact JSON integer maximum",
+                        )
+                    })
+            }
+        }
+    }
+
     /// Validate action-specific bounds and compare-and-set revisions.
     ///
     /// # Errors

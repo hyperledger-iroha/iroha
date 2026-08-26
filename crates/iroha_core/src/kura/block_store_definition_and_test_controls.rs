@@ -680,6 +680,11 @@ pub struct BlockStore {
     read_scratch: Vec<u8>,
     data_mmap: Option<MemoryMirror>,
     data_mmap_len: u64,
+    /// Canonical inline-body bytes read through either block-store read path.
+    #[cfg(test)]
+    body_bytes_read: AtomicU64,
+    /// Durable prefix validated read-only before emergency Fast recovery.
+    fast_prevalidated_count: Option<u64>,
     commit_marker_count: u64,
     commit_marker_pending: Option<u64>,
     /// Committed DA rewrite whose body promotion must be retried before the next mutation.

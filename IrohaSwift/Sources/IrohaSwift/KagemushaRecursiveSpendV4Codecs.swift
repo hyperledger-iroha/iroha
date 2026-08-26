@@ -423,10 +423,7 @@ enum KagemushaRecursiveSpendCodecsV4 {
 
     private static func constVector(_ value: Data) -> Data {
         var writer = CompactNoritoWriter()
-        for byte in value {
-            writer.writeLength(1)
-            writer.writeUInt8(byte)
-        }
+        writer.writeByteFields(value)
         return writer.data
     }
 

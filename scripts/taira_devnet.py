@@ -162,7 +162,7 @@ GENERATED_TAIRA_EGRESS_RATE_PER_MINUTE = 60
 GENERATED_TAIRA_EGRESS_MAX_BYTES_PER_MINUTE = 1024 * 1024
 LINUX_KVM_GET_API_VERSION = 0xAE00
 LINUX_KVM_API_VERSION = 12
-INROU_CANARY_DEPLOY_VERSION_V1 = "1.0.0"
+INROU_CANARY_SERVICE_VERSION_PREFIX_V1 = "artifact-"
 INROU_CANARY_ROUTE_HOST_V1 = "taira-inrou-canary.sora"
 INROU_CANARY_HEALTH_PATH_V1 = "/api/v1/health"
 INROU_CANARY_REPORT_KEYS_V1 = frozenset(
@@ -306,6 +306,9 @@ INROU_STAGE_RECEIPT_KEYS_V1 = frozenset(
 )
 SORAFS_CONTENT_CID_V1_RE = re.compile(r"b[a-z2-7]{58}")
 LOWER_32_BYTE_HEX_RE = re.compile(r"[0-9a-f]{64}")
+INROU_CANARY_SERVICE_VERSION_V1_RE = re.compile(
+    rf"{re.escape(INROU_CANARY_SERVICE_VERSION_PREFIX_V1)}[0-9a-f]{{64}}"
+)
 IROHA_HASH_LITERAL_RE = re.compile(r"hash:[0-9A-F]{64}#[0-9A-F]{4}")
 LOWER_GIT_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 LINUX_AARCH64_TARGET_RE = re.compile(
@@ -3311,7 +3314,6 @@ def _read_inrou_stage_receipt(stage_dir: Path) -> dict[str, Any]:
         "schema_version": 1,
         "mutation_mode": "deploy",
         "service_name": "taira_inrou_canary",
-        "service_version": INROU_CANARY_DEPLOY_VERSION_V1,
         "container_file": str(INROU_STAGE_CONTAINER_FILE),
         "service_file": str(INROU_STAGE_SERVICE_FILE),
         "bundle_payload_file": str(INROU_STAGE_BUNDLE_PAYLOAD),
@@ -3322,6 +3324,12 @@ def _read_inrou_stage_receipt(stage_dir: Path) -> dict[str, Any]:
     }
     if any(receipt.get(field) != value for field, value in expected.items()):
         fail("native Taira Inrou stage receipt is not the exact V1 deploy layout")
+    service_version = receipt.get("service_version")
+    if (
+        not isinstance(service_version, str)
+        or INROU_CANARY_SERVICE_VERSION_V1_RE.fullmatch(service_version) is None
+    ):
+        fail("native Taira Inrou stage receipt has a malformed artifact-derived service_version")
     for field in (
         "bundle_hash",
         "bundle_manifest_digest_hex",
@@ -3603,13 +3611,18 @@ def require_canonical_inrou_canary_receipt(
         or receipt.get("public_root") != expected_public_root
         or receipt.get("mutation_mode") != "deploy"
         or receipt.get("service_name") != "taira_inrou_canary"
-        or receipt.get("service_version") != INROU_CANARY_DEPLOY_VERSION_V1
         or receipt.get("route_host") != INROU_CANARY_ROUTE_HOST_V1
         or receipt.get("route_path") != INROU_CANARY_HEALTH_PATH_V1
         or receipt.get("warnings") != []
         or receipt.get("failures") != []
     ):
         fail("compiled Taira Inrou canary did not report exact V1 deploy success")
+    service_version = receipt.get("service_version")
+    if (
+        not isinstance(service_version, str)
+        or INROU_CANARY_SERVICE_VERSION_V1_RE.fullmatch(service_version) is None
+    ):
+        fail("compiled Taira Inrou canary has a malformed artifact-derived service_version")
     for field in ("active_host_adverts", "hosted_replica_count"):
         value = receipt.get(field)
         if type(value) is not int or value != PEER_COUNT:
@@ -3732,13 +3745,18 @@ def require_canonical_inrou_check_receipt(
         or receipt.get("status") != "ok"
         or receipt.get("public_root") != expected_public_root
         or receipt.get("service_name") != "taira_inrou_canary"
-        or receipt.get("service_version") != INROU_CANARY_DEPLOY_VERSION_V1
         or receipt.get("route_host") != INROU_CANARY_ROUTE_HOST_V1
         or receipt.get("route_path") != INROU_CANARY_HEALTH_PATH_V1
         or receipt.get("warnings") != []
         or receipt.get("failures") != []
     ):
         fail("compiled Taira Inrou check did not report exact V1 live success")
+    service_version = receipt.get("service_version")
+    if (
+        not isinstance(service_version, str)
+        or INROU_CANARY_SERVICE_VERSION_V1_RE.fullmatch(service_version) is None
+    ):
+        fail("compiled Taira Inrou check has a malformed artifact-derived service_version")
     for retired in ("mutation_mode", "submitted_tx_hash", "mutation_response_digest"):
         if retired in receipt:
             fail(f"compiled Taira Inrou check exposed mutation-only field {retired}")

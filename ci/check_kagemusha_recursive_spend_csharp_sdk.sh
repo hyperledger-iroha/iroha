@@ -6,22 +6,28 @@ DOTNET_BIN="${KAGEMUSHA_RECURSIVE_SPEND_CSHARP_DOTNET_BIN:-dotnet}"
 ARTIFACTS="$(mktemp -d "${TMPDIR:-/tmp}/iroha-kagemusha-csharp.XXXXXX")"
 trap 'rm -rf "${ARTIFACTS}"' EXIT
 
-version="$(${DOTNET_BIN} --version)"
+version="$(
+  cd "${ROOT_DIR}/csharp"
+  "${DOTNET_BIN}" --version
+)"
 if [[ ! "${version}" =~ ^8\. ]]; then
   echo "error: C# SDK checks require .NET 8; got ${version}" >&2
   exit 1
 fi
 
-"${DOTNET_BIN}" test \
-  "${ROOT_DIR}/csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj" \
-  --artifacts-path "${ARTIFACTS}" \
-  -p:ProduceReferenceAssembly=false \
-  -- \
-  --filter-class \
-    Hyperledger.Iroha.Sdk.Tests.KagemushaToriiTests \
-    Hyperledger.Iroha.Sdk.Tests.VerifyingKeyBackendTagTests \
-    Hyperledger.Iroha.Sdk.Tests.ToriiClientTests \
-    Hyperledger.Iroha.Sdk.Tests.TransactionBuilderTests
+(
+  cd "${ROOT_DIR}/csharp"
+  "${DOTNET_BIN}" test \
+    tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj \
+    --artifacts-path "${ARTIFACTS}" \
+    -p:ProduceReferenceAssembly=false \
+    -- \
+    --filter-class \
+      Hyperledger.Iroha.Sdk.Tests.KagemushaToriiTests \
+      Hyperledger.Iroha.Sdk.Tests.VerifyingKeyBackendTagTests \
+      Hyperledger.Iroha.Sdk.Tests.ToriiClientTests \
+      Hyperledger.Iroha.Sdk.Tests.TransactionBuilderTests
+)
 
 client="${ROOT_DIR}/csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiKagemushaClient.cs"
 models="${ROOT_DIR}/csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiKagemushaModels.cs"
@@ -29,7 +35,7 @@ test -f "${client}"
 test -f "${models}"
 
 grep -Fq 'KagemushaRequiredBridgeAbiVersion = ToriiKagemushaTransport.BridgeAbiVersion' "${client}"
-grep -Fq 'internal const int BridgeAbiVersion = 22;' "${models}"
+grep -Fq 'internal const int BridgeAbiVersion = 23;' "${models}"
 grep -Fq 'internal const int ManifestVersion = 4;' "${models}"
 grep -Fq 'internal const int MaxTopUpNoritoRequestBytes = 512 * 1024;' "${models}"
 grep -Fq 'internal const int MaxRedeemNoritoRequestBytes = 48 * 1024 * 1024;' "${models}"

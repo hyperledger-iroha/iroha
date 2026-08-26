@@ -51,8 +51,6 @@ use std::{
 const SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS: &str = "60";
 const SORACLOUD_TEST_SUBPROCESS_TIMEOUT_HEADROOM: Duration = Duration::from_secs(15);
 const SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT: Duration = Duration::from_secs(60);
-const SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
-const SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES: usize = 4_096;
 fn canonical_quantity_literal_from_nanos(nanos: u128) -> String {
     const NANOS_PER_UNIT: u128 = 1_000_000_000;
     let whole = nanos / NANOS_PER_UNIT;
@@ -145,7 +143,7 @@ fn assert_soracloud_hf_lease_asset_ready(
     Ok(())
 }
 const SORACLOUD_LIVE_HF_TEST_REPO_ID: &str = "hf-internal-testing/tiny-random-gpt2";
-const SORACLOUD_LIVE_HF_TEST_MODEL_NAME: &str = "tiny-random-gpt2";
+const SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 fn soracloud_live_hf_allowed_signing() -> toml::Value {
     toml::Value::Array(vec![
         toml::Value::String("ed25519".to_owned()),
@@ -570,6 +568,16 @@ async fn wait_for_soracloud_hf_status_payload(
 }
 fn soracloud_command_args(args: &[&str]) -> Vec<String> {
     let mut effective_args = namespaced_soracloud_command_args(args);
+    if effective_args.first().is_some_and(|group| group == "hf") {
+        if !args.contains(&"--revision") {
+            effective_args.push("--revision".to_owned());
+            effective_args.push(SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION.to_owned());
+        }
+        if !args.contains(&"--storage-class") {
+            effective_args.push("--storage-class".to_owned());
+            effective_args.push("warm".to_owned());
+        }
+    }
     if !args.contains(&"--timeout-secs") {
         effective_args.push("--timeout-secs".to_owned());
         effective_args.push(SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS.to_owned());
@@ -612,11 +620,7 @@ fn namespaced_soracloud_command_args(args: &[&str]) -> Vec<String> {
         "model-weight-status" => Some(("model", "weight-status")),
         "model-upload-register" => Some(("model", "upload-register")),
         "model-upload-status" => Some(("model", "upload-status")),
-        "model-host-advertise" => Some(("model", "host-advertise")),
-        "model-host-heartbeat" => Some(("model", "host-heartbeat")),
-        "model-host-withdraw" => Some(("model", "host-withdraw")),
-        "model-host-status" => Some(("model", "host-status")),
-        "hf-deploy" => Some(("hf", "deploy")),
+        "hf-join" => Some(("hf", "join")),
         "hf-status" => Some(("hf", "status")),
         "hf-lease-leave" => Some(("hf", "lease-leave")),
         "hf-lease-renew" => Some(("hf", "lease-renew")),
@@ -646,12 +650,16 @@ fn namespaced_soracloud_command_args(args: &[&str]) -> Vec<String> {
 #[test]
 fn soracloud_command_args_append_timeout_once() {
     assert_eq!(
-        soracloud_command_args(&["hf-deploy", "--repo-id", "openai/gpt-oss"]),
+        soracloud_command_args(&["hf-join", "--repo-id", "openai/gpt-oss"]),
         vec![
             "hf".to_owned(),
-            "deploy".to_owned(),
+            "join".to_owned(),
             "--repo-id".to_owned(),
             "openai/gpt-oss".to_owned(),
+            "--revision".to_owned(),
+            SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION.to_owned(),
+            "--storage-class".to_owned(),
+            "warm".to_owned(),
             "--timeout-secs".to_owned(),
             SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS.to_owned(),
         ]
@@ -669,12 +677,16 @@ fn soracloud_command_args_append_timeout_once() {
             "status".to_owned(),
             "--repo-id".to_owned(),
             "openai/gpt-oss".to_owned(),
+            "--revision".to_owned(),
+            SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION.to_owned(),
+            "--storage-class".to_owned(),
+            "warm".to_owned(),
             "--timeout-secs".to_owned(),
             "15".to_owned(),
         ]
     );
     assert_eq!(
-        soracloud_subprocess_timeout(&["hf-deploy", "--repo-id", "openai/gpt-oss"]),
+        soracloud_subprocess_timeout(&["hf-join", "--repo-id", "openai/gpt-oss"]),
         Duration::from_secs(75)
     );
     assert_eq!(
@@ -817,157 +829,6 @@ fn read_mock_http_request_path(stream: &mut TcpStream) -> String {
         return url.path().to_owned();
     }
     target.split('?').next().unwrap_or_default().to_owned()
-}
-fn start_mock_hf_source_server() -> MockHttpServer {
-    let repo_id = SORACLOUD_LIVE_HF_TEST_REPO_ID;
-    let revision = SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION;
-    let weight_path = format!("/{repo_id}/resolve/{revision}/model.safetensors");
-    let info_path = format!("/api/models/{repo_id}/revision/{revision}");
-    let model_info = norito::json!({
-        "sha": revision,
-        "siblings": [
-            { "rfilename": "model.safetensors" }
-        ]
-    });
-    MockHttpServer::start(BTreeMap::from([
-        (
-            info_path,
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&model_info).expect("encode mock HF model info"),
-            },
-        ),
-        (
-            weight_path,
-            MockHttpResponse {
-                content_type: "application/octet-stream",
-                body: vec![7_u8; SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES],
-            },
-        ),
-    ]))
-}
-#[tokio::test]
-async fn mock_hf_source_server_serves_profile_routes() -> eyre::Result<()> {
-    let server = start_mock_hf_source_server();
-    let client = integration_tests::http::client();
-    let info = client
-        .get(format!(
-            "{}/api/models/{}/revision/{}",
-            server.base_url,
-            SORACLOUD_LIVE_HF_TEST_REPO_ID,
-            SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION
-        ))
-        .send()
-        .await?;
-    assert!(info.status().is_success());
-    let info_payload: Value = json::from_slice(&info.bytes().await?)?;
-    assert_eq!(
-        info_payload
-            .get("siblings")
-            .and_then(Value::as_array)
-            .and_then(|siblings| siblings.first())
-            .and_then(Value::as_object)
-            .and_then(|entry| entry.get("rfilename"))
-            .and_then(Value::as_str),
-        Some("model.safetensors")
-    );
-    let weights = client
-        .head(format!(
-            "{}/{}/resolve/{}/model.safetensors",
-            server.base_url,
-            SORACLOUD_LIVE_HF_TEST_REPO_ID,
-            SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION
-        ))
-        .send()
-        .await?;
-    assert!(weights.status().is_success());
-    assert_eq!(
-        weights
-            .headers()
-            .get(reqwest::header::CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok()),
-        Some("4096")
-    );
-    let repeated_info = client
-        .get(format!(
-            "{}/api/models/{}/revision/{}",
-            server.base_url,
-            SORACLOUD_LIVE_HF_TEST_REPO_ID,
-            SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION
-        ))
-        .send()
-        .await?;
-    assert!(
-        repeated_info.status().is_success(),
-        "mock HF server should continue serving later profile requests"
-    );
-    Ok(())
-}
-fn validator_program_config(
-    network: &iroha_test_network::Network,
-) -> eyre::Result<(ProgramConfig, String, AccountId)> {
-    let validator_peer = network
-        .peers()
-        .first()
-        .ok_or_else(|| eyre::eyre!("test network should expose at least one peer"))?;
-    Ok((
-        program_config_for_account(
-            &network.client(),
-            "wonderland",
-            validator_peer.streaming_key_pair(),
-        ),
-        validator_peer.id().to_string(),
-        validator_peer.account_id(),
-    ))
-}
-async fn advertise_soracloud_model_host(
-    cwd: &Path,
-    network: &iroha_test_network::Network,
-) -> eyre::Result<()> {
-    let (validator_config, peer_id, _validator_account_id) = validator_program_config(network)?;
-    let validator_accounts = network
-        .peers()
-        .iter()
-        .map(iroha_test_network::NetworkPeer::account_id)
-        .collect::<Vec<_>>();
-    assert_soracloud_hf_lease_asset_ready(&network.client(), &validator_accounts, 100_000)?;
-    let torii_url = network.client().torii_url.to_string();
-    let heartbeat_expires_at_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_millis()
-        .saturating_add(600_000)
-        .min(u128::from(u64::MAX)) as u64;
-    let heartbeat_expires_at_ms = heartbeat_expires_at_ms.to_string();
-    let advertise = run_soracloud_command(
-        cwd,
-        &validator_config,
-        &[
-            "model-host-advertise",
-            "--peer-id",
-            peer_id.as_str(),
-            "--backends",
-            "transformers",
-            "--formats",
-            "safetensors",
-            "--max-model-bytes",
-            "2147483648",
-            "--max-disk-cache-bytes",
-            "8589934592",
-            "--max-ram-bytes",
-            "8589934592",
-            "--max-concurrent-resident-models",
-            "4",
-            "--host-class",
-            "cpu.small",
-            "--heartbeat-expires-at-ms",
-            heartbeat_expires_at_ms.as_str(),
-            "--torii-url",
-            torii_url.as_str(),
-        ],
-    )
-    .await?;
-    assert_soracloud_success(&advertise, "model-host-advertise");
-    Ok(())
 }
 fn assert_requires_torii_url(output: &std::process::Output) {
     assert!(
@@ -1274,12 +1135,10 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
     )
     .await?;
     assert_soracloud_success(&deploy, "deploy");
-    let deploy_payload: Value =
+    let join_payload: Value =
         json::from_slice(&deploy.stdout).expect("CLI should emit deploy JSON payload");
     assert_eq!(
-        deploy_payload
-            .get("current_version")
-            .and_then(Value::as_str),
+        join_payload.get("current_version").and_then(Value::as_str),
         Some("1.0.0")
     );
     let upgrade = run_soracloud_command(
@@ -1897,9 +1756,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
-    let hf_source_server = start_mock_hf_source_server();
-    let hf_hub_base_url = hf_source_server.base_url.clone();
-    let hf_api_base_url = hf_source_server.api_base_url();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_npos_consensus()
@@ -1910,14 +1766,6 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
                 .write(
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
-                )
-                .write(
-                    ["soracloud_runtime", "hf", "hub_base_url"],
-                    hf_hub_base_url.clone(),
-                )
-                .write(
-                    ["soracloud_runtime", "hf", "api_base_url"],
-                    hf_api_base_url.clone(),
                 );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -1940,7 +1788,6 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-    advertise_soracloud_model_host(dir.path(), &network).await?;
     let repo_id = SORACLOUD_LIVE_HF_TEST_REPO_ID;
     let service_name_a = "hf_lease_a";
     let service_name_b = "hf_lease_b";
@@ -1955,7 +1802,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         dir.path(),
         &config,
         &[
-            "hf-deploy",
+            "hf-join",
             "--repo-id",
             repo_id,
             "--service-name",
@@ -1973,101 +1820,35 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         ],
     )
     .await?;
-    assert_soracloud_success(&deploy, "hf-deploy");
-    let deploy_payload: Value = json::from_slice(&deploy.stdout).expect("hf-deploy json");
+    assert_soracloud_success(&deploy, "hf-join");
+    let join_payload: Value = json::from_slice(&deploy.stdout).expect("hf-join json");
     assert_eq!(
-        deploy_payload
+        join_payload
             .get("action")
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("CreateWindow")
     );
-    assert_eq!(
-        deploy_payload
-            .get("importer_pending")
-            .and_then(Value::as_bool),
-        Some(false)
-    );
-    let deploy_source = deploy_payload
+    let join_source = join_payload
         .get("source")
         .and_then(Value::as_object)
-        .expect("hf-deploy source object");
+        .expect("hf-join source object");
     assert_eq!(
-        deploy_source
-            .get("status")
-            .and_then(|value| tagged_enum_label(value, "status")),
-        Some("Ready")
+        join_source.get("resolved_revision").and_then(Value::as_str),
+        Some(SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION)
     );
-    assert_eq!(
-        deploy_source.get("model_name").and_then(Value::as_str),
-        Some(SORACLOUD_LIVE_HF_TEST_MODEL_NAME)
-    );
-    assert_eq!(
-        deploy_source
-            .get("resolved_revision")
-            .and_then(Value::as_str),
-        Some("main")
-    );
-    let deploy_member = deploy_payload
+    let join_member = join_payload
         .get("member")
         .and_then(Value::as_object)
-        .expect("hf-deploy member object");
+        .expect("hf-join member object");
     assert_eq!(
-        deploy_member.get("last_charge").and_then(Value::as_str),
+        join_member.get("last_charge").and_then(Value::as_str),
         Some(base_fee.as_str())
-    );
-    let service_status = run_soracloud_command(
-        dir.path(),
-        &config,
-        &["status", "--torii-url", torii_url.as_str()],
-    )
-    .await?;
-    assert_soracloud_success(&service_status, "soracloud status after hf-deploy");
-    let service_status_payload: Value =
-        json::from_slice(&service_status.stdout).expect("soracloud status json");
-    let services = service_status_payload
-        .get("network_status")
-        .and_then(Value::as_object)
-        .and_then(|network_status| network_status.get("control_plane"))
-        .and_then(Value::as_object)
-        .and_then(|control_plane| control_plane.get("services"))
-        .and_then(Value::as_array)
-        .expect("soracloud services array");
-    assert!(
-        services.iter().any(|service| {
-            service.get("service_name").and_then(Value::as_str) == Some(service_name_a)
-        }),
-        "hf-deploy should auto-deploy service `{service_name_a}`"
-    );
-    let agent_status = run_soracloud_command(
-        dir.path(),
-        &config,
-        &[
-            "agent-status",
-            "--apartment-name",
-            apartment_name,
-            "--torii-url",
-            torii_url.as_str(),
-        ],
-    )
-    .await?;
-    assert_soracloud_success(&agent_status, "agent status after hf-deploy");
-    let agent_status_payload: Value =
-        json::from_slice(&agent_status.stdout).expect("agent status after hf-deploy json");
-    let apartments = agent_status_payload
-        .get("apartments")
-        .and_then(Value::as_array)
-        .expect("apartments array");
-    assert!(
-        apartments.iter().any(|apartment| {
-            apartment.get("apartment_name").and_then(Value::as_str) == Some(apartment_name)
-        }),
-        "hf-deploy should auto-deploy apartment `{apartment_name}`"
     );
     let rebind = run_soracloud_command(
         dir.path(),
         &config,
         &[
-            "hf-deploy",
+            "hf-join",
             "--repo-id",
             repo_id,
             "--service-name",
@@ -2083,7 +1864,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         ],
     )
     .await?;
-    assert_soracloud_success(&rebind, "hf-deploy rebind");
+    assert_soracloud_success(&rebind, "hf-join rebind");
     let rebind_payload: Value = json::from_slice(&rebind.stdout).expect("hf rebind json");
     assert_eq!(
         rebind_payload
@@ -2280,9 +2061,6 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
 async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
-    let hf_source_server = start_mock_hf_source_server();
-    let hf_hub_base_url = hf_source_server.base_url.clone();
-    let hf_api_base_url = hf_source_server.api_base_url();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_npos_consensus()
@@ -2293,14 +2071,6 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
                 .write(
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
-                )
-                .write(
-                    ["soracloud_runtime", "hf", "hub_base_url"],
-                    hf_hub_base_url.clone(),
-                )
-                .write(
-                    ["soracloud_runtime", "hf", "api_base_url"],
-                    hf_api_base_url.clone(),
                 );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -2323,12 +2093,10 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-    advertise_soracloud_model_host(dir.path(), &network).await?;
     let repo_id = SORACLOUD_LIVE_HF_TEST_REPO_ID;
     let initial_service_name = "hf_queue_a";
     let queued_service_name = "hf_queue_next";
     let promoted_service_name = "hf_queue_promoted";
-    let renewed_model_name = "tiny-random-gpt2-renewed";
     let lease_term_ms_value = 30_000_u64;
     let lease_term_ms = lease_term_ms_value.to_string();
     let base_fee = canonical_quantity_literal_from_nanos(10_000);
@@ -2340,7 +2108,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         dir.path(),
         &config,
         &[
-            "hf-deploy",
+            "hf-join",
             "--repo-id",
             repo_id,
             "--service-name",
@@ -2356,10 +2124,10 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         ],
     )
     .await?;
-    assert_soracloud_success(&deploy, "initial hf-deploy");
-    let deploy_payload: Value = json::from_slice(&deploy.stdout).expect("initial deploy json");
+    assert_soracloud_success(&deploy, "initial hf-join");
+    let join_payload: Value = json::from_slice(&deploy.stdout).expect("initial deploy json");
     assert_eq!(
-        deploy_payload
+        join_payload
             .get("action")
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("CreateWindow")
@@ -2371,8 +2139,6 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
             "hf-lease-renew",
             "--repo-id",
             repo_id,
-            "--model-name",
-            renewed_model_name,
             "--service-name",
             queued_service_name,
             "--lease-term-ms",
@@ -2408,10 +2174,6 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         .get("queued_next_window")
         .and_then(Value::as_object)
         .expect("queued next window");
-    assert_eq!(
-        queued_next_window.get("model_name").and_then(Value::as_str),
-        Some(renewed_model_name)
-    );
     assert_eq!(
         queued_next_window
             .get("service_name")
@@ -2474,11 +2236,9 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         dir.path(),
         &config,
         &[
-            "hf-deploy",
+            "hf-join",
             "--repo-id",
             repo_id,
-            "--model-name",
-            renewed_model_name,
             "--service-name",
             promoted_service_name,
             "--lease-term-ms",
@@ -2492,7 +2252,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         ],
     )
     .await?;
-    assert_soracloud_success(&promote, "promotion hf-deploy");
+    assert_soracloud_success(&promote, "promotion hf-join");
     let promote_payload: Value = json::from_slice(&promote.stdout).expect("promote json");
     assert_eq!(
         promote_payload
@@ -2526,14 +2286,6 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     .await?;
     assert_soracloud_success(&status, "post-promotion hf-status");
     let status_payload: Value = json::from_slice(&status.stdout).expect("status json");
-    let status_source = status_payload
-        .get("source")
-        .and_then(Value::as_object)
-        .expect("status source");
-    assert_eq!(
-        status_source.get("model_name").and_then(Value::as_str),
-        Some(renewed_model_name)
-    );
     let status_pool = status_payload
         .get("pool")
         .and_then(Value::as_object)
@@ -2583,9 +2335,6 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
 async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
-    let hf_source_server = start_mock_hf_source_server();
-    let hf_hub_base_url = hf_source_server.base_url.clone();
-    let hf_api_base_url = hf_source_server.api_base_url();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_npos_consensus()
@@ -2596,14 +2345,6 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
                 .write(
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
-                )
-                .write(
-                    ["soracloud_runtime", "hf", "hub_base_url"],
-                    hf_hub_base_url.clone(),
-                )
-                .write(
-                    ["soracloud_runtime", "hf", "api_base_url"],
-                    hf_api_base_url.clone(),
                 );
         })
         .with_genesis_instruction(Grant::account_permission(
@@ -2656,7 +2397,6 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         toml::to_string(&alice_config.toml())?.as_bytes(),
     )
     .await?;
-    advertise_soracloud_model_host(dir.path(), &network).await?;
     let repo_id = SORACLOUD_LIVE_HF_TEST_REPO_ID;
     let torii_url = network.client().torii_url.to_string();
     let lease_term_ms = 60_000_u64;
@@ -2667,11 +2407,11 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
     let alice_account_id = network.client().account.to_string();
     let bob_account_id = BOB_ID.to_string();
     let carpenter_account_id = CARPENTER_ID.to_string();
-    let alice_deploy = run_soracloud_command(
+    let alice_join = run_soracloud_command(
         dir.path(),
         &alice_config,
         &[
-            "hf-deploy",
+            "hf-join",
             "--repo-id",
             repo_id,
             "--service-name",
@@ -2687,28 +2427,28 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         ],
     )
     .await?;
-    assert_soracloud_success(&alice_deploy, "alice hf-deploy");
-    let alice_deploy_payload: Value =
-        json::from_slice(&alice_deploy.stdout).expect("alice hf-deploy json");
+    assert_soracloud_success(&alice_join, "alice hf-join");
+    let alice_join_payload: Value =
+        json::from_slice(&alice_join.stdout).expect("alice hf-join json");
     assert_eq!(
-        alice_deploy_payload
+        alice_join_payload
             .get("action")
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("CreateWindow")
     );
     assert_eq!(
-        alice_deploy_payload
+        alice_join_payload
             .get("member")
             .and_then(Value::as_object)
             .and_then(|member| member.get("last_charge"))
             .and_then(Value::as_str),
         Some(base_fee.as_str())
     );
-    let bob_deploy = run_soracloud_command(
+    let bob_join = run_soracloud_command(
         dir.path(),
         &bob_config,
         &[
-            "hf-deploy",
+            "hf-join",
             "--repo-id",
             repo_id,
             "--service-name",
@@ -2724,10 +2464,10 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         ],
     )
     .await?;
-    assert_soracloud_success(&bob_deploy, "bob hf-deploy");
-    let bob_deploy_payload: Value = json::from_slice(&bob_deploy.stdout).expect("bob deploy json");
+    assert_soracloud_success(&bob_join, "bob hf-join");
+    let bob_join_payload: Value = json::from_slice(&bob_join.stdout).expect("bob deploy json");
     assert_eq!(
-        bob_deploy_payload
+        bob_join_payload
             .get("action")
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("Join")
@@ -2798,18 +2538,18 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         (base_fee_subunits * u128::from(bob_remaining_ms) / u128::from(lease_term_ms)) / 2;
     let bob_expected_charge_quantity = canonical_quantity_literal_from_nanos(bob_expected_charge);
     assert_eq!(
-        bob_deploy_payload
+        bob_join_payload
             .get("member")
             .and_then(Value::as_object)
             .and_then(|member| member.get("last_charge"))
             .and_then(Value::as_str),
         Some(bob_expected_charge_quantity.as_str())
     );
-    let carpenter_deploy = run_soracloud_command(
+    let carpenter_join = run_soracloud_command(
         dir.path(),
         &carpenter_config,
         &[
-            "hf-deploy",
+            "hf-join",
             "--repo-id",
             repo_id,
             "--service-name",
@@ -2825,11 +2565,11 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         ],
     )
     .await?;
-    assert_soracloud_success(&carpenter_deploy, "carpenter hf-deploy");
-    let carpenter_deploy_payload: Value =
-        json::from_slice(&carpenter_deploy.stdout).expect("carpenter deploy json");
+    assert_soracloud_success(&carpenter_join, "carpenter hf-join");
+    let carpenter_join_payload: Value =
+        json::from_slice(&carpenter_join.stdout).expect("carpenter deploy json");
     assert_eq!(
-        carpenter_deploy_payload
+        carpenter_join_payload
             .get("action")
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("Join")
@@ -2905,7 +2645,7 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
     let carpenter_expected_charge_quantity =
         canonical_quantity_literal_from_nanos(carpenter_expected_charge);
     assert_eq!(
-        carpenter_deploy_payload
+        carpenter_join_payload
             .get("member")
             .and_then(Value::as_object)
             .and_then(|member| member.get("last_charge"))
@@ -3140,10 +2880,10 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         "--service", site_service_path.to_string_lossy().into_owned(),
         "--torii-url", network.client().torii_url.to_string(),
     );
-    let site_deploy_payload: Value =
+    let site_join_payload: Value =
         json::from_slice(&site_deploy.stdout).expect("site deploy JSON payload");
     assert_eq!(
-        site_deploy_payload
+        site_join_payload
             .get("current_version")
             .and_then(Value::as_str),
         Some("1.0.0")
@@ -3156,10 +2896,10 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         "--service", webapp_service_path.to_string_lossy().into_owned(),
         "--torii-url", network.client().torii_url.to_string(),
     );
-    let webapp_deploy_payload: Value =
+    let webapp_join_payload: Value =
         json::from_slice(&webapp_deploy.stdout).expect("webapp deploy JSON payload");
     assert_eq!(
-        webapp_deploy_payload
+        webapp_join_payload
             .get("current_version")
             .and_then(Value::as_str),
         Some("1.0.0")
@@ -3342,14 +3082,13 @@ async fn soracloud_agent_autonomy_controls_use_live_torii_control_plane() -> eyr
         SoracloudSuccessCase::new("agent deploy");
         "agent", "deploy",
         "--manifest", manifest_path.to_string_lossy().into_owned(),
-        "--lease-ticks", "30",
+        "--lease-blocks", "30",
         "--autonomy-budget-units", "500",
         "--torii-url", network.client().torii_url.to_string(),
     );
-    let deploy_payload: Value =
-        json::from_slice(&deploy.stdout).expect("agent deploy JSON payload");
+    let join_payload: Value = json::from_slice(&deploy.stdout).expect("agent deploy JSON payload");
     assert_eq!(
-        deploy_payload
+        join_payload
             .get("action")
             .and_then(Value::as_object)
             .and_then(|action| action.get("action"))
@@ -3357,7 +3096,7 @@ async fn soracloud_agent_autonomy_controls_use_live_torii_control_plane() -> eyr
         Some("Deploy")
     );
     assert_eq!(
-        deploy_payload
+        join_payload
             .get("budget_remaining_units")
             .and_then(Value::as_u64),
         Some(500)
@@ -3490,7 +3229,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         SoracloudSuccessCase::new("sender deploy");
         "agent", "deploy",
         "--manifest", sender_manifest_path.to_string_lossy().into_owned(),
-        "--lease-ticks", "1",
+        "--lease-blocks", "1",
         "--torii-url", network.client().torii_url.to_string(),
     );
     let _recipient_deploy = run_bounded_soracloud_success!(
@@ -3498,7 +3237,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         SoracloudSuccessCase::new("recipient deploy");
         "agent", "deploy",
         "--manifest", recipient_manifest_path.to_string_lossy().into_owned(),
-        "--lease-ticks", "30",
+        "--lease-blocks", "30",
         "--torii-url", network.client().torii_url.to_string(),
     );
     let expired_wallet = run_bounded_soracloud_command!(
@@ -3526,7 +3265,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         SoracloudSuccessCase::new("lease renew");
         "agent", "lease-renew",
         "--apartment-name", "ops_agent",
-        "--lease-ticks", "20",
+        "--lease-blocks", "20",
         "--torii-url", network.client().torii_url.to_string(),
     );
     let restart = run_bounded_soracloud_success!(
@@ -3767,7 +3506,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         SoracloudSuccessCase::new("sender deploy");
         "agent", "deploy",
         "--manifest", sender_manifest_path.to_string_lossy().into_owned(),
-        "--lease-ticks", "80",
+        "--lease-blocks", "80",
         "--autonomy-budget-units", "500",
         "--torii-url", &restart_torii_url,
     );
@@ -3776,7 +3515,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         SoracloudSuccessCase::new("recipient deploy");
         "agent", "deploy",
         "--manifest", recipient_manifest_path.to_string_lossy().into_owned(),
-        "--lease-ticks", "80",
+        "--lease-blocks", "80",
         "--autonomy-budget-units", "250",
         "--torii-url", &restart_torii_url,
     );
@@ -3900,7 +3639,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
     );
     assert!(
         apartment
-            .get("lease_remaining_ticks")
+            .get("lease_remaining_blocks")
             .and_then(Value::as_u64)
             .is_some_and(|ticks| ticks > 0)
     );
@@ -4290,7 +4029,7 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
             "agent-deploy",
             "--manifest",
             &manifest_path.to_string_lossy(),
-            "--lease-ticks",
+            "--lease-blocks",
             "1",
         ],
     )
@@ -4303,7 +4042,7 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
             "agent-lease-renew",
             "--apartment-name",
             "ops_agent",
-            "--lease-ticks",
+            "--lease-blocks",
             "20",
         ],
     )
@@ -4364,7 +4103,7 @@ async fn soracloud_hf_shared_lease_commands_require_torii_url() -> eyre::Result<
         dir.path(),
         &config,
         &[
-            "hf-deploy",
+            "hf-join",
             "--repo-id",
             "openai/gpt-oss",
             "--service-name",
@@ -4383,7 +4122,7 @@ async fn soracloud_hf_shared_lease_commands_require_torii_url() -> eyre::Result<
         dir.path(),
         &config,
         &[
-            "hf-deploy",
+            "hf-join",
             "--repo-id",
             "openai/gpt-oss",
             "--service-name",

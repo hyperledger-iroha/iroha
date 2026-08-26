@@ -10,7 +10,9 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
+import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 
 /** Minimal JSON parser for Torii contract deploy/call responses. */
@@ -56,6 +58,9 @@ public final class ContractJsonParser {
     validateUnsignedTransactionState(
         response.submitted(),
         response.txHashHex(),
+        null,
+        response.creationTimeMs(),
+        response.operationReceipt().feePayment(),
         response.transactionPayloadB64(),
         response.signingMessageB64(),
         "contract call response");
@@ -121,11 +126,15 @@ public final class ContractJsonParser {
                 root.get("executed_tx_hash_hex"), "multisig response.executed_tx_hash_hex")
             : null,
         asOptionalNonNegativeLong(root.get("creation_time_ms"), "multisig response.creation_time_ms"),
+        FeePaymentJson.parse(root.get("fee_payment"), "multisig response.fee_payment"),
         optionalBase64(root.get("transaction_payload_b64"), "multisig response.transaction_payload_b64"),
         optionalBase64(root.get("signing_message_b64"), "multisig response.signing_message_b64"));
     validateUnsignedTransactionState(
         response.submitted(),
         response.txHashHex(),
+        response.executedTxHashHex(),
+        response.creationTimeMs(),
+        response.feePayment(),
         response.transactionPayloadB64(),
         response.signingMessageB64(),
         "multisig response");
@@ -323,6 +332,9 @@ public final class ContractJsonParser {
   private static void validateUnsignedTransactionState(
       final boolean submitted,
       final String txHashHex,
+      final String executedTxHashHex,
+      final Long creationTimeMs,
+      final FeePaymentIntent feePayment,
       final String transactionPayloadB64,
       final String signingMessageB64,
       final String context) {
@@ -339,9 +351,10 @@ public final class ContractJsonParser {
     }
     final byte[] transactionPayload = Base64.getDecoder().decode(transactionPayloadB64);
     final byte[] signingMessage = Base64.getDecoder().decode(signingMessageB64);
+    final TransactionPayload decodedPayload;
     try {
-      NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(
-          transactionPayload, TransactionAdmissionIntent.QUEUE_PLAN_SYNCED);
+      decodedPayload = NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
+          transactionPayload, TransactionAdmissionIntent.ORDINARY);
     } catch (final Exception ex) {
       throw new IllegalStateException(
           context + ".transaction_payload_b64 must contain one canonical TransactionPayload", ex);
@@ -350,6 +363,18 @@ public final class ContractJsonParser {
         || !Arrays.equals(signingMessage, IrohaHash.prehash(transactionPayload))) {
       throw new IllegalStateException(
           context + ".signing_message_b64 must be the exact TransactionPayload hash");
+    }
+    if (feePayment == null || !decodedPayload.feePayment().equals(feePayment)) {
+      throw new IllegalStateException(
+          context + ".fee_payment must match the exact TransactionPayload");
+    }
+    if (creationTimeMs == null || decodedPayload.creationTimeMs() != creationTimeMs.longValue()) {
+      throw new IllegalStateException(
+          context + ".creation_time_ms must match the exact TransactionPayload");
+    }
+    if (executedTxHashHex != null) {
+      throw new IllegalStateException(
+          context + " unsigned response must not contain transaction hashes");
     }
   }
 

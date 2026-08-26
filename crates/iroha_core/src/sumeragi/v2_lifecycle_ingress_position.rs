@@ -3,9 +3,10 @@ use super::super::{
     FairV2Ingress, FairV2IngressClass, FairV2IngressDequeueDisposition, FairV2IngressEntry,
     FairV2IngressLeaderWirePhase, FairV2IngressLeaderWireSelectorProjection,
     FairV2IngressLeaderWireToken, FairV2IngressOwnershipEvidence, FairV2IngressQueueGateVerdict,
-    FairV2IngressSource, FairV2IngressSourceClass, FairV2IngressState, FairV2IngressWireKey,
-    InboundBlockMessage, fair_v2_ingress_leader_wire_selector_projection,
-    fair_v2_ingress_queue_gate_verdict, message::BlockMessage, select_fair_v2_ingress_candidate,
+    FairV2IngressSelectorAttemptDiagnosticV1, FairV2IngressSource, FairV2IngressSourceClass,
+    FairV2IngressState, FairV2IngressWireKey, InboundBlockMessage,
+    fair_v2_ingress_leader_wire_selector_projection, fair_v2_ingress_queue_gate_verdict,
+    message::BlockMessage, select_fair_v2_ingress_candidate,
 };
 use super::schema::{LifecycleContext, LifecycleDigest};
 use iroha_crypto::Hash;
@@ -88,6 +89,8 @@ pub(in crate::sumeragi) enum FairIngressQueueCutError {
     DuplicateAdmissionOrdinal,
     /// A position or frozen physical cutoff was not representable.
     PositionOverflow,
+    /// An explicit physical cutoff was zero or ahead of the live admission frontier.
+    InvalidPhysicalCut,
     /// An ingress occurrence lost or changed its exact ownership carrier.
     InvalidOccurrenceIdentity,
     /// The target wire carrier does not expose one exact lifecycle context.
@@ -140,13 +143,31 @@ impl PartialEq for FrozenFairIngressOccurrence {
     }
 }
 impl Eq for FrozenFairIngressOccurrence {}
+impl FrozenFairIngressOccurrence {
+    /// Compare the immutable queue carrier while deliberately excluding the
+    /// monotonic ownership/reply-route history refreshed by exact
+    /// retransmission coalescence.
+    fn same_carrier(&self, other: &Self) -> bool {
+        self.wire_key == other.wire_key
+            && self.encoded_hash == other.encoded_hash
+            && self.encoded_len == other.encoded_len
+            && self
+                .ownership_snapshot
+                .same_semantic_request(&other.ownership_snapshot)
+            && self.source_class == other.source_class
+            && self.class == other.class
+            && self.leader_wire_token == other.leader_wire_token
+            && self.queue_gate == other.queue_gate
+            && self.obsolete == other.obsolete
+    }
+}
 /// Opaque exact carrier retained for executor-owned selector classification.
 ///
 /// The queue cut is the sole mint. Fields remain hidden so a sibling cannot
 /// claim drainability, source class, or a physical ordinal independently of
 /// the state-locked queue projection.
 #[derive(Debug)]
-pub(super) struct FairIngressSelectorOccurrence {
+pub(in crate::sumeragi) struct FairIngressSelectorOccurrence {
     physical_admission_ordinal: u64,
     context: Option<LifecycleContext>,
     source_class: FairV2IngressSourceClass,
@@ -157,7 +178,7 @@ pub(super) struct FairIngressSelectorOccurrence {
 }
 impl FairIngressSelectorOccurrence {
     /// Return the exact queue-local physical ordinal.
-    pub(super) const fn physical_admission_ordinal(&self) -> u64 {
+    pub(in crate::sumeragi) const fn physical_admission_ordinal(&self) -> u64 {
         self.physical_admission_ordinal
     }
     /// Return the carrier-derived lifecycle context when the wire exposes one.
@@ -181,7 +202,7 @@ impl FairIngressSelectorOccurrence {
         self.obsolete
     }
     /// Borrow the exact immutable inbound carrier retained by the queue cut.
-    pub(super) fn inbound(&self) -> &InboundBlockMessage {
+    pub(in crate::sumeragi) fn inbound(&self) -> &InboundBlockMessage {
         &self.inbound
     }
     /// Clone the immutable carrier owner without copying its encoded body.
@@ -195,18 +216,43 @@ struct FrozenQueueGeometry<S, V> {
     lanes: BTreeMap<S, Vec<FrozenQueueOccurrence<V>>>,
     positions: BTreeMap<u64, FairIngressQueuePositions>,
 }
+fn same_fair_ingress_carrier_geometry(
+    retained: &FrozenQueueGeometry<FairV2IngressSource, FrozenFairIngressOccurrence>,
+    refreshed: &FrozenQueueGeometry<FairV2IngressSource, FrozenFairIngressOccurrence>,
+) -> bool {
+    retained.ready_prefix == refreshed.ready_prefix
+        && retained.positions == refreshed.positions
+        && retained.lanes.len() == refreshed.lanes.len()
+        && retained.lanes.iter().all(|(source, retained_lane)| {
+            refreshed.lanes.get(source).is_some_and(|refreshed_lane| {
+                retained_lane.len() == refreshed_lane.len()
+                    && retained_lane.iter().zip(refreshed_lane).all(
+                        |(retained_occurrence, refreshed_occurrence)| {
+                            retained_occurrence.physical_admission_ordinal
+                                == refreshed_occurrence.physical_admission_ordinal
+                                && retained_occurrence
+                                    .value
+                                    .same_carrier(&refreshed_occurrence.value)
+                        },
+                    )
+            })
+        })
+}
 /// Move-only owner of one exact pre-predicate fair-ingress service cut.
 ///
-/// Lock order is always `service_lock` then `state`. The state guard is
-/// released before this value is returned, while the service guard may span
-/// composite coordinator snapshot validation. Producers may append at or
-/// after `physical_cut`; they cannot change the frozen prefix. No network,
-/// crypto, effect execution, or coordinator mutation may run while a future
-/// dequeue commit holds the state guard.
+/// Lock order is always `service_lock`, optionally
+/// `producer_publication_lock`, then `state`. The state guard is released
+/// before this value is returned, while the service guard and an installed
+/// producer fence may span composite coordinator snapshot validation.
+/// Unfenced generic cuts still permit producers to append at or after
+/// `physical_cut`; they cannot change the frozen prefix. No network, crypto,
+/// effect execution, or coordinator mutation may run while a future dequeue
+/// commit holds the state guard.
 #[must_use = "the queue cut must be validated or consumed by the composite planner"]
 pub(super) struct FairIngressQueueCut<'a> {
     queue: &'a FairV2Ingress,
     _service_guard: MutexGuard<'a, ()>,
+    producer_publication_guard: Option<MutexGuard<'a, ()>>,
     physical_cut: u128,
     bound_context: (wire::HeightContextId, wire::Height),
     geometry: FrozenQueueGeometry<FairV2IngressSource, FrozenFairIngressOccurrence>,
@@ -226,9 +272,10 @@ pub(super) struct FairIngressQueueCut<'a> {
 /// then either narrow to a lifecycle census or physically remove this exact
 /// occurrence; it exposes no free-standing ordinal or dequeue primitive.
 #[must_use = "the selected ingress cut must narrow or dequeue its exact winner"]
-pub(super) struct FairIngressTurnCut<'a> {
+pub(in crate::sumeragi) struct FairIngressTurnCut<'a> {
     queue: &'a FairV2Ingress,
     _service_guard: MutexGuard<'a, ()>,
+    producer_publication_guard: Option<MutexGuard<'a, ()>>,
     physical_cut: u128,
     geometry: FrozenQueueGeometry<FairV2IngressSource, FrozenFairIngressOccurrence>,
     selector_occurrences: BTreeMap<u64, FairIngressSelectorOccurrence>,
@@ -420,6 +467,7 @@ impl PreparedFairIngressQueueWitness {
                     selection.physical_admission_ordinal,
                     selection.disposition,
                     true,
+                    false,
                     Instant::now(),
                 )
                 .map_err(|_| FairIngressQueueCutError::DequeueFailed)
@@ -616,6 +664,7 @@ impl LockedPreparedFairIngressExactDequeue<'_> {
                 selection.physical_admission_ordinal,
                 selection.disposition,
                 true,
+                false,
                 Instant::now(),
             )
             .expect("prevalidated lifecycle dequeue is infallible after publication");
@@ -645,6 +694,10 @@ impl FairIngressQueueCut<'_> {
     pub(super) const fn selected_positions(&self) -> FairIngressQueuePositions {
         self.selected_positions
     }
+    /// Return the exact queue-frozen disposition for the selected occurrence.
+    pub(super) const fn selected_disposition(&self) -> FairV2IngressDequeueDisposition {
+        self.selected_disposition
+    }
     /// Borrow the complete exact pre-cut occurrence census in ordinal order.
     pub(super) fn selector_occurrences(
         &self,
@@ -657,6 +710,7 @@ impl FairIngressQueueCut<'_> {
         let Self {
             queue,
             _service_guard,
+            producer_publication_guard,
             physical_cut,
             bound_context: _,
             geometry,
@@ -668,6 +722,7 @@ impl FairIngressQueueCut<'_> {
             selected_disposition,
         } = self;
         let queue_identity = Arc::clone(&queue.queue_identity);
+        drop(producer_publication_guard);
         drop(_service_guard);
         PreparedFairIngressQueueWitness {
             queue_identity,
@@ -783,6 +838,92 @@ impl FairIngressQueueCut<'_> {
     }
 }
 impl<'a> FairIngressQueueCut<'a> {
+    /// Convert a still-service-owned lifecycle cut directly into its final lock.
+    ///
+    /// A producer fence retained by the originating turn cut is moved into the
+    /// returned dequeue. An unfenced caller acquires that fence here and must
+    /// still pass the exact frozen-prefix comparison. This direct surface avoids
+    /// the borrow-free witness's intentional service-lock release/reacquire gap.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn into_locked_exact_dequeue_retaining(
+        mut self,
+        expected_context: LifecycleContext,
+        expected_physical_ordinal: u64,
+    ) -> Result<LockedPreparedFairIngressExactDequeue<'a>, (FairIngressQueueCutError, Self)> {
+        if self.selected_identity.context != expected_context {
+            return Err((FairIngressQueueCutError::ForeignCommitContext, self));
+        }
+        if self.selected_identity.physical_admission_ordinal != expected_physical_ordinal {
+            return Err((FairIngressQueueCutError::ForeignCommitOrdinal, self));
+        }
+        if self.producer_publication_guard.is_none() {
+            self.producer_publication_guard = Some(self.queue.producer_publication_lock.lock());
+        }
+        if !self.pre_cut_is_intact() {
+            return Err((FairIngressQueueCutError::QueueCutChanged, self));
+        }
+
+        let selection = (|| {
+            let selected_source = source_for_frozen_ordinal(
+                &self.geometry,
+                self.selected_identity.physical_admission_ordinal,
+            )
+            .ok_or(FairIngressQueueCutError::MissingTarget)?;
+            let selected_source_index = self
+                .geometry
+                .ready_prefix
+                .iter()
+                .position(|source| source == selected_source)
+                .ok_or(FairIngressQueueCutError::MissingReadyLane)?;
+            Ok(PreparedFairIngressQueueSelection {
+                ready_sources: self.geometry.ready_prefix.clone(),
+                selected_source_index,
+                physical_admission_ordinal: self.selected_identity.physical_admission_ordinal,
+                disposition: self.selected_disposition,
+            })
+        })();
+        let selection = match selection {
+            Ok(selection) => selection,
+            Err(error) => return Err((error, self)),
+        };
+
+        let Self {
+            queue,
+            _service_guard,
+            producer_publication_guard,
+            physical_cut,
+            bound_context: _,
+            geometry,
+            selector_occurrences,
+            pending_identities,
+            leader_wire_projection,
+            selected_identity,
+            selected_positions,
+            selected_disposition,
+        } = self;
+        drop(selector_occurrences);
+        let producer_publication_guard = producer_publication_guard
+            .expect("direct exact dequeue installed one producer-publication fence");
+        let witness = PreparedFairIngressQueueWitness {
+            queue_identity: Arc::clone(&queue.queue_identity),
+            physical_cut,
+            geometry,
+            pending_identities,
+            leader_wire_projection,
+            selected_identity,
+            selected_positions,
+            selected_disposition,
+        };
+        debug_assert!(witness.is_internally_exact());
+        Ok(LockedPreparedFairIngressExactDequeue {
+            queue,
+            _service_guard,
+            _producer_publication_guard: producer_publication_guard,
+            witness,
+            selection,
+        })
+    }
+
     /// Widen a current-context cut back to its exact queue-owned turn.
     ///
     /// This is used only when a complete executor census proves that a
@@ -792,6 +933,7 @@ impl<'a> FairIngressQueueCut<'a> {
         let Self {
             queue,
             _service_guard,
+            producer_publication_guard,
             physical_cut,
             bound_context,
             geometry,
@@ -813,6 +955,7 @@ impl<'a> FairIngressQueueCut<'a> {
         FairIngressTurnCut {
             queue,
             _service_guard,
+            producer_publication_guard,
             physical_cut,
             geometry,
             selector_occurrences,
@@ -828,15 +971,100 @@ impl<'a> FairIngressQueueCut<'a> {
 
 impl<'a> FairIngressTurnCut<'a> {
     /// Borrow the exact selected immutable carrier while dequeue service stays held.
-    pub(super) fn selected_occurrence(&self) -> &FairIngressSelectorOccurrence {
+    pub(in crate::sumeragi) fn selected_occurrence(&self) -> &FairIngressSelectorOccurrence {
         self.selector_occurrences
             .get(&self.selected_physical_ordinal)
             .expect("selected ingress occurrence remains in its frozen census")
     }
 
     /// Return the queue-frozen ordinary dequeue disposition.
-    pub(super) const fn selected_disposition(&self) -> FairV2IngressDequeueDisposition {
+    pub(in crate::sumeragi) const fn selected_disposition(
+        &self,
+    ) -> FairV2IngressDequeueDisposition {
         self.selected_disposition
+    }
+
+    /// Fence every producer mutation and refresh monotonic ownership coalescence.
+    ///
+    /// The cut already owns `service_lock`, so acquiring the publication fence
+    /// here follows the queue's global `service -> producer -> state` order.
+    /// Exact retransmission may have replaced reply-route/ownership history
+    /// before this call; that history is refreshed only when every immutable
+    /// carrier, position, gate, and leader-wire projection remains identical.
+    /// The returned cut retains both guards through lifecycle narrowing.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn fence_producer_publication_retaining(
+        mut self,
+    ) -> Result<Self, (FairIngressQueueCutError, Self)> {
+        if self.producer_publication_guard.is_none() {
+            self.producer_publication_guard = Some(self.queue.producer_publication_lock.lock());
+        }
+
+        let refreshed = (|| {
+            let state = self.queue.state.lock();
+            validate_live_queue_structure(&state)?;
+            let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection(
+                &state,
+                true,
+                Some(self.physical_cut),
+            )
+            .map_err(|_| FairIngressQueueCutError::InvalidLeaderWireAuthority)?;
+            let (geometry, selector_occurrences) =
+                freeze_live_geometry(&state, self.physical_cut, &leader_wire_projection)?;
+            let bound_context = state.leader_wire_context;
+            if bound_context != self.bound_context
+                || leader_wire_projection != self.leader_wire_projection
+                || !same_fair_ingress_carrier_geometry(&self.geometry, &geometry)
+            {
+                return Err(FairIngressQueueCutError::QueueCutChanged);
+            }
+            let selected_positions = geometry
+                .positions
+                .get(&self.selected_physical_ordinal)
+                .copied()
+                .ok_or(FairIngressQueueCutError::MissingTarget)?;
+            let selected_source =
+                source_for_frozen_ordinal(&geometry, self.selected_physical_ordinal)
+                    .ok_or(FairIngressQueueCutError::MissingTarget)?;
+            let selected_source_index = geometry
+                .ready_prefix
+                .iter()
+                .position(|source| source == selected_source)
+                .ok_or(FairIngressQueueCutError::MissingReadyLane)?;
+            let selected_projection =
+                frozen_projection_for_ordinal(&geometry, self.selected_physical_ordinal)
+                    .ok_or(FairIngressQueueCutError::MissingTarget)?;
+            let selected_disposition = if selected_projection.obsolete {
+                FairV2IngressDequeueDisposition::RetireObsolete
+            } else {
+                FairV2IngressDequeueDisposition::Admit
+            };
+            if selected_positions != self.selected_positions
+                || selected_source_index != self.selected_source_index
+                || selected_disposition != self.selected_disposition
+            {
+                return Err(FairIngressQueueCutError::QueueCutChanged);
+            }
+            drop(state);
+            validate_frozen_ownership_outside_state(&geometry, &selector_occurrences)?;
+            Ok((
+                geometry,
+                selector_occurrences,
+                leader_wire_projection,
+                bound_context,
+            ))
+        })();
+
+        match refreshed {
+            Ok((geometry, selector_occurrences, leader_wire_projection, bound_context)) => {
+                self.geometry = geometry;
+                self.selector_occurrences = selector_occurrences;
+                self.leader_wire_projection = leader_wire_projection;
+                self.bound_context = bound_context;
+                Ok(self)
+            }
+            Err(error) => Err((error, self)),
+        }
     }
 
     /// Narrow this exact winner to the active lifecycle when its carrier agrees.
@@ -885,6 +1113,7 @@ impl<'a> FairIngressTurnCut<'a> {
         let Self {
             queue,
             _service_guard,
+            producer_publication_guard,
             physical_cut,
             geometry,
             selector_occurrences,
@@ -898,6 +1127,7 @@ impl<'a> FairIngressTurnCut<'a> {
         let cut = FairIngressQueueCut {
             queue,
             _service_guard,
+            producer_publication_guard,
             physical_cut,
             bound_context,
             geometry,
@@ -924,7 +1154,7 @@ impl<'a> FairIngressTurnCut<'a> {
     /// returned with its service guard still held so the caller can close
     /// consensus output before releasing queue ownership.
     #[allow(clippy::result_large_err)]
-    pub(super) fn dequeue_exact_retaining(
+    pub(in crate::sumeragi) fn dequeue_exact_retaining(
         mut self,
     ) -> Result<
         (InboundBlockMessage, FairV2IngressDequeueDisposition),
@@ -940,6 +1170,7 @@ impl<'a> FairIngressTurnCut<'a> {
             self.selected_physical_ordinal,
             self.selected_disposition,
             true,
+            false,
             Instant::now(),
         ) {
             Ok(dequeued) => Ok(dequeued),
@@ -955,6 +1186,11 @@ enum LifecycleQueueCutTarget {
     Exact(u64),
     NextAdmissible,
 }
+#[derive(Clone, Copy)]
+enum FairIngressTurnSelectionPolicy {
+    OrdinaryRetireObsolete,
+    PredicateOnly,
+}
 impl FairV2Ingress {
     /// Select the exact next ordinary-or-lifecycle winner under one service episode.
     ///
@@ -966,23 +1202,87 @@ impl FairV2Ingress {
     /// occurrence.
     pub(super) fn capture_next_ingress_turn_cut(
         &self,
+        predicate: impl FnMut(&FairIngressSelectorOccurrence) -> bool,
+    ) -> Result<Option<FairIngressTurnCut<'_>>, FairIngressQueueCutError> {
+        self.capture_next_ingress_turn_cut_at(
+            None,
+            FairIngressTurnSelectionPolicy::OrdinaryRetireObsolete,
+            predicate,
+        )
+    }
+
+    /// Select the next ordinary-or-lifecycle winner strictly before an external cut.
+    ///
+    /// `physical_cut` is the first physical admission ordinal excluded from
+    /// this service episode. It must be non-zero and no later than the queue's
+    /// live next-admission ordinal while the service/state locks are held.
+    /// Later producer appends therefore cannot enter the frozen geometry or
+    /// renew a bounded pre-timeout scan. Selection and exact dequeue retain the
+    /// ordinary queue gate, source rotation, ownership, and durable handoff.
+    /// Unlike the ordinary turn, this bounded scan cannot select an unrelated
+    /// WAL-obsolete carrier when the supplied exact predicate rejects it.
+    pub(in crate::sumeragi) fn capture_next_ingress_turn_cut_before(
+        &self,
+        physical_cut: u128,
+        predicate: impl FnMut(&FairIngressSelectorOccurrence) -> bool,
+    ) -> Result<Option<FairIngressTurnCut<'_>>, FairIngressQueueCutError> {
+        self.capture_next_ingress_turn_cut_at(
+            Some(physical_cut),
+            FairIngressTurnSelectionPolicy::PredicateOnly,
+            predicate,
+        )
+    }
+
+    /// Select before a fixed cut while allowing ordinary obsolete retirement.
+    ///
+    /// This is the bounded dependency companion to
+    /// [`Self::capture_next_ingress_turn_cut_before`]. It preserves the same
+    /// immutable physical prefix but lets an already WAL-obsolete predecessor
+    /// cross the ordinary durable retirement tail even when `predicate`
+    /// accepts only the exact work blocked behind that predecessor. It grants
+    /// no gate bypass: a non-obsolete row must still satisfy `predicate` and a
+    /// blocked row remains ineligible.
+    pub(in crate::sumeragi) fn capture_next_ingress_turn_cut_before_with_obsolete_retirement(
+        &self,
+        physical_cut: u128,
+        predicate: impl FnMut(&FairIngressSelectorOccurrence) -> bool,
+    ) -> Result<Option<FairIngressTurnCut<'_>>, FairIngressQueueCutError> {
+        self.capture_next_ingress_turn_cut_at(
+            Some(physical_cut),
+            FairIngressTurnSelectionPolicy::OrdinaryRetireObsolete,
+            predicate,
+        )
+    }
+
+    fn capture_next_ingress_turn_cut_at(
+        &self,
+        requested_physical_cut: Option<u128>,
+        selection_policy: FairIngressTurnSelectionPolicy,
         mut predicate: impl FnMut(&FairIngressSelectorOccurrence) -> bool,
     ) -> Result<Option<FairIngressTurnCut<'_>>, FairIngressQueueCutError> {
         let service_guard = self.service_lock.lock();
         let service_attempt_at = Instant::now();
         let mut state = self.state.lock();
         validate_live_queue_structure(&state)?;
-        if state.len != 0 {
-            state.last_service_attempt_at = Some(service_attempt_at);
-        }
-        let physical_cut = u128::from(state.last_admission_ordinal)
+        let live_physical_cut = u128::from(state.last_admission_ordinal)
             .checked_add(1)
             .ok_or(FairIngressQueueCutError::PositionOverflow)?;
+        let physical_cut = requested_physical_cut.unwrap_or(live_physical_cut);
+        if physical_cut == 0 || physical_cut > live_physical_cut {
+            return Err(FairIngressQueueCutError::InvalidPhysicalCut);
+        }
         let leader_wire_projection =
             fair_v2_ingress_leader_wire_selector_projection(&state, true, Some(physical_cut))
                 .map_err(|_| FairIngressQueueCutError::InvalidLeaderWireAuthority)?;
         let (geometry, selector_occurrences) =
             freeze_live_geometry(&state, physical_cut, &leader_wire_projection)?;
+        let records_service_attempt = match selection_policy {
+            FairIngressTurnSelectionPolicy::OrdinaryRetireObsolete => state.len != 0,
+            FairIngressTurnSelectionPolicy::PredicateOnly => !selector_occurrences.is_empty(),
+        };
+        if records_service_attempt {
+            state.last_service_attempt_at = Some(service_attempt_at);
+        }
         let bound_context = state.leader_wire_context;
         drop(state);
         validate_frozen_ownership_outside_state(&geometry, &selector_occurrences)?;
@@ -1009,22 +1309,67 @@ impl FairV2Ingress {
                     .collect::<Result<Vec<_>, _>>()
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let Some((selected_source_index, selected_physical_ordinal, selected_disposition)) =
-            select_fair_v2_ingress_candidate(
-                &candidates,
-                |occurrence| {
-                    (
-                        occurrence.physical_admission_ordinal(),
-                        occurrence.queue_gate(),
-                        occurrence.is_obsolete(),
-                    )
-                },
-                |occurrence| predicate(occurrence),
-            )
-        else {
+        let (gate_blocked, gate_strict, gate_dependency) = selector_occurrences.values().fold(
+            (0usize, 0usize, 0usize),
+            |(blocked, strict, dependency), occurrence| match occurrence.queue_gate() {
+                FairV2IngressQueueGateVerdict::Blocked => {
+                    (blocked.saturating_add(1), strict, dependency)
+                }
+                FairV2IngressQueueGateVerdict::Strict => {
+                    (blocked, strict.saturating_add(1), dependency)
+                }
+                FairV2IngressQueueGateVerdict::Dependency => {
+                    (blocked, strict, dependency.saturating_add(1))
+                }
+            },
+        );
+        let mut predicate_tested = 0usize;
+        let mut predicate_rejected = 0usize;
+        let selected = select_fair_v2_ingress_candidate(
+            &candidates,
+            |occurrence| {
+                (
+                    occurrence.physical_admission_ordinal(),
+                    occurrence.queue_gate(),
+                    matches!(
+                        selection_policy,
+                        FairIngressTurnSelectionPolicy::OrdinaryRetireObsolete
+                    ) && occurrence.is_obsolete(),
+                )
+            },
+            |occurrence| {
+                predicate_tested = predicate_tested.saturating_add(1);
+                let accepted = predicate(occurrence);
+                if !accepted {
+                    predicate_rejected = predicate_rejected.saturating_add(1);
+                }
+                accepted
+            },
+        );
+        *self.last_selector_attempt.lock() = Some(FairV2IngressSelectorAttemptDiagnosticV1 {
+            observed_at: Instant::now(),
+            physical_cut,
+            depth: selector_occurrences.len(),
+            gate_blocked,
+            gate_strict,
+            gate_dependency,
+            predicate_tested,
+            predicate_rejected,
+            selected: selected.is_some(),
+        });
+        let Some((selected_source_index, selected_physical_ordinal, _)) = selected else {
             return Ok(None);
         };
         drop(candidates);
+        let selected_disposition = if selector_occurrences
+            .get(&selected_physical_ordinal)
+            .expect("shared fair selector returns one frozen occurrence")
+            .is_obsolete()
+        {
+            FairV2IngressDequeueDisposition::RetireObsolete
+        } else {
+            FairV2IngressDequeueDisposition::Admit
+        };
         let selected_positions = geometry
             .positions
             .get(&selected_physical_ordinal)
@@ -1033,6 +1378,7 @@ impl FairV2Ingress {
         Ok(Some(FairIngressTurnCut {
             queue: self,
             _service_guard: service_guard,
+            producer_publication_guard: None,
             physical_cut,
             geometry,
             selector_occurrences,
@@ -1164,6 +1510,7 @@ impl FairV2Ingress {
         let cut = FairIngressQueueCut {
             queue: self,
             _service_guard: service_guard,
+            producer_publication_guard: None,
             physical_cut,
             bound_context,
             geometry,
@@ -1713,7 +2060,8 @@ fn target_lifecycle_context(
                 response.certificate.round.height,
             )),
             wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => return None,
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
         },
         BlockMessage::V2(_) => return None,
         BlockMessage::KuraReplicaAdvert(_)
@@ -1951,6 +2299,33 @@ mod tests {
             ordinal,
         )
     }
+    fn two_commit_request_ingress() -> (FairV2Ingress, u64, u64) {
+        const HEIGHT: wire::Height = 19;
+        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"lifecycle-ingress-explicit-physical-cut-context",
+        )));
+        let peer = PeerId::from(KeyPair::random().public_key().clone());
+        let ingress = FairV2Ingress::new(16, 1024 * 1024, 512 * 1024, 0, 0);
+        ingress
+            .configure_roster([peer.clone()])
+            .expect("one validator lane fits the explicit-cut fixture");
+        ingress.state.lock().leader_wire_context = Some((context_id, HEIGHT));
+        ingress.open().expect("open explicit-cut fixture");
+
+        let mut ordinals = Vec::new();
+        for signature_byte in [41, 42] {
+            let message = commit_certificate_request(context_id, HEIGHT, &peer, signature_byte);
+            assert!(matches!(
+                ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                    message,
+                    peer.clone(),
+                )),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+            ordinals.push(ingress.state.lock().last_admission_ordinal);
+        }
+        (ingress, ordinals[0], ordinals[1])
+    }
     #[test]
     fn freezes_exact_one_based_lane_and_source_positions() {
         let ready = [Source::First, Source::Second, Source::Third];
@@ -2115,6 +2490,134 @@ mod tests {
     }
 
     #[test]
+    fn explicit_turn_cut_selects_an_exact_pre_cut_occurrence() {
+        let (ingress, first_ordinal, second_ordinal) = two_commit_request_ingress();
+        let physical_cut = ingress.next_physical_admission_ordinal();
+
+        let cut = ingress
+            .capture_next_ingress_turn_cut_before(physical_cut, |occurrence| {
+                occurrence.physical_admission_ordinal() == second_ordinal
+            })
+            .expect("capture a valid explicit physical cut")
+            .expect("the exact pre-cut occurrence is eligible");
+
+        assert_eq!(cut.physical_cut, physical_cut);
+        assert_eq!(
+            cut.selected_occurrence().physical_admission_ordinal(),
+            second_ordinal,
+            "an unrelated earlier row cannot consume the exact-predicate scan"
+        );
+        drop(cut);
+        assert_eq!(ingress.len(), 2, "cut capture is read-only");
+        let ordinary = ingress
+            .capture_next_ingress_turn_cut(|_| true)
+            .expect("ordinary recapture remains structurally valid")
+            .expect("the earlier generic row remains queued");
+        assert_eq!(
+            ordinary.selected_occurrence().physical_admission_ordinal(),
+            first_ordinal
+        );
+    }
+
+    #[test]
+    fn explicit_turn_cut_excludes_post_cut_occurrences_from_the_predicate() {
+        let (ingress, _, peer, first_message, first_ordinal) = single_commit_request_ingress(40);
+        let physical_cut = ingress.next_physical_admission_ordinal();
+        let (context_id, height) = match &first_message {
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::CommitCertificateRequest(request),
+                ..
+            }) => (request.context_id, request.height),
+            _ => panic!("explicit-cut fixture must retain a commit-certificate request"),
+        };
+        let post_cut_message = commit_certificate_request(context_id, height, &peer, 43);
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                post_cut_message,
+                peer,
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let second_ordinal = ingress.state.lock().last_admission_ordinal;
+        assert_eq!(u128::from(second_ordinal), physical_cut);
+        let mut tested = Vec::new();
+
+        let selected = ingress
+            .capture_next_ingress_turn_cut_before(physical_cut, |occurrence| {
+                let ordinal = occurrence.physical_admission_ordinal();
+                tested.push(ordinal);
+                ordinal == second_ordinal
+            })
+            .expect("capture a valid explicit physical cut");
+
+        assert!(selected.is_none(), "the post-cut match remains invisible");
+        assert_eq!(tested, vec![first_ordinal]);
+        assert_eq!(ingress.len(), 2);
+
+        let (post_cut_only, _, _) = two_commit_request_ingress();
+        assert!(
+            post_cut_only
+                .capture_next_ingress_turn_cut_before(1, |_| true)
+                .expect("the initial exclusion boundary is a valid cut")
+                .is_none()
+        );
+        assert!(
+            post_cut_only.state.lock().last_service_attempt_at.is_none(),
+            "traffic wholly after the frozen cut cannot claim a service attempt"
+        );
+    }
+
+    #[test]
+    fn explicit_turn_cut_rejects_zero_and_future_cuts() {
+        let (ingress, _, _) = two_commit_request_ingress();
+        let live_physical_cut = ingress.next_physical_admission_ordinal();
+
+        assert!(matches!(
+            ingress.capture_next_ingress_turn_cut_before(0, |_| true),
+            Err(FairIngressQueueCutError::InvalidPhysicalCut)
+        ));
+        assert!(matches!(
+            ingress.capture_next_ingress_turn_cut_before(live_physical_cut + 1, |_| true),
+            Err(FairIngressQueueCutError::InvalidPhysicalCut)
+        ));
+        assert_eq!(ingress.len(), 2);
+    }
+
+    #[test]
+    fn explicit_turn_cut_false_predicate_preserves_queue_geometry() {
+        let (ingress, first_ordinal, second_ordinal) = two_commit_request_ingress();
+        let physical_cut = u128::from(second_ordinal);
+        let before = {
+            let state = ingress.state.lock();
+            (state.len, state.ready.iter().cloned().collect::<Vec<_>>())
+        };
+
+        assert!(
+            ingress
+                .capture_next_ingress_turn_cut_before(physical_cut, |_| false)
+                .expect("a false predicate is a valid explicit-cut scan")
+                .is_none()
+        );
+        let after = {
+            let state = ingress.state.lock();
+            (state.len, state.ready.iter().cloned().collect::<Vec<_>>())
+        };
+        assert_eq!(
+            after, before,
+            "a rejected scan cannot remove or rotate work"
+        );
+
+        let retained = ingress
+            .capture_next_ingress_turn_cut_before(physical_cut, |_| true)
+            .expect("recapture the same frozen prefix")
+            .expect("the original fair winner remains queued");
+        assert_eq!(
+            retained.selected_occurrence().physical_admission_ordinal(),
+            first_ordinal
+        );
+    }
+
+    #[test]
     fn turn_cut_dequeues_exact_winner_once_and_preserves_ready_rotation() {
         const HEIGHT: wire::Height = 13;
         let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
@@ -2195,6 +2698,18 @@ mod tests {
                 .expect("a false pure predicate is a valid retained turn")
                 .is_none()
         );
+        let rejected_attempt = ingress
+            .last_selector_attempt
+            .lock()
+            .expect("the composite selector publishes its scalar attempt");
+        assert_eq!(rejected_attempt.depth, depth);
+        assert!(rejected_attempt.gate_strict > 0);
+        assert_eq!(
+            rejected_attempt.predicate_rejected,
+            rejected_attempt.predicate_tested
+        );
+        assert!(rejected_attempt.predicate_tested > 0);
+        assert!(!rejected_attempt.selected);
         let state = ingress.state.lock();
         assert_eq!(state.len, depth);
         assert_eq!(state.ready.iter().cloned().collect::<Vec<_>>(), ready);
@@ -2258,6 +2773,97 @@ mod tests {
     }
 
     #[test]
+    fn fenced_turn_refreshes_coalescence_and_transfers_guards_to_exact_dequeue() {
+        let (ingress, context, peer, message, ordinal) = single_commit_request_ingress(29);
+        let cut = ingress
+            .capture_next_ingress_turn_cut(|_| true)
+            .expect("capture current-context turn before ownership refresh")
+            .expect("current-context winner exists");
+        let ownership_before = cut
+            .selected_occurrence()
+            .inbound()
+            .ingress_ownership()
+            .expect("selected ingress retains ownership")
+            .process_local_projection_hash();
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                message.clone(),
+                peer.clone(),
+            )),
+            Ok(FairV2IngressPushDisposition::Coalesced)
+        ));
+        let cut = cut
+            .fence_producer_publication_retaining()
+            .unwrap_or_else(|(error, _)| panic!("refresh coalesced turn under fence: {error:?}"));
+        let ownership_after = cut
+            .selected_occurrence()
+            .inbound()
+            .ingress_ownership()
+            .expect("refreshed ingress retains ownership")
+            .process_local_projection_hash();
+        assert_ne!(
+            ownership_before, ownership_after,
+            "the fenced cut must retain the latest coalesced ownership"
+        );
+        assert!(ingress.service_lock.try_lock().is_none());
+        assert!(ingress.producer_publication_lock.try_lock().is_none());
+
+        let cut = match cut.narrow_to_lifecycle(context) {
+            Ok(FairIngressTurnContextCut::Lifecycle(cut)) => cut,
+            Ok(FairIngressTurnContextCut::Ordinary(_)) => {
+                panic!("refreshed current-context turn must remain lifecycle work")
+            }
+            Err((error, _)) => panic!("fenced refreshed turn must narrow exactly: {error:?}"),
+        };
+        assert_eq!(
+            cut.selected_disposition(),
+            FairV2IngressDequeueDisposition::Admit
+        );
+        let locked = cut
+            .into_locked_exact_dequeue_retaining(context, ordinal)
+            .unwrap_or_else(|(error, _)| panic!("direct fenced dequeue must lock: {error:?}"));
+        assert!(ingress.service_lock.try_lock().is_none());
+        assert!(ingress.producer_publication_lock.try_lock().is_none());
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let ingress = &ingress;
+            scope.spawn(move || {
+                started_tx
+                    .send(())
+                    .expect("fenced retransmission start receiver remains live");
+                let result =
+                    ingress.try_push(InboundBlockMessage::from_authenticated_peer(message, peer));
+                result_tx
+                    .send(result)
+                    .expect("fenced retransmission result receiver remains live");
+            });
+            started_rx
+                .recv()
+                .expect("retransmission reaches the retained producer fence");
+            std::thread::yield_now();
+            assert!(matches!(
+                result_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ));
+
+            let (dequeued, disposition) = locked.commit();
+            assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
+            drop(dequeued);
+            assert!(matches!(
+                result_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("retransmission resumes after direct exact dequeue"),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+        });
+        assert_eq!(ingress.len(), 1);
+        assert!(ingress.state.lock().last_admission_ordinal > ordinal);
+    }
+
+    #[test]
     fn lifecycle_cut_detects_selected_carrier_coalescence_during_selector_capture() {
         let (ingress, context, peer, message, ordinal) = single_commit_request_ingress(28);
         let turn = ingress
@@ -2297,6 +2903,52 @@ mod tests {
             Ok(FairIngressTurnContextCut::Lifecycle(_))
         ));
         assert_eq!(ingress.len(), 1, "stable recapture cannot dequeue the row");
+    }
+
+    #[test]
+    fn direct_locked_conversion_retains_unfenced_cut_after_coalescence() {
+        let (ingress, context, peer, message, ordinal) = single_commit_request_ingress(30);
+        let turn = ingress
+            .capture_next_ingress_turn_cut(|_| true)
+            .expect("capture unfenced current-context turn")
+            .expect("current-context winner exists");
+        let cut = match turn.narrow_to_lifecycle(context) {
+            Ok(FairIngressTurnContextCut::Lifecycle(cut)) => cut,
+            Ok(FairIngressTurnContextCut::Ordinary(_)) => {
+                panic!("current-context winner must narrow to lifecycle ownership")
+            }
+            Err((error, _)) => panic!("unchanged turn must narrow exactly: {error:?}"),
+        };
+        let foreign_context =
+            LifecycleContext::new(LifecycleDigest::new([0xA5; 32]), context.height());
+        let cut = match cut.into_locked_exact_dequeue_retaining(foreign_context, ordinal) {
+            Err((FairIngressQueueCutError::ForeignCommitContext, retained)) => retained,
+            Err((error, _)) => panic!("wrong direct-lock context returned {error:?}"),
+            Ok(_) => panic!("wrong context cannot enter the direct exact dequeue"),
+        };
+        let cut = match cut.into_locked_exact_dequeue_retaining(context, ordinal + 1) {
+            Err((FairIngressQueueCutError::ForeignCommitOrdinal, retained)) => retained,
+            Err((error, _)) => panic!("wrong direct-lock ordinal returned {error:?}"),
+            Ok(_) => panic!("wrong ordinal cannot enter the direct exact dequeue"),
+        };
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(message, peer)),
+            Ok(FairV2IngressPushDisposition::Coalesced)
+        ));
+
+        let retained = match cut.into_locked_exact_dequeue_retaining(context, ordinal) {
+            Err((FairIngressQueueCutError::QueueCutChanged, retained)) => retained,
+            Err((error, _)) => panic!("coalesced direct lock returned structural error: {error:?}"),
+            Ok(_) => panic!("unfenced stale cut cannot enter the direct exact dequeue"),
+        };
+        drop(retained);
+        assert_eq!(
+            ingress.len(),
+            1,
+            "rejected direct lock cannot dequeue the row"
+        );
+        assert!(ingress.service_lock.try_lock().is_some());
+        assert!(ingress.producer_publication_lock.try_lock().is_some());
     }
 
     #[test]

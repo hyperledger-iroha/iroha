@@ -12,6 +12,8 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::consensus_v2 as wire;
 use iroha_primitives::erasure::rs16;
 use std::path::Path;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use thiserror::Error;
 /// Canonical encoded payload and the manifest committing to every chunk.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +44,10 @@ pub(crate) enum ChunkAdmission {
 pub(crate) struct V2ChunkSession {
     manifest: wire::PayloadManifest,
     chunks: Vec<Option<Vec<u8>>>,
+    #[cfg(test)]
+    reconstruction_attempts: AtomicUsize,
+    #[cfg(test)]
+    payload_allocation_attempts: AtomicUsize,
 }
 impl V2ChunkSession {
     /// Open an empty bounded session for the exact validated manifest.
@@ -59,6 +65,10 @@ impl V2ChunkSession {
         Ok(Self {
             manifest,
             chunks: vec![None; chunk_count],
+            #[cfg(test)]
+            reconstruction_attempts: AtomicUsize::new(0),
+            #[cfg(test)]
+            payload_allocation_attempts: AtomicUsize::new(0),
         })
     }
     /// Borrow the immutable manifest.
@@ -106,6 +116,8 @@ impl V2ChunkSession {
     /// RS16 reconstruction needs any `data_shards` chunks per stripe. Missing
     /// parity chunks are not materialized unless needed to recover data.
     pub(crate) fn reconstruct(&self) -> Result<Option<Vec<u8>>, V2ChunkError> {
+        #[cfg(test)]
+        self.reconstruction_attempts.fetch_add(1, Ordering::Relaxed);
         let payload = self.reconstruct_rs16()?;
         let Some(payload) = payload else {
             return Ok(None);
@@ -116,6 +128,16 @@ impl V2ChunkSession {
             return Err(V2ChunkError::PayloadMismatch);
         }
         Ok(Some(payload))
+    }
+    /// Return how often reconstruction was attempted in this test session.
+    #[cfg(test)]
+    pub(crate) fn reconstruction_attempts(&self) -> usize {
+        self.reconstruction_attempts.load(Ordering::Relaxed)
+    }
+    /// Return how often reconstruction reached payload allocation in tests.
+    #[cfg(test)]
+    pub(crate) fn payload_allocation_attempts(&self) -> usize {
+        self.payload_allocation_attempts.load(Ordering::Relaxed)
     }
     fn validate_chunk(&self, index: usize, bytes: &[u8]) -> Result<(), V2ChunkError> {
         let expected_hash = self
@@ -142,6 +164,13 @@ impl V2ChunkSession {
         if stripe_width == 0 || !self.chunks.len().is_multiple_of(stripe_width) {
             return Err(V2ChunkError::InvalidErasureLayout);
         }
+        if self
+            .chunks
+            .chunks_exact(stripe_width)
+            .any(|stripe| stripe.iter().filter(|chunk| chunk.is_some()).count() < data_shards)
+        {
+            return Ok(None);
+        }
         let chunk_size = usize::try_from(self.manifest.layout.chunk_size_bytes)
             .map_err(|_| V2ChunkError::InvalidChunkLength)?;
         if !chunk_size.is_multiple_of(2) {
@@ -150,11 +179,11 @@ impl V2ChunkSession {
         let symbol_count = chunk_size / 2;
         let payload_size = usize::try_from(self.manifest.payload_size_bytes)
             .map_err(|_| V2ChunkError::PayloadTooLarge)?;
+        #[cfg(test)]
+        self.payload_allocation_attempts
+            .fetch_add(1, Ordering::Relaxed);
         let mut payload = Vec::with_capacity(payload_size);
         for stripe in self.chunks.chunks_exact(stripe_width) {
-            if stripe.iter().filter(|chunk| chunk.is_some()).count() < data_shards {
-                return Ok(None);
-            }
             if stripe.iter().take(data_shards).all(Option::is_some) {
                 for shard in stripe.iter().take(data_shards) {
                     payload.extend_from_slice(
@@ -467,6 +496,35 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn incomplete_multi_stripe_session_returns_before_payload_allocation() {
+        let payload = b"RS16 payload spanning more than one deterministic stripe";
+        let (context, encoded) = encode_fixture(payload);
+        let data_shards = usize::from(context.da_layout.data_shards);
+        let stripe_width =
+            usize::from(context.da_layout.data_shards + context.da_layout.parity_shards);
+        assert!(
+            encoded.chunks.len() > stripe_width,
+            "fixture must span more than one stripe"
+        );
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut session =
+            V2ChunkSession::open(root.path(), &context, encoded.manifest).expect("open session");
+        for (index, chunk) in encoded.chunks.iter().take(data_shards).enumerate() {
+            session
+                .admit_bytes(u32::try_from(index).expect("index"), chunk)
+                .expect("buffer complete first stripe data");
+        }
+        assert_eq!(session.reconstruction_attempts(), 0);
+        assert_eq!(session.payload_allocation_attempts(), 0);
+        assert_eq!(session.reconstruct().expect("pending reconstruction"), None);
+        assert_eq!(session.reconstruction_attempts(), 1);
+        assert_eq!(
+            session.payload_allocation_attempts(),
+            0,
+            "an incomplete later stripe must be found before payload allocation"
+        );
     }
     #[test]
     fn corruption_duplicates_and_insufficient_shards_are_rejected_or_pending() {

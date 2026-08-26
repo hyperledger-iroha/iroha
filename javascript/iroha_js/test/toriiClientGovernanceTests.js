@@ -57,7 +57,9 @@ export function registerToriiClientGovernanceTests({
   assert,
   BASE_URL,
   FIXTURE_ALICE_ID,
+  FIXTURE_ALICE_TEST_ID,
   FIXTURE_BOB_ID,
+  FIXTURE_BOB_NARNIA_ID,
   FIXTURE_CAROL_ID,
   GOVERNANCE_NETWORK_ID,
   GOVERNANCE_LOCAL_SIGNING_CONTEXT,
@@ -71,7 +73,6 @@ export function registerToriiClientGovernanceTests({
   ValidationErrorCode,
   cloneFixture,
   createResponse,
-  expectValidationErrorFixture,
   parseStrictLosslessIntegerJson,
   readFileSync,
   test,
@@ -79,31 +80,10 @@ export function registerToriiClientGovernanceTests({
 }) {
   test("governance helpers validate options", async () => {
     const client = new ToriiClient(BASE_URL);
-    const finalizePayload = {
-      referendumId: "ab".repeat(32),
-      proposalId: "ab".repeat(32),
-    };
-    const enactPayload = { proposalId: "cd".repeat(32) };
 
     await assert.rejects(
       () => client.getGovernanceCouncilCurrent("invalid"),
       /getGovernanceCouncilCurrent options must be an object/,
-    );
-    await assert.rejects(
-      () => client.governanceFinalizeReferendum(finalizePayload, { signal: "nope" }),
-      /governanceFinalizeReferendum options.signal must be an AbortSignal/,
-    );
-    await assert.rejects(
-      () => client.governanceFinalizeReferendum(finalizePayload, { extra: true }),
-      /governanceFinalizeReferendum options contains unsupported fields: extra/,
-    );
-    await assert.rejects(
-      () => client.governanceEnactProposal(enactPayload, { signal: "nope" }),
-      /governanceEnactProposal options.signal must be an AbortSignal/,
-    );
-    await assert.rejects(
-      () => client.governanceEnactProposal(enactPayload, { extra: true }),
-      /governanceEnactProposal options contains unsupported fields: extra/,
     );
     const optionTypeCases = [
       [
@@ -209,10 +189,22 @@ export function registerToriiClientGovernanceTests({
     };
     const client = new ToriiClient(BASE_URL, { fetchImpl });
 
-    assert.equal(await client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID), null);
-    assert.equal(await client.getGovernanceReferendum("ref.one~1"), null);
-    assert.equal(await client.getGovernanceTally("ref_two-2"), null);
-    assert.equal(await client.getGovernanceLocks("Ref3"), null);
+    assert.equal(
+      await client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID, governanceReadOptions()),
+      null,
+    );
+    assert.equal(
+      await client.getGovernanceReferendum("ref.one~1", governanceReadOptions()),
+      null,
+    );
+    assert.equal(
+      await client.getGovernanceTally("ref_two-2", governanceReadOptions()),
+      null,
+    );
+    assert.equal(
+      await client.getGovernanceLocks("Ref3", governanceReadOptions()),
+      null,
+    );
     assert.deepEqual(capturedUrls, [
       `${BASE_URL}/v1/gov/proposals/${GOVERNANCE_PROPOSAL_ID}`,
       `${BASE_URL}/v1/gov/referenda/ref.one~1`,
@@ -268,15 +260,6 @@ export function registerToriiClientGovernanceTests({
       "a".repeat(129),
     ];
     for (const selector of invalidSelectors) {
-      // eslint-disable-next-line no-await-in-loop
-      await assert.rejects(
-        () =>
-          client.governanceFinalizeReferendum({
-            referendumId: selector,
-            proposalId: "ab".repeat(32),
-          }),
-        /exact lowercase 32-byte hex string/u,
-      );
       const calls = [
         () =>
           client.governanceSubmitPlainBallot({
@@ -348,10 +331,34 @@ export function registerToriiClientGovernanceTests({
       privateKey: Buffer.alloc(32, 0x33),
     },
   });
+  const governanceReadOptions = (options = {}) =>
+    governanceBallotOptions(FIXTURE_ALICE_ID, options);
   const governanceBallotClient = (options = {}) => new ToriiClient(BASE_URL, {
     ...options,
     localSigningContext: GOVERNANCE_LOCAL_SIGNING_CONTEXT,
   });
+  const governanceProposalFixture = (kind, payload) => ({
+    found: true,
+    proposal: {
+      proposer: FIXTURE_ALICE_ID,
+      kind: { kind, payload },
+      created_height: 42,
+      status: "Enacted",
+    },
+  });
+  const readGovernanceProposalFixture = async (fixture) => {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: fixture,
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    return client.getGovernanceProposalTyped(
+      GOVERNANCE_PROPOSAL_ID,
+      governanceReadOptions(),
+    );
+  };
   test("getGovernanceProposalTyped parses DeployContract variant", async () => {
     const fetchImpl = async (url) => {
       assert.equal(url, `${BASE_URL}/v1/gov/proposals/${GOVERNANCE_PROPOSAL_ID}`);
@@ -362,24 +369,316 @@ export function registerToriiClientGovernanceTests({
       });
     };
     const client = new ToriiClient(BASE_URL, { fetchImpl });
-    const result = await client.getGovernanceProposalTyped(GOVERNANCE_PROPOSAL_ID);
+    const result = await client.getGovernanceProposalTyped(
+      GOVERNANCE_PROPOSAL_ID,
+      governanceReadOptions(),
+    );
     assert.equal(result.found, true);
     assert.ok(result.proposal);
-    assert.equal(result.proposal?.status, "Approved");
+    assert.equal(result.proposal?.status, "Enacted");
     assert.equal(result.proposal?.kind.variant, "DeployContract");
     assert.equal(
       result.proposal?.kind.deploy_contract?.contract_address,
       "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     );
+    assert.equal(result.proposal?.kind.deploy_contract?.code_hash, "aa".repeat(32));
+    assert.equal(result.proposal?.kind.deploy_contract?.abi_hash, "bb".repeat(32));
+    assert.equal(result.proposal?.kind.deploy_contract?.abi_version, 1);
+    assert.deepEqual(result.proposal?.kind.deploy_contract?.manifest_provenance, {
+      signer:
+        "ed012017CB79FB2B4120F2B1EC65E4198D6E08B28E813FEB01E4A400839B85E18080CE",
+      signature:
+        "C74557F062FDC5799D64FD2561103F6B13263B1FCE11F3148D48A34781F43D6C3ACB87C885BA666624A98D848AF3BF48A0A0C79FB3F28B244703269A52128809",
+    });
 
     const notFoundClient = new ToriiClient(BASE_URL, {
       fetchImpl: async () => createResponse({ status: 404 }),
     });
-    const missing = await notFoundClient.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID);
+    const missing = await notFoundClient.getGovernanceProposal(
+      GOVERNANCE_PROPOSAL_ID,
+      governanceReadOptions(),
+    );
     assert.equal(missing, null);
 
-    const missingTyped = await notFoundClient.getGovernanceProposalTyped(GOVERNANCE_PROPOSAL_ID);
+    const missingTyped = await notFoundClient.getGovernanceProposalTyped(
+      GOVERNANCE_PROPOSAL_ID,
+      governanceReadOptions(),
+    );
     assert.deepEqual(missingTyped, { found: false, proposal: null });
+  });
+
+  test("getGovernanceProposalTyped closes over all seven V1 proposal kinds", async () => {
+    const contractAddress =
+      "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+    const payoutBinding = {
+      contract_address: contractAddress,
+      code_hash: Array(32).fill(0x44),
+      entrypoint: "autonomous_validation_fee_tick",
+      treasury_account_id: FIXTURE_ALICE_TEST_ID,
+      ds_asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+      xor_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc",
+      pool_vault_account_id: FIXTURE_BOB_NARNIA_ID,
+      batch_ds: "10",
+      min_xor_out: "4",
+      max_xor_out: "100",
+      recipients: [
+        FIXTURE_ALICE_ID,
+        FIXTURE_BOB_ID,
+        FIXTURE_CAROL_ID,
+        SAMPLE_ACCOUNT_FORMS.canonical,
+      ].map((account_id) => ({ account_id, share: "0.25" })),
+    };
+    const packageId = {
+      home_dataspace: 7,
+      scope: { kind: "DataspaceRoot", value: null },
+      name: ["governed-package"],
+    };
+    const variants = [
+      [
+        "DeployContract",
+        cloneFixture(toriiFixtures.governance.proposalDeployContract).proposal.kind.payload,
+        "deploy_contract",
+      ],
+      [
+        "RuntimeUpgrade",
+        {
+          manifest: {
+            name: "runtime-v1-refresh",
+            description: "Canonical V1 runtime image",
+            abi_version: 1,
+            abi_hash: Array(32).fill(0x11),
+            added_syscalls: [],
+            added_pointer_types: [],
+            start_height: 100,
+            end_height: 120,
+            sbom_digests: [{ algorithm: "sha256", digest: "AQID" }],
+            slsa_attestation: "BAUG",
+            provenance: [],
+          },
+        },
+        "runtime_upgrade",
+      ],
+      [
+        "SccpRouteGovernance",
+        {
+          anchor: {
+            network_id: GOVERNANCE_NETWORK_ID.toString(),
+            action: {
+              action: "Remove",
+              route: {
+                lane_id: {
+                  source: { network: "bsc_mainnet", profile: null },
+                  target: { network: "sora_taira", profile: null },
+                },
+                route_id: "taira_bsc_xor",
+                asset_key: "xor",
+                revision: 1,
+              },
+            },
+          },
+        },
+        "sccp_route_governance",
+      ],
+      [
+        "ValidationFeePolicy",
+        {
+          proposal_operator: FIXTURE_ALICE_ID,
+          policy: {
+            schema_version: 1,
+            network_id: GOVERNANCE_NETWORK_ID.toString(),
+            policy_version: "1",
+            previous_policy_hash: null,
+            ds_asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            ds_scale: 2,
+            fee: "0.1",
+            treasury_account_id: FIXTURE_ALICE_TEST_ID,
+            charging_mode: {
+              charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION",
+              value: null,
+            },
+            effective_from_height: "121100",
+            expires_after_height: null,
+            exemption_classes: [],
+            treasury_payout_binding: null,
+          },
+          payout_lifecycle_proposal_id: null,
+        },
+        "validation_fee_policy",
+      ],
+      [
+        "ValidationFeePayoutLifecycle",
+        { proposal_operator: FIXTURE_ALICE_ID, payout_binding: payoutBinding },
+        "validation_fee_payout_lifecycle",
+      ],
+      [
+        "MusubiRegistryGovernance",
+        {
+          kind: "RetargetAlias",
+          value: { alias: ["stable-alias"], target: packageId, expected_revision: 1 },
+        },
+        "musubi_registry_governance",
+      ],
+      [
+        "SorafsProviderGovernance",
+        {
+          action: {
+            action: "establish",
+            value: { provider_id: [Array(32).fill(0x31)], owner: FIXTURE_ALICE_ID },
+          },
+        },
+        "sorafs_provider_governance",
+      ],
+    ];
+    for (const [variant, payload, resultField] of variants) {
+      // eslint-disable-next-line no-await-in-loop
+      const result = await readGovernanceProposalFixture(
+        governanceProposalFixture(variant, payload),
+      );
+      assert.equal(result.proposal?.kind.variant, variant);
+      assert.ok(result.proposal?.kind[resultField]);
+      assert.equal(Object.hasOwn(result.proposal?.kind ?? {}, "raw"), false);
+    }
+
+    const directProviderId = governanceProposalFixture("SorafsProviderGovernance", {
+      action: {
+        action: "establish",
+        value: { provider_id: Array(32).fill(0x31), owner: FIXTURE_ALICE_ID },
+      },
+    });
+    await assert.rejects(
+      readGovernanceProposalFixture(directProviderId),
+      /exact one-field ProviderId tuple/u,
+    );
+
+    const scalarMusubiNewtypes = governanceProposalFixture("MusubiRegistryGovernance", {
+      kind: "RetargetAlias",
+      value: {
+        alias: "stable-alias",
+        target: packageId,
+        expected_revision: 1,
+      },
+    });
+    await assert.rejects(
+      readGovernanceProposalFixture(scalarMusubiNewtypes),
+      /exact one-field string tuple/u,
+    );
+  });
+
+  test("getGovernanceProposalTyped rejects open, legacy, and inexact proposal shapes", async () => {
+    const canonical = cloneFixture(toriiFixtures.governance.proposalDeployContract);
+    for (const status of [
+      "Proposed",
+      "Rejected",
+      "Enacted",
+      "Superseded",
+      "ExecutionFailed",
+    ]) {
+      const fixture = cloneFixture(canonical);
+      fixture.proposal.status = status;
+      // eslint-disable-next-line no-await-in-loop
+      const result = await readGovernanceProposalFixture(fixture);
+      assert.equal(result.proposal?.status, status);
+    }
+    const cases = [
+      ["unknown proposal kind", (fixture) => {
+        fixture.proposal.kind.kind = "FutureProposal";
+      }],
+      ["legacy externally tagged kind", (fixture) => {
+        fixture.proposal.kind = { DeployContract: fixture.proposal.kind.payload };
+      }],
+      ["kind wrapper field", (fixture) => {
+        fixture.proposal.kind.raw = {};
+      }],
+      ["legacy record pipeline", (fixture) => {
+        fixture.proposal.pipeline = { stage: "retired" };
+      }],
+      ["missing record status", (fixture) => {
+        delete fixture.proposal.status;
+      }],
+      ["retired Approved status", (fixture) => {
+        fixture.proposal.status = "Approved";
+      }],
+      ["unknown SoraFS action", (fixture) => {
+        fixture.proposal.kind = {
+          kind: "SorafsProviderGovernance",
+          payload: { action: { action: "rotate", value: {} } },
+        };
+      }],
+      ["unknown Musubi action", (fixture) => {
+        fixture.proposal.kind = {
+          kind: "MusubiRegistryGovernance",
+          payload: { kind: "RestoreArtifact", value: {} },
+        };
+      }],
+    ];
+    for (const [label, mutate] of cases) {
+      const fixture = cloneFixture(canonical);
+      mutate(fixture);
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        () => readGovernanceProposalFixture(fixture),
+        undefined,
+        label,
+      );
+    }
+  });
+
+  test("getGovernanceProposalTyped rejects every retired deploy layout", async () => {
+    const canonical = cloneFixture(toriiFixtures.governance.proposalDeployContract);
+    const parse = async (mutate) => {
+      const fixture = cloneFixture(canonical);
+      mutate(fixture.proposal.kind.payload);
+      const client = new ToriiClient(BASE_URL, {
+        fetchImpl: async () => createResponse({
+          status: 200,
+          jsonData: fixture,
+          headers: { "content-type": "application/json" },
+        }),
+      });
+      return client.getGovernanceProposalTyped(
+        GOVERNANCE_PROPOSAL_ID,
+        governanceReadOptions(),
+      );
+    };
+
+    const nullable = await parse((deploy) => {
+      deploy.manifest_provenance = null;
+    });
+    assert.equal(nullable.proposal?.kind.deploy_contract?.manifest_provenance, null);
+
+    const cases = [
+      ["legacy hash names", (deploy) => {
+        deploy.code_hash_hex = deploy.code_hash;
+        deploy.abi_hash_hex = deploy.abi_hash;
+        delete deploy.code_hash;
+        delete deploy.abi_hash;
+      }],
+      ["string ABI", (deploy) => {
+        deploy.abi_version = "1";
+      }],
+      ["uppercase code hash", (deploy) => {
+        deploy.code_hash = deploy.code_hash.toUpperCase();
+      }],
+      ["prefixed ABI hash", (deploy) => {
+        deploy.abi_hash = `0x${deploy.abi_hash}`;
+      }],
+      ["missing provenance", (deploy) => {
+        delete deploy.manifest_provenance;
+      }],
+      ["unknown deploy field", (deploy) => {
+        deploy.mode = "retired";
+      }],
+      ["unknown provenance field", (deploy) => {
+        deploy.manifest_provenance.key_id = "retired";
+      }],
+      ["missing provenance signer", (deploy) => {
+        delete deploy.manifest_provenance.signer;
+      }],
+    ];
+    for (const [label, mutate] of cases) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(() => parse(mutate), undefined, label);
+    }
   });
 
   test("getGovernanceProposal forwards AbortSignal option", async () => {
@@ -394,7 +693,10 @@ export function registerToriiClientGovernanceTests({
       });
     };
     const client = new ToriiClient(BASE_URL, { fetchImpl });
-    await client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID, { signal: controller.signal });
+    await client.getGovernanceProposal(
+      GOVERNANCE_PROPOSAL_ID,
+      governanceReadOptions({ signal: controller.signal }),
+    );
     assert.equal(captured.url, `${BASE_URL}/v1/gov/proposals/${GOVERNANCE_PROPOSAL_ID}`);
     assert.ok(captured.init.signal instanceof AbortSignal);
   });
@@ -432,7 +734,7 @@ export function registerToriiClientGovernanceTests({
       });
     const client = new ToriiClient(BASE_URL, { fetchImpl });
     await assert.rejects(
-      () => client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID),
+      () => client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID, governanceReadOptions()),
       /governance proposal endpoint returned no payload/,
     );
   });
@@ -446,7 +748,7 @@ export function registerToriiClientGovernanceTests({
       });
     const client = new ToriiClient(BASE_URL, { fetchImpl });
     await assert.rejects(
-      () => client.getGovernanceReferendum("ref-1"),
+      () => client.getGovernanceReferendum("ref-1", governanceReadOptions()),
       /governance referendum endpoint returned no payload/,
     );
   });
@@ -487,7 +789,7 @@ export function registerToriiClientGovernanceTests({
       });
     const client = new ToriiClient(BASE_URL, { fetchImpl });
     await assert.rejects(
-      () => client.getGovernanceLocks("ref-1"),
+      () => client.getGovernanceLocks("ref-1", governanceReadOptions()),
       /governance locks endpoint returned no payload/,
     );
   });
@@ -496,7 +798,7 @@ export function registerToriiClientGovernanceTests({
     const fetchImpl = async () => createResponse({ status: 200 });
     const client = new ToriiClient(BASE_URL, { fetchImpl });
     await assert.rejects(
-      () => client.getGovernanceUnlockStats(),
+      () => client.getGovernanceUnlockStats(governanceReadOptions()),
       /governance unlock stats endpoint returned no payload/,
     );
   });
@@ -509,7 +811,10 @@ export function registerToriiClientGovernanceTests({
         headers: { "content-type": "application/json" },
       });
     const client = new ToriiClient(BASE_URL, { fetchImpl });
-    const result = await client.getGovernanceReferendumTyped("ref-1");
+    const result = await client.getGovernanceReferendumTyped(
+      "ref-1",
+      governanceReadOptions(),
+    );
     assert.equal(result.found, false);
     assert.equal(result.referendum, null);
   });
@@ -518,9 +823,12 @@ export function registerToriiClientGovernanceTests({
     const client = new ToriiClient(BASE_URL, {
       fetchImpl: async () => createResponse({ status: 404 }),
     });
-    const raw = await client.getGovernanceReferendum("missing-ref");
+    const raw = await client.getGovernanceReferendum("missing-ref", governanceReadOptions());
     assert.equal(raw, null);
-    const typed = await client.getGovernanceReferendumTyped("missing-ref");
+    const typed = await client.getGovernanceReferendumTyped(
+      "missing-ref",
+      governanceReadOptions(),
+    );
     assert.equal(typed.found, false);
     assert.equal(typed.referendum, null);
   });
@@ -537,7 +845,7 @@ export function registerToriiClientGovernanceTests({
         headers: { "content-type": "application/json" },
       });
     const client = new ToriiClient(BASE_URL, { fetchImpl });
-    const result = await client.getGovernanceLocksTyped("ref-1");
+    const result = await client.getGovernanceLocksTyped("ref-1", governanceReadOptions());
     assert.equal(result.found, true);
     assert.equal(Object.keys(result.locks).length, 1);
     const [firstLock] = Object.values(result.locks);
@@ -555,9 +863,12 @@ export function registerToriiClientGovernanceTests({
     const missingClient = new ToriiClient(BASE_URL, {
       fetchImpl: async () => createResponse({ status: 404 }),
     });
-    const raw = await missingClient.getGovernanceLocks("ref-2");
+    const raw = await missingClient.getGovernanceLocks("ref-2", governanceReadOptions());
     assert.equal(raw, null);
-    const missing = await missingClient.getGovernanceLocksTyped("ref-2");
+    const missing = await missingClient.getGovernanceLocksTyped(
+      "ref-2",
+      governanceReadOptions(),
+    );
     assert.deepEqual(missing, {
       found: false,
       locks: {},
@@ -578,7 +889,7 @@ export function registerToriiClientGovernanceTests({
             headers: { "content-type": "application/json" },
           }),
       });
-      return client.getGovernanceLocksTyped("ref-1");
+      return client.getGovernanceLocksTyped("ref-1", governanceReadOptions());
     };
 
     const legacy = await parseCustody((lock) => {
@@ -651,7 +962,7 @@ export function registerToriiClientGovernanceTests({
             }),
         });
         await assert.rejects(
-          () => client.getGovernanceLocksTyped("ref-1"),
+          () => client.getGovernanceLocksTyped("ref-1", governanceReadOptions()),
           /canonical non-negative Kotodama V1 quantity|canonical Kotodama V1 quantity/u,
           `${field} ${String(value)} must be rejected`,
         );
@@ -667,7 +978,7 @@ export function registerToriiClientGovernanceTests({
         headers: { "content-type": "application/json" },
       });
     const client = new ToriiClient(BASE_URL, { fetchImpl });
-    const stats = await client.getGovernanceUnlockStatsTyped();
+    const stats = await client.getGovernanceUnlockStatsTyped(governanceReadOptions());
     assert.equal(stats.height_current, 100);
     assert.equal(stats.expired_locks_now, 2);
     assert.equal(stats.referenda_with_expired, 1);
@@ -685,7 +996,7 @@ export function registerToriiClientGovernanceTests({
       });
     };
     const client = new ToriiClient(BASE_URL, { fetchImpl });
-    const tally = await client.getGovernanceTallyTyped("ref-1");
+    const tally = await client.getGovernanceTallyTyped("ref-1", governanceReadOptions());
     assert.equal(capturedUrl, `${BASE_URL}/v1/gov/tally/ref-1`);
     assert.deepEqual(tally, {
       found: true,
@@ -708,7 +1019,7 @@ export function registerToriiClientGovernanceTests({
       });
     const client = new ToriiClient(BASE_URL, { fetchImpl });
     await assert.rejects(
-      () => client.getGovernanceTallyTyped("ref-1"),
+      () => client.getGovernanceTallyTyped("ref-1", governanceReadOptions()),
       /governance tally endpoint returned no payload/,
     );
   });
@@ -717,104 +1028,17 @@ export function registerToriiClientGovernanceTests({
     const missingClient = new ToriiClient(BASE_URL, {
       fetchImpl: async () => createResponse({ status: 404 }),
     });
-    const raw = await missingClient.getGovernanceTally("ref-2");
+    const raw = await missingClient.getGovernanceTally("ref-2", governanceReadOptions());
     assert.equal(raw, null);
-    const missing = await missingClient.getGovernanceTallyTyped("ref-2");
+    const missing = await missingClient.getGovernanceTallyTyped(
+      "ref-2",
+      governanceReadOptions(),
+    );
     assert.deepEqual(missing, {
       found: false,
       referendum_id: "ref-2",
       tally: null,
     });
-  });
-
-  test("governanceFinalizeReferendum and governanceEnactProposal emit closed canonical payloads", async () => {
-    const captures = [];
-    const fetchImpl = async (url, init) => {
-      captures.push({ url, init });
-      if (url.endsWith("/finalize")) {
-        return createResponse({ status: 204 });
-      }
-      return createResponse({
-        status: 200,
-        jsonData: cloneFixture(toriiFixtures.governance.draftResponse),
-        headers: { "content-type": "application/json" },
-      });
-    };
-    const client = new ToriiClient(BASE_URL, { fetchImpl });
-    const finalizeProposal = "ab".repeat(32);
-    const enactProposal = "cd".repeat(32);
-    const finalizeHex = "ab".repeat(32);
-    const enactHex = "cd".repeat(32);
-    const finalizeResult = await client.governanceFinalizeReferendum({
-      referendumId: finalizeProposal,
-      proposalId: finalizeProposal,
-    });
-    assert.equal(finalizeResult, null);
-    const enact = await client.governanceEnactProposal({ proposalId: enactProposal });
-    assert.deepEqual(enact, {
-      ok: true,
-      proposal_id: enactHex,
-      tx_instructions: [
-        { wire_id: "FinalizeReferendum", payload_hex: "aaaaaaaa" },
-        { wire_id: "PersistCouncilForEpoch" },
-      ],
-    });
-    assert.equal(captures.length, 2);
-    assert.equal(captures[0].url, `${BASE_URL}/v1/gov/finalize`);
-    assert.equal(captures[1].url, `${BASE_URL}/v1/gov/enact`);
-    const finalizeBody = JSON.parse(String(captures[0].init.body));
-    assert.deepEqual(finalizeBody, {
-      referendum_id: finalizeHex,
-      proposal_id: finalizeHex,
-    });
-    const enactBody = JSON.parse(String(captures[1].init.body));
-    assert.deepEqual(enactBody, {
-      proposal_id: enactHex,
-    });
-    for (const capture of captures) {
-      assert.equal(capture.init.method, "POST");
-      assert.equal(capture.init.headers["Content-Type"], "application/json");
-    }
-  });
-
-  test("typed governance finalize/enact helpers always return drafts", async () => {
-    const captures = [];
-    const fetchImpl = async (url, init) => {
-      captures.push({ url, init });
-      if (url.endsWith("/finalize")) {
-        return createResponse({ status: 204 });
-      }
-      return createResponse({
-        status: 200,
-        jsonData: cloneFixture(toriiFixtures.governance.draftResponse),
-        headers: { "content-type": "application/json" },
-      });
-    };
-    const client = new ToriiClient(BASE_URL, { fetchImpl });
-    const finalizeProposalId = "01".repeat(32);
-    const finalizeDraft = await client.governanceFinalizeReferendumTyped({
-      referendumId: finalizeProposalId,
-      proposalId: finalizeProposalId,
-    });
-    assert.deepEqual(finalizeDraft, {
-      ok: true,
-      proposal_id: null,
-      tx_instructions: [],
-    });
-    const typedEnact = await client.governanceEnactProposalTyped({
-      proposalId: "02".repeat(32),
-    });
-    assert.deepEqual(typedEnact, {
-      ok: true,
-      proposal_id: "cd".repeat(32),
-      tx_instructions: [
-        { wire_id: "FinalizeReferendum", payload_hex: "aaaaaaaa" },
-        { wire_id: "PersistCouncilForEpoch" },
-      ],
-    });
-    assert.equal(captures.length, 2);
-    assert.equal(captures[0].url, `${BASE_URL}/v1/gov/finalize`);
-    assert.equal(captures[1].url, `${BASE_URL}/v1/gov/enact`);
   });
 
   test("draftMinistryAgendaProposal normalizes the draft response payload", async () => {
@@ -831,7 +1055,7 @@ export function registerToriiClientGovernanceTests({
           jsonData: {
             ok: true,
             agenda_proposal_id: "AC-2026-001",
-            authority: "i105-test-account",
+            authority: FIXTURE_ALICE_ID,
             tx_instructions: [
               { wire_id: "SubmitAgendaProposal", payload_hex: "aa55" },
             ],
@@ -871,8 +1095,8 @@ export function registerToriiClientGovernanceTests({
     };
     const draft = await client.draftMinistryAgendaProposal({
       proposal,
-      authority: "i105-test-account",
-    });
+      authority: FIXTURE_ALICE_ID,
+    }, governanceReadOptions());
 
     const withOrdinaryObjectPrototypes = (value) => {
       if (Array.isArray(value)) return value.map(withOrdinaryObjectPrototypes);
@@ -891,12 +1115,12 @@ export function registerToriiClientGovernanceTests({
         ...proposal,
         duplicates: [],
       },
-      authority: "i105-test-account",
+      authority: FIXTURE_ALICE_ID,
     });
     assert.deepEqual(draft, {
       ok: true,
       agenda_proposal_id: "AC-2026-001",
-      authority: "i105-test-account",
+      authority: FIXTURE_ALICE_ID,
       tx_instructions: [
         { wire_id: "SubmitAgendaProposal", payload_hex: "aa55" },
       ],
@@ -990,7 +1214,7 @@ export function registerToriiClientGovernanceTests({
                 proposal_id: "AC-2026-001",
                 action: "add-to-denylist",
               },
-              authority: "i105-test-account",
+              authority: FIXTURE_ALICE_ID,
               submitted_tx_hash_hex: "ab".repeat(32),
               submitted_height: 44,
             },
@@ -1000,8 +1224,14 @@ export function registerToriiClientGovernanceTests({
       },
     });
 
-    const missing = await client.getMinistryAgendaProposal(" AC-2026-001 ");
-    const found = await client.getMinistryAgendaProposal("AC-2026-001");
+    const missing = await client.getMinistryAgendaProposal(
+      " AC-2026-001 ",
+      governanceReadOptions(),
+    );
+    const found = await client.getMinistryAgendaProposal(
+      "AC-2026-001",
+      governanceReadOptions(),
+    );
 
     assert.deepEqual(missing, {
       found: false,
@@ -1014,7 +1244,7 @@ export function registerToriiClientGovernanceTests({
           proposal_id: "AC-2026-001",
           action: "add-to-denylist",
         },
-        authority: "i105-test-account",
+        authority: FIXTURE_ALICE_ID,
         submitted_tx_hash_hex: "ab".repeat(32),
         submitted_height: 44,
       },
@@ -1033,31 +1263,105 @@ export function registerToriiClientGovernanceTests({
         });
       },
     });
-    const result = await client.governanceProposeDeployContract({
-      contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-      codeHash: `BlAkE2b32:0X${"1a".repeat(32)}`,
-      abiHash: Buffer.alloc(32, 0xbb),
-      abiVersion: "1",
-      window: { lower: 10, upper: 42 },
-      mode: "Plain",
-      manifestProvenance: {
-        signer: `ed25519:ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`,
-        signature: `ed25519:${"22".repeat(64)}`,
+    const result = await client.governanceProposeDeployContract(
+      {
+        contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+        codeHash: `BlAkE2b32:0X${"1a".repeat(32)}`,
+        abiHash: Buffer.alloc(32, 0xbb),
+        abiVersion: 1,
+        manifestProvenance: {
+          signer: `ed25519:ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`,
+          signature: `ed25519:${"22".repeat(64)}`,
+        },
       },
-    });
+      governanceBallotOptions(FIXTURE_ALICE_ID),
+    );
     assert.equal(
       capturedBody.contract_address,
       "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     );
     assert.equal(capturedBody.code_hash, "1a".repeat(32));
     assert.equal(capturedBody.abi_hash, "bb".repeat(32));
-    assert.equal(capturedBody.mode, "Plain");
-    assert.deepEqual(capturedBody.window, { lower: 10, upper: 42 });
+    assert.equal(capturedBody.abi_version, 1);
+    assert.equal(Object.hasOwn(capturedBody, "mode"), false);
+    assert.equal(Object.hasOwn(capturedBody, "window"), false);
     assert.deepEqual(capturedBody.manifest_provenance, {
       signer: `ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX.toUpperCase()}`,
       signature: "22".repeat(64).toUpperCase(),
     });
     assert.equal(result.proposal_id, "cd".repeat(32));
+    assert.equal(Object.hasOwn(result, "ok"), false);
+    assert.deepEqual(result.tx_instructions, [
+      {
+        wire_id: "iroha_data_model::isi::governance::ProposeDeployContract",
+        payload_hex: "00",
+      },
+    ]);
+  });
+
+  test("governanceProposeDeployContract rejects noncanonical draft responses", async () => {
+    const request = {
+      contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+      codeHash: "11".repeat(32),
+      abiHash: "22".repeat(32),
+    };
+    const canonical = cloneFixture(toriiFixtures.governance.deployContractDraft);
+    const cases = [
+      { ...canonical, ok: true },
+      {
+        ...canonical,
+        tx_instructions: [{
+          wire_id: "iroha_data_model::isi::governance::ProposeDeployContract",
+        }],
+      },
+      {
+        ...canonical,
+        tx_instructions: [{
+          wire_id: "ProposeDeployContract",
+          payload_hex: "00",
+        }],
+      },
+      {
+        ...canonical,
+        tx_instructions: [...canonical.tx_instructions, ...canonical.tx_instructions],
+      },
+      {
+        ...canonical,
+        proposal_id: canonical.proposal_id.toUpperCase(),
+      },
+      {
+        ...canonical,
+        proposal_id: `0x${canonical.proposal_id}`,
+      },
+      {
+        ...canonical,
+        tx_instructions: [{
+          ...canonical.tx_instructions[0],
+          payload_hex: "AA",
+        }],
+      },
+      {
+        ...canonical,
+        tx_instructions: [{
+          ...canonical.tx_instructions[0],
+          payload_hex: "0x00",
+        }],
+      },
+    ];
+    for (const response of cases) {
+      const client = new ToriiClient(BASE_URL, {
+        fetchImpl: async () => createResponse({
+          status: 200,
+          jsonData: response,
+          headers: { "content-type": "application/json" },
+        }),
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(() => client.governanceProposeDeployContract(
+        request,
+        governanceBallotOptions(FIXTURE_ALICE_ID),
+      ));
+    }
   });
 
   test("governance mutation declarations expose closed V1 request shapes", () => {
@@ -1074,20 +1378,71 @@ export function registerToriiClientGovernanceTests({
         .map((match) => match[1])
         .sort();
 
-    assert.deepEqual(interfaceFields("ToriiGovernanceFinalizeRequest"), [
-      "proposalId",
-      "referendumId",
-    ]);
-    assert.deepEqual(interfaceFields("ToriiGovernanceEnactRequest"), ["proposalId"]);
-
     const deploy = interfaceBody("ToriiGovernanceDeployContractProposalRequest");
     assert.doesNotMatch(deploy, /\blimits\??:/u);
-    assert.match(deploy, /abiVersion\?: "1";/u);
+    assert.match(deploy, /abiVersion\?: 1;/u);
+    assert.doesNotMatch(deploy, /\b(?:window|mode)\??:/u);
     assert.match(
       deploy,
       /manifestProvenance\?: ToriiGovernanceManifestProvenanceInput \| null;/u,
     );
     assert.doesNotMatch(deploy, /manifest_provenance/u);
+    const storedDeploy = interfaceBody("ToriiGovernanceDeployContractProposal");
+    assert.deepEqual(interfaceFields("ToriiGovernanceDeployContractProposal"), [
+      "abi_hash",
+      "abi_version",
+      "code_hash",
+      "contract_address",
+      "manifest_provenance",
+    ]);
+    assert.match(storedDeploy, /abi_version: 1;/u);
+    assert.match(
+      storedDeploy,
+      /manifest_provenance: ToriiGovernanceManifestProvenance \| null;/u,
+    );
+    assert.doesNotMatch(storedDeploy, /(?:code_hash_hex|abi_hash_hex)/u);
+    assert.deepEqual(interfaceFields("ToriiGovernanceManifestProvenance"), [
+      "signature",
+      "signer",
+    ]);
+    const proposalKind = declarations.match(
+      /export type ToriiGovernanceProposalKind =([\s\S]*?);\n\nexport interface ToriiGovernanceProposalRecord/u,
+    );
+    assert.ok(proposalKind, "missing closed ToriiGovernanceProposalKind union");
+    for (const variant of [
+      "DeployContract",
+      "RuntimeUpgrade",
+      "SccpRouteGovernance",
+      "ValidationFeePolicy",
+      "ValidationFeePayoutLifecycle",
+      "MusubiRegistryGovernance",
+      "SorafsProviderGovernance",
+    ]) {
+      assert.match(proposalKind[1], new RegExp(`variant: "${variant}"`, "u"));
+    }
+    assert.doesNotMatch(proposalKind[1], /\braw\b|variant: string/u);
+    const proposalStatus = declarations.match(
+      /export type ToriiGovernanceProposalStatus =([\s\S]*?);/u,
+    );
+    assert.ok(proposalStatus, "missing closed ToriiGovernanceProposalStatus union");
+    assert.deepEqual(
+      [...proposalStatus[1].matchAll(/"([A-Za-z]+)"/gu)].map((match) => match[1]),
+      ["Proposed", "Rejected", "Enacted", "Superseded", "ExecutionFailed"],
+    );
+    assert.deepEqual(interfaceFields("ToriiGovernanceProposalRecord"), [
+      "created_height",
+      "kind",
+      "proposer",
+      "status",
+    ]);
+    assert.deepEqual(interfaceFields("ToriiGovernanceProposalDraftResponseV1"), [
+      "proposal_id",
+      "tx_instructions",
+    ]);
+    assert.deepEqual(interfaceFields("ToriiGovernanceProposalInstructionDraftV1"), [
+      "payload_hex",
+      "wire_id",
+    ]);
     const provenance = interfaceBody("ToriiGovernanceManifestProvenanceInput");
     assert.deepEqual(
       [...provenance.matchAll(/^\s+([A-Za-z_][A-Za-z0-9_]*)\??:/gmu)]
@@ -1147,17 +1502,21 @@ export function registerToriiClientGovernanceTests({
       },
     });
 
-    await client.governanceProposeDeployContract({
-      contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-      codeHash: Array.from(Buffer.alloc(32, 0x1a)),
-      abiHash: Array.from(Buffer.alloc(32, 0xbb)),
-    });
+    await client.governanceProposeDeployContract(
+      {
+        contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+        codeHash: Array.from(Buffer.alloc(32, 0x1a)),
+        abiHash: Array.from(Buffer.alloc(32, 0xbb)),
+      },
+      governanceBallotOptions(FIXTURE_ALICE_ID),
+    );
 
     assert.equal(capturedBody.code_hash, "1a".repeat(32));
     assert.equal(capturedBody.abi_hash, "bb".repeat(32));
+    assert.equal(capturedBody.abi_version, 1);
   });
 
-  test("governanceProposeDeployContract rejects non-V1 ABI labels before fetch", async () => {
+  test("governanceProposeDeployContract accepts only numeric ABI V1", async () => {
     let fetchCalls = 0;
     const client = new ToriiClient(BASE_URL, {
       fetchImpl: async () => {
@@ -1171,11 +1530,14 @@ export function registerToriiClientGovernanceTests({
       abiHash: "bb".repeat(32),
     };
 
-    for (const abiVersion of ["2", "01", " 1", "1 ", 1, null]) {
+    for (const abiVersion of ["1", "2", "01", " 1", "1 ", 0, 2, 1n, null]) {
       // eslint-disable-next-line no-await-in-loop
       await assert.rejects(
-        () => client.governanceProposeDeployContract({ ...base, abiVersion }),
-        /abiVersion must (?:be exactly '1'|be a string|not contain surrounding whitespace)/u,
+        () => client.governanceProposeDeployContract(
+          { ...base, abiVersion },
+          governanceBallotOptions(FIXTURE_ALICE_ID),
+        ),
+        /abiVersion must be exactly 1/u,
       );
     }
     assert.equal(fetchCalls, 0);
@@ -1203,23 +1565,22 @@ export function registerToriiClientGovernanceTests({
     ]) {
       // eslint-disable-next-line no-await-in-loop
       await assert.rejects(
-        () => client.governanceProposeDeployContract({ ...base, codeHash }),
+        () => client.governanceProposeDeployContract(
+          { ...base, codeHash },
+          governanceBallotOptions(FIXTURE_ALICE_ID),
+        ),
         /32-byte hex string|surrounding whitespace/u,
       );
     }
     assert.equal(fetchCalls, 0);
   });
 
-  test("governanceProposeDeployContract accepts only canonical voting modes", async () => {
-    const capturedModes = [];
+  test("governanceProposeDeployContract rejects retired lifecycle controls", async () => {
+    let fetchCalls = 0;
     const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async (_url, init) => {
-        capturedModes.push(JSON.parse(init.body).mode);
-        return createResponse({
-          status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.deployContractDraft),
-          headers: { "content-type": "application/json" },
-        });
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        throw new Error("retired lifecycle control reached transport");
       },
     });
     const base = {
@@ -1227,57 +1588,20 @@ export function registerToriiClientGovernanceTests({
       codeHash: `0x${"1a".repeat(32)}`,
       abiHash: Buffer.alloc(32, 0xbb),
     };
-    for (const mode of ["Zk", "Plain"]) {
-      await client.governanceProposeDeployContract({ ...base, mode });
-    }
-    assert.deepEqual(capturedModes, ["Zk", "Plain"]);
-    for (const mode of [
-      "zk",
-      "plain",
-      "ZKBALLOT",
-      "zk_vote",
-      " Plain ",
-      "plainballot",
-      "zero-knowledge",
-      "zkp",
-      "plaintext",
-      "plain_text",
-      "quadratic",
-      "ranked-choice",
-      1,
+    for (const [field, value] of [
+      ["window", { lower: 10, upper: 20 }],
+      ["mode", "Plain"],
+      ["votingMode", "Zk"],
     ]) {
       await assert.rejects(
-        () => client.governanceProposeDeployContract({ ...base, mode }),
-        /must be either 'Zk' or 'Plain'|surrounding whitespace|must be a string/u,
+        () => client.governanceProposeDeployContract(
+          { ...base, [field]: value },
+          governanceBallotOptions(FIXTURE_ALICE_ID),
+        ),
+        new RegExp(`unsupported fields: ${field}`, "u"),
       );
     }
-    assert.equal(capturedModes.length, 2, "invalid modes must fail before fetch");
-  });
-
-  test("governanceProposeDeployContract emits full-u64 window tokens losslessly", async () => {
-    let capturedBody;
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async (_url, init) => {
-        capturedBody = String(init.body);
-        return createResponse({
-          status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.deployContractDraft),
-          headers: { "content-type": "application/json" },
-        });
-      },
-    });
-    const maximum = (1n << 64n) - 1n;
-    await client.governanceProposeDeployContract({
-      contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-      codeHash: "1a".repeat(32),
-      abiHash: "bb".repeat(32),
-      window: { lower: maximum - 1n, upper: maximum },
-    });
-    assert.match(capturedBody, /"lower":18446744073709551614/u);
-    assert.match(capturedBody, /"upper":18446744073709551615/u);
-    const decoded = parseStrictLosslessIntegerJson(capturedBody, "deploy request");
-    assert.equal(decoded.window.lower, maximum - 1n);
-    assert.equal(decoded.window.upper, maximum);
+    assert.equal(fetchCalls, 0);
   });
 
   test("ToriiClient omits retired SCCP compatibility methods", () => {
@@ -1309,11 +1633,14 @@ export function registerToriiClientGovernanceTests({
 
     await assert.rejects(
       () =>
-        client.governanceProposeDeployContract({
-          contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-          codeHash: [256],
-          abiHash: Array.from(Buffer.alloc(32, 0xbb)),
-        }),
+        client.governanceProposeDeployContract(
+          {
+            contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+            codeHash: [256],
+            abiHash: Array.from(Buffer.alloc(32, 0xbb)),
+          },
+          governanceBallotOptions(FIXTURE_ALICE_ID),
+        ),
       (error) =>
         error?.name === "ValidationError" &&
         /governanceProposeDeployContract\.codeHash\[0\]/i.test(error.message),
@@ -1484,76 +1811,6 @@ export function registerToriiClientGovernanceTests({
     assert.equal(fetchCalls, 0);
   });
 
-  test("governanceSubmitParliamentBallot encodes the closed canonical stage ballot", async () => {
-    let capturedUrl;
-    let capturedBody;
-    let capturedSignal;
-    const client = governanceBallotClient({
-      fetchImpl: async (url, init) => {
-        capturedUrl = url;
-        capturedBody = JSON.parse(init.body);
-        capturedSignal = init.signal;
-        return createResponse({
-          status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.plainBallotResponse),
-          headers: { "content-type": "application/json" },
-        });
-      },
-    });
-    const controller = new AbortController();
-    const ballot = await client.governanceSubmitParliamentBallot(
-      {
-        authority: FIXTURE_ALICE_ID,
-        networkId: GOVERNANCE_NETWORK_ID,
-        proposalId: `blake2b32:${"AB".repeat(32)}`,
-        body: "policy-jury",
-        decision: "approve",
-      },
-      governanceBallotOptions(FIXTURE_ALICE_ID, { signal: controller.signal }),
-    );
-
-    assert.equal(capturedUrl, `${BASE_URL}/v1/gov/parliament/ballots`);
-    assert.equal(capturedSignal, controller.signal);
-    assert.deepEqual(capturedBody, {
-      authority: FIXTURE_ALICE_ID,
-      network_id: GOVERNANCE_NETWORK_ID.literal,
-      proposal_id: "ab".repeat(32),
-      body: "policy-jury",
-      decision: "approve",
-    });
-    assert.equal(ballot.accepted, true);
-  });
-
-  test("governanceSubmitParliamentBallot rejects noncanonical decision aliases before fetch", async () => {
-    let fetchCalls = 0;
-    const client = governanceBallotClient({
-      fetchImpl: async () => {
-        fetchCalls += 1;
-        throw new Error("fetch must not run for an invalid Parliament ballot");
-      },
-    });
-    const base = {
-      authority: FIXTURE_ALICE_ID,
-      networkId: GOVERNANCE_NETWORK_ID,
-      proposalId: "ab".repeat(32),
-      body: "policy-jury",
-    };
-    for (const decision of [
-      "Approve",
-      "Reject",
-      "Abstain",
-      "APPROVE",
-      " approve",
-    ]) {
-      // eslint-disable-next-line no-await-in-loop
-      await assert.rejects(
-        () => client.governanceSubmitParliamentBallot({ ...base, decision }),
-        /must be approve, reject, or abstain|surrounding whitespace/u,
-      );
-    }
-    assert.equal(fetchCalls, 0);
-  });
-
   test("governance mutations reject private-key aliases and unknown fields before fetch", async () => {
     let fetchCalls = 0;
     const client = governanceBallotClient({
@@ -1579,7 +1836,10 @@ export function registerToriiClientGovernanceTests({
           codeHash: "11".repeat(32),
           abiHash: "22".repeat(32),
         },
-        invoke: (payload) => client.governanceProposeDeployContract(payload),
+        invoke: (payload) => client.governanceProposeDeployContract(
+          payload,
+          governanceBallotOptions(FIXTURE_ALICE_ID),
+        ),
       },
       {
         name: "plain ballot",
@@ -1592,18 +1852,10 @@ export function registerToriiClientGovernanceTests({
           durationBlocks: 128,
           direction: "Aye",
         },
-        invoke: (payload) => client.governanceSubmitPlainBallot(payload),
-      },
-      {
-        name: "Parliament ballot",
-        payload: {
-          authority: FIXTURE_ALICE_ID,
-          networkId: GOVERNANCE_NETWORK_ID,
-          proposalId: "33".repeat(32),
-          body: "policy-jury",
-          decision: "approve",
-        },
-        invoke: (payload) => client.governanceSubmitParliamentBallot(payload),
+        invoke: (payload) => client.governanceSubmitPlainBallot(
+          payload,
+          governanceBallotOptions(FIXTURE_ALICE_ID),
+        ),
       },
       {
         name: "zk-v1 ballot",
@@ -1614,20 +1866,18 @@ export function registerToriiClientGovernanceTests({
           backend: "halo2/ipa",
           envelope: [4, 5],
         },
-        invoke: (payload) => client.governanceSubmitZkBallotV1(payload),
+        invoke: (payload) => client.governanceSubmitZkBallotV1(
+          payload,
+          governanceBallotOptions(FIXTURE_BOB_ID),
+        ),
       },
       {
         name: "zk-v1 ballot proof",
         payload: proofRequest,
-        invoke: (payload) => client.governanceSubmitZkBallotProofV1(payload),
-      },
-      {
-        name: "finalize",
-        payload: {
-          referendumId: "44".repeat(32),
-          proposalId: "44".repeat(32),
-        },
-        invoke: (payload) => client.governanceFinalizeReferendum(payload),
+        invoke: (payload) => client.governanceSubmitZkBallotProofV1(
+          payload,
+          governanceBallotOptions(FIXTURE_BOB_ID),
+        ),
       },
     ];
     const privateKeyAliases = [
@@ -1709,26 +1959,32 @@ export function registerToriiClientGovernanceTests({
     );
     await assert.rejects(
       () =>
-        client.governanceProposeDeployContract({
-          contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-          codeHash: "11".repeat(32),
-          abiHash: "22".repeat(32),
-          limits: { maxTx: 5 },
-        }),
+        client.governanceProposeDeployContract(
+          {
+            contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+            codeHash: "11".repeat(32),
+            abiHash: "22".repeat(32),
+            limits: { maxTx: 5 },
+          },
+          governanceBallotOptions(FIXTURE_ALICE_ID),
+        ),
       /unsupported fields: limits/u,
     );
     await assert.rejects(
       () =>
-        client.governanceProposeDeployContract({
-          contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-          codeHash: "11".repeat(32),
-          abiHash: "22".repeat(32),
-          manifestProvenance: {
-            signer: `ed25519:ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`,
-            signature: `ed25519:${"22".repeat(64)}`,
-            algorithm: "ed25519",
+        client.governanceProposeDeployContract(
+          {
+            contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+            codeHash: "11".repeat(32),
+            abiHash: "22".repeat(32),
+            manifestProvenance: {
+              signer: `ed25519:ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`,
+              signature: `ed25519:${"22".repeat(64)}`,
+              algorithm: "ed25519",
+            },
           },
-        }),
+          governanceBallotOptions(FIXTURE_ALICE_ID),
+        ),
       /unsupported fields: algorithm/u,
     );
     assert.equal(fetchCalls, 0);
@@ -1746,7 +2002,7 @@ export function registerToriiClientGovernanceTests({
       contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       codeHash: "11".repeat(32),
       abiHash: "22".repeat(32),
-      abiVersion: "1",
+      abiVersion: 1,
       manifestProvenance: {
         signer: `ed25519:ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`,
         signature: `ed25519:${"22".repeat(64)}`,
@@ -1760,13 +2016,6 @@ export function registerToriiClientGovernanceTests({
       amount: "42",
       durationBlocks: 128,
       direction: "Aye",
-    };
-    const parliament = {
-      authority: FIXTURE_ALICE_ID,
-      networkId: GOVERNANCE_NETWORK_ID,
-      proposalId: "33".repeat(32),
-      body: "policy-jury",
-      decision: "approve",
     };
     const publicInputs = {
       rootHint: "44".repeat(32),
@@ -1796,32 +2045,6 @@ export function registerToriiClientGovernanceTests({
     };
 
     const topLevelCases = [
-      [
-        "referendum_id",
-        () =>
-          client.governanceFinalizeReferendum({
-            referendumId: "ref-finalize",
-            proposalId: "66".repeat(32),
-            referendum_id: "ref-shadow",
-          }),
-      ],
-      [
-        "proposal_id",
-        () =>
-          client.governanceFinalizeReferendum({
-            referendumId: "ref-finalize",
-            proposalId: "66".repeat(32),
-            proposal_id: "77".repeat(32),
-          }),
-      ],
-      [
-        "proposal_id",
-        () =>
-          client.governanceEnactProposal({
-            proposalId: "66".repeat(32),
-            proposal_id: "77".repeat(32),
-          }),
-      ],
       ...[
         "contract_address",
         "contract_alias",
@@ -1831,7 +2054,10 @@ export function registerToriiClientGovernanceTests({
         "manifest_provenance",
       ].map((alias) => [
         alias,
-        () => client.governanceProposeDeployContract({ ...deploy, [alias]: "shadow" }),
+        () => client.governanceProposeDeployContract(
+          { ...deploy, [alias]: "shadow" },
+          governanceBallotOptions(FIXTURE_ALICE_ID),
+        ),
       ]),
       ...[
         "chain_id",
@@ -1843,12 +2069,6 @@ export function registerToriiClientGovernanceTests({
           alias,
           () => client.governanceSubmitPlainBallot({ ...plain, [alias]: "shadow" }),
         ]),
-      ...["chain_id", "genesis_hash", "genesisHash", "proposal_id"].map(
-        (alias) => [
-          alias,
-          () => client.governanceSubmitParliamentBallot({ ...parliament, [alias]: "shadow" }),
-        ],
-      ),
       ...[
         "chain_id",
         "genesis_hash",
@@ -2081,7 +2301,9 @@ export function registerToriiClientGovernanceTests({
     assert.equal(applyResponse.ok, true);
     assert.equal(applyResponse.applied, 2);
 
-    const getResponse = await client.getProtectedNamespaces({ signal: controller.signal });
+    const getResponse = await client.getProtectedNamespaces(
+      governanceReadOptions({ signal: controller.signal }),
+    );
     assert.equal(captures[1].url, `${BASE_URL}/v1/gov/protected-namespaces`);
     assert.equal(captures[1].init.method, "GET");
     assert.equal(captures[1].init.signal, controller.signal);
@@ -2151,14 +2373,12 @@ export function registerToriiClientGovernanceTests({
         client.governanceProposeDeployContract(
           {
             contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-            codeHash: "hash:DEMO",
+            codeHash: "11".repeat(32),
             abiHash: Buffer.alloc(32, 0xaa),
-            abiVersion: "1",
-            window: { lower: 1, upper: 5 },
-            mode: "Plain",
+            abiVersion: 1,
           },
           // @ts-expect-error: exercised to assert runtime validation.
-          { signal: {} },
+          governanceBallotOptions(FIXTURE_ALICE_ID, { signal: {} }),
         ),
       /governanceProposeDeployContract options\.signal must be an AbortSignal/,
     );
@@ -2555,7 +2775,7 @@ export function registerToriiClientGovernanceTests({
         });
       },
     });
-    const roster = await client.getGovernanceCouncilCurrent();
+    const roster = await client.getGovernanceCouncilCurrent(governanceReadOptions());
     assert.equal(callCount, 1);
     assert.equal(roster.epoch, 77);
     assert.deepEqual(roster.members, [
@@ -2574,188 +2794,6 @@ export function registerToriiClientGovernanceTests({
       () => client.getGovernanceCouncilCurrent("bad-options"),
       /getGovernanceCouncilCurrent options must be an object/,
     );
-  });
-
-  test("governanceFinalizeReferendum validates required fields", async () => {
-    let fetchCalls = 0;
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () => {
-        fetchCalls += 1;
-        return createResponse({ status: 204 });
-      },
-    });
-    await assert.rejects(
-      () =>
-        client.governanceFinalizeReferendum({
-          proposalId: `0x${"11".repeat(32)}`,
-        }),
-      (error) =>
-        expectValidationErrorFixture(
-          error,
-          "governanceFinalizeReferendum_referendum_required",
-        ),
-    );
-    await assert.rejects(
-      () =>
-        client.governanceFinalizeReferendum({
-          referendumId: "ref-3",
-        }),
-      (error) =>
-        expectValidationErrorFixture(
-          error,
-          "governanceFinalizeReferendum_proposal_required",
-        ),
-    );
-    await assert.rejects(
-      () =>
-        client.governanceFinalizeReferendum({
-          referendumId: "aa".repeat(32),
-          proposalId: "beef",
-        }),
-      (error) => {
-        assert(error instanceof ValidationError);
-        assert.equal(error.code, ValidationErrorCode.INVALID_HEX);
-        assert.equal(error.path, "governanceFinalizeReferendum.proposalId");
-        return true;
-      },
-    );
-    await assert.rejects(
-      () =>
-        client.governanceFinalizeReferendum({
-          referendumId: " ref-3 ",
-          proposalId: "aa".repeat(32),
-        }),
-      /referendumId.*surrounding whitespace/u,
-    );
-    await assert.rejects(
-      () =>
-        client.governanceFinalizeReferendum({
-          referendumId: "aa".repeat(32),
-          proposalId: ` ${"aa".repeat(32)}`,
-        }),
-      /proposalId.*surrounding whitespace/u,
-    );
-    for (const proposalId of [
-      `0x${"aa".repeat(32)}`,
-      "AA".repeat(32),
-      `blake2b32:${"aa".repeat(32)}`,
-    ]) {
-      // eslint-disable-next-line no-await-in-loop
-      await assert.rejects(
-        () =>
-          client.governanceFinalizeReferendum({
-            referendumId: "aa".repeat(32),
-            proposalId,
-          }),
-        /proposalId must be an exact lowercase 32-byte hex string/u,
-      );
-    }
-    await assert.rejects(
-      () =>
-        client.governanceFinalizeReferendum({
-          referendumId: "aa".repeat(32),
-          proposalId: "bb".repeat(32),
-        }),
-      /referendumId must equal proposalId/u,
-    );
-    assert.equal(fetchCalls, 0);
-  });
-
-  test("governanceEnactProposal rejects caller-controlled enactment fields before fetch", async () => {
-    let fetchCalls = 0;
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () => {
-        fetchCalls += 1;
-        return createResponse({
-          status: 200,
-          jsonData: { ok: true },
-          headers: { "content-type": "application/json" },
-        });
-      },
-    });
-    await assert.rejects(
-      () =>
-        client.governanceEnactProposal({
-          proposalId: "1234",
-        }),
-      (error) => {
-        assert(error instanceof ValidationError);
-        assert.equal(error.code, ValidationErrorCode.INVALID_HEX);
-        assert.equal(error.path, "governanceEnactProposal.proposalId");
-        return true;
-      },
-    );
-    await assert.rejects(
-      () =>
-        client.governanceEnactProposal({
-          proposalId: `0x${"aa".repeat(32)}`,
-          preimageHash: "zzzz",
-        }),
-      /unsupported fields: preimageHash/u,
-    );
-    await assert.rejects(
-      () =>
-        client.governanceEnactProposal({
-          proposalId: `0x${"aa".repeat(32)}`,
-          window: { upper: 4 },
-        }),
-      /unsupported fields: window/u,
-    );
-    await assert.rejects(
-      () =>
-        client.governanceEnactProposal({
-          proposalId: `0x${"aa".repeat(32)}`,
-          metadata: { private_key: "must-never-cross-the-boundary" },
-        }),
-      /does not accept private-key fields/u,
-    );
-    for (const proposalId of [
-      `0x${"aa".repeat(32)}`,
-      "AA".repeat(32),
-      ` ${"aa".repeat(32)}`,
-    ]) {
-      await assert.rejects(
-        () => client.governanceEnactProposal({ proposalId }),
-        /exact lowercase 32-byte hex string|surrounding whitespace/u,
-      );
-    }
-    assert.equal(fetchCalls, 0);
-  });
-
-  test("governance helpers surface structured hex validation", async () => {
-    const client = new ToriiClient(BASE_URL);
-    const cases = [
-      [
-        "governanceFinalizeReferendum",
-        () =>
-          client.governanceFinalizeReferendum({
-            referendumId: "aa".repeat(32),
-            proposalId: `zz${"aa".repeat(31)}`,
-          }),
-        "governanceFinalizeReferendum.proposalId",
-      ],
-      [
-        "governanceEnactProposal",
-        () =>
-          client.governanceEnactProposal({
-            proposalId: "0x1234",
-          }),
-        "governanceEnactProposal.proposalId",
-      ],
-    ];
-    for (const [label, invoke, path] of cases) {
-      // eslint-disable-next-line no-await-in-loop
-      await assert.rejects(invoke, (error) => {
-        assert(
-          error instanceof ValidationError,
-          `${label} should return a ValidationError for invalid proposal id`,
-        );
-        assert.equal(error.code, ValidationErrorCode.INVALID_HEX);
-        assert.equal(error.path, path);
-        assert.match(error.message, /32-byte hex string/);
-        return true;
-      });
-    }
   });
 
   test("setProtectedNamespaces posts exact namespace list", async () => {
@@ -2813,7 +2851,7 @@ export function registerToriiClientGovernanceTests({
           headers: { "content-type": "application/json" },
         }),
     });
-    const result = await client.getProtectedNamespaces();
+    const result = await client.getProtectedNamespaces(governanceReadOptions());
     assert.deepEqual(result, { found: true, namespaces: ["apps", "system"] });
   });
 
@@ -2827,7 +2865,7 @@ export function registerToriiClientGovernanceTests({
         }),
     });
     await assert.rejects(
-      () => client.getProtectedNamespaces(),
+      () => client.getProtectedNamespaces(governanceReadOptions()),
       /protected namespaces response\.namespaces\[0\] must not contain surrounding whitespace/,
     );
   });

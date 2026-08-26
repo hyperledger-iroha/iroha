@@ -811,8 +811,12 @@ causal `BeginPrepare` successor, and the frozen Normal delivery shape for
 Proposal, PrepareVote, and CommitVote items. Reachable delivery ownership must
 originate at authenticated ingress, but protection follows the stored class so
 view movement cannot drop an admitted CommitVote when its dynamic classification
-becomes historical Progress. Authenticated `TimeoutVote`/`DeliverTimeout` owns
-a signer-keyed protected Progress slot. Certified-body and Commit-certificate
+becomes historical Progress. An exact current-view Prepare for an older durable
+lock also becomes typed Progress only after local validation has independently
+bound the unchanged subject and execution commitment for that current round;
+generic Prepare traffic remains Normal. Authenticated
+`TimeoutVote`/`DeliverTimeout` owns a signer-keyed protected Progress slot.
+Certified-body and Commit-certificate
 recovery requests receive fresh live Serve nonces and occurrence-level FIFO
 ranks, so equal request values cannot collapse one another's starvation
 witness. These constructor families deliberately over-approximate reachable
@@ -1723,7 +1727,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`a7364ee89cfab31a3a48d13e7f74b6e353bc34871619da907200b84cdf482a07`.
+`331123d12b08027a9ac0ed0157ed84007eac5a8659b1995bf4c77c3eedb231c2`.
 The separate source-sealed G-UNIT inventory contains 522 focused tests,
 including 316 `iroha_core` tests. Its 523-line
 canonical TSV has SHA-256
@@ -1778,7 +1782,7 @@ includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
 latest consumer, byte retirement, three-class production arbitration, the exact
-`5N+3H` ingress and `2N+3` deferred partitions, successor activation/recovery,
+`5N+3H` ingress and `3N+3` deferred partitions, successor activation/recovery,
 authenticated exact historical recovery, retained effect-capacity ownership,
 post-decision timeout/TC quiescence, and watchdog classification. It also pins
 the adapter's maximum flattened persistence macro-step at four effects within

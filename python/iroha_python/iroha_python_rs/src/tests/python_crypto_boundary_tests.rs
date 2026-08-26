@@ -477,8 +477,94 @@ fn decode_transaction_receipt_json_roundtrip() {
     assert_eq!(decoded, expected);
 }
 #[test]
+fn transaction_submission_native_boundary_pins_wire_hash_and_receipt_signer() {
+    ensure_python();
+    let transaction_signing = SigningKey::from_bytes(&[0x31; 32]);
+    let transaction_private =
+        parse_private_key(transaction_signing.as_bytes()).expect("transaction private key");
+    let authority = AccountId::new(PublicKey::from(transaction_private))
+        .canonical_i105()
+        .expect("canonical transaction authority");
+    let mut builder = TransactionBuilder::new(
+        &python_test_network_id(),
+        &authority,
+        authority_fee_payment_json(),
+    )
+    .expect("transaction builder");
+    let envelope = builder
+        .sign(transaction_signing.as_bytes())
+        .expect("signed transaction envelope");
+
+    let receipt_key_pair =
+        KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519).expect("receipt signing key");
+    let expected_receipt_signer = receipt_key_pair.public_key().to_string();
+    Python::attach(|py| {
+        let (hash, canonical_signer) =
+            sorafs_orderbook_submission::inspect_transaction_submission_v1_py(
+                py,
+                &envelope.signed_transaction_versioned,
+                &expected_receipt_signer,
+            )
+            .expect("native submission inspection");
+        assert_eq!(hash.bind(py).as_bytes(), envelope.hash);
+        assert_eq!(canonical_signer, expected_receipt_signer);
+    });
+    Python::attach(|py| {
+        assert!(
+            sorafs_orderbook_submission::inspect_transaction_submission_v1_py(
+                py,
+                &envelope.signed_transaction_versioned,
+                &format!(" {expected_receipt_signer}"),
+            )
+            .is_err(),
+            "non-canonical receipt signer text must fail before dispatch",
+        );
+    });
+
+    let transaction_hash =
+        HashOf::<iroha_data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+            Hash::prehashed(envelope.hash),
+        );
+    let receipt = TransactionSubmissionReceipt::sign(
+        iroha_data_model::transaction::TransactionSubmissionReceiptPayload {
+            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::from(transaction_hash)),
+            signed_transaction_hash: Some(transaction_hash),
+            submitted_at_ms: 42,
+            submitted_at_height: 7,
+            signer: receipt_key_pair.public_key().clone(),
+        },
+        &receipt_key_pair,
+    );
+    let receipt_bytes = norito::encode_canonical(&receipt).expect("canonical receipt");
+    let hash_literal = transaction_hash.to_string();
+    let verified = sorafs_orderbook_submission::verify_transaction_submission_receipt_v1_py(
+        &receipt_bytes,
+        &hash_literal,
+        &expected_receipt_signer,
+    )
+    .expect("pinned receipt verifies");
+    assert_eq!(
+        verified,
+        norito::json::to_json(&receipt).expect("receipt JSON")
+    );
+
+    let wrong_signer = KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
+        .expect("alternate receipt key")
+        .public_key()
+        .to_string();
+    assert!(
+        sorafs_orderbook_submission::verify_transaction_submission_receipt_v1_py(
+            &receipt_bytes,
+            &hash_literal,
+            &wrong_signer,
+        )
+        .is_err(),
+        "a self-signed receipt from an unpinned signer must reject",
+    );
+}
+#[test]
 fn privacy_bridge_abi_version_python_function_matches_first_release() {
-    assert_eq!(privacy_bridge_abi_version_py(), 22);
+    assert_eq!(privacy_bridge_abi_version_py(), 23);
 }
 #[test]
 fn privacy_compiled_profile_catalog_python_validator_calls_the_exact_local_boundary() {

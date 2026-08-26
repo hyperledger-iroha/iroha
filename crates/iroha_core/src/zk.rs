@@ -64,9 +64,6 @@ pub mod kagemusha_finality;
 /// Fixed-shape ABI-21/V4 Eq/Ep recursive verifier and terminal IPA decisions.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_recursion_adapter;
-/// Phase-zero serialized advice binding for the review-blocked V7 audit join.
-#[cfg(all(feature = "zk-halo2-ipa", feature = "kagemusha-generation-memory-lab"))]
-pub(crate) mod kagemusha_serialized_audit_v7;
 pub(crate) mod kagemusha_sha256_table16_v4;
 /// Exact row-bounded SHA-256 used by the composite Kagemusha Step circuit.
 #[cfg(feature = "zk-halo2-ipa")]
@@ -78,20 +75,6 @@ pub(crate) mod kagemusha_step_transition;
 /// ABI-21/V4 Kagemusha facade plus unchanged V2 amount, note, and membership primitives.
 #[cfg(feature = "zk-halo2-ipa")]
 pub mod kagemusha_v2;
-/// Clean first-release offline-cash paired-proof terminal boundary.
-#[cfg(feature = "zk-halo2-ipa")]
-#[allow(
-    dead_code,
-    reason = "staged offline-cash boundary remains disconnected until exact STATE circuits and activation wiring land"
-)]
-pub mod offline_cash_v1;
-/// Private non-authorizing Offline Cash V2 source contracts.
-#[cfg(feature = "zk-halo2-ipa")]
-#[allow(
-    dead_code,
-    reason = "staged V2 contracts remain disconnected from wire, artifact, verifier, backend, readiness, and release authority"
-)]
-mod offline_cash_v2;
 /// Shared fixed-profile accounting for Pasta IPA recursive proofs.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod pasta_ipa_recursion;
@@ -5498,7 +5481,7 @@ pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyB
             return false;
         }
     }
-    // Groth16 family: unsupported until native verifier is added under `zk-groth16`.
+    // Groth16 family: unsupported in the first release.
     if backend.starts_with("groth16/") {
         return false;
     }
@@ -5624,6 +5607,8 @@ mod debug_backend_tests {
     fn halo2_ivm_execution_rejects_legacy_unauthenticated_inner_headers() {
         use halo2_proofs::halo2curves::ff::PrimeField as _;
 
+        const RETIRED_LOOKUP_FLAG: u8 = 0x01;
+
         let fixture = test_utils::halo2_ivm_execution_envelope(
             iroha_crypto::Hash::new(b"legacy-inner-header/code"),
             iroha_crypto::Hash::new(b"legacy-inner-header/overlay"),
@@ -5653,7 +5638,6 @@ mod debug_backend_tests {
             .collect();
         assert_eq!(public_inputs.len(), 16);
 
-        const RETIRED_LOOKUP_FLAG: u8 = 0x01;
         let legacy_headers = [(13, 0, 0), (0, 13, RETIRED_LOOKUP_FLAG)];
         let mut encoded_headers = Vec::new();
         for (n_in, n_out, flags) in legacy_headers {

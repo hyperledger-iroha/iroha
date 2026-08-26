@@ -674,7 +674,7 @@ fn control_service_fixture(
     let commitment = control_commitment();
     let semantic_release_digest = MusubiSemanticReleaseDigestV1::new([0x9a; 32]);
     let verification_lock_digest = MusubiVerificationLockDigestV1::new([0x9b; 32]);
-    let replication_order = ReplicationOrderId::new([0x9e; 32]);
+    let replication_order = ReplicationOrderId::new([0x1e; 32]);
     let provider_attestations = (0_u16..MUSUBI_MIN_HEALTHY_REPLICAS_V1)
         .map(|index| {
             let index = u8::try_from(index).expect("replica bound fits u8");
@@ -1138,8 +1138,11 @@ fn threshold_private_service_fixture(behavior: ThresholdSigningBehavior) -> Priv
                 .expect("derive threshold broker key")
         })
         .collect();
+    // Keep the broker identity itself valid; `OverApprovalBound` exercises untrusted signer
+    // output by returning every key below, including approvals outside this 2-of-3 controller.
     let members = key_pairs
         .iter()
+        .take(3)
         .map(|key_pair| {
             MultisigMember::new(key_pair.public_key().clone(), 1).expect("threshold broker member")
         })

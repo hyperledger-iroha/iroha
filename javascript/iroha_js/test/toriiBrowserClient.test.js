@@ -1399,6 +1399,46 @@ test("ToriiBrowserClient requires canonical raw lowercase receipt identities", a
   }
 });
 
+for (const status of [200, 201, 204]) {
+  test(`ToriiBrowserClient rejects noncanonical HTTP ${status} transaction admission`, async () => {
+    const signedTransaction = compactHashSignedTransactionFixture();
+    let attempts = 0;
+    const client = new ToriiBrowserClient("https://torii.example", {
+      fetchImpl: async () => {
+        attempts += 1;
+        return status === 204
+          ? new Response(null, { status })
+          : jsonResponse({ accepted: true }, { status });
+      },
+    });
+
+    await assert.rejects(
+      () => client.submitTransaction(signedTransaction),
+      (error) => error instanceof ToriiBrowserHttpError && error.status === status,
+    );
+    assert.equal(attempts, 1);
+  });
+}
+
+test("ToriiBrowserClient keeps transaction admission statuses immutable", () => {
+  const signedTransaction = compactHashSignedTransactionFixture();
+  let attempts = 0;
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => {
+      attempts += 1;
+      return jsonResponse({ accepted: true }, { status: 202 });
+    },
+  });
+
+  for (const successStatuses of [[200], [202], [200, 202]]) {
+    assert.throws(
+      () => client.submitTransaction(signedTransaction, { successStatuses }),
+      /submitTransaction options contains unsupported option successStatuses/u,
+    );
+  }
+  assert.equal(attempts, 0);
+});
+
 for (const redirectStatus of [307, 308]) {
   test(`ToriiBrowserClient rejects transaction ${redirectStatus} without redirecting`, async () => {
     const signedTransaction = compactHashSignedTransactionFixture();

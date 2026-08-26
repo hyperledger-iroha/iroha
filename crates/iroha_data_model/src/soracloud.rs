@@ -12,6 +12,7 @@ use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
     name::Name,
+    nexus::LaneId,
     peer::PeerId,
     proof::ProofAttachment,
     sorafs::pin_registry::{
@@ -34,7 +35,6 @@ use iroha_crypto::{
         validate_bfv_full_bootstrap_release_audit_trusted_reviewer_public_key_v1,
         validate_public_key as validate_bfv_public_key,
     },
-    kex::{KeyExchangeScheme as _, X25519Sha256},
 };
 use iroha_primitives::{
     json::Json,
@@ -223,11 +223,8 @@ pub const SORA_MODEL_ARTIFACT_RECORD_VERSION_V1: u16 = 1;
 pub const SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraUploadedModelBundleV1`].
 pub const SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1: u16 = 1;
-/// Schema version for [`SoraUploadedModelEncryptionRecipientV1`].
-pub const SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1: u16 = 1;
-/// Schema version for [`SoraUploadedModelWrappedKeyV1`].
-pub const SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1: u16 = 1;
-const SORA_UPLOADED_MODEL_X25519_PUBLIC_KEY_BYTES: usize = 32;
+/// Maximum byte length of an uploaded-model id or weight-version identifier.
+pub const SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1: usize = 128;
 /// Schema version for [`SoraHfSourceRecordV1`].
 pub const SORA_HF_SOURCE_RECORD_VERSION_V1: u16 = 1;
 /// Maximum byte length of one canonical, fully-qualified Hugging Face repository identifier.
@@ -345,8 +342,6 @@ pub fn derive_hf_shared_lease_pool_id_v1(
     })?;
     Ok(Hash::new(payload))
 }
-/// Schema version for [`SoraModelHostCapabilityRecordV1`].
-pub const SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraInrouHostCapabilityRecordV1`].
 pub const SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
 /// Exact hosted-replica capacity of one qualified Inrou V1 host advert.
@@ -443,8 +438,6 @@ pub const SORACLOUD_RUNTIME_PROVENANCE_DOMAIN_V1: &[u8] =
     b"iroha:soracloud:runtime-provenance:v1\x00";
 /// Canonical Soracloud runtime provenance preimage version.
 pub const SORACLOUD_RUNTIME_PROVENANCE_PREIMAGE_VERSION_V1: u8 = 1;
-/// Schema version for [`SoraHfPlacementRecordV1`].
-pub const SORA_HF_PLACEMENT_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraInrouServicePlacementRecordV1`].
 pub const SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHfSharedLeasePoolV1`].
@@ -453,8 +446,6 @@ pub const SORA_HF_SHARED_LEASE_POOL_VERSION_V1: u16 = 1;
 pub const SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHfSharedLeaseAuditEventV1`].
 pub const SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1: u16 = 1;
-/// Schema version for [`SoraModelHostViolationEvidenceRecordV1`].
-pub const SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraAgentApartmentRecordV1`].
 pub const SORA_AGENT_APARTMENT_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraAgentApartmentAuditEventV1`].
@@ -467,6 +458,10 @@ pub const SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraRuntimeReceiptV1`].
 pub const SORA_RUNTIME_RECEIPT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraOrderedMailboxStateMutationV1`].
+pub const SORA_ORDERED_MAILBOX_STATE_MUTATION_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraOrderedMailboxResultV1`].
+pub const SORA_ORDERED_MAILBOX_RESULT_VERSION_V1: u16 = 1;
 /// Schema version for [`CanonicalRequestWitnessV1`].
 pub const CANONICAL_REQUEST_WITNESS_VERSION_V1: u16 = 1;
 /// Schema version for [`SoracloudHostRequestEnvelopeV1`].
@@ -479,6 +474,10 @@ pub const SORA_SERVICE_ROLLOUT_STATE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseStateV1`].
 pub const SORA_SERVICE_LEASE_STATE_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraServiceLeaseUsageAuditV1`].
+pub const SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraServiceLeaseReporterAssignmentV1`].
+pub const SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseReportingEpochRolloverV1`].
 pub const SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseVolumeStateV1`].

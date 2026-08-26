@@ -11,10 +11,10 @@ use crate::{
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         AgentApartmentManifestV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheJobSpecV1,
-        SecretEnvelopeV1, SoraAppInfraManifestV1, SoraDeploymentBundleV1, SoraHfResourceProfileV1,
-        SoraInrouHostCapabilityRecordV1, SoraInrouReplicaRuntimeStateV1,
-        SoraModelHostCapabilityRecordV1, SoraModelHostViolationKindV1, SoraRuntimeReceiptV1,
-        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
+        SecretEnvelopeV1, SoraAppInfraManifestV1, SoraAppInfraMutationPreconditionV1,
+        SoraDeploymentBundleV1, SoraInrouHostCapabilityRecordV1, SoraInrouReplicaRuntimeStateV1,
+        SoraOrderedMailboxResultV1, SoraRuntimeReceiptV1, SoraServiceMailboxMessageV1,
+        SoraServiceMutationPreconditionV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
         SoraStateMutationOperationV1, SoraUploadedModelBundleV1, SoracloudFheBootstrapKeyProofV1,
         SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheGovernedMaterialV1,
         SoracloudFheInputAdmissionProofV1, SoracloudFhePolicyReferenceV1,
@@ -45,6 +45,8 @@ pub struct DeploySoracloudService {
     pub initial_service_configs: BTreeMap<String, Json>,
     /// Authoritative secret entries committed atomically; an empty map must be explicit.
     pub initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    /// Signed atomic condition requiring this service to remain absent until execution.
+    pub precondition: SoraServiceMutationPreconditionV1,
     /// Provenance attestation over the bundle payload.
     pub provenance: ManifestProvenance,
 }
@@ -65,6 +67,8 @@ pub struct UpgradeSoracloudService {
     pub initial_service_configs: BTreeMap<String, Json>,
     /// Authoritative secret entries committed atomically; an empty map must be explicit.
     pub initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    /// Signed atomic condition binding the exact active revision observed by the caller.
+    pub precondition: SoraServiceMutationPreconditionV1,
     /// Provenance attestation over the bundle payload.
     pub provenance: ManifestProvenance,
 }
@@ -81,6 +85,8 @@ impl PartialOrd for UpgradeSoracloudService {
 pub struct DeploySoracloudAppInfra {
     /// App topology manifest being admitted.
     pub manifest: SoraAppInfraManifestV1,
+    /// Signed atomic condition requiring this app topology to remain absent until execution.
+    pub precondition: SoraAppInfraMutationPreconditionV1,
     /// Provenance attestation over the app topology payload.
     pub provenance: ManifestProvenance,
 }
@@ -96,6 +102,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DeploySoracloudAppInfra {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
+        let precondition = super::decode_aos_canonical_field::<SoraAppInfraMutationPreconditionV1>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         let provenance = super::decode_aos_canonical_field::<ManifestProvenance>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
@@ -107,6 +117,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DeploySoracloudAppInfra {
         Ok((
             Self {
                 manifest,
+                precondition,
                 provenance,
             },
             offset,
@@ -125,6 +136,8 @@ impl PartialOrd for DeploySoracloudAppInfra {
 pub struct UpgradeSoracloudAppInfra {
     /// App topology manifest being admitted.
     pub manifest: SoraAppInfraManifestV1,
+    /// Signed atomic condition binding the exact active topology observed by the caller.
+    pub precondition: SoraAppInfraMutationPreconditionV1,
     /// Provenance attestation over the app topology payload.
     pub provenance: ManifestProvenance,
 }
@@ -140,6 +153,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for UpgradeSoracloudAppInfra {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
+        let precondition = super::decode_aos_canonical_field::<SoraAppInfraMutationPreconditionV1>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         let provenance = super::decode_aos_canonical_field::<ManifestProvenance>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
@@ -151,6 +168,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for UpgradeSoracloudAppInfra {
         Ok((
             Self {
                 manifest,
+                precondition,
                 provenance,
             },
             offset,
@@ -406,8 +424,6 @@ pub struct JoinSoracloudHfSharedLease {
     pub repo_id: String,
     /// Exact pinned revision for the canonical source.
     pub resolved_revision: String,
-    /// Normalized model name used for Soracloud bindings.
-    pub model_name: String,
     /// Service binding that will reuse the shared lease.
     pub service_name: Name,
     /// Optional apartment binding that will reuse the shared lease.
@@ -421,14 +437,6 @@ pub struct JoinSoracloudHfSharedLease {
     pub lease_asset_definition_id: AssetDefinitionId,
     /// Full-window nominal price in `lease_asset_definition_id`.
     pub base_fee: Quantity,
-    /// Canonical HF resource profile derived by the control plane.
-    #[norito(required)]
-    pub resource_profile: Option<SoraHfResourceProfileV1>,
-    /// Exact first-release upper bound for the compute reservation charge.
-    ///
-    /// The transaction signer reviews this value together with the derived resource profile.
-    /// Consensus rejects a join whose effective compute charge would exceed this bound.
-    pub max_compute_reservation_fee: Quantity,
     /// Provenance attestation over the join payload.
     pub provenance: ManifestProvenance,
 }
@@ -475,8 +483,6 @@ pub struct RenewSoracloudHfSharedLease {
     pub repo_id: String,
     /// Exact pinned revision for the canonical source.
     pub resolved_revision: String,
-    /// Normalized model name used for Soracloud bindings.
-    pub model_name: String,
     /// Service binding that will reuse the renewed shared lease.
     pub service_name: Name,
     /// Optional apartment binding that will reuse the renewed shared lease.
@@ -490,74 +496,11 @@ pub struct RenewSoracloudHfSharedLease {
     pub lease_asset_definition_id: AssetDefinitionId,
     /// Full-window nominal price in `lease_asset_definition_id`.
     pub base_fee: Quantity,
-    /// Canonical HF resource profile derived by the control plane.
-    #[norito(required)]
-    pub resource_profile: Option<SoraHfResourceProfileV1>,
     /// Provenance attestation over the renew payload.
     pub provenance: ManifestProvenance,
 }
 impl crate::seal::Instruction for RenewSoracloudHfSharedLease {}
 impl PartialOrd for RenewSoracloudHfSharedLease {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(encoded_order(self, other))
-    }
-}
-/// Advertise validator-host capabilities for authoritative HF placement.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct AdvertiseSoracloudModelHost {
-    /// Capability advert being published by the validator.
-    pub capability: SoraModelHostCapabilityRecordV1,
-    /// Provenance attestation over the advert payload.
-    pub provenance: ManifestProvenance,
-}
-impl crate::seal::Instruction for AdvertiseSoracloudModelHost {}
-impl PartialOrd for AdvertiseSoracloudModelHost {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(encoded_order(self, other))
-    }
-}
-/// Refresh the heartbeat TTL for an advertised validator host.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct HeartbeatSoracloudModelHost {
-    /// Validator account that owns the host advert.
-    pub validator_account_id: AccountId,
-    /// New heartbeat-expiry timestamp.
-    pub heartbeat_expires_at_ms: u64,
-    /// Provenance attestation over the heartbeat payload.
-    pub provenance: ManifestProvenance,
-}
-impl crate::seal::Instruction for HeartbeatSoracloudModelHost {}
-impl PartialOrd for HeartbeatSoracloudModelHost {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(encoded_order(self, other))
-    }
-}
-/// Withdraw an advertised validator host from authoritative HF placement.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct WithdrawSoracloudModelHost {
-    /// Validator account that owns the host advert.
-    pub validator_account_id: AccountId,
-    /// Provenance attestation over the withdrawal payload.
-    pub provenance: ManifestProvenance,
-}
-impl crate::seal::Instruction for WithdrawSoracloudModelHost {}
-impl PartialOrd for WithdrawSoracloudModelHost {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(encoded_order(self, other))
-    }
-}
-/// Reconcile expired validator-host adverts against authoritative HF placements.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct ReconcileSoracloudModelHosts;
-impl crate::seal::Instruction for ReconcileSoracloudModelHosts {}
-impl PartialOrd for ReconcileSoracloudModelHosts {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
@@ -604,28 +547,6 @@ impl PartialOrd for ReconcileSoracloudInrouPlacements {
         Some(encoded_order(self, other))
     }
 }
-/// Report authoritative evidence for a validator-host violation.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct ReportSoracloudModelHostViolation {
-    /// Validator responsible for the violation.
-    pub validator_account_id: AccountId,
-    /// Violation class.
-    pub kind: SoraModelHostViolationKindV1,
-    /// Implicated placement when the violation is placement-scoped.
-    #[norito(required)]
-    pub placement_id: Option<Hash>,
-    /// Optional explanatory detail attached to the evidence.
-    #[norito(required)]
-    pub detail: Option<String>,
-}
-impl crate::seal::Instruction for ReportSoracloudModelHostViolation {}
-impl PartialOrd for ReportSoracloudModelHostViolation {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(encoded_order(self, other))
-    }
-}
 /// Deploy a Soracloud agent apartment into authoritative world state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -633,8 +554,8 @@ impl PartialOrd for ReportSoracloudModelHostViolation {
 pub struct DeploySoracloudAgentApartment {
     /// Apartment manifest being admitted.
     pub manifest: AgentApartmentManifestV1,
-    /// Requested lease duration in deterministic ticks.
-    pub lease_ticks: u64,
+    /// Requested lease duration in consensus blocks.
+    pub lease_blocks: u64,
     /// Initial autonomy budget ceiling for the apartment.
     pub autonomy_budget_units: u64,
     /// Provenance attestation over the deploy payload.
@@ -653,8 +574,8 @@ impl PartialOrd for DeploySoracloudAgentApartment {
 pub struct RenewSoracloudAgentLease {
     /// Apartment to renew.
     pub apartment_name: Name,
-    /// Requested lease duration in deterministic ticks.
-    pub lease_ticks: u64,
+    /// Requested lease duration in consensus blocks.
+    pub lease_blocks: u64,
     /// Provenance attestation over the renew payload.
     pub provenance: ManifestProvenance,
 }
@@ -1198,15 +1119,17 @@ impl PartialOrd for ClearSoracloudInrouReplicaRuntimeState {
 /// public-lane validator assigned to the exact service revision and replica
 /// slot and current reporting epoch. A terminal report may instead come
 /// from the exact former authority of an existing reporter checkpoint; the
-/// first terminal update requires it to be open, while an exact finalized
-/// replay is idempotent. Manager authority is not a substitute for either
-/// reporter identity.
+/// first terminal update may include its final monotonic delta and requires
+/// the checkpoint to be open, while an exact finalized replay is idempotent.
+/// Manager authority is not a substitute for either reporter identity.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct ReportSoracloudServiceLeaseUsage {
     /// Service whose hosted-service lease should be updated.
     pub service_name: Name,
+    /// Exact economic-lease incarnation observed by the runtime.
+    pub lease_started_height: u64,
     /// Current reporting epoch, or its exact successor when atomically opening
     /// a new epoch at the reporter-checkpoint hard limit.
     pub reporting_epoch: u64,
@@ -1227,11 +1150,11 @@ impl PartialOrd for ReportSoracloudServiceLeaseUsage {
         Some(encoded_order(self, other))
     }
 }
-/// Persist an ordered Soracloud mailbox message.
+/// Submit an ordered Soracloud mailbox message to the consensus admission path.
 ///
-/// The source service must be deployed. `CanManageSoracloud` holders may reconcile any source;
-/// other callers must be active public-lane validators assigned to the source service's active
-/// revision. Recorded message identifiers are immutable and cannot be replaced.
+/// First-release execution rejects this instruction unconditionally until
+/// consensus can re-execute the exact admitted IVM bundle and verify a
+/// self-contained effect certificate.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -1245,17 +1168,36 @@ impl PartialOrd for RecordSoracloudMailboxMessage {
         Some(encoded_order(self, other))
     }
 }
-/// Persist an authoritative Soracloud runtime receipt.
+/// Persist an authoritative Soracloud local-read runtime receipt.
 ///
 /// `CanManageSoracloud` holders may reconcile any service. Other callers must be active public-lane
 /// validators assigned to the exact service revision and must identify themselves as the selected
 /// validator in the receipt. Recorded receipt identifiers are immutable and cannot be replaced.
+/// Mailbox-bound receipts are rejected by the first-release consensus path.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct RecordSoracloudRuntimeReceipt {
-    /// Runtime receipt to persist.
+    /// Runtime receipt to persist; `emitted_sequence` must be the zero submission sentinel.
     pub receipt: SoraRuntimeReceiptV1,
+}
+/// Submit the effects and receipt of one selected deterministic mailbox executor.
+///
+/// First-release execution rejects this instruction unconditionally until
+/// consensus can re-execute the exact admitted IVM bundle and verify a
+/// self-contained effect certificate.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct ApplySoracloudOrderedMailboxResult {
+    /// Atomic result envelope prepared by the selected runtime validator.
+    pub result: SoraOrderedMailboxResultV1,
+}
+impl crate::seal::Instruction for ApplySoracloudOrderedMailboxResult {}
+impl PartialOrd for ApplySoracloudOrderedMailboxResult {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
 }
 impl crate::seal::Instruction for RecordSoracloudRuntimeReceipt {}
 impl PartialOrd for RecordSoracloudRuntimeReceipt {
@@ -1311,12 +1253,14 @@ impl_soracloud_decode_from_slice!(DeploySoracloudService {
     bundle: SoraDeploymentBundleV1,
     initial_service_configs: BTreeMap<String, Json>,
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    precondition: SoraServiceMutationPreconditionV1,
     provenance: ManifestProvenance,
 });
 impl_soracloud_decode_from_slice!(UpgradeSoracloudService {
     bundle: SoraDeploymentBundleV1,
     initial_service_configs: BTreeMap<String, Json>,
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    precondition: SoraServiceMutationPreconditionV1,
     provenance: ManifestProvenance,
 });
 impl_soracloud_decode_from_slice!(RollbackSoracloudService {
@@ -1393,15 +1337,12 @@ impl_soracloud_decode_from_slice!(RecordSoracloudDecryptionRequest {
 impl_soracloud_decode_from_slice!(JoinSoracloudHfSharedLease {
     repo_id: String,
     resolved_revision: String,
-    model_name: String,
     service_name: Name,
     apartment_name: Option<Name>,
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition_id: AssetDefinitionId,
     base_fee: Quantity,
-    resource_profile: Option<SoraHfResourceProfileV1>,
-    max_compute_reservation_fee: Quantity,
     provenance: ManifestProvenance,
 });
 impl_soracloud_decode_from_slice!(LeaveSoracloudHfSharedLease {
@@ -1416,30 +1357,14 @@ impl_soracloud_decode_from_slice!(LeaveSoracloudHfSharedLease {
 impl_soracloud_decode_from_slice!(RenewSoracloudHfSharedLease {
     repo_id: String,
     resolved_revision: String,
-    model_name: String,
     service_name: Name,
     apartment_name: Option<Name>,
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition_id: AssetDefinitionId,
     base_fee: Quantity,
-    resource_profile: Option<SoraHfResourceProfileV1>,
     provenance: ManifestProvenance,
 });
-impl_soracloud_decode_from_slice!(AdvertiseSoracloudModelHost {
-    capability: SoraModelHostCapabilityRecordV1,
-    provenance: ManifestProvenance,
-});
-impl_soracloud_decode_from_slice!(HeartbeatSoracloudModelHost {
-    validator_account_id: AccountId,
-    heartbeat_expires_at_ms: u64,
-    provenance: ManifestProvenance,
-});
-impl_soracloud_decode_from_slice!(WithdrawSoracloudModelHost {
-    validator_account_id: AccountId,
-    provenance: ManifestProvenance,
-});
-impl_soracloud_unit_decode_from_slice!(ReconcileSoracloudModelHosts);
 impl_soracloud_decode_from_slice!(AdvertiseSoracloudInrouHost {
     capability: SoraInrouHostCapabilityRecordV1,
     provenance: ManifestProvenance,
@@ -1449,21 +1374,15 @@ impl_soracloud_decode_from_slice!(WithdrawSoracloudInrouHost {
     provenance: ManifestProvenance,
 });
 impl_soracloud_unit_decode_from_slice!(ReconcileSoracloudInrouPlacements);
-impl_soracloud_decode_from_slice!(ReportSoracloudModelHostViolation {
-    validator_account_id: AccountId,
-    kind: SoraModelHostViolationKindV1,
-    placement_id: Option<Hash>,
-    detail: Option<String>,
-});
 impl_soracloud_decode_from_slice!(DeploySoracloudAgentApartment {
     manifest: AgentApartmentManifestV1,
-    lease_ticks: u64,
+    lease_blocks: u64,
     autonomy_budget_units: u64,
     provenance: ManifestProvenance,
 });
 impl_soracloud_decode_from_slice!(RenewSoracloudAgentLease {
     apartment_name: Name,
-    lease_ticks: u64,
+    lease_blocks: u64,
     provenance: ManifestProvenance,
 });
 impl_soracloud_decode_from_slice!(RestartSoracloudAgentApartment {
@@ -1636,6 +1555,7 @@ impl_soracloud_decode_from_slice!(ClearSoracloudInrouReplicaRuntimeState {
 });
 impl_soracloud_decode_from_slice!(ReportSoracloudServiceLeaseUsage {
     service_name: Name,
+    lease_started_height: u64,
     reporting_epoch: u64,
     active_service_version: String,
     replica_slot: u16,
@@ -1649,10 +1569,15 @@ impl_soracloud_decode_from_slice!(RecordSoracloudMailboxMessage {
 impl_soracloud_decode_from_slice!(RecordSoracloudRuntimeReceipt {
     receipt: SoraRuntimeReceiptV1,
 });
+impl_soracloud_decode_from_slice!(ApplySoracloudOrderedMailboxResult {
+    result: SoraOrderedMailboxResultV1,
+});
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
+    #[cfg(feature = "json")]
+    use crate::soracloud::SoraServiceExactCurrentRevisionPreconditionV1;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use norito::core::DecodeFromSlice;
     fn name(raw: &str) -> Name {
@@ -1701,23 +1626,11 @@ mod tests {
             secret_name: "openai_api_key".to_owned(),
             provenance: provenance(3),
         });
-        assert_slice_roundtrip(HeartbeatSoracloudModelHost {
-            validator_account_id: account(4),
-            heartbeat_expires_at_ms: 42_000,
-            provenance: provenance(4),
-        });
         assert_slice_roundtrip(WithdrawSoracloudInrouHost {
             validator_account_id: account(5),
             provenance: provenance(5),
         });
-        assert_slice_roundtrip(ReconcileSoracloudModelHosts);
         assert_slice_roundtrip(ReconcileSoracloudInrouPlacements);
-        assert_slice_roundtrip(ReportSoracloudModelHostViolation {
-            validator_account_id: account(6),
-            kind: SoraModelHostViolationKindV1::AssignedHeartbeatMiss,
-            placement_id: Some(hash("placement")),
-            detail: Some("heartbeat expired".to_owned()),
-        });
         assert_slice_roundtrip(RevokeSoracloudAgentPolicy {
             apartment_name: name("agent_home"),
             capability: "wallet.spend".to_owned(),
@@ -1759,6 +1672,7 @@ mod tests {
         });
         assert_slice_roundtrip(ReportSoracloudServiceLeaseUsage {
             service_name: name("portal"),
+            lease_started_height: 7,
             reporting_epoch: 1,
             active_service_version: "2026.5".to_owned(),
             replica_slot: 1,
@@ -1879,7 +1793,7 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn soracloud_deploy_upgrade_and_rollout_v1_require_explicit_wire_keys() {
-        macro_rules! assert_required_maps {
+        macro_rules! assert_required_fields {
             ($value:expr, $ty:ty, $label:literal) => {{
                 let canonical =
                     norito::json::to_value(&$value).expect(concat!("serialize ", $label));
@@ -1888,7 +1802,11 @@ mod tests {
                     $label,
                     " must decode"
                 ));
-                for field in ["initial_service_configs", "initial_service_secrets"] {
+                for field in [
+                    "initial_service_configs",
+                    "initial_service_secrets",
+                    "precondition",
+                ] {
                     let mut missing = canonical.clone();
                     assert!(
                         missing
@@ -1898,34 +1816,45 @@ mod tests {
                             .is_some()
                     );
                     norito::json::from_value::<$ty>(missing)
-                        .expect_err(concat!($label, " must reject omitted material maps"));
+                        .expect_err(concat!($label, " must reject omitted required fields"));
 
                     let mut null = canonical.clone();
                     null.as_object_mut()
                         .expect(concat!($label, " JSON object"))
                         .insert(field.to_owned(), norito::json::Value::Null);
                     norito::json::from_value::<$ty>(null)
-                        .expect_err(concat!($label, " must reject null material maps"));
+                        .expect_err(concat!($label, " must reject null required fields"));
                 }
             }};
         }
 
         let bundle = deployment_bundle();
-        assert_required_maps!(
+        assert_required_fields!(
             DeploySoracloudService {
                 bundle: bundle.clone(),
                 initial_service_configs: BTreeMap::new(),
                 initial_service_secrets: BTreeMap::new(),
+                precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
                 provenance: provenance(14),
             },
             DeploySoracloudService,
             "Soracloud deploy instruction"
         );
-        assert_required_maps!(
+        assert_required_fields!(
             UpgradeSoracloudService {
                 bundle,
                 initial_service_configs: BTreeMap::new(),
                 initial_service_secrets: BTreeMap::new(),
+                precondition: SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+                    SoraServiceExactCurrentRevisionPreconditionV1 {
+                        service_version: "2026.4".to_owned(),
+                        service_manifest_hash: hash("current-service-manifest"),
+                        container_manifest_hash: hash("current-container-manifest"),
+                        process_generation: 1,
+                        config_generation: 0,
+                        secret_generation: 0,
+                    },
+                ),
                 provenance: provenance(15),
             },
             UpgradeSoracloudService,
@@ -2190,19 +2119,6 @@ mod tests {
         assert_unknown_rejected!(JoinSoracloudHfSharedLease, "HF lease join instruction");
         assert_unknown_rejected!(LeaveSoracloudHfSharedLease, "HF lease leave instruction");
         assert_unknown_rejected!(RenewSoracloudHfSharedLease, "HF lease renew instruction");
-        assert_unknown_rejected!(AdvertiseSoracloudModelHost, "model-host advert instruction");
-        assert_unknown_rejected!(
-            HeartbeatSoracloudModelHost,
-            "model-host heartbeat instruction"
-        );
-        assert_unknown_rejected!(
-            WithdrawSoracloudModelHost,
-            "model-host withdraw instruction"
-        );
-        assert_unknown_rejected!(
-            ReportSoracloudModelHostViolation,
-            "model-host violation instruction"
-        );
         assert_unknown_rejected!(DeploySoracloudAgentApartment, "agent deploy instruction");
         assert_unknown_rejected!(RenewSoracloudAgentLease, "agent lease-renew instruction");
         assert_unknown_rejected!(RestartSoracloudAgentApartment, "agent restart instruction");
@@ -2272,6 +2188,10 @@ mod tests {
         );
         assert_unknown_rejected!(RecordSoracloudMailboxMessage, "mailbox-record instruction");
         assert_unknown_rejected!(RecordSoracloudRuntimeReceipt, "runtime-receipt instruction");
+        assert_unknown_rejected!(
+            ApplySoracloudOrderedMailboxResult,
+            "ordered mailbox-result instruction"
+        );
     }
     #[cfg(feature = "json")]
     #[test]
@@ -2326,19 +2246,16 @@ mod tests {
             JoinSoracloudHfSharedLease {
                 repo_id: "openai/gpt-oss".to_owned(),
                 resolved_revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
-                model_name: "gpt-oss".to_owned(),
                 service_name: name("portal"),
                 apartment_name: None,
                 storage_class: StorageClass::Warm,
                 lease_term_ms: 60_000,
                 lease_asset_definition_id: lease_asset_definition_id.clone(),
                 base_fee: nominal_fee.clone(),
-                resource_profile: None,
-                max_compute_reservation_fee: nominal_fee.clone(),
                 provenance: provenance(24),
             },
             JoinSoracloudHfSharedLease,
-            ["apartment_name", "resource_profile"],
+            ["apartment_name"],
             "HF lease join instruction"
         );
         assert_required_nulls!(
@@ -2359,30 +2276,17 @@ mod tests {
             RenewSoracloudHfSharedLease {
                 repo_id: "openai/gpt-oss".to_owned(),
                 resolved_revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
-                model_name: "gpt-oss".to_owned(),
                 service_name: name("portal"),
                 apartment_name: None,
                 storage_class: StorageClass::Warm,
                 lease_term_ms: 60_000,
                 lease_asset_definition_id,
                 base_fee: nominal_fee,
-                resource_profile: None,
                 provenance: provenance(26),
             },
             RenewSoracloudHfSharedLease,
-            ["apartment_name", "resource_profile"],
+            ["apartment_name"],
             "HF lease renew instruction"
-        );
-        assert_required_nulls!(
-            ReportSoracloudModelHostViolation {
-                validator_account_id: account(27),
-                kind: SoraModelHostViolationKindV1::AssignedHeartbeatMiss,
-                placement_id: None,
-                detail: None,
-            },
-            ReportSoracloudModelHostViolation,
-            ["placement_id", "detail"],
-            "model-host violation instruction"
         );
         assert_required_nulls!(
             RevokeSoracloudAgentPolicy {
@@ -2538,8 +2442,6 @@ mod tests {
                     materialized_bundle_hash: hash("bundle"),
                     reporting_epoch: 1,
                     accounted_egress_bytes: 0,
-                    pending_mailbox_message_count: 0,
-                    last_receipt_id: None,
                     updated_at_ms: 1,
                     last_error: None,
                 },

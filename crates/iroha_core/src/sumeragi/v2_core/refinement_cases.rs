@@ -3889,6 +3889,39 @@ fn leader_wire_admission_gate_separates_insert_reactivation_coalescing_and_repla
         ..ProductionLeaderWireAdmissionTraceProjection::default()
     };
     assert!(production_leader_wire_admission_refines_lifecycle_ownership_kernel(replacement));
+    let same_round_timeout_replacement = ProductionLeaderWireAdmissionTraceProjection {
+        incoming_view: 2,
+        stored_view: 2,
+        incoming_phase_is_timeout_certificate: true,
+        incumbent_phase_is_timeout_certificate: true,
+        ..replacement
+    };
+    assert!(
+        production_leader_wire_admission_refines_lifecycle_ownership_kernel(
+            same_round_timeout_replacement
+        ),
+        "a distinct timeout certificate may replace its same-round terminal predecessor"
+    );
+    assert!(
+        check_production_leader_wire_admission_transition(
+            ProductionLeaderWireAdmissionTraceProjection {
+                incumbent_phase_is_timeout_certificate: false,
+                ..same_round_timeout_replacement
+            }
+        )
+        .is_none(),
+        "the same-round exception requires both owners to be timeout certificates"
+    );
+    assert!(
+        check_production_leader_wire_admission_transition(
+            ProductionLeaderWireAdmissionTraceProjection {
+                incoming_phase_is_timeout_certificate: false,
+                ..same_round_timeout_replacement
+            }
+        )
+        .is_none(),
+        "the same-round exception requires both owners to be timeout certificates"
+    );
     for invalid in [
         ProductionLeaderWireAdmissionTraceProjection {
             incoming_view: 2,

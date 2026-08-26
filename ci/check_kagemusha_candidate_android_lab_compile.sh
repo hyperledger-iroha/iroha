@@ -3,6 +3,19 @@ set -euo pipefail
 umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ $# -gt 1 ]]; then
+  echo "usage: $0 [--warm-dependencies]" >&2
+  exit 64
+fi
+MODE="${1:-}"
+case "$MODE" in
+  "") ;;
+  --warm-dependencies) ;;
+  *)
+    echo "usage: $0 [--warm-dependencies]" >&2
+    exit 64
+    ;;
+esac
 PYTHON3_BINARY="$(command -v python3 2>/dev/null || true)"
 [[ -x "$PYTHON3_BINARY" ]] || {
   echo "[kagemusha-candidate-compile] ERROR: python3 is required" >&2
@@ -133,7 +146,7 @@ validation_report = {
     "generation": "compile-only",
     "generation_memory_limit_bytes": 6 * 1024 * 1024 * 1024,
     "generation_memory_enforcement_profile": "self-physical-footprint-v1",
-    "bridge_abi_version": 22,
+    "bridge_abi_version": 23,
     "artifact_count": len(artifact_reports),
     "artifacts": artifact_reports,
     "topup_finality_roster_file_name": "topup-finality-roster-v4.norito",
@@ -270,10 +283,45 @@ ANDROID_SDK_RESOLVED="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/
   echo "[kagemusha-candidate-compile] ERROR: Android SDK is required" >&2
   exit 69
 }
+SOURCE_GRADLE_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
+GRADLE_ARGS=(
+  --no-daemon
+  --max-workers=2
+  -PkagemushaCandidateCompileOnly=true
+  -PkagemushaCandidateEvidenceLab=true
+  -PkagemushaCandidateSha256="$CANDIDATE_SHA256"
+  -PkagemushaCandidateStageSha256="$STAGE_SHA256"
+  -PkagemushaCandidateEvidenceRoot="$EVIDENCE_ROOT"
+  -PkagemushaCandidateSourceCommit="$SOURCE_COMMIT"
+  -PkagemushaCandidateSourceTreeSha256="$SOURCE_TREE_SHA256"
+  -PkagemushaCandidateGeneration=compile-only
+  -PkagemushaCandidateSlotId=compile-only
+  -PkagemushaCandidateLabNativeLibrary="$NATIVE_LIBRARY"
+  :kagemusha-candidate-evidence-lab:compileDebugKotlin
+  :kagemusha-candidate-evidence-lab:compileDebugAndroidTestKotlin
+)
+
+if [[ "$MODE" == "--warm-dependencies" ]]; then
+  (
+    cd "$ROOT_DIR/kotlin"
+    /usr/bin/env -i \
+      HOME="$HOME" \
+      PATH="$JAVA_HOME_RESOLVED/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+      TMPDIR="${TMPDIR:-/tmp}" \
+      LANG="${LANG:-C.UTF-8}" \
+      JAVA_HOME="$JAVA_HOME_RESOLVED" \
+      ANDROID_HOME="$ANDROID_SDK_RESOLVED" \
+      ANDROID_SDK_ROOT="$ANDROID_SDK_RESOLVED" \
+      GRADLE_USER_HOME="$SOURCE_GRADLE_HOME" \
+      ./gradlew "${GRADLE_ARGS[@]}"
+  )
+  echo "[kagemusha-candidate-compile] exact candidate Android dependencies warmed"
+  exit 0
+fi
+
 PRIVATE_GRADLE_HOME="$EVIDENCE_ROOT/compile-gradle-user-home"
 mkdir -p "$PRIVATE_GRADLE_HOME/caches" "$PRIVATE_GRADLE_HOME/wrapper"
 chmod 0700 "$PRIVATE_GRADLE_HOME" "$PRIVATE_GRADLE_HOME/caches" "$PRIVATE_GRADLE_HOME/wrapper"
-SOURCE_GRADLE_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
 SOURCE_DEPENDENCY_CACHE="$SOURCE_GRADLE_HOME/caches/modules-2"
 [[ -d "$SOURCE_DEPENDENCY_CACHE" ]] || {
   echo "[kagemusha-candidate-compile] ERROR: warmed Gradle dependency cache is required" >&2
@@ -314,19 +362,7 @@ fi
     ANDROID_SDK_ROOT="$ANDROID_SDK_RESOLVED" \
     GRADLE_USER_HOME="$PRIVATE_GRADLE_HOME" \
     GRADLE_RO_DEP_CACHE="$READ_ONLY_DEPENDENCY_CACHE" \
-    ./gradlew --no-daemon --offline --max-workers=2 \
-    -PkagemushaCandidateCompileOnly=true \
-    -PkagemushaCandidateEvidenceLab=true \
-    -PkagemushaCandidateSha256="$CANDIDATE_SHA256" \
-    -PkagemushaCandidateStageSha256="$STAGE_SHA256" \
-    -PkagemushaCandidateEvidenceRoot="$EVIDENCE_ROOT" \
-    -PkagemushaCandidateSourceCommit="$SOURCE_COMMIT" \
-    -PkagemushaCandidateSourceTreeSha256="$SOURCE_TREE_SHA256" \
-    -PkagemushaCandidateGeneration=compile-only \
-    -PkagemushaCandidateSlotId=compile-only \
-    -PkagemushaCandidateLabNativeLibrary="$NATIVE_LIBRARY" \
-    :kagemusha-candidate-evidence-lab:compileDebugKotlin \
-    :kagemusha-candidate-evidence-lab:compileDebugAndroidTestKotlin
+    ./gradlew --offline --rerun-tasks "${GRADLE_ARGS[@]}"
 )
 
 echo "[kagemusha-candidate-compile] actual AGP/Kotlin main+androidTest compilation passed"

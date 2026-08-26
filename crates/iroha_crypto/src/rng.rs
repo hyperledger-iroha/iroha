@@ -1,10 +1,5 @@
-#[cfg(test)]
-use rand::rngs::OsRng;
 use rand_chacha::ChaChaRng;
-use rand_core::{
-    CryptoRng as CryptoRngNew, RngCore as RngCoreNew, SeedableRng, TryCryptoRng,
-    TryRngCore as TryRngCoreNew,
-};
+use rand_core::{CryptoRng as CryptoRngNew, RngCore as RngCoreNew, SeedableRng};
 use rand_core_06::{self, CryptoRng as CryptoRngOld, RngCore as RngCoreOld};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
@@ -20,52 +15,38 @@ impl<R> CompatRng<R> {
 }
 impl<R> RngCoreNew for CompatRng<R>
 where
-    R: TryRngCoreNew,
+    R: RngCoreNew,
 {
     fn next_u32(&mut self) -> u32 {
-        self.inner
-            .try_next_u32()
-            .expect("secure RNG should not fail")
+        self.inner.next_u32()
     }
     fn next_u64(&mut self) -> u64 {
-        self.inner
-            .try_next_u64()
-            .expect("secure RNG should not fail")
+        self.inner.next_u64()
     }
     fn fill_bytes(&mut self, dst: &mut [u8]) {
-        self.inner
-            .try_fill_bytes(dst)
-            .expect("secure RNG should not fail");
+        self.inner.fill_bytes(dst);
     }
 }
-impl<R> CryptoRngNew for CompatRng<R> where R: TryRngCoreNew + TryCryptoRng {}
+impl<R> CryptoRngNew for CompatRng<R> where R: CryptoRngNew {}
 impl<R> RngCoreOld for CompatRng<R>
 where
-    R: TryRngCoreNew,
-    R::Error: std::error::Error + Send + Sync + 'static,
+    R: RngCoreNew,
 {
     fn next_u32(&mut self) -> u32 {
-        self.inner
-            .try_next_u32()
-            .expect("secure RNG should not fail")
+        self.inner.next_u32()
     }
     fn next_u64(&mut self) -> u64 {
-        self.inner
-            .try_next_u64()
-            .expect("secure RNG should not fail")
+        self.inner.next_u64()
     }
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        self.inner
-            .try_fill_bytes(dest)
-            .expect("secure RNG should not fail");
+        self.inner.fill_bytes(dest);
     }
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core_06::Error> {
-        self.inner
-            .try_fill_bytes(dest)
-            .map_err(rand_core_06::Error::new)
+        self.inner.fill_bytes(dest);
+        Ok(())
     }
 }
-impl<R> CryptoRngOld for CompatRng<R> where R: TryRngCoreNew + TryCryptoRng {}
+impl<R> CryptoRngOld for CompatRng<R> where R: CryptoRngNew {}
 /// Deterministic RNG derived from seed material via SHA-256, implementing both
 /// modern and 0.6 `rand_core` traits.
 ///
@@ -93,11 +74,6 @@ pub fn rng_from_seed_slice(seed: &[u8]) -> CompatRng<ChaChaRng> {
     key.zeroize();
     rng
 }
-/// Operating-system RNG wrapped in the dual-trait adapter.
-#[cfg(test)]
-pub fn os_rng() -> CompatRng<OsRng> {
-    CompatRng::new(OsRng)
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,5 +97,23 @@ mod tests {
         rand_core::RngCore::fill_bytes(&mut owned_rng, &mut owned);
         rand_core::RngCore::fill_bytes(&mut borrowed_rng, &mut borrowed);
         assert_eq!(owned, borrowed);
+    }
+    #[test]
+    fn compatibility_adapter_matches_both_rand_core_versions() {
+        let seed = b"dual rand_core compatibility";
+        let mut modern_rng = rng_from_seed_slice(seed);
+        let mut legacy_rng = rng_from_seed_slice(seed);
+        let mut fallible_legacy_rng = rng_from_seed_slice(seed);
+        let mut modern = [0_u8; 64];
+        let mut legacy = [0_u8; 64];
+        let mut fallible_legacy = [0_u8; 64];
+
+        rand_core::RngCore::fill_bytes(&mut modern_rng, &mut modern);
+        rand_core_06::RngCore::fill_bytes(&mut legacy_rng, &mut legacy);
+        rand_core_06::RngCore::try_fill_bytes(&mut fallible_legacy_rng, &mut fallible_legacy)
+            .expect("infallible adapter");
+
+        assert_eq!(modern, legacy);
+        assert_eq!(modern, fallible_legacy);
     }
 }

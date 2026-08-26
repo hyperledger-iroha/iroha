@@ -163,7 +163,7 @@ object NoritoAdapters {
                     continue
                 }
                 val payload = decoder.readBytes(elemSize)
-                val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+                val child = NoritoDecoder(payload, decoder.flags)
                 val value = child.readByte()
                 require(child.remaining() == 0) {
                     "Byte vector element did not consume all bytes"
@@ -217,7 +217,7 @@ object NoritoAdapters {
             val out = ByteArray(count)
             for (i in 0 until count) {
                 val payload = decoder.readBytes(sizes[i])
-                val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+                val child = NoritoDecoder(payload, decoder.flags)
                 val value = child.readByte()
                 require(child.remaining() == 0) {
                     "Packed byte element did not consume all bytes"
@@ -306,7 +306,7 @@ object NoritoAdapters {
             val length = decoder.readLength(decoder.compactLenActive())
             require(length <= Int.MAX_VALUE) { "Option payload too large" }
             val payload = decoder.readBytes(length.toInt())
-            val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+            val child = NoritoDecoder(payload, decoder.flags)
             val value = inner.decode(child)
             require(child.remaining() == 0) { "Trailing bytes after Option payload" }
             return Optional.of(value as Any) as Optional<T>
@@ -349,7 +349,7 @@ object NoritoAdapters {
             val length = decoder.readLength(decoder.compactLenActive())
             require(length <= Int.MAX_VALUE) { "Result payload too large" }
             val payload = decoder.readBytes(length.toInt())
-            val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+            val child = NoritoDecoder(payload, decoder.flags)
             val value = if (tag == 0) ok.decode(child) else err.decode(child)
             require(child.remaining() == 0) { "Trailing bytes after Result payload" }
             return if (tag == 0) {
@@ -412,7 +412,7 @@ object NoritoAdapters {
                 val elemLen = decoder.readLength(compact)
                 require(elemLen <= Int.MAX_VALUE) { "Sequence element too large" }
                 val payload = decoder.readBytes(elemLen.toInt())
-                val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+                val child = NoritoDecoder(payload, decoder.flags)
                 val value = element.decode(child)
                 require(child.remaining() == 0) {
                     "Sequence element did not consume all bytes"
@@ -456,7 +456,7 @@ object NoritoAdapters {
             val values = ArrayList<T>(count)
             for (size in sizes) {
                 val chunk = decoder.readBytes(size)
-                val child = NoritoDecoder(chunk, decoder.flags, decoder.flagsHint)
+                val child = NoritoDecoder(chunk, decoder.flags)
                 val value = element.decode(child)
                 require(child.remaining() == 0) {
                     "Packed element did not consume all bytes"
@@ -614,7 +614,7 @@ object NoritoAdapters {
             size: Int,
         ): T {
             val chunk = decoder.readBytes(size)
-            val child = NoritoDecoder(chunk, decoder.flags, decoder.flagsHint)
+            val child = NoritoDecoder(chunk, decoder.flags)
             val value = adapter.decode(child)
             require(child.remaining() == 0) { "Map entry did not consume all bytes" }
             return value

@@ -230,23 +230,41 @@ jobs:
           toolchain: 1.93.1
       - name: Provision exact Apple targets and locked dependencies
         run: |
-          rustup target add --toolchain 1.93.1 aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
+          mobile_python="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          rustup_source="$(command -v rustup)"
+          rustup_source="$("$mobile_python" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_source")"
+          [[ "$rustup_source" == /* && -f "$rustup_source" && ! -L "$rustup_source" && -x "$rustup_source" ]]
+          rustup_tools="$RUNNER_TEMP/iroha-sccp-apple-tools"
+          mkdir -p "$rustup_tools"
+          chmod 0700 "$rustup_tools"
+          rustup_path="$rustup_tools/rustup"
+          test ! -e "$rustup_path"
+          /bin/cp "$rustup_source" "$rustup_path"
+          chmod 0700 "$rustup_path"
+          rustup_path="$("$mobile_python" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_path")"
+          [[ "$rustup_path" == /* && "${rustup_path##*/}" == rustup && -f "$rustup_path" && ! -L "$rustup_path" && -x "$rustup_path" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" >> "$GITHUB_ENV"
+          "$rustup_path" target add --toolchain 1.93.1 aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
           cargo fetch --locked
       - name: Bind the first-release Swift bridge envelope
         run: |
           cargo_target="$RUNNER_TEMP/iroha-sccp-apple-cargo"
+          bridge_artifacts="$RUNNER_TEMP/iroha-sccp-apple-artifacts"
           bridge_build="$RUNNER_TEMP/iroha-sccp-apple-build"
-          mkdir -p "$cargo_target" "$bridge_build"
-          cargo_target="$(python3 -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
-          bridge_build="$(python3 -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$bridge_build")"
-          mobile_python="$(python3 -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
-          rustc_path="$(rustup which --toolchain 1.93.1 rustc)"
-          rustdoc_path="$(rustup which --toolchain 1.93.1 rustdoc)"
+          mkdir -p "$cargo_target" "$bridge_artifacts" "$bridge_build"
+          cargo_target="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
+          bridge_artifacts="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$bridge_artifacts")"
+          bridge_build="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$bridge_build")"
+          rustc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustc)"
+          rustdoc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustdoc)"
           echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
           echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
           echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
-          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$bridge_artifacts" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_OUT_DIR=$bridge_artifacts" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_BUILD_DIR=$bridge_build" >> "$GITHUB_ENV"
           echo "RUSTC=$rustc_path" >> "$GITHUB_ENV"
           echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"

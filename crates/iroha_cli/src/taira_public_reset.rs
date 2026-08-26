@@ -5,7 +5,9 @@ use iroha::{
     client::AccountOnboardingPlanRequestV1,
     data_model::{account::AccountId, nexus::FeeSponsorProgramId},
 };
-use iroha_crypto::{Algorithm, PublicKey, ed25519_parse_signature, verify_signature_for_admission};
+use iroha_crypto::{
+    Algorithm, Hash, PublicKey, ed25519_parse_signature, verify_signature_for_admission,
+};
 use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
 use sha2::{Digest as _, Sha256};
 use std::{
@@ -59,6 +61,7 @@ const MAX_SOURCE_FILES: usize = 100_000;
 const MAX_SOURCE_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_GIT_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_INROU_STAGE_BYTES: u64 = 12 * 1024 * 1024 * 1024;
+const INROU_CANARY_SERVICE_VERSION_PREFIX_V1: &str = "artifact-";
 const JOURNAL_ROOT: &str = "/private/runtime/taira-public-reset/journal-v1";
 const RECOVERY_INTENT_SCHEMA_V1: &str = "iroha.taira.public-reset.recovery-intent.v1";
 
@@ -75,7 +78,7 @@ pub(crate) struct PublicReset {
 
 #[derive(clap::Subcommand, Debug)]
 enum PublicResetCommand {
-    /// Verify the complete reset input closure without contacting any host.
+    /// Verify the signed reset inventory and pinned local inputs without contacting any host.
     Preflight(PublicResetPreflight),
     /// Execute the admitted reset with pinned SSH and runtime signing inputs.
     Apply(PublicResetApply),
@@ -237,7 +240,12 @@ impl PublicReset {
                     &args.ssh_identity,
                     &args.known_hosts,
                 )?;
-                report(&admitted, "preflight", "ok", "local input closure admitted")
+                report(
+                    &admitted,
+                    "preflight",
+                    "ok",
+                    "signed inventory and pinned local inputs admitted",
+                )
             }
             PublicResetCommand::Apply(args) => {
                 let journal_dir = Path::new(JOURNAL_ROOT);
@@ -1219,7 +1227,6 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
     if !hostnames.insert(inventory.edge.endpoint.hostname.clone()) {
         return Err(eyre!("edge hostname must be distinct from every validator"));
     }
-    validate_shared_inrou_closure(inventory)?;
     validate_lower_hex(
         "artifact closure SHA-256",
         &inventory.artifact_closure_sha256,
@@ -1757,7 +1764,6 @@ fn require_remote_artifact(artifacts: &[ArtifactV1], role: &str, path: &str) -> 
 fn validate_inrou(canary: &InrouCanaryV1) -> Result<()> {
     if canary.public_root != PUBLIC_ROOT
         || canary.service_name != "taira_inrou_canary"
-        || canary.service_version != "1.0.0"
         || canary.replicas != 4
         || canary.route_host != "taira-inrou-canary.sora"
         || canary.route_path_prefix != "/api/v1"
@@ -1769,6 +1775,22 @@ fn validate_inrou(canary: &InrouCanaryV1) -> Result<()> {
             "Inrou canary must use the exact first-release four-replica identity"
         ));
     }
+    let service_revision = canary
+        .service_version
+        .strip_prefix(INROU_CANARY_SERVICE_VERSION_PREFIX_V1)
+        .ok_or_else(|| {
+            eyre!(
+                "Inrou canary service version must use the canonical first-release artifact identity"
+            )
+        })?;
+    // The inventory admits the closed V1 spelling here. Apply separately loads the complete
+    // retained stage and recomputes the bundle-derived Blake2b-256 service version before any
+    // host mutation; the inventory does not contain enough bundle material to reproduce it.
+    validate_lower_hex(
+        "Inrou canary service artifact revision",
+        service_revision,
+        64,
+    )?;
     validate_lower_hex("Inrou stage tree SHA-256", &canary.stage_tree_sha256, 64)?;
     for (label, value) in [
         (
@@ -1783,12 +1805,21 @@ fn validate_inrou(canary: &InrouCanaryV1) -> Result<()> {
         validate_lower_hex(label, value, 64)?;
     }
     for (label, value) in [
-        ("Inrou bundle hash", canary.bundle_hash.as_str()),
         (
             "Inrou bundle content CID",
             canary.bundle_content_cid.as_str(),
         ),
         ("Inrou guest content CID", canary.guest_content_cid.as_str()),
+    ] {
+        if value.is_empty()
+            || value.len() > 256
+            || !value.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(eyre!("{label} is outside the exact printable V1 bound"));
+        }
+    }
+    for (label, value) in [
+        ("Inrou bundle hash", canary.bundle_hash.as_str()),
         (
             "Inrou container manifest hash",
             canary.container_manifest_hash.as_str(),
@@ -1798,11 +1829,11 @@ fn validate_inrou(canary: &InrouCanaryV1) -> Result<()> {
             canary.service_manifest_hash.as_str(),
         ),
     ] {
-        if value.is_empty()
-            || value.len() > 256
-            || !value.bytes().all(|byte| byte.is_ascii_graphic())
-        {
-            return Err(eyre!("{label} is outside the exact printable V1 bound"));
+        let parsed = value
+            .parse::<Hash>()
+            .wrap_err_with(|| format!("{label} is not a canonical Iroha hash"))?;
+        if parsed.to_string() != value {
+            return Err(eyre!("{label} is not a canonical Iroha hash"));
         }
     }
     validate_lower_hex("Inrou receipt SHA-256", &canary.receipt_sha256, 64)?;
@@ -1897,11 +1928,6 @@ fn validate_cleanup(cleanup: &CleanupV1) -> Result<()> {
             "cleanup must use the bounded marker-only V1 policy and preserve state, secrets, and rollback releases"
         ));
     }
-    Ok(())
-}
-
-fn validate_shared_inrou_closure(inventory: &InventoryV1) -> Result<()> {
-    let _ = inventory;
     Ok(())
 }
 
@@ -4865,6 +4891,49 @@ mod executor_model {
         }
 
         #[test]
+        fn inrou_canary_requires_exact_first_release_service_version_format() {
+            let canonical = sample_inventory().inrou_canary;
+            validate_inrou(&canonical).expect("canonical artifact-version format");
+
+            let mut another_canonical_digest = canonical.clone();
+            another_canonical_digest.service_version = format!("artifact-{}", "8".repeat(64));
+            validate_inrou(&another_canonical_digest)
+                .expect("format admission defers bundle derivation to retained-stage apply");
+
+            for malformed in [
+                "1.0.0".to_owned(),
+                format!("artifact-{}", "A".repeat(64)),
+                format!("artifact-{}", "a".repeat(63)),
+                format!("artifact-{}", "a".repeat(65)),
+                format!("release-{}", "a".repeat(64)),
+            ] {
+                let mut canary = canonical.clone();
+                canary.service_version = malformed;
+                validate_inrou(&canary)
+                    .expect_err("legacy or malformed Inrou service revisions must fail closed");
+            }
+        }
+
+        #[test]
+        fn inrou_canary_rejects_printable_but_noncanonical_iroha_hashes() {
+            let canonical = sample_inventory().inrou_canary;
+            for mutate in [
+                |canary: &mut InrouCanaryV1| canary.bundle_hash = "bundle".to_owned(),
+                |canary: &mut InrouCanaryV1| {
+                    canary.container_manifest_hash = "container".to_owned();
+                },
+                |canary: &mut InrouCanaryV1| {
+                    canary.service_manifest_hash = "service".to_owned();
+                },
+            ] {
+                let mut malformed = canonical.clone();
+                mutate(&mut malformed);
+                validate_inrou(&malformed)
+                    .expect_err("printable legacy hash spellings must fail closed");
+            }
+        }
+
+        #[test]
         fn signed_fee_intent_binds_payer_program_and_revision() {
             let sponsor_key =
                 KeyPair::try_random_with_algorithm(Algorithm::Ed25519).expect("sponsor key");
@@ -5961,18 +6030,24 @@ mod executor_model {
                 inrou_canary: InrouCanaryV1 {
                     public_root: PUBLIC_ROOT.to_owned(),
                     service_name: "taira_inrou_canary".to_owned(),
-                    service_version: "1.0.0".to_owned(),
+                    service_version: format!("artifact-{}", "7".repeat(64)),
                     replicas: 4,
                     route_host: "taira-inrou-canary.sora".to_owned(),
                     route_path_prefix: "/api/v1".to_owned(),
                     healthcheck_path: "/health".to_owned(),
-                    bundle_hash: "bundle".to_owned(),
+                    bundle_hash: iroha_crypto::Hash::new(b"fixture Inrou bundle").to_string(),
                     bundle_content_cid: "sora1bundle".to_owned(),
                     bundle_manifest_digest_hex: "8".repeat(64),
                     guest_content_cid: "sora1guest".to_owned(),
                     guest_manifest_digest_hex: "9".repeat(64),
-                    container_manifest_hash: "container".to_owned(),
-                    service_manifest_hash: "service".to_owned(),
+                    container_manifest_hash: iroha_crypto::Hash::new(
+                        b"fixture Inrou container manifest",
+                    )
+                    .to_string(),
+                    service_manifest_hash: iroha_crypto::Hash::new(
+                        b"fixture Inrou service manifest",
+                    )
+                    .to_string(),
                     stage_tree_sha256: "a".repeat(64),
                     stage_bytes: 6,
                     receipt_sha256: "b".repeat(64),

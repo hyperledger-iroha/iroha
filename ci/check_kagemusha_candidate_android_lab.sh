@@ -31,6 +31,7 @@ paths = {
     "cargo": root / "crates/connect_norito_bridge/Cargo.toml",
     "core_cargo": root / "crates/iroha_core/Cargo.toml",
     "header": root / "crates/connect_norito_bridge/include/connect_norito_bridge.h",
+    "kagemusha_workflow": root / ".github/workflows/pr_kagemusha_payload_bench.yml",
     "release_workflow": root / ".github/workflows/mobile_sdk_artifacts.yml",
 }
 
@@ -165,7 +166,7 @@ if actual_kotlin_methods != kotlin_methods:
         f"missing={sorted(kotlin_methods - actual_kotlin_methods)} "
         f"extra={sorted(actual_kotlin_methods - kotlin_methods)}"
     )
-for needle in (f"package {package}", 'LIBRARY_NAME: String = "connect_norito_bridge_candidate_lab"', "REQUIRED_BRIDGE_ABI: Int = 22"):
+for needle in (f"package {package}", 'LIBRARY_NAME: String = "connect_norito_bridge_candidate_lab"', "REQUIRED_BRIDGE_ABI: Int = 23"):
     if needle not in text["native"]:
         errors.append(f"candidate lab Kotlin JNI contract is missing {needle}")
 
@@ -712,10 +713,12 @@ for needle in (
 
 compile_check = text["compile_check"]
 for needle in (
+    "--warm-dependencies",
     "-PkagemushaCandidateCompileOnly=true",
     ":kagemusha-candidate-evidence-lab:compileDebugKotlin",
     ":kagemusha-candidate-evidence-lab:compileDebugAndroidTestKotlin",
     "--offline",
+    "--rerun-tasks",
     "--max-workers=2",
     "GRADLE_RO_DEP_CACHE",
     "compile-gradle-read-only-cache",
@@ -723,6 +726,31 @@ for needle in (
 ):
     if needle not in compile_check:
         errors.append(f"actual AGP/Kotlin compile-only check is missing {needle}")
+
+warm_command = "ci/check_kagemusha_candidate_android_lab_compile.sh --warm-dependencies"
+offline_command = "run: ci/check_kagemusha_candidate_android_lab_compile.sh\n"
+for workflow_label in ("kagemusha_workflow", "release_workflow"):
+    workflow = text[workflow_label]
+    if workflow.count(warm_command) != 1:
+        errors.append(
+            f"{workflow_label} must warm the exact candidate Android dependency graph once"
+        )
+    if workflow.count(offline_command) != 1:
+        errors.append(
+            f"{workflow_label} must prove candidate Android compilation offline once"
+        )
+    if (
+        workflow.count(warm_command) == 1
+        and workflow.count(offline_command) == 1
+        and workflow.index(warm_command) > workflow.index(offline_command)
+    ):
+        errors.append(
+            f"{workflow_label} must warm Android dependencies before the offline proof"
+        )
+    if ":offline-wallet-android:compileDebugAndroidTestKotlin" in workflow:
+        errors.append(
+            f"{workflow_label} must compile the exact candidate app, not a proxy module"
+        )
 
 source_seal = text["source_seal"]
 for needle in (

@@ -505,11 +505,133 @@ fn proposal_status_label(status: crate::state::GovernanceProposalStatus) -> &'st
     use crate::state::GovernanceProposalStatus as GPS;
     match status {
         GPS::Proposed => "proposed",
-        GPS::Approved => "approved",
         GPS::Rejected => "rejected",
         GPS::Enacted => "enacted",
         GPS::Superseded => "superseded",
+        GPS::ExecutionFailed => "execution_failed",
     }
+}
+#[cfg(feature = "telemetry")]
+fn parliament_transition_label(
+    kind: iroha_data_model::isi::governance::ParliamentLifecycleTransitionKindV1,
+) -> &'static str {
+    use iroha_data_model::isi::governance::ParliamentLifecycleTransitionKindV1 as Kind;
+    match kind {
+        Kind::EscalateRisk => "escalate_risk",
+        Kind::CompleteQualification => "complete_qualification",
+        Kind::RegisterSortitionRequest => "register_sortition_request",
+        Kind::ConsumeSortitionPulseBatch => "consume_sortition_pulse_batch",
+        Kind::BeginInvitationAcceptance => "begin_invitation_acceptance",
+        Kind::FailBodyElectionNoRoster => "fail_body_election_no_roster",
+        Kind::SealBodyRoster => "seal_body_roster",
+        Kind::AdvanceBodyPhase => "advance_body_phase",
+        Kind::RecordAttemptAbsence => "record_attempt_absence",
+        Kind::EndorsePublicFinding => "endorse_public_finding",
+        Kind::FailPublicFindingNoResult => "fail_public_finding_no_result",
+        Kind::RegisterBallotAttempt => "register_ballot_attempt",
+        Kind::CloseBallotRegistration => "close_ballot_registration",
+        Kind::FreezeBallotSurvivors => "freeze_ballot_survivors",
+        Kind::FreezeTimedOvnCorpus => "freeze_timed_ovn_corpus",
+        Kind::BeginBallotOpeningBatch => "begin_ballot_opening_batch",
+        Kind::FailBallotNoResult => "fail_ballot_no_result",
+        Kind::FinalizeOpenedBallot => "finalize_opened_ballot",
+        Kind::MarkEnacted => "mark_enacted",
+        Kind::MarkSuperseded => "mark_superseded",
+        Kind::MarkExecutionFailed => "mark_execution_failed",
+        Kind::RecordInvitationResponse => "record_invitation_response",
+        Kind::RegisterBallotParticipant => "register_ballot_participant",
+        Kind::RecordBallotDropout => "record_ballot_dropout",
+    }
+}
+#[cfg(feature = "telemetry")]
+fn parliament_no_result_label(
+    kind: iroha_data_model::governance::types::ParliamentNoResultKindV1,
+) -> &'static str {
+    use iroha_data_model::governance::types::ParliamentNoResultKindV1 as Kind;
+    match kind {
+        Kind::PublicFindingQuorumUnreachable => "public_finding_quorum_unreachable",
+        Kind::PublicFindingDeadlineExpired => "public_finding_deadline_expired",
+        Kind::BallotRegistrationDeadlineExpired => "ballot_registration_deadline_expired",
+        Kind::BallotSurvivorDeadlineExpired => "ballot_survivor_deadline_expired",
+        Kind::BallotCommitmentDeadlineExpired => "ballot_commitment_deadline_expired",
+        Kind::BallotReleasePulseUnavailable => "ballot_release_pulse_unavailable",
+        Kind::BallotOpeningDeadlineExpired => "ballot_opening_deadline_expired",
+    }
+}
+#[cfg(feature = "telemetry")]
+fn parliament_no_result_matches_transition(
+    transition: iroha_data_model::isi::governance::ParliamentLifecycleTransitionKindV1,
+    no_result: iroha_data_model::governance::types::ParliamentNoResultKindV1,
+) -> bool {
+    use iroha_data_model::{
+        governance::types::ParliamentNoResultKindV1 as NoResult,
+        isi::governance::ParliamentLifecycleTransitionKindV1 as Transition,
+    };
+    match no_result {
+        NoResult::PublicFindingQuorumUnreachable => matches!(
+            transition,
+            Transition::RecordAttemptAbsence | Transition::EndorsePublicFinding
+        ),
+        NoResult::PublicFindingDeadlineExpired => {
+            transition == Transition::FailPublicFindingNoResult
+        }
+        NoResult::BallotRegistrationDeadlineExpired
+        | NoResult::BallotSurvivorDeadlineExpired
+        | NoResult::BallotCommitmentDeadlineExpired
+        | NoResult::BallotReleasePulseUnavailable
+        | NoResult::BallotOpeningDeadlineExpired => transition == Transition::FailBallotNoResult,
+    }
+}
+#[cfg(feature = "telemetry")]
+fn parliament_attempt_status_label(
+    status: iroha_data_model::governance::types::GovernanceAttemptStatusV1,
+) -> &'static str {
+    use iroha_data_model::governance::types::GovernanceAttemptStatusV1 as Status;
+    match status {
+        Status::Active => "active",
+        Status::Certified => "certified",
+        Status::Rejected => "rejected",
+        Status::Enacted => "enacted",
+        Status::Superseded => "superseded",
+        Status::ExecutionFailed => "execution_failed",
+    }
+}
+#[cfg(feature = "telemetry")]
+fn parliament_attempt_stage_label(
+    stage: iroha_data_model::governance::types::GovernanceStageV1,
+) -> &'static str {
+    use iroha_data_model::governance::types::GovernanceStageV1 as Stage;
+    match stage {
+        Stage::Qualification => "qualification",
+        Stage::Rules => "rules",
+        Stage::Agenda => "agenda",
+        Stage::Interest => "interest",
+        Stage::Review => "review",
+        Stage::Coordination => "coordination",
+        Stage::Mpc => "mpc",
+        Stage::Fma => "fma",
+        Stage::Oversight => "oversight",
+        Stage::PolicyJury => "policy_jury",
+        Stage::ConfirmationJury => "confirmation_jury",
+        Stage::Certification => "certification",
+        Stage::Enactment => "enactment",
+    }
+}
+/// Reduce a committed governance event to its bounded Parliament metric fields.
+///
+/// The projection intentionally drops every identifier, digest, certificate,
+/// automatic-outcome payload, and private-protocol record.
+#[cfg(feature = "telemetry")]
+pub(crate) fn parliament_lifecycle_metric_projection(
+    event: &GovernanceEvent,
+) -> Option<(
+    iroha_data_model::isi::governance::ParliamentLifecycleTransitionKindV1,
+    Option<iroha_data_model::governance::types::ParliamentNoResultKindV1>,
+)> {
+    let GovernanceEvent::ParliamentLifecycleTransitionApplied(payload) = event else {
+        return None;
+    };
+    Some((payload.transition_kind, payload.no_result_kind))
 }
 #[cfg(feature = "telemetry")]
 #[allow(dead_code)]
@@ -2011,9 +2133,7 @@ impl StateTelemetry {
             GovernanceEvent::ProposalSubmitted(payload) => {
                 self.update_governance_status(payload.id, GPS::Proposed);
             }
-            GovernanceEvent::ProposalApproved(payload) => {
-                self.update_governance_status(payload.id, GPS::Approved);
-            }
+            GovernanceEvent::ProposalApproved(_) => {}
             GovernanceEvent::ProposalRejected(payload) => {
                 self.update_governance_status(payload.id, GPS::Rejected);
             }
@@ -2161,10 +2281,10 @@ impl StateTelemetry {
             cache.insert(id, status);
             match status {
                 GPS::Proposed => counts[0] = counts[0].saturating_add(1),
-                GPS::Approved => counts[1] = counts[1].saturating_add(1),
-                GPS::Rejected => counts[2] = counts[2].saturating_add(1),
-                GPS::Enacted => counts[3] = counts[3].saturating_add(1),
-                GPS::Superseded => counts[4] = counts[4].saturating_add(1),
+                GPS::Rejected => counts[1] = counts[1].saturating_add(1),
+                GPS::Enacted => counts[2] = counts[2].saturating_add(1),
+                GPS::Superseded => counts[3] = counts[3].saturating_add(1),
+                GPS::ExecutionFailed => counts[4] = counts[4].saturating_add(1),
             }
         }
         drop(cache);
@@ -2173,14 +2293,121 @@ impl StateTelemetry {
         }
         for (status, count) in [
             (GPS::Proposed, counts[0]),
-            (GPS::Approved, counts[1]),
-            (GPS::Rejected, counts[2]),
-            (GPS::Enacted, counts[3]),
-            (GPS::Superseded, counts[4]),
+            (GPS::Rejected, counts[1]),
+            (GPS::Enacted, counts[2]),
+            (GPS::Superseded, counts[3]),
+            (GPS::ExecutionFailed, counts[4]),
         ] {
             self.metrics
                 .governance_proposals_status
                 .with_label_values(&[proposal_status_label(status)])
+                .set(count);
+        }
+    }
+    /// Record one accepted Parliament transition from the committed event buffer.
+    ///
+    /// Both labels are closed enums. Identifiers, roots, member records, ballots,
+    /// shares, openings, and account labels never enter the metric registry.
+    #[cfg(feature = "telemetry")]
+    pub(crate) fn record_committed_parliament_transition(
+        &self,
+        transition: iroha_data_model::isi::governance::ParliamentLifecycleTransitionKindV1,
+        no_result_kind: Option<iroha_data_model::governance::types::ParliamentNoResultKindV1>,
+    ) {
+        if !self.is_enabled() {
+            return;
+        }
+        self.metrics
+            .governance_parliament_transitions_total
+            .with_label_values(&[parliament_transition_label(transition)])
+            .inc();
+        if let Some(no_result_kind) = no_result_kind
+            && parliament_no_result_matches_transition(transition, no_result_kind)
+        {
+            self.metrics
+                .governance_parliament_no_result_total
+                .with_label_values(&[parliament_no_result_label(no_result_kind)])
+                .inc();
+        }
+    }
+    /// Replace Parliament attempt gauges with a snapshot of committed state.
+    #[cfg(feature = "telemetry")]
+    pub(crate) fn seed_parliament_attempts(
+        &self,
+        attempts: impl IntoIterator<
+            Item = (
+                iroha_data_model::governance::types::GovernanceAttemptStatusV1,
+                iroha_data_model::governance::types::GovernanceStageV1,
+            ),
+        >,
+    ) {
+        use iroha_data_model::governance::types::{
+            GovernanceAttemptStatusV1 as Status, GovernanceStageV1 as Stage,
+        };
+
+        let mut status_counts = [0_u64; 6];
+        let mut stage_counts = [0_u64; 13];
+        for (status, stage) in attempts {
+            let status_index = match status {
+                Status::Active => 0,
+                Status::Certified => 1,
+                Status::Rejected => 2,
+                Status::Enacted => 3,
+                Status::Superseded => 4,
+                Status::ExecutionFailed => 5,
+            };
+            let stage_index = match stage {
+                Stage::Qualification => 0,
+                Stage::Rules => 1,
+                Stage::Agenda => 2,
+                Stage::Interest => 3,
+                Stage::Review => 4,
+                Stage::Coordination => 5,
+                Stage::Mpc => 6,
+                Stage::Fma => 7,
+                Stage::Oversight => 8,
+                Stage::PolicyJury => 9,
+                Stage::ConfirmationJury => 10,
+                Stage::Certification => 11,
+                Stage::Enactment => 12,
+            };
+            status_counts[status_index] = status_counts[status_index].saturating_add(1);
+            stage_counts[stage_index] = stage_counts[stage_index].saturating_add(1);
+        }
+        if !self.is_enabled() {
+            return;
+        }
+        for (status, count) in [
+            (Status::Active, status_counts[0]),
+            (Status::Certified, status_counts[1]),
+            (Status::Rejected, status_counts[2]),
+            (Status::Enacted, status_counts[3]),
+            (Status::Superseded, status_counts[4]),
+            (Status::ExecutionFailed, status_counts[5]),
+        ] {
+            self.metrics
+                .governance_parliament_attempts_by_status
+                .with_label_values(&[parliament_attempt_status_label(status)])
+                .set(count);
+        }
+        for (stage, count) in [
+            (Stage::Qualification, stage_counts[0]),
+            (Stage::Rules, stage_counts[1]),
+            (Stage::Agenda, stage_counts[2]),
+            (Stage::Interest, stage_counts[3]),
+            (Stage::Review, stage_counts[4]),
+            (Stage::Coordination, stage_counts[5]),
+            (Stage::Mpc, stage_counts[6]),
+            (Stage::Fma, stage_counts[7]),
+            (Stage::Oversight, stage_counts[8]),
+            (Stage::PolicyJury, stage_counts[9]),
+            (Stage::ConfirmationJury, stage_counts[10]),
+            (Stage::Certification, stage_counts[11]),
+            (Stage::Enactment, stage_counts[12]),
+        ] {
+            self.metrics
+                .governance_parliament_attempts_by_stage
+                .with_label_values(&[parliament_attempt_stage_label(stage)])
                 .set(count);
         }
     }
@@ -3496,18 +3723,18 @@ impl StateTelemetry {
         for status in collected {
             match status {
                 GPS::Proposed => counts[0] = counts[0].saturating_add(1),
-                GPS::Approved => counts[1] = counts[1].saturating_add(1),
-                GPS::Rejected => counts[2] = counts[2].saturating_add(1),
-                GPS::Enacted => counts[3] = counts[3].saturating_add(1),
-                GPS::Superseded => counts[4] = counts[4].saturating_add(1),
+                GPS::Rejected => counts[1] = counts[1].saturating_add(1),
+                GPS::Enacted => counts[2] = counts[2].saturating_add(1),
+                GPS::Superseded => counts[3] = counts[3].saturating_add(1),
+                GPS::ExecutionFailed => counts[4] = counts[4].saturating_add(1),
             }
         }
         for (status, count) in [
             (GPS::Proposed, counts[0]),
-            (GPS::Approved, counts[1]),
-            (GPS::Rejected, counts[2]),
-            (GPS::Enacted, counts[3]),
-            (GPS::Superseded, counts[4]),
+            (GPS::Rejected, counts[1]),
+            (GPS::Enacted, counts[2]),
+            (GPS::Superseded, counts[3]),
+            (GPS::ExecutionFailed, counts[4]),
         ] {
             self.metrics
                 .governance_proposals_status
@@ -7602,7 +7829,7 @@ mod tests {
         prelude::World,
         query::store::LiveQueryStore,
         state::StateReadOnly,
-        sumeragi::{message::BlockMessage, network_topology::Topology, status},
+        sumeragi::{message::BlockMessage, network_topology::Topology},
         tx::AcceptedTransaction,
     };
     use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
@@ -10642,7 +10869,7 @@ mod tests {
         );
         telemetry.record_governance_proposal_transition(
             Some(crate::state::GovernanceProposalStatus::Proposed),
-            crate::state::GovernanceProposalStatus::Approved,
+            crate::state::GovernanceProposalStatus::ExecutionFailed,
         );
         assert_eq!(
             metrics
@@ -10654,7 +10881,7 @@ mod tests {
         assert_eq!(
             metrics
                 .governance_proposals_status
-                .with_label_values(&["approved"])
+                .with_label_values(&["execution_failed"])
                 .get(),
             1
         );
@@ -10666,7 +10893,11 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         telemetry.record_governance_proposal_transition(None, GPS::Proposed);
-        telemetry.seed_governance_proposal_statuses([GPS::Approved, GPS::Approved, GPS::Rejected]);
+        telemetry.seed_governance_proposal_statuses([
+            GPS::ExecutionFailed,
+            GPS::ExecutionFailed,
+            GPS::Rejected,
+        ]);
         assert_eq!(
             metrics
                 .governance_proposals_status
@@ -10677,7 +10908,7 @@ mod tests {
         assert_eq!(
             metrics
                 .governance_proposals_status
-                .with_label_values(&["approved"])
+                .with_label_values(&["execution_failed"])
                 .get(),
             2
         );
@@ -10694,6 +10925,177 @@ mod tests {
                 .with_label_values(&["enacted"])
                 .get(),
             0
+        );
+    }
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn parliament_metrics_use_only_closed_low_cardinality_labels() {
+        use iroha_data_model::{
+            events::data::governance::{
+                GovernanceEvent, GovernanceParliamentLifecycleTransitionApplied,
+            },
+            governance::types::{
+                GovernanceAttemptId, GovernanceCertificateId, ParliamentNoResultKindV1 as NoResult,
+                ProposalContentId,
+            },
+            isi::governance::ParliamentLifecycleTransitionKindV1 as Transition,
+        };
+
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+        let event = GovernanceEvent::ParliamentLifecycleTransitionApplied(
+            GovernanceParliamentLifecycleTransitionApplied {
+                proposal_content_id: ProposalContentId::new([0xAB; 32]),
+                governance_attempt_id: GovernanceAttemptId::new([0xCD; 32]),
+                transition_kind: Transition::FailBallotNoResult,
+                no_result_kind: Some(NoResult::BallotOpeningDeadlineExpired),
+                automatic_outcome: None,
+                transition_digest: [0xEF; 32],
+                certificate_id: Some(GovernanceCertificateId::new([0x12; 32])),
+                at_height: 42,
+            },
+        );
+        let projection = parliament_lifecycle_metric_projection(&event)
+            .expect("project committed Parliament lifecycle event");
+        telemetry.record_committed_parliament_transition(projection.0, projection.1);
+        telemetry.record_committed_parliament_transition(
+            Transition::EndorsePublicFinding,
+            Some(NoResult::PublicFindingQuorumUnreachable),
+        );
+        telemetry.record_committed_parliament_transition(
+            Transition::FailPublicFindingNoResult,
+            Some(NoResult::PublicFindingDeadlineExpired),
+        );
+        telemetry.record_committed_parliament_transition(
+            Transition::CompleteQualification,
+            Some(NoResult::PublicFindingDeadlineExpired),
+        );
+
+        assert_eq!(
+            metrics
+                .governance_parliament_transitions_total
+                .with_label_values(&["fail_ballot_no_result"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_transitions_total
+                .with_label_values(&["endorse_public_finding"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_no_result_total
+                .with_label_values(&["ballot_opening_deadline_expired"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_no_result_total
+                .with_label_values(&["public_finding_quorum_unreachable"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_no_result_total
+                .with_label_values(&["public_finding_deadline_expired"])
+                .get(),
+            1,
+            "an incompatible transition must not increment the valid deadline outcome again"
+        );
+
+        let exposition = metrics.try_to_string().expect("encode metrics exposition");
+        for secret in ["ab", "cd", "ef", "12"] {
+            assert!(
+                !exposition.contains(&secret.repeat(32)),
+                "Parliament metric exposition leaked an event identifier or digest"
+            );
+        }
+        for line in exposition
+            .lines()
+            .filter(|line| line.starts_with("governance_parliament_"))
+        {
+            let Some((_, labels_and_value)) = line.split_once('{') else {
+                continue;
+            };
+            let labels = labels_and_value
+                .split_once('}')
+                .expect("labeled Parliament metric")
+                .0;
+            assert!(
+                labels.starts_with("transition=\"")
+                    || labels.starts_with("class=\"")
+                    || labels.starts_with("status=\"")
+                    || labels.starts_with("stage=\""),
+                "unexpected Parliament metric label: {labels}"
+            );
+            assert!(
+                !labels.contains(','),
+                "Parliament metrics have one bounded label"
+            );
+        }
+    }
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn parliament_attempt_gauge_seeding_replaces_committed_snapshot() {
+        use iroha_data_model::governance::types::{
+            GovernanceAttemptStatusV1 as Status, GovernanceStageV1 as Stage,
+        };
+
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+        telemetry.seed_parliament_attempts([
+            (Status::Active, Stage::Qualification),
+            (Status::Active, Stage::Rules),
+            (Status::Certified, Stage::Enactment),
+        ]);
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_status
+                .with_label_values(&["active"])
+                .get(),
+            2
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_stage
+                .with_label_values(&["enactment"])
+                .get(),
+            1
+        );
+
+        telemetry.seed_parliament_attempts([(Status::Rejected, Stage::PolicyJury)]);
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_status
+                .with_label_values(&["active"])
+                .get(),
+            0
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_status
+                .with_label_values(&["rejected"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_stage
+                .with_label_values(&["qualification"])
+                .get(),
+            0
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_stage
+                .with_label_values(&["policy_jury"])
+                .get(),
+            1
         );
     }
     #[cfg(feature = "telemetry")]
@@ -10716,13 +11118,6 @@ mod tests {
                 .governance_proposals_status
                 .with_label_values(&["proposed"])
                 .get(),
-            0
-        );
-        assert_eq!(
-            metrics
-                .governance_proposals_status
-                .with_label_values(&["approved"])
-                .get(),
             1
         );
         telemetry.ingest_data_event(&DataEvent::Governance(GovernanceEvent::ProposalEnacted(
@@ -10731,7 +11126,7 @@ mod tests {
         assert_eq!(
             metrics
                 .governance_proposals_status
-                .with_label_values(&["approved"])
+                .with_label_values(&["proposed"])
                 .get(),
             0
         );

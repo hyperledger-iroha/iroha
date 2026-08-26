@@ -126,39 +126,71 @@ impl<'a> PreparedCertifiedFetchExecution<'a> {
 }
 #[allow(dead_code)]
 impl<'a> PreparedDurableStoreExecution<'a> {
-    fn durable_store(&self) -> &DurableStoreBody {
+    fn installed_work(&self) -> &ConcreteLifecycleWork {
         let work = self
             .registry
             .entries
             .get(&self.address)
             .expect("prepared durable Store carrier remains installed");
-        let ConcreteLifecycleWorkKind::DurableStoreBody(store) = &work.kind else {
-            unreachable!("prepared durable Store execution retains its closed carrier")
-        };
-        store
+        work
     }
     /// Return the exact reducer coordinates accepted by the direct
     /// `BodyStored` adapter preview.
     pub(super) fn adapter_preview_inputs(
         &self,
     ) -> (EventTag, wire::ConsensusRound, wire::BlockSubject) {
-        let AdapterEffect::StoreBody {
-            tag,
-            round,
-            subject,
-        } = &self.durable_store().effect
-        else {
-            unreachable!("prepared durable Store carrier retains its Store effect")
-        };
-        (*tag, *round, *subject)
+        match (&self.origin, &self.installed_work().kind) {
+            (
+                DurableStoreExecutionOriginV1::Certified,
+                ConcreteLifecycleWorkKind::DurableStoreBody(store),
+            ) => {
+                let AdapterEffect::StoreBody {
+                    tag,
+                    round,
+                    subject,
+                } = &store.effect
+                else {
+                    unreachable!("prepared durable Store carrier retains its Store effect")
+                };
+                (*tag, *round, *subject)
+            }
+            (
+                DurableStoreExecutionOriginV1::RecoveredDecision(_),
+                ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(store),
+            ) => store
+                .store
+                .adapter_preview_inputs()
+                .expect("prepared recovered Decision Store retains its Store effect"),
+            _ => unreachable!("prepared durable Store execution retains its closed carrier"),
+        }
     }
     /// Borrow the exact post-fsync body receipt retained by the Store carrier.
     pub(super) fn durable_body_receipt(&self) -> &DurableBodyReceipt {
-        &self.durable_store().durable_receipt
+        match (&self.origin, &self.installed_work().kind) {
+            (
+                DurableStoreExecutionOriginV1::Certified,
+                ConcreteLifecycleWorkKind::DurableStoreBody(store),
+            ) => &store.durable_receipt,
+            (
+                DurableStoreExecutionOriginV1::RecoveredDecision(_),
+                ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(store),
+            ) => store.store.durable_body_receipt(),
+            _ => unreachable!("prepared durable Store execution retains its closed carrier"),
+        }
     }
     /// Return the manifest hash transferred independently from the parent response.
     pub(super) fn expected_manifest_hash(&self) -> HashOf<wire::PayloadManifest> {
-        self.durable_store().expected_manifest_hash
+        match (&self.origin, &self.installed_work().kind) {
+            (
+                DurableStoreExecutionOriginV1::Certified,
+                ConcreteLifecycleWorkKind::DurableStoreBody(store),
+            ) => store.expected_manifest_hash,
+            (
+                DurableStoreExecutionOriginV1::RecoveredDecision(_),
+                ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(store),
+            ) => store.store.expected_manifest_hash(),
+            _ => unreachable!("prepared durable Store execution retains its closed carrier"),
+        }
     }
     /// Seal the ordinal-free pending binding for the exact Validate effect
     /// emitted by the direct `BodyStored` adapter preview.
@@ -170,12 +202,16 @@ impl<'a> PreparedDurableStoreExecution<'a> {
     pub(super) fn seal_validate_successor<'adapter>(
         self,
         adapter: crate::sumeragi::v2::PreparedDurableStoreValidateAdapterV1<'adapter>,
-    ) -> Result<
-        PreparedDurableStoreValidateSuccessor<'a, 'adapter>,
-        DurableStoreExecutionError,
-    > {
+    ) -> Result<PreparedDurableStoreValidateSuccessor<'a, 'adapter>, DurableStoreExecutionError>
+    {
         let successor = adapter.validate_effect();
+        let Self {
+            registry,
+            address,
+            origin,
+        } = self;
         let (
+            parent,
             validate_effect,
             validate_pending,
             validate_digest,
@@ -183,28 +219,74 @@ impl<'a> PreparedDurableStoreExecution<'a> {
             expected_manifest_hash,
             replay_evidence,
         ) = {
-            let work = self
-                .registry
+            let work = registry
                 .entries
-                .get(&self.address)
+                .get(&address)
                 .expect("prepared durable Store carrier remains installed");
-            let ConcreteLifecycleWorkKind::DurableStoreBody(store) = &work.kind else {
-                return Err(DurableStoreExecutionError::InvalidStoreShape);
-            };
-            if !store.validates(work.digest) {
-                return Err(DurableStoreExecutionError::InvalidStoreShape);
-            }
-            let Some(validate_pending) = store
-                .pending
-                .project_store_validate_successor(&store.effect, successor)
-            else {
-                return Err(DurableStoreExecutionError::InvalidValidateSuccessor);
-            };
-            if validate_pending.causal_lifecycle_key() != store.pending.causal_lifecycle_key()
-                || super::CausalRoot::new(digest_from_hash(validate_pending.causal_lifecycle_key()))
-                    != store.address.owner.causal_root()
-                || validate_pending.candidate_statement() != store.pending.candidate_statement()
-                || validate_pending.exact_effect_identity() == store.pending.exact_effect_identity()
+            let (parent, validate_pending, durable_body, expected_manifest_hash, replay_evidence) =
+                match (origin, &work.kind) {
+                    (
+                        DurableStoreExecutionOriginV1::Certified,
+                        ConcreteLifecycleWorkKind::DurableStoreBody(store),
+                    ) => {
+                        if !store.validates(work.digest) {
+                            return Err(DurableStoreExecutionError::InvalidStoreShape);
+                        }
+                        let Some(validate_pending) = store
+                            .pending
+                            .project_store_validate_successor(&store.effect, successor)
+                        else {
+                            return Err(DurableStoreExecutionError::InvalidValidateSuccessor);
+                        };
+                        if validate_pending.causal_lifecycle_key()
+                            != store.pending.causal_lifecycle_key()
+                            || validate_pending.candidate_statement()
+                                != store.pending.candidate_statement()
+                            || validate_pending.exact_effect_identity()
+                                == store.pending.exact_effect_identity()
+                        {
+                            return Err(DurableStoreExecutionError::InvalidValidateSuccessor);
+                        }
+                        let Some(replay_evidence) = store.replay_evidence.project_validate(
+                            &store.effect,
+                            &store.durable_receipt,
+                            successor,
+                            &validate_pending,
+                        ) else {
+                            return Err(DurableStoreExecutionError::InvalidValidateSuccessor);
+                        };
+                        (
+                            DurableStoreValidateParentV1::Certified,
+                            validate_pending,
+                            store.durable_receipt.clone(),
+                            store.expected_manifest_hash,
+                            DurableValidateReplayEvidenceV1::certified(replay_evidence),
+                        )
+                    }
+                    (
+                        DurableStoreExecutionOriginV1::RecoveredDecision(authority),
+                        ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(store),
+                    ) => {
+                        if !store.validates_at(address, work.digest) {
+                            return Err(DurableStoreExecutionError::InvalidStoreShape);
+                        }
+                        let Some((validate_pending, replay_evidence)) =
+                            authority.project_validate_successor(&store.store, successor)
+                        else {
+                            return Err(DurableStoreExecutionError::InvalidValidateSuccessor);
+                        };
+                        (
+                            DurableStoreValidateParentV1::RecoveredDecision,
+                            validate_pending,
+                            store.store.durable_body_receipt().clone(),
+                            store.store.expected_manifest_hash(),
+                            replay_evidence,
+                        )
+                    }
+                    _ => return Err(DurableStoreExecutionError::InvalidStoreShape),
+                };
+            if super::CausalRoot::new(digest_from_hash(validate_pending.causal_lifecycle_key()))
+                != address.owner.causal_root()
                 || !validate_pending.exactly_binds_adapter_effect(successor)
             {
                 return Err(DurableStoreExecutionError::InvalidValidateSuccessor);
@@ -213,26 +295,29 @@ impl<'a> PreparedDurableStoreExecution<'a> {
             if validate_digest == work.digest {
                 return Err(DurableStoreExecutionError::InvalidValidateSuccessor);
             }
-            let Some(replay_evidence) = store.replay_evidence.project_validate(
-                &store.effect,
-                &store.durable_receipt,
-                successor,
-                &validate_pending,
-            ) else {
+            if durable_body.manifest_hash() != expected_manifest_hash
+                || !replay_evidence.exactly_matches_validate_pending(
+                    successor,
+                    &durable_body,
+                    &validate_pending,
+                )
+            {
                 return Err(DurableStoreExecutionError::InvalidValidateSuccessor);
-            };
+            }
             (
+                parent,
                 successor.clone(),
                 validate_pending,
                 validate_digest,
-                store.durable_receipt.clone(),
-                store.expected_manifest_hash,
+                durable_body,
+                expected_manifest_hash,
                 replay_evidence,
             )
         };
         Ok(PreparedDurableStoreValidateSuccessor {
-            registry: self.registry,
-            store_address: self.address,
+            registry,
+            store_address: address,
+            parent,
             validate_effect,
             validate_digest,
             validate_pending,

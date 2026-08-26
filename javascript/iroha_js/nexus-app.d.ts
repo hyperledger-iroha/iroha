@@ -4,6 +4,8 @@ import type { NetworkId } from "./index.js";
 export interface NexusAppConfig {
   /** Exact genesis-derived domain for transactions and Connect sessions. */
   networkId?: NetworkId;
+  /** Required exact I105 chain context for the Nexus facade. */
+  chainDiscriminant: number;
   baseUrl?: string;
   toriiBaseUrl?: string;
   connectBaseUrl?: string;
@@ -223,7 +225,7 @@ export interface NexusConnectTransport {
   awaitApproval?(
     session: NexusConnectSession,
     config: NexusAppConfig,
-  ): Promise<{ accountId?: string; account_id?: string; signingPublicKey?: unknown; signing_public_key?: unknown; session?: NexusConnectSession }> | { accountId?: string; account_id?: string; signingPublicKey?: unknown; signing_public_key?: unknown; session?: NexusConnectSession };
+  ): Promise<{ accountId?: string; account_id?: string; signingPublicKey?: unknown; signing_public_key?: unknown }> | { accountId?: string; account_id?: string; signingPublicKey?: unknown; signing_public_key?: unknown };
   requestSignature?(
     session: NexusConnectSession,
     signable: NexusSignableTransaction,
@@ -289,7 +291,7 @@ export class NexusAppError extends Error {
 }
 
 export class NexusAppClient {
-  constructor(config?: NexusAppConfig);
+  constructor(config: NexusAppConfig);
   startConnect(options?: NexusConnectOptions): Promise<NexusConnectSession>;
   awaitApproval(session: NexusConnectSession): Promise<NexusApprovedAccount>;
   buildTransferDraft(input: NexusTransferInput): NexusTransferDraft;

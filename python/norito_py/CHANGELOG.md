@@ -28,9 +28,9 @@
   deframing removed; bundled-only streaming defaults). Python bindings continue
   to use the canonical encoder/decoder paths and require no API changes, but
   the parity check was rerun to mirror the stricter framing.
-- Added `from_bytes_view`/`ArchiveView.decode` so callers can deframe archives and
-  inspect header flags/minor hints, matching the new Rust `ArchiveView::flags*`
-  accessors.
+- Added `from_bytes_view`/`ArchiveView.decode` so callers can deframe archives
+  and inspect the authoritative header flags while strictly requiring the fixed
+  V1 minor byte (`0x00`).
 - Revalidated parity after the Rust Norito streaming RD harness/PSNR flag
   tweaks; bindings remain unchanged, parity suite rerun to satisfy the sync
   guard.

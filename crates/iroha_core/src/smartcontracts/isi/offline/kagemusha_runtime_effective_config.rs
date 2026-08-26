@@ -8,7 +8,7 @@ use iroha_data_model::{
     block::consensus_v2::{
         ConsensusMode, SnapshotV2BootstrapRecord, SumeragiV2GenesisContextParameters,
     },
-    isi::{Instruction as _, SetParameter},
+    isi::SetParameter,
     offline::{
         KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT, KagemushaV4RuntimeEffectiveConfigProjectionV1,
         KagemushaV4RuntimeValidatorProjectionV1,

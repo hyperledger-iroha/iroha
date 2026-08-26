@@ -63,23 +63,23 @@ def require_fail_closed_tests(kotlin: str, java: str) -> None:
         r"if\s*\(\s*!available\s*\)\s*\{\s*return;\s*\}", java
     ) is None
     assert kotlin.count(
-        "ABI-22 connect_norito_bridge with compiled-profile catalog JNI exports is required"
+        "ABI-23 connect_norito_bridge with compiled-profile catalog JNI exports is required"
     ) == 1
     assert kotlin.count(
-        "ABI-22 connect_norito_bridge with exact-12 fixture JNI exports is required"
+        "ABI-23 connect_norito_bridge with exact-12 fixture JNI exports is required"
     ) == 1
     assert java.count(
-        "ABI-22 connect_norito_bridge with compiled-profile catalog JNI exports is required"
+        "ABI-23 connect_norito_bridge with compiled-profile catalog JNI exports is required"
     ) == 1
     assert java.count(
-        "ABI-22 connect_norito_bridge with exact-12 fixture JNI exports is required"
+        "ABI-23 connect_norito_bridge with exact-12 fixture JNI exports is required"
     ) == 1
     assert kotlin.count("assertTrue(\n            available,") == 2
     assert java.count("if (!available) {") == 2
     assert java.count("throw new AssertionError(") >= 2
 
 
-def test_privacy_jvm_gate_builds_and_authenticates_native_abi22() -> None:
+def test_privacy_jvm_gate_builds_and_authenticates_native_abi23() -> None:
     gate = read("ci/check_privacy_jvm_sdk.sh")
     assert f'FROZEN_CARGO_LOCK_SHA256="{FROZEN_LOCK_SHA256}"' in gate
     assert f'TRACKED_ROOT_CARGO_LOCK_SHA256="{TRACKED_ROOT_LOCK_SHA256}"' in gate
@@ -150,7 +150,7 @@ def test_csharp_lane_consumes_the_same_authenticated_native_bytes() -> None:
     assert "WhenAvailable" not in tests
 
 
-def test_javascript_lane_builds_and_executes_real_napi_abi22() -> None:
+def test_javascript_lane_builds_and_executes_real_napi_abi23() -> None:
     workflow = read(".github/workflows/pr_privacy_sdk_guard.yml")
     job = javascript_job(workflow)
     assert "needs: privacy_jvm_sdk_tests" in job
@@ -187,7 +187,7 @@ def test_javascript_lane_builds_and_executes_real_napi_abi22() -> None:
     assert "privacyValidateCompiledProfileCatalogV1" in integration
 
 
-def test_python_lane_authenticates_and_executes_real_pyo3_abi22() -> None:
+def test_python_lane_authenticates_and_executes_real_pyo3_abi23() -> None:
     gate = read("ci/check_privacy_python_sdk.sh")
     assert f'FROZEN_CARGO_LOCK_SHA256="{FROZEN_LOCK_SHA256}"' in gate
     assert '"${ABI22_CHECKER}" record' in gate
@@ -214,7 +214,7 @@ def test_python_lane_authenticates_and_executes_real_pyo3_abi22() -> None:
     )
 
 
-def test_swift_lane_rebuilds_external_xcframework_and_requires_native_abi22() -> None:
+def test_swift_lane_rebuilds_external_xcframework_and_requires_native_abi23() -> None:
     workflow = read(".github/workflows/pr_privacy_sdk_guard.yml")
     job = swift_job(workflow)
     assert "needs: privacy_jvm_sdk_tests" in job
@@ -236,7 +236,7 @@ def test_swift_lane_rebuilds_external_xcframework_and_requires_native_abi22() ->
     assert "chmod -R a-w" in job
     assert "scripts/build_norito_xcframework.sh" in job
     assert "run: ci/check_privacy_swift_sdk.sh" in job
-    assert "Revalidate frozen Swift inputs and ABI22 artifacts" in job
+    assert "Revalidate frozen Swift inputs and ABI23 artifacts" in job
     assert job.count("scripts/check_mobile_sdk_artifacts.sh --apple-only") == 1
 
     gate = read("ci/check_privacy_swift_sdk.sh")

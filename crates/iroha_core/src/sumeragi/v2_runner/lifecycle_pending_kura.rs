@@ -691,6 +691,9 @@ pub(super) fn run_pending_kura_lifecycle_height(
     reputation_finalized_archive: Option<
         Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
     >,
+    global_beacon_partial_signer: Option<
+        Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>,
+    >,
     network: crate::IrohaNetwork,
     block_rx: Arc<FairV2Ingress>,
     lane_relay_rx: std::sync::mpsc::Receiver<crate::sumeragi::LaneRelayMessage>,
@@ -728,6 +731,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
     kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
     mut block_sync_server: Option<V2BlockSyncServer>,
 ) -> Result<(), V2RunnerError> {
+    let emergency_fast = kura.emergency_fast_startup_enabled();
     if pending_successor_activation.is_some()
         || staged_genesis_nexus_amx_context.is_some()
         || !reservation_reconciliation_pending
@@ -776,7 +780,11 @@ pub(super) fn run_pending_kura_lifecycle_height(
         retransmit_interval,
         round_timeout,
     )?;
-    let local_validator = local_validator_index(&context, &local_peer, config.role)?;
+    let local_validator = if emergency_fast {
+        None
+    } else {
+        local_validator_index(&context, &local_peer, config.role)?
+    };
     if block_sync_server.is_none() {
         block_sync_server = Some(V2BlockSyncServer::new(
             context.network_id,
@@ -786,11 +794,19 @@ pub(super) fn run_pending_kura_lifecycle_height(
     let consensus_key_hash: [u8; 32] =
         Hash::new(common_config.key_pair.public_key().encode()).into();
     let storage_root = kura.sumeragi_v2_storage_root();
-    let body_store = V2BodyStore::open_with_policy(
-        storage_root.join("bodies"),
-        context.clone(),
-        signature_policy,
-    )
+    let body_store = if emergency_fast {
+        V2BodyStore::open_emergency_fast_read_only(
+            storage_root.join("bodies"),
+            context.clone(),
+            signature_policy,
+        )
+    } else {
+        V2BodyStore::open_with_policy(
+            storage_root.join("bodies"),
+            context.clone(),
+            signature_policy,
+        )
+    }
     .map_err(|error| {
         V2RunnerError::Effect(super::super::v2_effects::EffectExecutorError::BodyStore(
             error.to_string(),
@@ -934,25 +950,32 @@ pub(super) fn run_pending_kura_lifecycle_height(
         .require_committed_kagemusha_runtime_effective_config()
         .map_err(V2RunnerError::Service)?;
 
-    let (pending, control) = reconcile_pending_lane_startup(
-        pending,
-        &mut setup_runner,
-        &mut activation,
-        &context,
-        &verified_context,
-        &state,
-        &queue,
-        &kura,
-        &local_peer,
-        &common_config.key_pair,
-        &output_guard,
-        lane_work_limits,
-        retransmit_interval,
-        control_queue_capacity,
-        &wake_rx,
-        &shutdown_signal,
-        lifecycle_process_generation.as_ref(),
-    )?;
+    let (pending, control) = if emergency_fast {
+        iroha_logger::warn!(
+            "emergency Fast startup completed interrupted-tip Apply but deferred historical lane repair and reservation reconciliation until a Strict restart"
+        );
+        (pending, PendingCanonicalRecoveryControlV1::Complete)
+    } else {
+        reconcile_pending_lane_startup(
+            pending,
+            &mut setup_runner,
+            &mut activation,
+            &context,
+            &verified_context,
+            &state,
+            &queue,
+            &kura,
+            &local_peer,
+            &common_config.key_pair,
+            &output_guard,
+            lane_work_limits,
+            retransmit_interval,
+            control_queue_capacity,
+            &wake_rx,
+            &shutdown_signal,
+            lifecycle_process_generation.as_ref(),
+        )?
+    };
     if control == PendingCanonicalRecoveryControlV1::Shutdown {
         pending.into_clean_shutdown(activation)?;
         return Ok(());
@@ -965,7 +988,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
                 &verified_context,
                 local_peer.clone(),
                 common_config.key_pair.clone(),
-                config.role == NodeRole::Validator,
+                config.role == NodeRole::Validator && !emergency_fast,
                 Arc::clone(&state),
                 Arc::clone(&kura),
                 lane_work_limits,
@@ -1035,6 +1058,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
         kura,
         provider_ingest_finalized_archive,
         reputation_finalized_archive,
+        global_beacon_partial_signer,
         network,
         block_rx,
         lane_relay_rx,
@@ -1058,7 +1082,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
         round_timeout,
         retransmit_interval,
         lifecycle_process_generation,
-        false,
+        reservation_reconciliation_pending,
         true,
         cleanup_supervisor,
         liveness_watchdog,

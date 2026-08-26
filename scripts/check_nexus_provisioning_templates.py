@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when production deployment templates embed runtime signing keys."""
+"""Validate runtime key handles and bounded MCP policy in public templates."""
 
 from __future__ import annotations
 
@@ -20,6 +20,10 @@ SERVER_TEMPLATES = (
     pathlib.Path("defaults/nexus/config.toml"),
 )
 DEPLOYMENT_SERVER_TEMPLATES = (
+    pathlib.Path("configs/soranexus/taira/config.toml"),
+)
+PUBLIC_MCP_SERVER_TEMPLATES = (
+    pathlib.Path("configs/soranexus/nexus/config.toml"),
     pathlib.Path("configs/soranexus/taira/config.toml"),
 )
 GENERATED_SERVER_TEMPLATES = (
@@ -183,6 +187,25 @@ def validate_client_template(path: pathlib.Path) -> str:
     )
 
 
+def validate_public_mcp_profile(path: pathlib.Path) -> None:
+    """Require the bounded public writer profile expected by the Iroha plugin."""
+
+    table = _load_toml(path)
+    torii = table.get("torii")
+    mcp = torii.get("mcp") if isinstance(torii, Mapping) else None
+    if (
+        not isinstance(mcp, Mapping)
+        or mcp.get("enabled") is not True
+        or mcp.get("profile") != "writer"
+        or mcp.get("expose_operator_routes") is not False
+        or mcp.get("allow_tool_prefixes") != ["iroha."]
+    ):
+        raise ProvisioningTemplateError(
+            f"{path}.torii.mcp must enable the public writer profile, disable "
+            "operator routes, and expose only the `iroha.` tool prefix"
+        )
+
+
 def validate_repository(root: pathlib.Path) -> None:
     """Validate every checked-in production/default provisioning template."""
 
@@ -198,6 +221,8 @@ def validate_repository(root: pathlib.Path) -> None:
         validate_server_template(root / relative)
     for relative in DEPLOYMENT_SERVER_TEMPLATES:
         validate_server_template(root / relative)
+    for relative in PUBLIC_MCP_SERVER_TEMPLATES:
+        validate_public_mcp_profile(root / relative)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -214,7 +239,10 @@ def main(argv: list[str] | None = None) -> int:
     except ProvisioningTemplateError as error:
         print(f"Nexus provisioning template check failed: {error}", file=sys.stderr)
         return 1
-    print("Production provisioning templates contain public identities and runtime file handles only")
+    print(
+        "Production provisioning templates contain public identities, runtime key handles, "
+        "and the bounded public MCP policy"
+    )
     return 0
 
 

@@ -4092,9 +4092,10 @@ mod tests {
     fn exact_entrypoint_wire_rejects_hash_equivalent_authorization_splice() {
         let key = KeyPair::try_from_seed(vec![0x42; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("fixture key");
-        let network_id = "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
-            .parse()
-            .expect("fixture network id");
+        let network_id =
+            "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+                .parse()
+                .expect("fixture network id");
         let transaction = TransactionBuilder::new(
             network_id,
             AccountId::new(key.public_key().clone()),
@@ -4129,9 +4130,10 @@ mod tests {
     fn journal_bound_status_identity_and_malformed_applied_are_uncertain() {
         let key = KeyPair::try_from_seed(vec![0x43; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("fixture key");
-        let network_id = "b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5"
-            .parse()
-            .expect("fixture network id");
+        let network_id =
+            "hash:B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5#87EB"
+                .parse()
+                .expect("fixture network id");
         let transaction = TransactionBuilder::new(
             network_id,
             AccountId::new(key.public_key().clone()),

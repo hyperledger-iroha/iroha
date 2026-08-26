@@ -103,8 +103,8 @@ into the output directory.
   path before signalling a live process, so stale or reused pids are left alone.
 
 `kagami wizard`
-- Guided observer-onboarding flow for an existing Sora Nexus or Taira network;
-  use `localnet-wizard` for a new generic network
+- Guided observer-onboarding flow for the existing Sora Nexus network; use
+  `localnet-wizard` for a new generic network
 - Supports interactive and fully flag-driven non-interactive use
 - Requires the operator-authenticated full validator peer/PoP roster encoded by
   the network's signed genesis; the generated local peer is not promoted to validator
@@ -119,8 +119,9 @@ into the output directory.
 - Protects validator/client configs and runtime signer/token sidecars with
   owner-only permissions and emits a bundle-wide `.gitignore`
 - Emits `genesis.signed.nrt`, `genesis.public_key`, and
-  `genesis.expected_hash` as a cross-checked runtime bundle, plus an owner-only
-  `genesis.private_key` that generated Compose files never mount
+  `genesis.expected_hash` as a cross-checked runtime bundle. The latter contains
+  one canonical checked `hash:<64 uppercase hex>#<CRC16>` NetworkId literal.
+  An owner-only `genesis.private_key` is never mounted by generated Compose files
 - Fresh-custody bundles keep directories and lifecycle scripts at `0700`, all
   other files at `0600`, and lifecycle scripts enforce `umask 077` for new
   logs, pidfiles, and runtime state
@@ -176,7 +177,8 @@ into the output directory.
   - `docker-compose.yml`
   - `README.md`
 - For a disposable four-validator Taira deployment, use
-  `python3 scripts/taira_devnet.py up`; use its `check` and `down` subcommands
+  `python3 scripts/taira_devnet.py up --inrou-canary-dir <owner-only-workspace>`;
+  use its `check` and `down` subcommands
   for inspection and teardown. The low-level `iroha3-taira` Kagami profile
   remains available for manifest generation and verification, targets the live
   Taira chain id, requires NPoS, and requires `--vrf-seed-hex`.
@@ -220,16 +222,13 @@ target/debug/kagami genesis sign \
   --expected-hash-out genesis.expected_hash
 ```
 
-The last option also publishes `genesis.identity.toml`. Treat that paired
-artifact as the deployment trust-root bundle: it carries the same exact signed
-header hash as both client `network_id` and validator
-`genesis.expected_hash`. Do not render those values independently. The
-one-line `genesis.expected_hash` file remains for validator launchers that
-consume it directly. Production templates select that exact file through
-validator `genesis.expected_hash_file` and client `network_id_file` rather than
-carrying replaceable inline placeholders.
+The one-line `genesis.expected_hash` output is the deployment trust root. It
+carries the exact signed header hash as one canonical checked NetworkId literal.
+Production templates select that same byte-exact file through validator
+`genesis.expected_hash_file` and client `network_id_file`; do not copy the value
+into independently rendered inline settings.
 
-For seedless `kagami docker`, place that body and hash beside the canonical
+For seedless `kagami docker`, place that body and checked network identity beside the canonical
 `genesis.public_key` and exact `peerN.toml` validator configs. Generation rejects
 any signer, hash, identity, trusted-roster, or PoP disagreement. The generated
 validator-only Compose projection rewrites operational paths to container

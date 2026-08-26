@@ -1,8 +1,7 @@
 //! Governance domain events exposed via the governance data model.
 //!
-//! These events mirror the lifecycle described in `gov.md` and the roadmap,
-//! providing typed Norito-serialisable payloads which higher layers can emit
-//! once the corresponding execution paths are implemented.
+//! These feature-gated administrative events complement the attempt-based V1
+//! Parliament events in the canonical data-event stream.
 use crate::{
     account::AccountId,
     governance::types::{ParliamentBodies, ProposalId, VoteChoice},
@@ -192,20 +191,37 @@ pub struct ParliamentExecutionFailed {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub enum ParliamentHouse {
     /// Rules Committee.
+    #[codec(index = 0)]
     RulesCommittee,
     /// Agenda Council.
+    #[codec(index = 1)]
     AgendaCouncil,
     /// Interest Panel.
+    #[codec(index = 2)]
     InterestPanel,
     /// Review Panel.
+    #[codec(index = 3)]
     ReviewPanel,
-    /// Policy Jury.
-    PolicyJury,
-    /// Oversight Committee.
-    OversightCommittee,
-    /// Final MPC/FMA gate.
+    /// Coordination Council.
+    #[codec(index = 4)]
+    CoordinationCouncil,
+    /// Monetary Policy Committee.
+    #[codec(index = 5)]
+    MpcCommittee,
+    /// Financial Markets Authority committee.
+    #[codec(index = 6)]
     FmaCommittee,
+    /// Oversight Committee.
+    #[codec(index = 7)]
+    OversightCommittee,
+    /// Policy Jury.
+    #[codec(index = 8)]
+    PolicyJury,
+    /// Disjoint Confirmation Jury.
+    #[codec(index = 9)]
+    ConfirmationJury,
     /// Enactment House.
+    #[codec(index = 10)]
     Enactment,
 }
 /// Parliament missed its deadline and timed out.

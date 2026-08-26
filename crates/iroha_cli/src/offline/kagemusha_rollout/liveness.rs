@@ -939,14 +939,13 @@ mod tests {
             attestation.headers().get(ACCEPT_ENCODING).unwrap(),
             "identity"
         );
+        let expected_challenge = hex::encode([0x42; 32]);
         assert_eq!(
             attestation
                 .headers()
                 .get(FINALITY_CHALLENGE_HEADER)
-                .unwrap()
-                .to_str()
-                .expect("challenge header is canonical ASCII"),
-            hex::encode([0x42; 32])
+                .unwrap(),
+            expected_challenge.as_str()
         );
         assert!(
             !attestation

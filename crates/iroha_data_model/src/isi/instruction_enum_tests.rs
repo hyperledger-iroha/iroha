@@ -224,61 +224,6 @@ fn dyn_encode_into_matches_dyn_encode() {
     assert_eq!(actual, expected);
 }
 #[test]
-fn opaque_instruction_dyn_encode_into_appends_bare_payload() {
-    let opaque = OpaqueInstruction {
-        wire_id: "opaque/test",
-        bare_payload: vec![0xAA, 0xBB, 0xCC],
-        framed_payload: vec![0xF0, 0xF1, 0xF2],
-    };
-    let mut actual = vec![0x11];
-    Instruction::dyn_encode_into(&opaque, &mut actual);
-    assert_eq!(actual, vec![0x11, 0xAA, 0xBB, 0xCC]);
-    assert_eq!(
-        Instruction::dyn_encode_capacity_hint(&opaque),
-        Some(opaque.bare_payload.len())
-    );
-}
-#[test]
-fn opaque_instruction_serializes_preserved_framed_payload() {
-    let log = Log::new(Level::INFO, "opaque preserve".to_owned());
-    let wire_id = "opaque/test";
-    let bare_payload = Instruction::dyn_encode(&log);
-    let framed_payload = norito::core::frame_bare_with_header_flags::<Log>(
-        &bare_payload,
-        norito::core::default_encode_flags(),
-    )
-    .expect("frame payload");
-    let opaque = InstructionBox::from(
-        OpaqueInstruction::from_framed(wire_id, &framed_payload).expect("opaque payload"),
-    );
-    assert_eq!(Instruction::dyn_encode(&*opaque), bare_payload);
-    assert_eq!(
-        opaque
-            .as_any()
-            .downcast_ref::<OpaqueInstruction>()
-            .expect("opaque")
-            .framed_payload(),
-        framed_payload.as_slice()
-    );
-    assert_eq!(
-        norito::to_bytes(&opaque).expect("encode opaque"),
-        norito::to_bytes(&(wire_id.to_owned(), framed_payload)).expect("encode pair"),
-    );
-}
-#[test]
-fn opaque_instruction_rejects_unframed_or_malformed_payloads() {
-    let log = Log::new(Level::INFO, "opaque reject raw".to_owned());
-    let raw_payload = Instruction::dyn_encode(&log);
-    assert!(
-        OpaqueInstruction::from_framed("opaque/raw", &raw_payload).is_err(),
-        "opaque instructions must carry a Norito-framed payload"
-    );
-    assert!(
-        OpaqueInstruction::from_framed("opaque/short", &[0x01, 0x02]).is_err(),
-        "short garbage must not be accepted as a framed opaque payload"
-    );
-}
-#[test]
 fn as_any_downcasts() {
     let log = Log {
         level: Level::INFO,

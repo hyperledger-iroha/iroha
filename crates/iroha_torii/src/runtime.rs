@@ -1761,7 +1761,7 @@ pub async fn handle_runtime_upgrades_list(
     });
     Ok(RuntimeUpgradesListResponse { items })
 }
-#[derive(Debug, JsonDeserialize, NoritoDeserialize)]
+#[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 pub struct ProposeUpgradeDto(pub iroha_data_model::runtime::RuntimeUpgradeManifest);
 #[derive(Debug, JsonSerialize, NoritoSerialize)]
 pub struct TxInstr {

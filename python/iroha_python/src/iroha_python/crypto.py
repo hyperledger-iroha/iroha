@@ -35,7 +35,7 @@ GOST_3410_2012_512_PARAMSET_B_ALGORITHM: Final[str] = "gost3410-2012-512-paramse
 BLS_NORMAL_ALGORITHM: Final[str] = "bls_normal"
 BLS_SMALL_ALGORITHM: Final[str] = "bls_small"
 SM2_ALGORITHM: Final[str] = "sm2"
-PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 22
+PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 23
 PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES: Final[int] = 256 * 1024
 PRIVACY_EXACT12_CAPABILITY_MANIFEST_ARCHIVE_MAX_BYTES_V1: Final[int] = 256 * 1024
 PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1: Final[Mapping[str, int]] = MappingProxyType(
@@ -184,6 +184,8 @@ __all__ = [
     "sign_ed25519",
     "sign_sm2",
     "decode_transaction_receipt_json",
+    "inspect_transaction_submission_v1",
+    "verify_transaction_submission_receipt_v1",
     "inspect_sorafs_orderbook_submission_for_discriminant_v1",
     "verify_sorafs_orderbook_submission_receipt_v1",
     "verify_signed_transaction_versioned",
@@ -193,23 +195,14 @@ __all__ = [
     "derive_confidential_keyset",
     "derive_confidential_keyset_from_hex",
     "compute_confidential_root_v2",
-    "computeConfidentialRootV2",
     "derive_confidential_next_zero_path_v2",
-    "deriveConfidentialNextZeroPathV2",
     "derive_confidential_diversifier_v2",
-    "deriveConfidentialDiversifierV2",
     "derive_confidential_owner_tag_v2",
-    "deriveConfidentialOwnerTagV2",
     "derive_confidential_note_v2",
-    "deriveConfidentialNoteV2",
     "build_confidential_transfer_proof_v2",
-    "buildConfidentialTransferProofV2",
     "build_confidential_transfer_proof_v2_with_paths",
-    "buildConfidentialTransferProofV2WithPaths",
     "build_confidential_unshield_proof_v3",
-    "buildConfidentialUnshieldProofV3",
     "build_confidential_unshield_proof_v3_with_paths",
-    "buildConfidentialUnshieldProofV3WithPaths",
     "confidential_transfer_v2_verifying_key_registration_payload_v1",
     "confidential_unshield_v3_verifying_key_registration_payload_v1",
     "privacy_bridge_abi_version",
@@ -674,6 +667,69 @@ def decode_transaction_receipt_json(payload: bytes) -> str:
     """Decode a Norito-framed transaction receipt into a JSON string."""
 
     return _crypto.decode_transaction_receipt_json(payload)
+
+
+def inspect_transaction_submission_v1(
+    signed_transaction_versioned: bytes,
+    expected_receipt_signer: str,
+) -> tuple[bytes, str]:
+    """Authenticate one exact signed wire and canonically parse its pinned receipt signer."""
+
+    if type(signed_transaction_versioned) is not bytes:
+        raise TypeError("signed_transaction_versioned must be exact immutable bytes")
+    if type(expected_receipt_signer) is not str or not expected_receipt_signer:
+        raise TypeError("expected_receipt_signer must be exact canonical text")
+    try:
+        result = _crypto.inspect_transaction_submission_v1(
+            signed_transaction_versioned,
+            expected_receipt_signer,
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing inspect_transaction_submission_v1; "
+            "rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError("invalid transaction submission preflight") from None
+    if (
+        type(result) is not tuple
+        or len(result) != 2
+        or type(result[0]) is not bytes
+        or len(result[0]) != 32
+        or result[0][-1] & 1 != 1
+        or result[1] != expected_receipt_signer
+    ):
+        raise RuntimeError("native transaction submission inspector returned malformed evidence")
+    return result
+
+
+def verify_transaction_submission_receipt_v1(
+    receipt_norito: bytes,
+    transaction_hash: str,
+    expected_receipt_signer: str,
+) -> str:
+    """Canonically authenticate and bind one receipt to its transaction and pinned signer."""
+
+    if type(receipt_norito) is not bytes:
+        raise TypeError("receipt_norito must be exact immutable bytes")
+    if not isinstance(transaction_hash, str) or not isinstance(expected_receipt_signer, str):
+        raise TypeError("transaction_hash and expected_receipt_signer must be strings")
+    try:
+        result = _crypto.verify_transaction_submission_receipt_v1(
+            receipt_norito,
+            transaction_hash,
+            expected_receipt_signer,
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing verify_transaction_submission_receipt_v1; "
+            "rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError("invalid transaction submission receipt") from None
+    if not isinstance(result, str):
+        raise RuntimeError("native transaction submission receipt verifier returned malformed JSON")
+    return result
 
 
 def inspect_sorafs_orderbook_submission_for_discriminant_v1(
@@ -1899,17 +1955,6 @@ def build_confidential_unshield_proof_v3_with_paths(
         vk_bytes,
     )
     return _confidential_native_result(result, "confidential unshield v3 path prover")
-
-
-computeConfidentialRootV2 = compute_confidential_root_v2
-deriveConfidentialNextZeroPathV2 = derive_confidential_next_zero_path_v2
-deriveConfidentialDiversifierV2 = derive_confidential_diversifier_v2
-deriveConfidentialOwnerTagV2 = derive_confidential_owner_tag_v2
-deriveConfidentialNoteV2 = derive_confidential_note_v2
-buildConfidentialTransferProofV2 = build_confidential_transfer_proof_v2
-buildConfidentialTransferProofV2WithPaths = build_confidential_transfer_proof_v2_with_paths
-buildConfidentialUnshieldProofV3 = build_confidential_unshield_proof_v3
-buildConfidentialUnshieldProofV3WithPaths = build_confidential_unshield_proof_v3_with_paths
 
 
 def confidential_transfer_v2_verifying_key_registration_payload_v1() -> Dict[str, Any]:

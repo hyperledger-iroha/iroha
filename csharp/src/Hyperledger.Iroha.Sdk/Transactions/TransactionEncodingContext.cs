@@ -188,11 +188,7 @@ internal sealed class TransactionEncodingContext
     {
         var writer = new CanonicalNoritoWriter();
         writer.WriteSequenceLength((ulong)bytes.Length);
-        foreach (var value in bytes)
-        {
-            writer.WriteCompactLength(1);
-            writer.WriteByte(value);
-        }
+        writer.WriteByteElements(bytes);
 
         return writer.ToArray();
     }
@@ -462,11 +458,7 @@ internal sealed class TransactionEncodingContext
         var uuidBytes = payload.AsSpan(1, 16);
 
         var writer = new CanonicalNoritoWriter();
-        foreach (var value in uuidBytes)
-        {
-            writer.WriteCompactLength(1);
-            writer.WriteByte(value);
-        }
+        writer.WriteByteElements(uuidBytes);
 
         return writer.ToArray();
     }

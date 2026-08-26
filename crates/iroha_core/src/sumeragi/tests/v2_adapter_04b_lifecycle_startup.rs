@@ -695,6 +695,13 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
         &local_signer,
     )
     .expect("open CompleteTip NPoS lifecycle");
+    let mut npos_beacon = super::super::v2_beacon::V2GlobalBeaconLifecycle::open(
+        &context,
+        state.as_ref(),
+        Some(local_validator),
+        None,
+    )
+    .expect("open CompleteTip global beacon lifecycle");
     let first = super::super::v2_runner::drain_lifecycle_v2_ingress(
         &mut activated,
         &mut active_runner,
@@ -706,6 +713,7 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
         &mut block_sync,
         &mut block_sync_request,
         &mut npos_vrf,
+        &mut npos_beacon,
         1,
         super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
     )
@@ -735,6 +743,7 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
             &mut block_sync,
             &mut block_sync_request,
             &mut npos_vrf,
+            &mut npos_beacon,
             1,
             producer_claim,
         )
@@ -1749,7 +1758,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             let ((), after_wrong_class_pass_through) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Runtime,
-                |runner| match launched.drive_completion_turn(runner, &mut lane_work) {
+                |runner| match launched.drive_completion_turn_for_test(runner, &mut lane_work) {
                     ProductionLifecycleCompletionTurnV1::PassThrough(runner) => {
                         assert_eq!(runner.target(), LifecycleRunnerRankTarget::Runtime);
                         drop(runner);
@@ -1773,7 +1782,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 with_lifecycle_current_runner_turn_for_test(
                     &foreign_context,
                     LifecycleRunnerRankTarget::Completion,
-                    |runner| match launched.drive_completion_turn(runner, &mut lane_work) {
+                    |runner| match launched.drive_completion_turn_for_test(runner, &mut lane_work) {
                         ProductionLifecycleCompletionTurnV1::PassThrough(runner) => {
                             assert_eq!(runner.target(), LifecycleRunnerRankTarget::Completion);
                             drop(runner);
@@ -1788,10 +1797,25 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 LifecycleRunnerRankTarget::Runtime
             );
             assert!(!output_guard.restart_required());
+            launched
+                .with_runner_setup(&mut setup_runner, |executor, _services| {
+                    let directive = executor.local_proposal_directive().map_err(
+                        super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1::LocalProposalDirective,
+                    )?;
+                    executor
+                        .acknowledge_runner_decision_cleanup(
+                            directive.tag(),
+                            directive.decided_subject(),
+                        )
+                        .map_err(
+                            super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1::LocalProposalDirective,
+                        )
+                })
+                .expect("mirror the runner's exact Decision cleanup before recovered Apply");
             let (queued, after_apply_selection) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Completion,
-                |runner| match launched.drive_completion_turn(runner, &mut lane_work) {
+                |runner| match launched.drive_completion_turn_for_test(runner, &mut lane_work) {
                     ProductionLifecycleCompletionTurnV1::Selected(
                         ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(result),
                     ) => {
@@ -1817,7 +1841,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     &recovered_context,
                     LifecycleRunnerRankTarget::Completion,
                     |runner| {
-                        match launched.drive_completion_turn(runner, &mut lane_work) {
+                        match launched.drive_completion_turn_for_test(runner, &mut lane_work) {
                             ProductionLifecycleCompletionTurnV1::Selected(
                                 ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied,
                             ) => true,
@@ -1861,7 +1885,8 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 with_lifecycle_current_runner_turn_for_test(
                     &recovered_context,
                     LifecycleRunnerRankTarget::Completion,
-                    |runner| match activated.drive_completion_turn(runner, &mut lane_work) {
+                    |runner| match activated.drive_completion_turn_for_test(runner, &mut lane_work)
+                    {
                         ProductionLifecycleCompletionTurnV1::PassThrough(runner) => drop(runner),
                         ProductionLifecycleCompletionTurnV1::Selected(_) => {
                             panic!("quiescent activated lifecycle Completion must pass through")
@@ -1872,6 +1897,148 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 after_activated_completion_pass_through,
                 LifecycleRunnerRankTarget::Runtime
             );
+            let mut terminal_serve_runner =
+                super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
+            assert!(
+                activated
+                    .ready_for_finalized_rollover(&mut terminal_serve_runner)
+                    .expect("authenticate the terminal finalization census"),
+                "the terminal fixture must be quiescent before capacity is withheld"
+            );
+            let terminal_ledger_before =
+                std::fs::read(lifecycle_root.join("lifecycle-ledger-v1.norito"))
+                    .expect("read terminal ledger before stale-claim CurrentServe repair");
+            let (_unused_rejection, terminal_serve) =
+                production_serve_requests_for_execution_commitment(
+                    &recovered_context,
+                    &keys,
+                    local_validator,
+                    round,
+                    subject,
+                    semantic_commitment,
+                );
+            assert!(matches!(
+                leader_wire_ingress.try_push(
+                    super::super::v2_worker::tests::certified_serve_inbound(
+                        terminal_serve.request(),
+                        local_peer.clone(),
+                    ),
+                ),
+                Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+            ));
+            let terminal_serve_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
+            let terminal_auxiliary_hold = activated
+                .hold_auxiliary_io_admission_for_test()
+                .expect("hold auxiliary capacity across the Apply barrier");
+            // Fixture-only construction of the capacity wait reached when a terminal-ready
+            // executor's process-local claim has returned to Eligible. From the sealed
+            // authoritative repair permit onward this fixture exercises only the production
+            // terminal handoff and direct CurrentServe path.
+            let (terminal_capacity_pending, after_terminal_capacity) =
+                with_lifecycle_current_runner_turn_for_test(
+                    &recovered_context,
+                    LifecycleRunnerRankTarget::Ingress,
+                    |runner| {
+                        matches!(
+                            activated.drive_ingress_turn(runner),
+                            ProductionLifecycleIngressTurnV1::Selected(
+                                super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending,
+                            )
+                        )
+                    },
+                );
+            assert!(terminal_capacity_pending);
+            assert_eq!(
+                after_terminal_capacity,
+                LifecycleRunnerRankTarget::Completion
+            );
+            assert_eq!(leader_wire_ingress.len(), 1);
+            assert_eq!(
+                leader_wire_ingress.state.lock().last_admission_ordinal,
+                terminal_serve_ordinal,
+                "capacity handoff cannot dequeue or renumber the terminal Serve"
+            );
+            assert!(
+                !activated
+                    .ready_for_finalized_rollover(&mut terminal_serve_runner)
+                    .expect("authenticate the capacity-blocked finalization census"),
+                "the parked Serve capacity owner must block finalization"
+            );
+            let permit = activated.with_runner_runtime(
+                &mut terminal_serve_runner,
+                |_owner, executor, _services, _local_proposal| {
+                    let directive = executor
+                        .local_proposal_directive()
+                        .expect("inspect terminal executor Decision");
+                    super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial()
+                        .terminal_ready_decided_lane_recovery_permit(
+                            executor.ready_to_finish(),
+                            directive.decided_subject().is_some(),
+                        )
+                        .expect("terminal-ready Eligible executor authorizes direct recovery")
+                },
+            );
+            assert!(
+                activated
+                    .reconcile_decided_lane_certified_serve(&mut terminal_serve_runner, permit)
+                    .expect("handoff the same-service capacity wait to direct CurrentServe"),
+                "the parked Serve capacity owner must make progress"
+            );
+            assert_eq!(leader_wire_ingress.len(), 1);
+            assert_eq!(
+                leader_wire_ingress.state.lock().last_admission_ordinal,
+                terminal_serve_ordinal,
+                "terminal handoff must retain the exact fair-ingress occurrence"
+            );
+            let mut terminal_block_sync_server =
+                super::super::v2_block_sync::V2BlockSyncServer::new(
+                    recovered_context.network_id.clone(),
+                    4,
+                )
+                .expect("open terminal CurrentServe block-sync server");
+            let terminal_serve_drained = activated.with_runner_runtime(
+                &mut terminal_serve_runner,
+                |_owner, executor, services, _local_proposal| {
+                    super::super::v2_runner::lifecycle_run_inner::drain_decided_lane_recovery_ingress_for_test(
+                        &leader_wire_ingress,
+                        executor,
+                        services,
+                        &mut lane_work,
+                        output_guard.as_ref(),
+                        kura.as_ref(),
+                        &local_signer,
+                        &mut terminal_block_sync_server,
+                    )
+                },
+            )
+            .expect("direct CurrentServe consumes the handed-off request");
+            assert!(terminal_serve_drained);
+            assert_eq!(leader_wire_ingress.len(), 0);
+            assert_eq!(
+                std::fs::read(lifecycle_root.join("lifecycle-ledger-v1.norito"))
+                    .expect("read terminal ledger after stale-claim CurrentServe repair"),
+                terminal_ledger_before,
+                "terminal-ready direct recovery cannot append fresh Serve or Producer rows"
+            );
+            drop(terminal_auxiliary_hold);
+            let permit =
+                super::super::v2_runner::LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
+                    .decided_lane_recovery_permit()
+                    .expect("settled Apply authorizes the quiescent Serve census");
+            assert!(
+                !activated
+                    .reconcile_decided_lane_certified_serve(&mut terminal_serve_runner, permit,)
+                    .expect("the direct Serve leaves no hidden lifecycle owner"),
+                "the quiescent Apply barrier cannot retain another Serve owner"
+            );
+            assert!(
+                activated
+                    .ready_for_finalized_rollover(&mut terminal_serve_runner)
+                    .expect("authenticate the released finalization census"),
+                "direct CurrentServe must release the last hidden finalization owner"
+            );
+            assert!(!output_guard.restart_required());
+
             let ordinary_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
             ));
@@ -1955,6 +2122,13 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 &local_signer,
             )
             .expect("open ordinary-tail NPoS lifecycle");
+            let mut npos_beacon = super::super::v2_beacon::V2GlobalBeaconLifecycle::open(
+                &recovered_context,
+                state.as_ref(),
+                Some(local_validator),
+                None,
+            )
+            .expect("open ordinary-tail global beacon lifecycle");
             assert_eq!(
                 activated
                     .consume_prepared_ordinary_ingress_turn(
@@ -1967,6 +2141,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                         &mut block_sync,
                         &mut block_sync_request,
                         &mut npos_vrf,
+                        &mut npos_beacon,
                     )
                     .expect("consume the exact ordinary runner handoff"),
                 super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
@@ -2005,6 +2180,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                         &mut block_sync,
                         &mut block_sync_request,
                         &mut npos_vrf,
+                        &mut npos_beacon,
                     )
                     .expect("consume the exact malformed-response ordinary handoff"),
                 super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
@@ -2036,6 +2212,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 &mut block_sync,
                 &mut block_sync_request,
                 &mut npos_vrf,
+                &mut npos_beacon,
                 1,
                 super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
             )
@@ -2179,25 +2356,12 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             assert!(!output_guard.restart_required());
             let completion_deadline = Instant::now() + Duration::from_secs(5);
             loop {
-                let (completed, _) = with_lifecycle_current_runner_turn_for_test(
-                    &recovered_context,
-                    LifecycleRunnerRankTarget::Completion,
-                    |runner| {
-                        match activated.drive_completion_turn(runner, &mut lane_work) {
-                        ProductionLifecycleCompletionTurnV1::Selected(
-                            ProductionLifecycleCompletionSelectionV1::CertifiedServeClaimedCompleted,
-                        ) => true,
-                        ProductionLifecycleCompletionTurnV1::PassThrough(_) => false,
-                        ProductionLifecycleCompletionTurnV1::Selected(selected) => {
-                            assert!(
-                                !selected.restart_required(),
-                                "current Serve completion requires lifecycle restart"
-                            );
-                            false
-                        }
-                    }
-                    },
-                );
+                let permit = super::super::v2_runner::LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
+                    .decided_lane_recovery_permit()
+                    .expect("settled Apply authorizes class-specific Serve completion");
+                let completed = activated
+                    .reconcile_decided_lane_certified_serve(&mut serve_runner, permit)
+                    .expect("settle only the in-flight Serve completion at the Apply barrier");
                 if completed {
                     break;
                 }
@@ -2290,7 +2454,8 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 let (completed, _) = with_lifecycle_current_runner_turn_for_test(
                     &recovered_context,
                     LifecycleRunnerRankTarget::Completion,
-                    |runner| match activated.drive_completion_turn(runner, &mut lane_work) {
+                    |runner| match activated.drive_completion_turn_for_test(runner, &mut lane_work)
+                    {
                         ProductionLifecycleCompletionTurnV1::Selected(
                             ProductionLifecycleCompletionSelectionV1::CertifiedServeReplayCompleted,
                         ) => true,

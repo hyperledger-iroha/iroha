@@ -87,7 +87,7 @@ final class ToriiUnsignedResponseHardCutTests: XCTestCase {
 
     XCTAssertThrowsError(
       try JSONDecoder().decode(
-        ToriiMultisigResponse.self,
+        ToriiMultisigContractCallResponse.self,
         from: data(#"{"ok":true,"resolved_multisig_account_id":"\#(paddedAccountId)"}"#)
       )
     )
@@ -115,9 +115,9 @@ final class ToriiUnsignedResponseHardCutTests: XCTestCase {
 
   private func decodeMultisigResponse(
     _ object: [String: Any]
-  ) throws -> ToriiMultisigResponse {
+  ) throws -> ToriiMultisigContractCallResponse {
     try JSONDecoder().decode(
-      ToriiMultisigResponse.self,
+      ToriiMultisigContractCallResponse.self,
       from: JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     )
   }

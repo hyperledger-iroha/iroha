@@ -217,7 +217,6 @@ fn permission_cache_rebuilds_after_restart() {
 fn permission_cache_rebuilds_after_restart_impl() {
     use iroha_config::{
         base::WithOrigin,
-        kura::InitMode,
         parameters::{
             actual::{Kura as Config, LaneConfig},
             defaults::kura::BLOCKS_IN_MEMORY,
@@ -255,7 +254,7 @@ fn permission_cache_rebuilds_after_restart_impl() {
         );
     }
     let make_config = |dir: &tempfile::TempDir| Config {
-        init_mode: InitMode::Strict,
+        init_mode: iroha_config::kura::InitMode::Strict,
         store_dir: WithOrigin::inline(dir.path().to_path_buf()),
         max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: BLOCKS_IN_MEMORY,

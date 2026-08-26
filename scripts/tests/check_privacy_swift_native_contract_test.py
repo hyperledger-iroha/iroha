@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze the authenticated, no-skip ABI-22 Swift privacy lane."""
+"""Freeze the authenticated, no-skip ABI-23 Swift privacy lane."""
 
 from __future__ import annotations
 
@@ -158,7 +158,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             '"MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT"',
             "configuredArtifactDirectory == nil",
             "must be outside the reviewed Iroha source tree",
-            "requiredBridgeAbiVersion = 22",
+            "requiredBridgeAbiVersion = 23",
             '"NoritoBridge.artifacts.json"',
             'manifest["native_bridge_abi_version"]',
             "validateBridgeArtifact(at: bridgeAbsolutePath)",
@@ -227,14 +227,9 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         android_job = workflow_job(workflow, "android-mobile-sdk")
         self.assertIn('APPLE_PRIVACY_PRODUCTION_ENABLED: "false"', workflow)
         self.assertIn('ANDROID_PRIVACY_PRODUCTION_ENABLED: "false"', workflow)
-        self.assertIn(
-            "PRIVACY_PRODUCTION_ENABLED: ${{ env.APPLE_PRIVACY_PRODUCTION_ENABLED }}",
-            apple_job,
-        )
-        self.assertIn(
-            "PRIVACY_PRODUCTION_ENABLED: ${{ env.ANDROID_PRIVACY_PRODUCTION_ENABLED }}",
-            android_job,
-        )
+        self.assertIn('PRIVACY_PRODUCTION_ENABLED: "false"', apple_job)
+        self.assertIn('PRIVACY_PRODUCTION_ENABLED: "false"', android_job)
+        self.assertNotIn("PRIVACY_PRODUCTION_ENABLED: ${{ env.", workflow)
         self.assertNotIn("inputs.privacy_production_enabled", workflow)
         self.assertNotIn("github.ref_type == 'tag' ||", workflow)
         for trigger in (

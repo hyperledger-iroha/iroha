@@ -22,7 +22,6 @@ import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
-import org.hyperledger.iroha.sdk.core.model.MAX_CONTRACT_ARGUMENT_RECORD_BYTES
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
@@ -211,7 +210,7 @@ internal class TransactionPayloadAdapter private constructor(
             parent: NoritoDecoder,
             index: Int,
         ): ByteArray {
-            val child = NoritoDecoder(payload, parent.flags, parent.flagsHint)
+            val child = NoritoDecoder(payload, parent.flags)
             val sibling = OPTIONAL_LANE_PRIVACY_HASH_ADAPTER.decode(child)
             require(child.remaining() == 0) {
                 "lane privacy sibling $index has trailing bytes"
@@ -560,23 +559,23 @@ internal class TransactionPayloadAdapter private constructor(
         override fun decode(decoder: NoritoDecoder): InstructionBox {
             val payload = decoder.readBytes(decoder.remaining())
             require(payload.isNotEmpty()) { "Instruction payload must not be empty" }
-            return tryDecodeWireInstruction(payload, decoder.flags, decoder.flagsHint)
+            return tryDecodeWireInstruction(payload, decoder.flags)
                 ?: throw IllegalArgumentException("Instruction payload must be wire-framed")
         }
     }
 
     private class ContractArgumentRecordAdapter : TypeAdapter<ByteArray> {
         override fun encode(encoder: NoritoEncoder, value: ByteArray) {
-            require(value.size <= MAX_CONTRACT_ARGUMENT_RECORD_BYTES) {
-                "Contract argument record exceeds $MAX_CONTRACT_ARGUMENT_RECORD_BYTES bytes"
+            require(value.size <= ContractInvocation.MAX_ARGUMENT_BYTES) {
+                "Contract argument record exceeds ${ContractInvocation.MAX_ARGUMENT_BYTES} bytes"
             }
             RAW_BYTE_VEC_ADAPTER.encode(encoder, value)
         }
 
         override fun decode(decoder: NoritoDecoder): ByteArray {
             val length = decoder.readLength(false)
-            require(length in 0L..MAX_CONTRACT_ARGUMENT_RECORD_BYTES.toLong()) {
-                "Contract argument record exceeds $MAX_CONTRACT_ARGUMENT_RECORD_BYTES bytes"
+            require(length in 0L..ContractInvocation.MAX_ARGUMENT_BYTES.toLong()) {
+                "Contract argument record exceeds ${ContractInvocation.MAX_ARGUMENT_BYTES} bytes"
             }
             return decoder.readBytes(length.toInt())
         }
@@ -602,7 +601,7 @@ internal class TransactionPayloadAdapter private constructor(
                 arguments = decodeBoundedSizedField<Optional<ByteArray>>(
                     decoder,
                     CONTRACT_ARGUMENTS_ADAPTER,
-                    MAX_CONTRACT_ARGUMENT_RECORD_BYTES.toLong() + 32L,
+                    ContractInvocation.MAX_ARGUMENT_BYTES.toLong() + 32L,
                     "ContractInvocation.arguments",
                 ).orElse(null),
             )
@@ -653,7 +652,7 @@ internal class TransactionPayloadAdapter private constructor(
 
         override fun decode(decoder: NoritoDecoder): String {
             val payload = decoder.readBytes(decoder.remaining())
-            return decodePayload(payload, decoder.flags, decoder.flagsHint)
+            return decodePayload(payload, decoder.flags)
         }
 
         companion object {
@@ -665,8 +664,8 @@ internal class TransactionPayloadAdapter private constructor(
             private val MULTISIG_MEMBER_LIST_ADAPTER: TypeAdapter<List<MultisigMemberPayload>> =
                 NoritoAdapters.sequence(MULTISIG_MEMBER_ADAPTER)
 
-            fun decodePayload(payload: ByteArray, flags: Int, flagsHint: Int): String {
-                val decoder = NoritoDecoder(payload, flags, flagsHint)
+            fun decodePayload(payload: ByteArray, flags: Int): String {
+                val decoder = NoritoDecoder(payload, flags)
                 val controller = decodeControllerPayload(decoder)
                 require(decoder.remaining() == 0) { "Trailing bytes after authority payload" }
                 return renderAuthority(controller)
@@ -884,7 +883,7 @@ internal class TransactionPayloadAdapter private constructor(
 
         override fun decode(decoder: NoritoDecoder): ByteArray {
             val payload = decoder.readBytes(decoder.remaining())
-            val sized = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+            val sized = NoritoDecoder(payload, decoder.flags)
             val value = decodeSizedField(sized, RAW_BYTE_VEC_ADAPTER)
             require(sized.remaining() == 0) { "Trailing bytes after IVM payload" }
             return value
@@ -1102,7 +1101,7 @@ internal class TransactionPayloadAdapter private constructor(
         }
 
         internal fun decodeProofAttachmentPayload(encoded: ByteArray, flags: Int = 0): ProofAttachment {
-            val decoder = NoritoDecoder(encoded, flags, NoritoHeader.MINOR_VERSION)
+            val decoder = NoritoDecoder(encoded, flags)
             val value = PROOF_ATTACHMENT_ADAPTER.decode(decoder)
             require(decoder.remaining() == 0) { "trailing ProofAttachment payload bytes" }
             return value
@@ -1121,7 +1120,7 @@ internal class TransactionPayloadAdapter private constructor(
             val length = decoder.readLength(decoder.compactLenActive())
             require(length <= Int.MAX_VALUE) { "Field payload too large" }
             val payload = decoder.readBytes(length.toInt())
-            val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+            val child = NoritoDecoder(payload, decoder.flags)
             val value = adapter.decode(child)
             require(child.remaining() == 0) { "Trailing bytes after field payload" }
             return value
@@ -1138,7 +1137,7 @@ internal class TransactionPayloadAdapter private constructor(
                 "$fieldName payload exceeds $maxEncodedLength bytes"
             }
             val payload = decoder.readBytes(length.toInt())
-            val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+            val child = NoritoDecoder(payload, decoder.flags)
             val value = adapter.decode(child)
             require(child.remaining() == 0) { "Trailing bytes after $fieldName payload" }
             return value
@@ -1175,7 +1174,7 @@ internal class TransactionPayloadAdapter private constructor(
         private fun decodeSizedBigInt(decoder: NoritoDecoder): BigInteger {
             val length = decoder.readLength(decoder.compactLenActive())
             require(length <= Int.MAX_VALUE) { "numeric mantissa payload too large" }
-            val child = NoritoDecoder(decoder.readBytes(length.toInt()), decoder.flags, decoder.flagsHint)
+            val child = NoritoDecoder(decoder.readBytes(length.toInt()), decoder.flags)
             val byteLength = child.readUInt(32)
             require(byteLength <= 64L) { "numeric mantissa exceeds 512 bits" }
             val bytes = child.readBytes(byteLength.toInt())
@@ -1212,7 +1211,7 @@ internal class TransactionPayloadAdapter private constructor(
             val length = decoder.readLength(decoder.compactLenActive())
             require(length <= Int.MAX_VALUE) { "Field payload too large" }
             val payload = decoder.readBytes(length.toInt())
-            return AccountIdAdapter.decodePayload(payload, decoder.flags, decoder.flagsHint)
+            return AccountIdAdapter.decodePayload(payload, decoder.flags)
         }
 
         private fun encodeExecutable(encoder: NoritoEncoder, executable: Executable) {
@@ -1259,9 +1258,9 @@ internal class TransactionPayloadAdapter private constructor(
             }
         }
 
-        private fun tryDecodeWireInstruction(payload: ByteArray, flags: Int, flagsHint: Int): InstructionBox? {
+        private fun tryDecodeWireInstruction(payload: ByteArray, flags: Int): InstructionBox? {
             return try {
-                val wireDecoder = NoritoDecoder(payload, flags, flagsHint)
+                val wireDecoder = NoritoDecoder(payload, flags)
                 val wireName = decodeSizedField(wireDecoder, STRING_ADAPTER)
                 val wirePayload = decodeSizedField(wireDecoder, RAW_BYTE_VEC_ADAPTER)
                 if (wireDecoder.remaining() != 0) return null

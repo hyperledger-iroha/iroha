@@ -2367,7 +2367,7 @@ mod tests {
             snapshot: registered_snapshot,
             archive: archive.clone(),
         };
-        let replication_order = ReplicationOrderId::new([0x81; 32]);
+        let replication_order = ReplicationOrderId::new([0x01; 32]);
         let provider_attestations = (0_u16..MUSUBI_MIN_HEALTHY_REPLICAS_V1)
             .map(|index| {
                 let index = u8::try_from(index).expect("replica bound fits u8");
@@ -2683,7 +2683,7 @@ mod tests {
             "the aggregate digest must reject a reordered provider set"
         );
         let mut substituted_order = checkpoint;
-        substituted_order.replication_order = ReplicationOrderId::new([0xef; 32]);
+        substituted_order.replication_order = ReplicationOrderId::new([0x6f; 32]);
         assert!(
             substituted_order.validate().is_err(),
             "the aggregate digest must bind the exact replication order"

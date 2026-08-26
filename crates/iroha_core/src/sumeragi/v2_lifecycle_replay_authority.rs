@@ -1,10 +1,6 @@
 //! Closed, codec-only authority envelope for lifecycle replay.
-//!
-//! This module deliberately performs structural matching only. Decoding this
-//! envelope does not authenticate its consensus artifacts or make executable
-//! work. The origin-specific cold-open transaction reauthenticates the retained
-//! source against the verified height context and its owning durable store
-//! before reconstructing executable authority.
+//! This module only matches structure: decoding cannot authenticate consensus artifacts or create executable work. The origin-specific
+//! cold-open transaction reauthenticates the retained source against its verified height context and owning durable store before execution.
 use super::ledger::{
     DurableCertifiedBodyPipelineLedgerCensusPermit, DurableCertifiedFetchLedgerJoinPermit,
     DurableStandaloneValidateLedgerJoinPermit, LifecycleLedgerRecordV1,
@@ -650,6 +646,7 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyReplayLineageV1 {
     body: RecoveredDecisionBodyPipelineReplayFamilyV1,
     apply: LifecycleReplayAuthorityV1,
 }
+include!("v2_lifecycle_replay_authority_recovered_decision_validate.rs");
 /// Closed logical Store/Validate/Apply lineage derived by the fixed reducer preview.
 ///
 /// The three candidates and their concrete bindings remain private. Ledger,
@@ -2383,7 +2380,8 @@ pub(super) fn exact_signed_broadcast_successor_candidate(
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
         | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_) => return None,
+        | wire::ConsensusMessageV2Payload::VrfReveal(_)
+        | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
     };
     let context = replay_context(round);
     let projected = super::projection::authority_free_admission_projection(
@@ -2748,7 +2746,8 @@ fn exact_signed_broadcast_authority(effect: &AdapterEffect) -> Option<LifecycleR
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
         | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_) => return None,
+        | wire::ConsensusMessageV2Payload::VrfReveal(_)
+        | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
     };
     canonical_replay_authority(
         replay_context(round),
@@ -3991,8 +3990,8 @@ impl LocalValidateReplayEvidenceV1 {
         }
         let family = match self.family {
             LocalValidateReplayFamilyV1::Assembled(family) => family,
-            LocalValidateReplayFamilyV1::AuthenticatedGenesis(_) => {
-                unreachable!("authenticated genesis cannot project LocalProposalReady")
+            LocalValidateReplayFamilyV1::AuthenticatedCertified(_) => {
+                unreachable!("authenticated certified Validate cannot project LocalProposalReady")
             }
         };
         Ok(LocalProposalReadyReplayEvidenceV1 {
@@ -5060,7 +5059,7 @@ pub(in crate::sumeragi) struct CertifiedValidateReplayEvidenceV1 {
 }
 /// Closed replay origin retained by an exact durable Validate carrier.
 ///
-/// Both variants are authenticated before this enum is constructed. The enum
+/// Every variant is authenticated before this enum is constructed. The enum
 /// has no fallback and exposes neither source family nor manifest parts.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
@@ -5074,6 +5073,8 @@ pub(in crate::sumeragi) enum DurableValidateReplayEvidenceV1 {
     LocalBody(LocalValidateReplayEvidenceV1),
     /// Restart-stable local or Proposal origin reconstructed from LedgerV1 and BodyFrame.
     RecoveredStandalone(RecoveredStandaloneValidateReplayEvidenceV1),
+    /// Recovered WAL Decision origin retaining its exact locator and CommitQC lineage.
+    RecoveredDecision(RecoveredDecisionValidateReplayEvidenceV1),
 }
 #[derive(Clone, Debug)]
 pub(super) struct RecoveredStandaloneValidateSourceV1 {

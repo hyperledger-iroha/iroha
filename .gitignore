@@ -168,6 +168,7 @@ docs/portal/node_modules/
 
 # Python build artifacts
 *.pyc
+*.egg-info/
 python/norito_py/build/
 python/iroha_python/dist/
 python/iroha_python/src/iroha_python/*.so

@@ -2188,7 +2188,11 @@ fn project_fetch(
     certified_sources: &[iroha_data_model::peer::PeerId],
     certificate: Option<&wire::QuorumCertificate>,
 ) -> Result<ProjectedShape, AdapterEffectAdmissionError> {
-    validate_tag_for_round(context, tag, round)?;
+    if certificate.is_some_and(|certificate| certificate.phase == wire::GlobalPhase::Commit) {
+        validate_tag_for_decision_round(context, tag, round)?;
+    } else {
+        validate_tag_for_round(context, tag, round)?;
+    }
     if let Some(manifest) = manifest {
         manifest
             .validate(context)
@@ -2273,7 +2277,11 @@ fn project_inherited_body_stage(
     {
         return Err(AdapterEffectAdmissionError::InvalidCarrier);
     }
-    validate_tag_for_round(context, tag, inherited.round())?;
+    if inherited.phase() == Some(wire::GlobalPhase::Commit) {
+        validate_tag_for_decision_round(context, tag, inherited.round())?;
+    } else {
+        validate_tag_for_round(context, tag, inherited.round())?;
+    }
     Ok(ProjectedShape {
         key: lifecycle_key(
             context,
@@ -2299,7 +2307,7 @@ fn project_apply(
     if certificate.phase != wire::GlobalPhase::Commit || certificate.subject != subject {
         return Err(AdapterEffectAdmissionError::InvalidCarrier);
     }
-    validate_tag_for_round(context, tag, certificate.round)?;
+    validate_tag_for_decision_round(context, tag, certificate.round)?;
     Ok(ProjectedShape {
         key: lifecycle_key(
             context,
@@ -2433,7 +2441,8 @@ fn project_broadcast(
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
         | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_) => {
+        | wire::ConsensusMessageV2Payload::VrfReveal(_)
+        | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
             Err(AdapterEffectAdmissionError::UnsupportedBroadcastPayload)
         }
     }
@@ -2506,6 +2515,22 @@ fn validate_tag_for_round(
 ) -> Result<(), AdapterEffectAdmissionError> {
     validate_round(context, round)?;
     if tag.height() != context.height || tag.view() < round.view {
+        return Err(AdapterEffectAdmissionError::InvalidCarrier);
+    }
+    Ok(())
+}
+/// Validate a durable Decision continuation without imposing reducer-view ordering.
+///
+/// An authenticated CommitQC can decide a future view before the local reducer
+/// installs that view. The current reducer tag still owns the resulting body
+/// pipeline, so only its height is an ordering predicate here.
+fn validate_tag_for_decision_round(
+    context: &wire::HeightContext,
+    tag: crate::sumeragi::v2_core::EventTag,
+    round: wire::ConsensusRound,
+) -> Result<(), AdapterEffectAdmissionError> {
+    validate_round(context, round)?;
+    if tag.height() != context.height {
         return Err(AdapterEffectAdmissionError::InvalidCarrier);
     }
     Ok(())
@@ -2617,7 +2642,9 @@ pub(super) fn execution_commitment(commitment: wire::ExecutionCommitment) -> Lif
 /// A same-round certificate may legitimately acquire a different quorum
 /// aggregation while retaining the same highest PrepareQC. Those envelopes
 /// require distinct durable output rows so the newer certificate still enters
-/// service I/O; exact byte retries retain the same key and stutter.
+/// service I/O. Exact byte retries retain the same key and logically stutter;
+/// a sealed fresh periodic-retransmit occurrence may still repeat physical
+/// Broadcast service without changing that terminal row.
 pub(super) fn timeout_certificate_envelope_subject(
     certificate: &wire::TimeoutCertificate,
 ) -> LifecycleDigest {

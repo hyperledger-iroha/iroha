@@ -23,6 +23,18 @@ _CURRENT_DATA_MODEL_VERSION = 4
 _MOCK_ACCOUNT_ID = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 
 
+def _default_governance_proposal_draft() -> Dict[str, Any]:
+    return {
+        "proposal_id": "11" * 32,
+        "tx_instructions": [
+            {
+                "wire_id": "iroha_data_model::isi::governance::ProposeDeployContract",
+                "payload_hex": "00ff",
+            }
+        ],
+    }
+
+
 @dataclass
 class _Response:
     status: int
@@ -105,9 +117,7 @@ class _MockState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._attachment_seq = 0
-        self._report_seq = 0
         self.attachments: Dict[str, Dict[str, Any]] = {}
-        self.prover_reports: Dict[str, Dict[str, Any]] = {}
         self.sumeragi_status: Dict[str, Any] = {}
         self.sumeragi_diagnostics: Dict[str, Any] = {}
         self.sumeragi_leader: Dict[str, Any] = {}
@@ -125,8 +135,6 @@ class _MockState:
         self.contract_call_response: Dict[str, Any] = {}
         self.gov_proposals: Dict[str, Dict[str, Any]] = {}
         self.gov_propose_deploy_response: Dict[str, Any] = {}
-        self.gov_finalize_response: Dict[str, Any] = {}
-        self.gov_enact_response: Dict[str, Any] = {}
         self.gov_protected_namespaces: Dict[str, Any] = {}
         self.gov_locks: Dict[str, Dict[str, Any]] = {}
         self.gov_tallies: Dict[str, Dict[str, Any]] = {}
@@ -162,18 +170,6 @@ class _MockState:
         if method == "DELETE" and path.startswith("/v1/zk/attachments/"):
             attachment_id = path.split("/")[-1]
             return self._attachment_delete(attachment_id)
-        if method == "GET" and path == "/v1/zk/prover/reports":
-            return self._prover_list(params)
-        if method == "GET" and path == "/v1/zk/prover/reports/count":
-            return self._prover_count(params)
-        if method == "GET" and path.startswith("/v1/zk/prover/reports/"):
-            report_id = path.split("/")[-1]
-            return self._prover_get(report_id)
-        if method == "DELETE" and path.startswith("/v1/zk/prover/reports/"):
-            report_id = path.split("/")[-1]
-            return self._prover_delete(report_id)
-        if method == "DELETE" and path == "/v1/zk/prover/reports":
-            return self._prover_delete_filtered(params)
         if method == "POST" and path == "/v1/pipeline/transactions":
             return self._pipeline_submit(body)
         if method == "GET" and path == "/v1/pipeline/transactions/status":
@@ -187,10 +183,6 @@ class _MockState:
             return self._gov_propose_deploy(body)
         if method == "POST" and path == "/v1/contracts/call":
             return self._contracts_call(body)
-        if method == "POST" and path == "/v1/gov/finalize":
-            return self._gov_finalize(body)
-        if method == "POST" and path == "/v1/gov/enact":
-            return self._gov_enact(body)
         if method == "POST" and path == "/v1/gov/protected-namespaces":
             return self._gov_protected_set(body)
         if method == "GET" and path == "/v1/gov/protected-namespaces":
@@ -274,9 +266,7 @@ class _MockState:
     def reset(self) -> None:
         with self._lock:
             self.attachments.clear()
-            self.prover_reports.clear()
             self._attachment_seq = 0
-            self._report_seq = 0
             self.pipeline_sequences.clear()
             self.pipeline_next_plan = None
             self.pipeline_preflight = {
@@ -366,9 +356,7 @@ class _MockState:
                 },
             }
             self.gov_proposals.clear()
-            self.gov_propose_deploy_response = {"ok": True, "proposal_id": "mock-proposal"}
-            self.gov_finalize_response = {"ok": True, "tx_instructions": []}
-            self.gov_enact_response = {"ok": True, "tx_instructions": []}
+            self.gov_propose_deploy_response = _default_governance_proposal_draft()
             self.gov_protected_namespaces = {"found": False, "namespaces": []}
             self.gov_locks.clear()
             self.gov_tallies.clear()
@@ -451,7 +439,6 @@ class _MockState:
             }
             self.sccp_bridge_proof_response = dict(prepared)
             self.sccp_bridge_message_response = dict(prepared)
-            self._seed_reports()
             self._seed_sumeragi()
 
 
@@ -715,23 +702,7 @@ class _MockState:
                 raise ValueError("propose_deploy_response must be an object")
             self.gov_propose_deploy_response = dict(propose_payload)
         else:
-            self.gov_propose_deploy_response = {"ok": True, "proposal_id": "mock-proposal"}
-
-        finalize_payload = payload.get("finalize_response")
-        if finalize_payload is not None:
-            if not isinstance(finalize_payload, dict):
-                raise ValueError("finalize_response must be an object")
-            self.gov_finalize_response = dict(finalize_payload)
-        else:
-            self.gov_finalize_response = {"ok": True, "tx_instructions": []}
-
-        enact_payload = payload.get("enact_response")
-        if enact_payload is not None:
-            if not isinstance(enact_payload, dict):
-                raise ValueError("enact_response must be an object")
-            self.gov_enact_response = dict(enact_payload)
-        else:
-            self.gov_enact_response = {"ok": True, "tx_instructions": []}
+            self.gov_propose_deploy_response = _default_governance_proposal_draft()
 
         protected_payload = payload.get("protected_namespaces")
         if protected_payload is not None:
@@ -830,39 +801,37 @@ class _MockState:
                 raise ValueError("propose-deploy payload must be an object")
             if ("contract_address" in payload) == ("contract_alias" in payload):
                 raise ValueError("propose-deploy payload must include exactly one of contract_address or contract_alias")
+            allowed_fields = {
+                "contract_address",
+                "contract_alias",
+                "abi_version",
+                "code_hash",
+                "abi_hash",
+                "manifest_provenance",
+            }
+            unknown_fields = sorted(set(payload).difference(allowed_fields))
+            if unknown_fields:
+                raise ValueError(
+                    f"propose-deploy payload contains unknown field '{unknown_fields[0]}'"
+                )
+            if payload.get("abi_version") != 1 or isinstance(payload.get("abi_version"), bool):
+                raise ValueError("propose-deploy abi_version must be the integer 1")
             for key in ("code_hash", "abi_hash"):
-                if key not in payload:
-                    raise ValueError(f"propose-deploy payload missing '{key}'")
+                value = payload.get(key)
+                if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                    raise ValueError(
+                        f"propose-deploy payload '{key}' must be 32 lowercase hexadecimal bytes"
+                    )
+            provenance = payload.get("manifest_provenance")
+            if provenance is not None:
+                if not isinstance(provenance, dict) or set(provenance) != {
+                    "signer",
+                    "signature",
+                }:
+                    raise ValueError(
+                        "propose-deploy manifest_provenance must contain exactly signer and signature"
+                    )
         response = json.loads(json.dumps(self.gov_propose_deploy_response))
-        return _json_response(HTTPStatus.OK, response)
-
-    def _gov_finalize(self, body: bytes) -> _Response:
-        try:
-            payload = json.loads(body.decode("utf-8") or "{}")
-        except json.JSONDecodeError as err:
-            raise ValueError(f"invalid finalize payload: {err}") from err
-        if not isinstance(payload, dict):
-            raise ValueError("finalize payload must be an object")
-        referendum_id = payload.get("referendum_id")
-        proposal_id = payload.get("proposal_id")
-        if not isinstance(referendum_id, str):
-            raise ValueError("referendum_id must be provided")
-        if not isinstance(proposal_id, str):
-            raise ValueError("proposal_id must be provided")
-        response = json.loads(json.dumps(self.gov_finalize_response))
-        return _json_response(HTTPStatus.OK, response)
-
-    def _gov_enact(self, body: bytes) -> _Response:
-        try:
-            payload = json.loads(body.decode("utf-8") or "{}")
-        except json.JSONDecodeError as err:
-            raise ValueError(f"invalid enact payload: {err}") from err
-        if not isinstance(payload, dict):
-            raise ValueError("enact payload must be an object")
-        proposal_id = payload.get("proposal_id")
-        if not isinstance(proposal_id, str):
-            raise ValueError("proposal_id must be provided")
-        response = json.loads(json.dumps(self.gov_enact_response))
         return _json_response(HTTPStatus.OK, response)
 
     def _gov_protected_set(self, body: bytes) -> _Response:
@@ -1400,13 +1369,6 @@ class _MockState:
             "resolved_from": str(resolved_from),
         }
 
-    @classmethod
-    def _queued_pipeline_status(cls, hash_value: str) -> Dict[str, Any]:
-        return cls._make_status_payload(
-            hash_value,
-            {"kind": "Queued", "scope": "local", "resolved_from": "queue"},
-        )
-
     def _next_pipeline_hash_locked(self) -> str:
         self._pipeline_submit_seq += 1
         return f"mock-pipeline-hash-{self._pipeline_submit_seq:04d}"
@@ -1467,138 +1429,6 @@ class _MockState:
             "size": record.get("size", 0),
             "created_ms": record.get("created_ms", 0),
         }
-
-    # ------------------------------------------------------------------
-    # Prover reports
-    # ------------------------------------------------------------------
-    def _prover_list(self, params: Mapping[str, List[str]]) -> _Response:
-        reports = self._filter_reports(params)
-        if _is_true(params.get("ids_only")):
-            payload = [{"id": r["id"]} for r in reports]
-        elif _is_true(params.get("messages_only")):
-            payload = [{"id": r["id"], "error": r.get("error", "") or ""} for r in reports]
-        else:
-            payload = [self._report_public_fields(r) for r in reports]
-        return _json_response(HTTPStatus.OK, payload)
-
-    def _prover_count(self, params: Mapping[str, List[str]]) -> _Response:
-        reports = self._filter_reports(params)
-        return _json_response(HTTPStatus.OK, {"count": len(reports)})
-
-    def _prover_get(self, report_id: str) -> _Response:
-        with self._lock:
-            record = self.prover_reports.get(report_id)
-            if record is None:
-                raise KeyError("report")
-            return _json_response(HTTPStatus.OK, self._report_public_fields(record))
-
-    def _prover_delete(self, report_id: str) -> _Response:
-        with self._lock:
-            if report_id not in self.prover_reports:
-                raise KeyError("report")
-            del self.prover_reports[report_id]
-        return _Response(HTTPStatus.NO_CONTENT)
-
-    def _prover_delete_filtered(self, params: Mapping[str, List[str]]) -> _Response:
-        reports = self._filter_reports(params)
-        deleted = 0
-        with self._lock:
-            for report in reports:
-                rid = str(report.get("id", ""))
-                if rid and rid in self.prover_reports:
-                    del self.prover_reports[rid]
-                    deleted += 1
-        return _json_response(HTTPStatus.OK, {"deleted": deleted})
-
-    def _filter_reports(self, params: Mapping[str, List[str]]) -> List[Dict[str, Any]]:
-        with self._lock:
-            reports = [self._report_public_fields(r) for r in self.prover_reports.values()]
-        reports.sort(key=lambda r: r.get("processed_ms", 0))
-        if params.get("order", ["asc"])[0].lower() == "desc":
-            reports.reverse()
-
-        def matches(report: Mapping[str, Any]) -> bool:
-            if _is_true(params.get("ok_only")) and not report.get("ok", False):
-                return False
-            if _is_true(params.get("failed_only")) and report.get("ok", False):
-                return False
-            if _is_true(params.get("errors_only")) and report.get("ok", False):
-                return False
-            rid = params.get("id", [None])[0]
-            if rid and report.get("id") != rid:
-                return False
-            ct = params.get("content_type", [None])[0]
-            if ct and ct not in str(report.get("content_type", "")):
-                return False
-            tag = params.get("has_tag", [None])[0]
-            if tag:
-                tags = report.get("zk1_tags") or []
-                if tag not in tags:
-                    return False
-            since = _parse_int(params.get("since_ms"))
-            if since is not None and report.get("processed_ms", 0) < since:
-                return False
-            before = _parse_int(params.get("before_ms"))
-            if before is not None and report.get("processed_ms", 0) > before:
-                return False
-            return True
-
-        filtered = [r for r in reports if matches(r)]
-        if _is_true(params.get("latest")) and filtered:
-            filtered = [filtered[-1]]
-        offset = _parse_int(params.get("offset")) or 0
-        if offset:
-            filtered = filtered[offset:]
-        limit = _parse_int(params.get("limit"))
-        if limit is not None:
-            filtered = filtered[:limit]
-        return filtered
-
-    def _report_public_fields(self, record: Mapping[str, Any]) -> Dict[str, Any]:
-        allowed = {
-            "id",
-            "ok",
-            "error",
-            "content_type",
-            "size",
-            "created_ms",
-            "processed_ms",
-            "latency_ms",
-            "zk1_tags",
-        }
-        return {key: record.get(key) for key in allowed if key in record}
-
-    def _seed_reports(self) -> None:
-        now = self._timestamp_ms(0)
-        samples = [
-            {
-                "ok": True,
-                "content_type": "application/json",
-                "size": 128,
-                "error": None,
-                "zk1_tags": ["TEST"],
-            },
-            {
-                "ok": False,
-                "content_type": "application/octet-stream",
-                "size": 256,
-                "error": "prover failed",
-                "zk1_tags": ["IPAK"],
-            },
-        ]
-        for sample in samples:
-            self._report_seq += 1
-            rid = f"rep-{self._report_seq:04d}"
-            record = dict(sample)
-            record.update(
-                {
-                    "id": rid,
-                    "created_ms": now + self._report_seq,
-                    "processed_ms": now + 100 + self._report_seq,
-                    "latency_ms": 5,
-                }
-            )
-            self.prover_reports[rid] = record
 
     @staticmethod
     def _timestamp_ms(seq: int) -> int:
@@ -1752,15 +1582,23 @@ class _MockState:
         if not isinstance(payload, dict):
             raise ValueError("sumeragi config must be an object")
 
+        allowed_fields = {"status", "diagnostics", "leader"}
+        unknown_fields = set(payload) - allowed_fields
+        if unknown_fields:
+            raise ValueError(
+                f"sumeragi config contains unknown field {sorted(unknown_fields)[0]}"
+            )
+
         updates: Dict[str, Dict[str, Any]] = {}
-        for field, attribute in (
+        for name, attribute in (
             ("status", "sumeragi_status"),
+            ("diagnostics", "sumeragi_diagnostics"),
             ("leader", "sumeragi_leader"),
         ):
-            value = payload.get(field)
+            value = payload.get(name)
             if value is not None:
                 if not isinstance(value, dict):
-                    raise ValueError(f"{field} must be an object")
+                    raise ValueError(f"{name} must be an object")
                 updates[attribute] = dict(value)
 
         with self._lock:
@@ -1768,13 +1606,6 @@ class _MockState:
                 setattr(self, attribute, value)
 
         return _json_response(HTTPStatus.OK, {"ok": True})
-
-
-def _is_true(values: Optional[Iterable[str]]) -> bool:
-    if not values:
-        return False
-    value = next(iter(values))
-    return value is not None and value.lower() in {"1", "true", "yes"}
 
 
 def _parse_int(values: Optional[Iterable[str]]) -> Optional[int]:

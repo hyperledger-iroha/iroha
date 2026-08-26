@@ -2,48 +2,49 @@
 #![allow(unexpected_cfgs)]
 mod algorithm;
 mod confidential;
-#[cfg(not(feature = "ffi_import"))]
 /// Authenticated, process-local spooling for bounded confidential chunks.
 pub mod confidential_spool;
 #[cfg(feature = "bls")]
 /// Verification primitives for drand BLS12-381 randomness beacons.
 pub mod drand;
-#[cfg(not(feature = "ffi_import"))]
 /// Symmetric/asymmetric encryption utilities.
 pub mod encryption;
-#[cfg(not(feature = "ffi_import"))]
 /// Baseline BFV fully homomorphic encryption primitives.
 pub mod fhe_bfv;
 mod hash;
-#[cfg(all(not(feature = "ffi_import"), feature = "pqc"))]
+#[cfg(feature = "pqc")]
 /// Hybrid KEM/DEM helpers used by SoraFS payload envelopes.
 pub mod hybrid;
-#[cfg(not(feature = "ffi_import"))]
 /// Key exchange protocols.
 pub mod kex;
 mod merkle;
 #[cfg(feature = "pqc")]
 mod mldsa_seed;
-#[cfg(not(feature = "ffi_import"))]
 mod multihash;
-#[cfg(not(feature = "ffi_import"))]
 /// Lane privacy commitment registry (NX-10).
 pub mod privacy;
 mod protocol_key;
-#[cfg(not(feature = "ffi_import"))]
 /// RAM-LFE commitment and evaluation interfaces.
 pub mod ram_lfe;
 pub(crate) mod rng;
+#[cfg(feature = "bls")]
+/// Fixed-suite threshold-BLS public transcript and signature validation.
+pub mod threshold_bls;
+#[cfg(feature = "bls")]
+/// Folded timed Open Vote Network ballots with intrinsic threshold release.
+pub mod timed_ovn;
+#[cfg(feature = "bls")]
+/// Generic timelock-encryption KEM/DEM helpers outside the folded ballot path.
+pub mod tle;
 /// Deterministic dual-`rand_core` RNG used by protocols that must replay an
 /// exact prover-randomness schedule from secret seed material.
 pub use rng::rng_from_seed_slice;
 mod secrecy;
 mod signature;
-#[cfg(not(feature = "ffi_import"))]
 pub mod sorafs;
-#[cfg(all(not(feature = "ffi_import"), feature = "pqc"))]
+#[cfg(feature = "pqc")]
 pub mod soranet;
-#[cfg(all(not(feature = "ffi_import"), feature = "pqc"))]
+#[cfg(feature = "pqc")]
 pub mod streaming;
 /// Canonical exact numeric facade for lower-level authenticated protocol crates.
 ///
@@ -71,7 +72,6 @@ mod numeric_facade_tests {
 }
 #[cfg(feature = "sm")]
 pub mod sm;
-#[cfg(not(feature = "ffi_import"))]
 mod varint;
 #[cfg(feature = "bls")]
 /// Verifiable Random Function (VRF) based on BLS12-381 signatures.
@@ -96,7 +96,6 @@ pub use self::signature::bls::{
     BlsSmallPublicKey, ETHEREUM_BLS_POP_DST, ethereum_bls_pop_fast_aggregate_verify,
     ethereum_bls_pop_validate_public_key,
 };
-#[cfg(not(feature = "ffi_import"))]
 pub use blake2;
 use core::{fmt, str::FromStr};
 #[cfg(any(feature = "bls", feature = "pqc"))]
@@ -123,11 +122,10 @@ pub use confidential::{
 use derive_more::Display;
 pub use error::Error;
 use error::ParseError;
-#[cfg(not(feature = "ffi_import"))]
 pub use fhe_bfv::*;
 use getset::Getters;
 pub use hash::*;
-#[cfg(all(not(feature = "ffi_import"), feature = "pqc"))]
+#[cfg(feature = "pqc")]
 pub use hybrid::{
     DerivedSecret as HybridDerivedSecret, HybridError, HybridKemCiphertext, HybridKeyPair,
     HybridPublicKey, HybridSecretKey, HybridSuite, decapsulate as hybrid_decapsulate,
@@ -137,20 +135,17 @@ use iroha_macro::ffi_impl_opaque;
 use iroha_primitives::const_vec::{ConstVec, ToConstVec};
 use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, TypeId};
 pub use merkle::{CompactMerkleProof, MerkleError, MerkleProof, MerkleTree, MerkleTreeCommitment};
-#[cfg(not(feature = "ffi_import"))]
 pub use privacy::{
     CommitmentScheme, LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, MerkleWitness,
     PrivacyError, PrivacyWitness, lane_merkle_leaf_hash, lane_merkle_node_hash,
 };
 pub use protocol_key::derive_non_signing_ed25519_public_key;
-#[cfg(not(feature = "ffi_import"))]
 pub use ram_lfe::*;
 #[cfg(feature = "sm")]
 pub use sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key};
-#[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+#[cfg(feature = "bls")]
 use w3f_bls::SerializableToBytes;
 // Zeroize trait is only required under configurations that use it.
-#[cfg(not(feature = "ffi_import"))]
 pub use self::signature::secp256k1::EcdsaSecp256k1Sha256;
 pub use self::signature::*;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -170,20 +165,20 @@ const POP_DST: &str = "iroha:bls:pop:v1";
 fn is_all_zero_material(bytes: &[u8]) -> bool {
     !bytes.is_empty() && bytes.iter().all(|&byte| byte == 0)
 }
-#[cfg(all(test, not(feature = "ffi_import"), feature = "pqc"))]
+#[cfg(all(test, feature = "pqc"))]
 std::thread_local! {
     static PUBLIC_KEY_VALIDATION_CALLS: core::cell::Cell<usize> =
         const { core::cell::Cell::new(0) };
 }
-#[cfg(all(test, not(feature = "ffi_import"), feature = "pqc"))]
+#[cfg(all(test, feature = "pqc"))]
 fn record_public_key_validation_call() {
     PUBLIC_KEY_VALIDATION_CALLS.with(|calls| calls.set(calls.get() + 1));
 }
-#[cfg(all(test, not(feature = "ffi_import"), feature = "pqc"))]
+#[cfg(all(test, feature = "pqc"))]
 fn reset_public_key_validation_call_count() {
     PUBLIC_KEY_VALIDATION_CALLS.with(|calls| calls.set(0));
 }
-#[cfg(all(test, not(feature = "ffi_import"), feature = "pqc"))]
+#[cfg(all(test, feature = "pqc"))]
 fn public_key_validation_call_count() -> usize {
     PUBLIC_KEY_VALIDATION_CALLS.with(core::cell::Cell::get)
 }
@@ -269,13 +264,11 @@ fn validate_public_key_structural_envelope(
 const fn public_key_validation_heap_units_for_decode(algorithm: Algorithm) -> usize {
     match algorithm {
         // These validators borrow the payload and retain no heap-backed parse
-        // result: Ed25519, secp256k1, ML-DSA, and the blstrs BLS backend.
+        // result: Ed25519, secp256k1, and ML-DSA.
         Algorithm::Ed25519 | Algorithm::Secp256k1 | Algorithm::MlDsa => 0,
-        #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-        Algorithm::BlsNormal | Algorithm::BlsSmall => 0,
-        // The w3f compatibility backend still materializes canonical and
-        // identity encodings while validating. Keep its source-derived charge.
-        #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+        // BLS validation materializes canonical and identity encodings. Keep
+        // its source-derived charge.
+        #[cfg(feature = "bls")]
         Algorithm::BlsNormal | Algorithm::BlsSmall => 2,
         // GOST's on-curve check can retain up to twelve payload-width
         // coordinate/intermediate buffers. This is deliberately still a
@@ -334,7 +327,7 @@ impl<K> fmt::Debug for KeyGenOption<K> {
 ffi::ffi_item! {
     /// Pair of Public and Private keys.
     #[derive(Clone, PartialEq, Eq, Getters)]
-    #[cfg_attr(not(feature="ffi_import"), derive(Debug))]
+    #[derive(Debug)]
     #[getset(get = "pub")]
     pub struct KeyPair {
         /// Public key.
@@ -717,26 +710,22 @@ enum PublicKeyFull {
         algorithm: Algorithm,
         key: signature::gost::PublicKey,
     },
-    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+    #[cfg(feature = "bls")]
     BlsNormal {
         key: bls::BlsNormalPublicKey,
         bytes: Vec<u8>,
     },
-    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+    #[cfg(feature = "bls")]
     BlsSmall {
         key: bls::BlsSmallPublicKey,
         bytes: Vec<u8>,
     },
-    #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-    BlsNormal(bls::BlsNormalPublicKey),
-    #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-    BlsSmall(bls::BlsSmallPublicKey),
     #[cfg(feature = "sm")]
     Sm2(Sm2PublicKey),
 }
 impl PublicKeyFull {
     fn from_bytes(algorithm: Algorithm, payload: &[u8]) -> Result<Self, ParseError> {
-        #[cfg(all(test, not(feature = "ffi_import"), feature = "pqc"))]
+        #[cfg(all(test, feature = "pqc"))]
         record_public_key_validation_call();
         match algorithm {
             Algorithm::Ed25519 => {
@@ -770,8 +759,8 @@ impl PublicKeyFull {
         }
     }
     /// Validate borrowed bytes for decoding. Only the Ed25519, secp256k1,
-    /// ML-DSA, and blstrs branches are cache-free and heap-free on success;
-    /// the feature-dependent fallback parsers are explicitly precharged.
+    /// and ML-DSA branches are cache-free and heap-free on success; allocating
+    /// fallback parsers are explicitly precharged.
     fn validate_bytes_for_decode(algorithm: Algorithm, payload: &[u8]) -> Result<(), ParseError> {
         match algorithm {
             Algorithm::Ed25519 => {
@@ -789,11 +778,7 @@ impl PublicKeyFull {
             | Algorithm::Gost3410_2012_512ParamSetB => {
                 Self::from_bytes(algorithm, payload).map(drop)
             }
-            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            Algorithm::BlsNormal => bls::BlsNormal::validate_public_key_for_decode(payload),
-            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            Algorithm::BlsSmall => bls::BlsSmall::validate_public_key_for_decode(payload),
-            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+            #[cfg(feature = "bls")]
             Algorithm::BlsNormal | Algorithm::BlsSmall => {
                 Self::from_bytes(algorithm, payload).map(drop)
             }
@@ -801,23 +786,15 @@ impl PublicKeyFull {
             Algorithm::Sm2 => Self::from_bytes(algorithm, payload).map(drop),
         }
     }
-    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+    #[cfg(feature = "bls")]
     fn from_bls_normal_key(key: bls::BlsNormalPublicKey) -> Self {
         let bytes = key.to_bytes();
         Self::BlsNormal { key, bytes }
     }
-    #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-    fn from_bls_normal_key(key: bls::BlsNormalPublicKey) -> Self {
-        Self::BlsNormal(key)
-    }
-    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+    #[cfg(feature = "bls")]
     fn from_bls_small_key(key: &bls::BlsSmallPublicKey) -> Self {
         let bytes = key.to_bytes();
         Self::BlsSmall { key: *key, bytes }
-    }
-    #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-    fn from_bls_small_key(key: &bls::BlsSmallPublicKey) -> Self {
-        Self::BlsSmall(key.clone())
     }
     /// Key payload in canonical form.
     // SM2 payload encoding is fallible under `feature = "sm"`; keep one
@@ -830,14 +807,10 @@ impl PublicKeyFull {
             Self::MlDsa(key) => Ok(Cow::Borrowed(key.as_slice())),
             #[cfg(feature = "gost")]
             Self::Gost { key, .. } => Ok(Cow::Borrowed(key.as_bytes())),
-            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+            #[cfg(feature = "bls")]
             Self::BlsNormal { bytes, .. } => Ok(Cow::Borrowed(bytes.as_slice())),
-            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+            #[cfg(feature = "bls")]
             Self::BlsSmall { bytes, .. } => Ok(Cow::Borrowed(bytes.as_slice())),
-            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            Self::BlsNormal(key) => Ok(Cow::Borrowed(key.as_bytes())),
-            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            Self::BlsSmall(key) => Ok(Cow::Borrowed(key.as_bytes())),
             #[cfg(feature = "sm")]
             Self::Sm2(key) => {
                 sm::encode_sm2_public_key_payload(key.distid(), &key.to_sec1_bytes(false))
@@ -859,14 +832,10 @@ impl PublicKeyFull {
             Self::MlDsa(_) => Algorithm::MlDsa,
             #[cfg(feature = "gost")]
             Self::Gost { algorithm, .. } => *algorithm,
-            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+            #[cfg(feature = "bls")]
             Self::BlsNormal { .. } => Algorithm::BlsNormal,
-            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+            #[cfg(feature = "bls")]
             Self::BlsSmall { .. } => Algorithm::BlsSmall,
-            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            Self::BlsNormal(_) => Algorithm::BlsNormal,
-            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            Self::BlsSmall(_) => Algorithm::BlsSmall,
             #[cfg(feature = "sm")]
             Self::Sm2(_) => Algorithm::Sm2,
         }
@@ -1227,24 +1196,12 @@ pub fn secp256k1_verify_batch_deterministic(
     public_keys: &[&[u8]],
     seed32: [u8; 32],
 ) -> Result<(), Error> {
-    #[cfg(feature = "secp256k1-msm-batch")]
-    {
-        signature::secp256k1::EcdsaSecp256k1Sha256::verify_batch_deterministic(
-            messages,
-            signatures,
-            public_keys,
-            seed32,
-        )
-    }
-    #[cfg(not(feature = "secp256k1-msm-batch"))]
-    {
-        signature::secp256k1::EcdsaSecp256k1Sha256::verify_batch_deterministic(
-            messages,
-            signatures,
-            public_keys,
-            seed32,
-        )
-    }
+    signature::secp256k1::EcdsaSecp256k1Sha256::verify_batch_deterministic(
+        messages,
+        signatures,
+        public_keys,
+        seed32,
+    )
 }
 /// Deterministic ML-DSA-65 batch verification wrapper.
 /// Verifies each signature independently.
@@ -1931,7 +1888,6 @@ impl From<PublicKeyFull> for PublicKeyCompact {
         Self::new(public_key.algorithm(), &public_key.payload())
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl norito::core::NoritoSerialize for PublicKeyCompact {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.structural_components()
@@ -1957,7 +1913,6 @@ impl norito::core::NoritoSerialize for PublicKeyCompact {
         )
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl<'de> norito::core::NoritoDeserialize<'de> for PublicKeyCompact {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("PublicKeyCompact decode")
@@ -1986,7 +1941,6 @@ impl<'de> norito::core::NoritoDeserialize<'de> for PublicKeyCompact {
         })
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl<'a> norito::core::DecodeFromSlice<'a> for PublicKeyCompact {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (payload, used) =
@@ -2041,7 +1995,7 @@ ffi::ffi_item! {
     /// ```
     #[derive(Clone, PartialEq, Eq, TypeId)]
     #[repr(transparent)]
-    #[cfg_attr(all(feature = "ffi_export", not(feature = "ffi_import")), ffi_type(opaque))]
+    #[cfg_attr(feature = "ffi_export", ffi_type(opaque))]
     pub struct PublicKey(PublicKeyCompact);
 }
 #[ffi_impl_opaque]
@@ -2161,7 +2115,6 @@ impl PublicKey {
         self.try_algorithm().expect("Invalid PublicKey::algorithm")
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl PublicKey {
     /// Validate and retain a public key under active decode resource accounting.
     ///
@@ -2262,7 +2215,6 @@ impl PublicKey {
         self.try_to_multihash_string()
             .unwrap_or_else(|_| self.malformed_compact_marker())
     }
-    #[cfg(not(feature = "ffi_import"))]
     /// Fallibly format as an algorithm-prefixed multihash string (e.g., "ed25519:...").
     ///
     /// # Errors
@@ -2271,10 +2223,8 @@ impl PublicKey {
     /// canonical multihash string.
     pub fn try_to_prefixed_string(&self) -> Result<String, ParseError> {
         let (algorithm, payload) = self.structural_components()?;
-        multihash::encode_public_key_prefixed(algorithm, payload)
-            .map_err(|err| ParseError(err.to_string()))
+        Ok(multihash::encode_public_key_prefixed(algorithm, payload))
     }
-    #[cfg(not(feature = "ffi_import"))]
     /// Format as an algorithm-prefixed multihash string (e.g., "ed25519:...").
     pub fn to_prefixed_string(&self) -> String {
         self.try_to_prefixed_string()
@@ -2282,7 +2232,6 @@ impl PublicKey {
     }
 }
 
-#[cfg(not(feature = "ffi_import"))]
 fn canonical_public_key_multihash_hex_len(
     mut digest_function: u64,
     payload_len: usize,
@@ -2303,7 +2252,6 @@ fn canonical_public_key_multihash_hex_len(
         .and_then(|bytes| bytes.checked_mul(2))
 }
 
-#[cfg(not(feature = "ffi_import"))]
 fn push_lower_varint_hex(mut value: u64, output: &mut String) {
     loop {
         let mut byte = (value & 0x7f) as u8;
@@ -2318,12 +2266,10 @@ fn push_lower_varint_hex(mut value: u64, output: &mut String) {
     }
 }
 
-#[cfg(not(feature = "ffi_import"))]
 fn push_string_hex_byte(byte: u8, alphabet: &[u8; 16], output: &mut String) {
     output.push(char::from(alphabet[usize::from(byte >> 4)]));
     output.push(char::from(alphabet[usize::from(byte & 0x0f)]));
 }
-#[cfg(not(feature = "ffi_import"))]
 impl core::hash::Hash for PublicKey {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         match self.try_to_bytes() {
@@ -2359,7 +2305,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for PublicKey {
             .map(|(compact, used)| (Self(compact), used))
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // This could be simplified using `f.field_with` when `debug_closure_helpers` feature become stable
@@ -2393,7 +2338,6 @@ impl fmt::Debug for PublicKey {
         }
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl fmt::Display for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Ok((algorithm, payload)) = self.structural_components() {
@@ -2413,7 +2357,6 @@ impl fmt::Display for PublicKey {
     }
 }
 
-#[cfg(not(feature = "ffi_import"))]
 fn fmt_lower_varint_hex(mut value: u64, output: &mut fmt::Formatter<'_>) -> fmt::Result {
     loop {
         let mut byte = (value & 0x7f) as u8;
@@ -2427,7 +2370,6 @@ fn fmt_lower_varint_hex(mut value: u64, output: &mut fmt::Formatter<'_>) -> fmt:
         }
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl norito::json::JsonSerialize for PublicKey {
     fn json_serialize(&self, out: &mut String) {
         let normalized = self.normalize_lossy();
@@ -2449,7 +2391,6 @@ impl norito::json::JsonSerialize for PublicKey {
         out.push('"')
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl norito::json::JsonDeserialize for PublicKey {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -2472,7 +2413,6 @@ impl norito::json::JsonDeserialize for PublicKey {
     }
 }
 
-#[cfg(not(feature = "ffi_import"))]
 fn public_key_json_decode_error(error: norito::core::Error) -> norito::json::Error {
     if error.is_decode_resource_limit() {
         norito::json::Error::from_decode_resource(error)
@@ -2480,7 +2420,6 @@ fn public_key_json_decode_error(error: norito::core::Error) -> norito::json::Err
         norito::json::Error::Message("invalid public key".to_owned())
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 fn write_lower_varint_hex(
     mut value: u64,
     out: &mut dyn norito::json::JsonWriteSink,
@@ -2497,7 +2436,6 @@ fn write_lower_varint_hex(
         }
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 fn write_hex_byte(
     byte: u8,
     alphabet: &[u8; 16],
@@ -2506,7 +2444,6 @@ fn write_hex_byte(
     out.push(char::from(alphabet[usize::from(byte >> 4)]))?;
     out.push(char::from(alphabet[usize::from(byte & 0x0f)]))
 }
-#[cfg(not(feature = "ffi_import"))]
 impl norito::json::JsonDeserialize for PrivateKey {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -2517,7 +2454,6 @@ impl norito::json::JsonDeserialize for PrivateKey {
             .map_err(|err: ParseError| norito::json::Error::Message(err.to_string()))
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl FromStr for PublicKey {
     type Err = ParseError;
     fn from_str(key: &str) -> Result<Self, Self::Err> {
@@ -2525,7 +2461,6 @@ impl FromStr for PublicKey {
         Self::from_bytes(algorithm, &payload)
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl norito::core::NoritoSerialize for PublicKey {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(&self.0, writer)
@@ -2539,7 +2474,6 @@ impl norito::core::NoritoSerialize for PublicKey {
         norito::core::NoritoSerialize::encoded_len_exact(&self.0)
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl<'de> norito::core::NoritoDeserialize<'de> for PublicKey {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("PublicKey decode")
@@ -2551,7 +2485,6 @@ impl<'de> norito::core::NoritoDeserialize<'de> for PublicKey {
         PublicKeyCompact::try_deserialize(archived_compact).map(Self)
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl IntoSchema for PublicKey {
     fn type_name() -> String {
         Self::id()
@@ -2579,8 +2512,6 @@ impl IntoSchema for PublicKey {
         }
     }
 }
-/// Deriving a public key from a private key is currently disabled when the `ffi_import` feature is active.
-#[cfg(not(feature = "ffi_import"))]
 impl From<PrivateKey> for PublicKey {
     fn from(private_key: PrivateKey) -> Self {
         Self::from_private_key(&private_key)
@@ -2735,7 +2666,7 @@ enum PrivateKeyInner {
 ffi::ffi_item! {
     /// Private Key used in signatures.
     #[derive(Clone)]
-    #[cfg_attr(all(feature = "ffi_export", not(feature = "ffi_import")), ffi_type(opaque))]
+    #[cfg_attr(feature = "ffi_export", ffi_type(opaque))]
     #[allow(variant_size_differences)]
     pub struct PrivateKey(Box<Secret<PrivateKeyInner>>);
 }
@@ -2746,6 +2677,8 @@ unsafe impl Sync for PrivateKey {}
 impl PartialEq for PrivateKey {
     fn eq(&self, other: &Self) -> bool {
         use crate::secrecy::ExposeSecret;
+        #[cfg(feature = "bls")]
+        use subtle::ConstantTimeEq as _;
         match (self.0.expose_secret(), other.0.expose_secret()) {
             (PrivateKeyInner::Ed25519(l), PrivateKeyInner::Ed25519(r)) => l == r,
             (PrivateKeyInner::Secp256k1(l), PrivateKeyInner::Secp256k1(r)) => l == r,
@@ -2764,11 +2697,11 @@ impl PartialEq for PrivateKey {
             ) => la == ra && ls == rs,
             #[cfg(feature = "bls")]
             (PrivateKeyInner::BlsNormal(l), PrivateKeyInner::BlsNormal(r)) => {
-                l.to_bytes() == r.to_bytes()
+                bool::from(l.as_bytes().ct_eq(r.as_bytes()))
             }
             #[cfg(feature = "bls")]
             (PrivateKeyInner::BlsSmall(l), PrivateKeyInner::BlsSmall(r)) => {
-                l.to_bytes() == r.to_bytes()
+                bool::from(l.as_bytes().ct_eq(r.as_bytes()))
             }
             #[cfg(feature = "sm")]
             (PrivateKeyInner::Sm2(l), PrivateKeyInner::Sm2(r)) => l == r,
@@ -2883,14 +2816,10 @@ impl PrivateKey {
                 let secret = Zeroizing::new(key.secret_bytes());
                 sm::encode_sm2_private_key_payload(key.distid(), secret.as_slice())?
             }
-            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
-            PrivateKeyInner::BlsNormal(key) => key.to_zeroizing_bytes().to_vec(),
-            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
-            PrivateKeyInner::BlsSmall(key) => key.to_zeroizing_bytes().to_vec(),
-            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            PrivateKeyInner::BlsNormal(key) => key.to_zeroizing_bytes().to_vec(),
-            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            PrivateKeyInner::BlsSmall(key) => key.to_zeroizing_bytes().to_vec(),
+            #[cfg(feature = "bls")]
+            PrivateKeyInner::BlsNormal(key) => key.as_bytes().to_vec(),
+            #[cfg(feature = "bls")]
+            PrivateKeyInner::BlsSmall(key) => key.as_bytes().to_vec(),
         };
         Ok(payload)
     }
@@ -2912,7 +2841,6 @@ impl PrivateKey {
         Ok((self.algorithm(), self.try_payload()?))
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl norito::json::JsonDeserialize for KeyPair {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -2946,7 +2874,6 @@ impl norito::json::JsonDeserialize for KeyPair {
             .map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl norito::json::JsonSerialize for KeyPair {
     fn json_serialize(&self, out: &mut String) {
         use norito::json::{self, Value};
@@ -3011,19 +2938,11 @@ impl Drop for PrivateKeyInner {
             PrivateKeyInner::Sm2(key) => {
                 assert_will_zeroize_on_drop(key);
             }
-            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+            #[cfg(feature = "bls")]
             PrivateKeyInner::BlsNormal(key) => {
                 key.zeroize();
             }
-            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
-            PrivateKeyInner::BlsSmall(key) => {
-                key.zeroize();
-            }
-            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            PrivateKeyInner::BlsNormal(key) => {
-                key.zeroize();
-            }
-            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
+            #[cfg(feature = "bls")]
             PrivateKeyInner::BlsSmall(key) => {
                 key.zeroize();
             }
@@ -3031,19 +2950,16 @@ impl Drop for PrivateKeyInner {
     }
 }
 const PRIVATE_KEY_REDACTED: &str = "[REDACTED PrivateKey]";
-#[cfg(not(feature = "ffi_import"))]
 impl core::fmt::Debug for PrivateKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         PRIVATE_KEY_REDACTED.fmt(f)
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl core::fmt::Display for PrivateKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         PRIVATE_KEY_REDACTED.fmt(f)
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl norito::json::JsonSerialize for PrivateKey {
     fn json_serialize(&self, out: &mut String) {
         let redacted = PRIVATE_KEY_REDACTED.to_string();
@@ -3089,18 +3005,15 @@ impl ExposedPrivateKey {
     pub fn try_to_multihash_string(&self) -> Result<String, ParseError> {
         let (algorithm, payload) = self.0.try_to_bytes()?;
         let payload = Zeroizing::new(payload);
-        let bytes = Zeroizing::new(
-            multihash::encode_private_key(algorithm, payload.as_slice())
-                .map_err(|err| ParseError(err.to_string()))?,
-        );
-        multihash::private_multihash_to_hex_string(bytes.as_slice())
-            .map_err(|err| ParseError(err.to_string()))
+        Ok(multihash::encode_private_key_string(
+            algorithm,
+            payload.as_slice(),
+        ))
     }
     fn normalize(&self) -> String {
         self.try_to_multihash_string()
             .unwrap_or_else(|_| self.malformed_private_key_marker())
     }
-    #[cfg(not(feature = "ffi_import"))]
     /// Fallibly format as an algorithm-prefixed multihash string (e.g., "ml-dsa:...").
     ///
     /// # Errors
@@ -3110,17 +3023,17 @@ impl ExposedPrivateKey {
     pub fn try_to_prefixed_string(&self) -> Result<String, ParseError> {
         let (algorithm, payload) = self.0.try_to_bytes()?;
         let payload = Zeroizing::new(payload);
-        multihash::encode_private_key_prefixed(algorithm, payload.as_slice())
-            .map_err(|err| ParseError(err.to_string()))
+        Ok(multihash::encode_private_key_prefixed(
+            algorithm,
+            payload.as_slice(),
+        ))
     }
-    #[cfg(not(feature = "ffi_import"))]
     /// Format as an algorithm-prefixed multihash string (e.g., "ml-dsa:...").
     pub fn to_prefixed_string(&self) -> String {
         self.try_to_prefixed_string()
             .unwrap_or_else(|_| self.malformed_private_key_marker())
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl fmt::Debug for ExposedPrivateKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ExposedPrivateKey")
@@ -3129,7 +3042,6 @@ impl fmt::Debug for ExposedPrivateKey {
             .finish()
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl norito::json::JsonSerialize for ExposedPrivateKey {
     fn json_serialize(&self, out: &mut String) {
         let normalized = self.normalize();
@@ -3142,7 +3054,6 @@ impl norito::json::JsonSerialize for ExposedPrivateKey {
         norito::json::write_json_string_to(&self.normalize(), out)
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl norito::json::JsonDeserialize for ExposedPrivateKey {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -3172,7 +3083,6 @@ impl<'de> norito::core::NoritoDeserialize<'de> for ExposedPrivateKey {
             .map_err(|err| norito::core::Error::Message(err.to_string()))
     }
 }
-#[cfg(not(feature = "ffi_import"))]
 impl fmt::Display for ExposedPrivateKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.normalize())
@@ -3275,7 +3185,7 @@ pub mod error {
     #[display("{_0}")]
     pub struct ParseError(pub(crate) String);
     impl std::error::Error for ParseError {}
-    #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
+    #[cfg(feature = "ffi_export")]
     impl iroha_ffi::IntoFfiReturn for ParseError {
         fn into_ffi_return(self) -> iroha_ffi::FfiReturn {
             let _ = self;
@@ -3309,7 +3219,7 @@ pub mod error {
             Self::NoSuchAlgorithm(source.to_string())
         }
     }
-    #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
+    #[cfg(feature = "ffi_export")]
     impl iroha_ffi::IntoFfiReturn for Error {
         fn into_ffi_return(self) -> iroha_ffi::FfiReturn {
             let _ = self;
@@ -3325,35 +3235,27 @@ pub mod error {
 }
 mod ffi {
     //! Definitions and implementations of FFI related functionalities
-    #[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
+    #[cfg(feature = "ffi_export")]
     use super::*;
     macro_rules! ffi_item {
         ($it: item $($attr: meta)?) => {
-            #[cfg(all(not(feature = "ffi_export"), not(feature = "ffi_import")))]
+            #[cfg(not(feature = "ffi_export"))]
             $it
-            #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
+            #[cfg(feature = "ffi_export")]
             #[derive(iroha_ffi::FfiType)]
             #[iroha_ffi::ffi_export]
             $(#[$attr])?
             $it
-            #[cfg(feature = "ffi_import")]
-            iroha_ffi::ffi! {
-                #[iroha_ffi::ffi_import]
-                $(#[$attr])?
-                $it
-            }
         };
     }
-    #[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
+    #[cfg(feature = "ffi_export")]
     iroha_ffi::handles! {
         PublicKey,
         PrivateKey,
         KeyPair,
         Signature,
     }
-    #[cfg(feature = "ffi_import")]
-    iroha_ffi::decl_ffi_fns! { link_prefix="iroha_crypto" Drop, Clone, Eq, Ord, Default }
-    #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
+    #[cfg(feature = "ffi_export")]
     iroha_ffi::def_ffi_fns! { link_prefix="iroha_crypto"
         Drop: { PublicKey, PrivateKey, KeyPair, Signature },
         Clone: { PublicKey, PrivateKey, KeyPair, Signature },
@@ -3361,7 +3263,7 @@ mod ffi {
         Ord: { PublicKey, Signature },
     }
     // NOTE: Makes sure that only one `dealloc` is exported per generated dynamic library
-    #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
+    #[cfg(feature = "ffi_export")]
     mod dylib {
         iroha_ffi::def_ffi_fns! {dealloc}
     }

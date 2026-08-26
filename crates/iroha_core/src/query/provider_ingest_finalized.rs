@@ -27,7 +27,7 @@ use iroha_data_model::{
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
-            PinManifestRecord, ProviderIngestCompletionSignerPolicyV1,
+            PinManifestRecord, PinStatus, ProviderIngestCompletionSignerPolicyV1,
             ProviderIngestFinalizedAnchorV1, ReplicationOrderId, ReplicationOrderRecord,
             ReplicationOrderStatus,
         },
@@ -75,6 +75,7 @@ const RETENTION_APPROVAL_REVISION_DOMAIN_V1: &[u8] =
 const RETENTION_APPROVAL_NAMESPACE_V1: [u8; 32] = *b"sorafs.pi.archive.retention.v1.0";
 const STATE_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.sorafs.provider-ingest.finalized-provider-state.first-release.v1\0";
+const MILLIS_PER_UNIX_SECOND: u64 = 1_000;
 const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
 const RETENTION_APPROVAL_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024;
 const MAX_DECODE_NESTING_DEPTH: usize = 128;
@@ -448,7 +449,7 @@ pub struct ProviderIngestFinalizedArchiveAssignmentV1 {
     pub replication_order: ReplicationOrderRecord,
     /// Consensus-authenticated Musubi archive binding, absent for generic non-Musubi replication orders.
     pub musubi_archive: Option<MusubiReplicationOrderArchiveBindingV1>,
-    /// Current authoritative completion epoch, when completion is admissible.
+    /// Exact finalized block Unix time in whole seconds, when completion is admissible.
     pub completion_epoch: Option<u64>,
 }
 /// Context-bound exclusive cursor for provider-indexed archive pages.
@@ -2325,15 +2326,16 @@ impl ProviderIngestFinalizedArchiveV1 {
                 resource: "provider page",
             }
         })?;
+        let finalized_unix_epoch = key.finalized_at_unix_ms / MILLIS_PER_UNIX_SECOND;
         rows.extend(orders[start..end].iter().map(|order| {
             let completion_epoch = matches!(
                 order.replication_order.status,
                 ReplicationOrderStatus::Pending
             )
-            .then_some(key.height)
-            .filter(|height| {
-                *height >= order.replication_order.issued_epoch
-                    && *height <= order.replication_order.deadline_epoch
+            .then_some(finalized_unix_epoch)
+            .filter(|epoch| {
+                *epoch >= order.replication_order.issued_epoch
+                    && *epoch <= order.replication_order.deadline_epoch
             });
             ProviderIngestFinalizedArchiveAssignmentV1 {
                 provider_id,
@@ -2669,6 +2671,8 @@ fn validated_replication_order_from_record(
         || order.order_id != *order_record.order_id.as_bytes()
         || order.manifest_digest != *order_record.manifest_digest.as_bytes()
         || order.manifest_cid.as_slice() != order_record.manifest_root_cid.as_bytes()
+        || order.issued_at != order_record.issued_epoch
+        || order.deadline_at != order_record.deadline_epoch
     {
         return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
             reason: "replication-order record differs from its canonical payload",
@@ -2681,6 +2685,7 @@ fn validate_archived_order(
     provider_id: ProviderId,
     archived: &ProviderIngestFinalizedArchivedOrderV1,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+    let finalized_unix_epoch = key.finalized_at_unix_ms / MILLIS_PER_UNIX_SECOND;
     let order = validated_replication_order_from_record(
         &archived.replication_order.order_id,
         &archived.replication_order,
@@ -2730,19 +2735,47 @@ fn validate_archived_order(
         }
     }
     validate_pin_manifest_lifecycle(&archived.pin_manifest)?;
-    if matches!(
-        archived.pin_manifest.status,
-        iroha_data_model::sorafs::pin_registry::PinStatus::Pending
-    ) || matches!(
-        (
-            archived.pin_manifest.status,
-            archived.replication_order.status
-        ),
-        (
-            iroha_data_model::sorafs::pin_registry::PinStatus::Retired(_),
-            ReplicationOrderStatus::Pending
+    if archived.replication_order.order_id.is_auto() {
+        crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+            &archived.pin_manifest,
+            &archived.replication_order,
+            &hex::encode(archived.replication_order.order_id.as_bytes()),
         )
+        .map_err(
+            |_| ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                reason: "automatic replication order differs from its exact derived pin contract",
+            },
+        )?;
+    }
+    let Some(approved_epoch) = archived.pin_manifest.approved_epoch else {
+        return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+            reason: "replication-order lifecycle conflicts with its pin manifest",
+        });
+    };
+    let order_lifecycle_matches_pin = match (
+        archived.pin_manifest.status,
+        archived.replication_order.status,
     ) {
+        (PinStatus::Pending, _)
+        | (PinStatus::Approved(_), ReplicationOrderStatus::Cancelled(_)) => false,
+        (PinStatus::Approved(_), _) => true,
+        (PinStatus::Retired(_), ReplicationOrderStatus::Pending) => false,
+        (PinStatus::Retired(retired_epoch), ReplicationOrderStatus::Completed(terminal_epoch)) => {
+            terminal_epoch <= retired_epoch
+                && (!archived.replication_order.order_id.is_auto()
+                    || retired_epoch >= archived.pin_manifest.policy.retention_epoch)
+        }
+        (PinStatus::Retired(retired_epoch), ReplicationOrderStatus::Expired(terminal_epoch)) => {
+            terminal_epoch <= retired_epoch
+        }
+        (PinStatus::Retired(retired_epoch), ReplicationOrderStatus::Cancelled(cancelled_epoch)) => {
+            cancelled_epoch == retired_epoch
+        }
+    };
+    if archived.replication_order.issued_epoch < approved_epoch
+        || matches!(archived.pin_manifest.status, PinStatus::Retired(retired_epoch) if archived.replication_order.issued_epoch > retired_epoch)
+        || !order_lifecycle_matches_pin
+    {
         return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
             reason: "replication-order lifecycle conflicts with its pin manifest",
         });
@@ -2753,6 +2786,7 @@ fn validate_archived_order(
         .map(|assignment| ProviderId::new(assignment.provider_id))
         .collect::<BTreeSet<_>>();
     let mut completed = BTreeSet::new();
+    let mut previous_completion_epoch = None;
     for completion in &archived.replication_order.provider_completions {
         if !assigned.contains(&completion.provider_id)
             || !completed.insert(completion.provider_id)
@@ -2764,13 +2798,16 @@ fn validate_archived_order(
             || !completion.finalized_anchor.is_valid()
             || completion.completion_epoch < archived.replication_order.issued_epoch
             || completion.completion_epoch > archived.replication_order.deadline_epoch
+            || previous_completion_epoch
+                .is_some_and(|previous| completion.completion_epoch < previous)
             || completion.finalized_anchor.height > key.height
-            || completion.completion_epoch > key.height
+            || completion.completion_epoch > finalized_unix_epoch
         {
             return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
                 reason: "replication order contains an invalid provider completion",
             });
         }
+        previous_completion_epoch = Some(completion.completion_epoch);
     }
     match archived.replication_order.status {
         ReplicationOrderStatus::Pending
@@ -2780,7 +2817,14 @@ fn validate_archived_order(
             if archived.replication_order.provider_completions.len()
                 < usize::from(order.target_replicas)
                 && epoch > archived.replication_order.deadline_epoch
-                && epoch <= key.height => {}
+                && epoch <= finalized_unix_epoch => {}
+        ReplicationOrderStatus::Cancelled(epoch)
+            if archived.replication_order.provider_completions.len()
+                < usize::from(order.target_replicas)
+                && epoch >= archived.replication_order.issued_epoch
+                && epoch <= archived.replication_order.deadline_epoch
+                && matches!(archived.pin_manifest.status, PinStatus::Retired(retired) if retired == epoch)
+                && epoch <= finalized_unix_epoch => {}
         ReplicationOrderStatus::Completed(epoch)
             if archived.replication_order.provider_completions.len()
                 == usize::from(order.target_replicas)
@@ -3261,6 +3305,10 @@ fn validate_order_transition(
         (ReplicationOrderStatus::Expired(previous), ReplicationOrderStatus::Expired(current)) => {
             previous == current
         }
+        (
+            ReplicationOrderStatus::Cancelled(previous),
+            ReplicationOrderStatus::Cancelled(current),
+        ) => previous == current,
         _ => false,
     };
     if !valid_status {
@@ -3292,13 +3340,24 @@ fn validate_pin_manifest_lifecycle(
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
     let status_is_valid = match manifest.status {
         iroha_data_model::sorafs::pin_registry::PinStatus::Pending => {
-            manifest.retirement_reason.is_none() && manifest.council_envelope_digest.is_none()
+            manifest.approved_epoch.is_none()
+                && manifest.retirement_reason.is_none()
+                && manifest.council_envelope_digest.is_none()
         }
         iroha_data_model::sorafs::pin_registry::PinStatus::Approved(epoch) => {
-            epoch >= manifest.submitted_epoch && manifest.retirement_reason.is_none()
+            manifest.approved_epoch == Some(epoch)
+                && epoch >= manifest.submitted_epoch
+                && epoch < manifest.policy.retention_epoch
+                && manifest.retirement_reason.is_none()
         }
         iroha_data_model::sorafs::pin_registry::PinStatus::Retired(epoch) => {
             epoch >= manifest.submitted_epoch
+                && manifest.approved_epoch.is_none_or(|approved_epoch| {
+                    approved_epoch >= manifest.submitted_epoch
+                        && approved_epoch <= epoch
+                        && approved_epoch < manifest.policy.retention_epoch
+                })
+                && (manifest.approved_epoch.is_some() || manifest.council_envelope_digest.is_none())
         }
     };
     if !status_is_valid
@@ -3338,6 +3397,21 @@ fn validate_pin_manifest_transition(
         (None, Some(_)) => !matches!(current.status, PinStatus::Pending),
         (None, None) => true,
     };
+    let approval_is_monotonic = match (previous.approved_epoch, current.approved_epoch) {
+        (Some(previous), Some(current)) => previous == current,
+        (Some(_), None) => false,
+        (None, Some(next_approval)) => {
+            matches!(previous.status, PinStatus::Pending)
+                && (matches!(
+                    current.status,
+                    PinStatus::Approved(status_epoch) if status_epoch == next_approval
+                ) || matches!(
+                    current.status,
+                    PinStatus::Retired(retired_epoch) if next_approval <= retired_epoch
+                ))
+        }
+        (None, None) => true,
+    };
     let retirement_is_monotonic = match (previous.status, current.status) {
         (PinStatus::Retired(_), PinStatus::Retired(_)) => {
             previous.retirement_reason == current.retirement_reason
@@ -3346,6 +3420,7 @@ fn validate_pin_manifest_transition(
         (_, PinStatus::Pending | PinStatus::Approved(_)) => current.retirement_reason.is_none(),
     };
     if !status_is_monotonic
+        || !approval_is_monotonic
         || !envelope_is_monotonic
         || !retirement_is_monotonic
         || previous.pin_fee_payment != current.pin_fee_payment
@@ -6910,7 +6985,7 @@ mod tests {
         block::BlockHeader,
         metadata::Metadata,
         sorafs::pin_registry::{
-            ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinPolicy, PinStatus,
+            ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinPolicy,
             ProviderIngestCompletionAuthorityV1, ReplicationOrderCompletionRecord,
         },
     };
@@ -7001,7 +7076,7 @@ mod tests {
             None,
             Metadata::default(),
         );
-        pin.status = PinStatus::Approved(1);
+        pin.approve(1, None);
         let order_id = [order_seed; 32];
         let canonical = ReplicationOrderV1 {
             version: REPLICATION_ORDER_VERSION_V1,
@@ -7048,8 +7123,8 @@ mod tests {
     }
     fn projection(height: u64) -> ProviderIngestFinalizedProjectionV1 {
         let key = key(height);
-        let shared = archived_order(0xA1, &[PROVIDER_A, PROVIDER_B]);
-        let only_a = archived_order(0xA2, &[PROVIDER_A]);
+        let shared = archived_order(0x21, &[PROVIDER_A, PROVIDER_B]);
+        let only_a = archived_order(0x22, &[PROVIDER_A]);
         ProviderIngestFinalizedProjectionV1 {
             key,
             providers: vec![
@@ -7737,7 +7812,8 @@ mod tests {
             ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds())
                 .expect("open archive");
         let first = projection(7);
-        let second = advance_projection(&first, 8);
+        let mut second = advance_projection(&first, 8);
+        second.key.finalized_at_unix_ms = 42_999;
         archive.insert(first).expect("insert activation floor");
         archive
             .insert(second.clone())
@@ -7760,7 +7836,8 @@ mod tests {
             page.rows[0].finalized_at_unix_ms,
             second.key.finalized_at_unix_ms
         );
-        assert_eq!(page.rows[0].completion_epoch, Some(second.key.height));
+        assert_eq!(page.rows[0].completion_epoch, Some(42));
+        assert_ne!(page.rows[0].completion_epoch, Some(second.key.height));
     }
     #[cfg(unix)]
     #[test]
@@ -8116,7 +8193,7 @@ mod tests {
         let order_archive =
             ProviderIngestFinalizedArchiveV1::try_open(archive_root(&order_directory), bounds())
                 .expect("open order archive");
-        let target = ReplicationOrderId::new([0xA2; 32]);
+        let target = ReplicationOrderId::new([0x22; 32]);
         let mut order_floor = projection(7);
         for provider in &mut order_floor.providers {
             for archived in &mut provider.orders {
@@ -8167,7 +8244,7 @@ mod tests {
         let directory = physical_tempdir().expect("archive tempdir");
         let root = archive_root(&directory);
         let mut first = projection(7);
-        let target = ReplicationOrderId::new([0xA2; 32]);
+        let target = ReplicationOrderId::new([0x22; 32]);
         for provider in &mut first.providers {
             for archived in &mut provider.orders {
                 if archived.order_id() != target {
@@ -8215,7 +8292,7 @@ mod tests {
                 .expect("open archive");
         let first = projection(7);
         archive.insert(first.clone()).expect("insert first");
-        let shared_id = ReplicationOrderId::new([0xA1; 32]);
+        let shared_id = ReplicationOrderId::new([0x21; 32]);
         let mut reassigned = advance_projection(&first, 8);
         reassigned
             .providers
@@ -8426,7 +8503,7 @@ mod tests {
                 .expect("open archive");
         let first = projection(7);
         archive.insert(first.clone()).expect("insert first");
-        let target = ReplicationOrderId::new([0xA2; 32]);
+        let target = ReplicationOrderId::new([0x22; 32]);
         let mut revised = advance_projection(&first, 8);
         for provider in &mut revised.providers {
             for archived in &mut provider.orders {
@@ -8478,7 +8555,7 @@ mod tests {
         let archive =
             ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds())
                 .expect("open archive");
-        let target = ReplicationOrderId::new([0xA2; 32]);
+        let target = ReplicationOrderId::new([0x22; 32]);
         let mut first = projection(7);
         for provider in &mut first.providers {
             for archived in &mut provider.orders {
@@ -8525,7 +8602,7 @@ mod tests {
         let archive =
             ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds())
                 .expect("open archive");
-        let target = ReplicationOrderId::new([0xA1; 32]);
+        let target = ReplicationOrderId::new([0x21; 32]);
         let mut first = projection(7);
         for provider in &mut first.providers {
             for archived in &mut provider.orders {
@@ -8593,6 +8670,120 @@ mod tests {
         ));
     }
     #[test]
+    fn canonical_order_timestamps_must_match_archived_record_epochs() {
+        let mut issued_mismatch = archived_order(0x23, &[PROVIDER_A]).replication_order;
+        issued_mismatch.issued_epoch = issued_mismatch.issued_epoch.saturating_add(1);
+        assert!(matches!(
+            validated_replication_order_from_record(&issued_mismatch.order_id, &issued_mismatch),
+            Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection { .. })
+        ));
+
+        let mut deadline_mismatch = archived_order(0x23, &[PROVIDER_A]).replication_order;
+        deadline_mismatch.deadline_epoch = deadline_mismatch.deadline_epoch.saturating_sub(1);
+        assert!(matches!(
+            validated_replication_order_from_record(
+                &deadline_mismatch.order_id,
+                &deadline_mismatch
+            ),
+            Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection { .. })
+        ));
+    }
+    #[test]
+    fn lifecycle_validation_uses_finalized_unix_seconds_instead_of_height() {
+        let completion_key = ProviderIngestFinalizedArchiveKeyV1::try_new(
+            test_network_id(0x31),
+            7,
+            [7; 32],
+            900_999,
+        )
+        .expect("valid completion key");
+        let completed_by = account(0x11);
+        let mut completed = archived_order(0x23, &[PROVIDER_A]);
+        completed.replication_order.provider_completions = vec![ReplicationOrderCompletionRecord {
+            provider_id: PROVIDER_A,
+            completed_by: completed_by.clone(),
+            completion_epoch: 900,
+            assignment_revision: 1,
+            completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                completed_by,
+                policy(0xA1, 1),
+            ),
+            finalized_anchor: completion_key.finalized_anchor(),
+        }];
+        completed.replication_order.status = ReplicationOrderStatus::Completed(900);
+        validate_archived_order(&completion_key, PROVIDER_A, &completed)
+            .expect("completion time may exceed the unrelated block height");
+
+        let mut future_completion = completed.clone();
+        future_completion.replication_order.provider_completions[0].completion_epoch = 901;
+        future_completion.replication_order.status = ReplicationOrderStatus::Completed(901);
+        assert!(matches!(
+            validate_archived_order(&completion_key, PROVIDER_A, &future_completion),
+            Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection { .. })
+        ));
+
+        let expiration_key = ProviderIngestFinalizedArchiveKeyV1::try_new(
+            test_network_id(0x31),
+            7,
+            [7; 32],
+            1_001_999,
+        )
+        .expect("valid expiration key");
+        let mut expired = archived_order(0x24, &[PROVIDER_A]);
+        expired.replication_order.status = ReplicationOrderStatus::Expired(1_001);
+        validate_archived_order(&expiration_key, PROVIDER_A, &expired)
+            .expect("expiration time may exceed the unrelated block height");
+
+        expired.replication_order.status = ReplicationOrderStatus::Expired(1_002);
+        assert!(matches!(
+            validate_archived_order(&expiration_key, PROVIDER_A, &expired),
+            Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection { .. })
+        ));
+    }
+    #[test]
+    fn archived_completion_evidence_must_be_nondecreasing() {
+        let completion_key = ProviderIngestFinalizedArchiveKeyV1::try_new(
+            test_network_id(0x31),
+            7,
+            [7; 32],
+            900_999,
+        )
+        .expect("valid completion key");
+        let owner_a = account(0x11);
+        let owner_b = account(0x22);
+        let mut archived = archived_order(0x23, &[PROVIDER_A, PROVIDER_B]);
+        archived.replication_order.provider_completions = vec![
+            ReplicationOrderCompletionRecord {
+                provider_id: PROVIDER_A,
+                completed_by: owner_a.clone(),
+                completion_epoch: 900,
+                assignment_revision: 1,
+                completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                    owner_a,
+                    policy(0xA1, 1),
+                ),
+                finalized_anchor: completion_key.finalized_anchor(),
+            },
+            ReplicationOrderCompletionRecord {
+                provider_id: PROVIDER_B,
+                completed_by: owner_b.clone(),
+                completion_epoch: 899,
+                assignment_revision: 1,
+                completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                    owner_b,
+                    policy(0xB1, 1),
+                ),
+                finalized_anchor: completion_key.finalized_anchor(),
+            },
+        ];
+        archived.replication_order.status = ReplicationOrderStatus::Completed(899);
+
+        assert!(matches!(
+            validate_archived_order(&completion_key, PROVIDER_A, &archived),
+            Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection { .. })
+        ));
+    }
+    #[test]
     fn pin_lifecycle_cannot_rollback_after_retirement() {
         let directory = physical_tempdir().expect("archive tempdir");
         let archive =
@@ -8608,19 +8799,27 @@ mod tests {
         let mut retired = advance_projection(&first, 8);
         for provider in &mut retired.providers {
             for archived in &mut provider.orders {
-                archived.pin_manifest.status = PinStatus::Retired(8);
-                archived.pin_manifest.retirement_reason = Some("retired".to_owned());
+                archived.pin_manifest.retire(8, Some("retired".to_owned()));
                 archived.replication_order.status = ReplicationOrderStatus::Expired(8);
             }
         }
         archive
             .insert(retired.clone())
             .expect("insert monotonic retirement");
+        let mut substituted_approval = advance_projection(&retired, 9);
+        for provider in &mut substituted_approval.providers {
+            for archived in &mut provider.orders {
+                archived.pin_manifest.approved_epoch = Some(2);
+            }
+        }
+        assert!(matches!(
+            archive.insert(substituted_approval),
+            Err(ProviderIngestFinalizedArchiveErrorV1::OrderSubstitution { .. })
+        ));
         let mut rollback = advance_projection(&retired, 9);
         for provider in &mut rollback.providers {
             for archived in &mut provider.orders {
-                archived.pin_manifest.status = PinStatus::Approved(1);
-                archived.pin_manifest.retirement_reason = None;
+                archived.pin_manifest.approve(1, None);
             }
         }
         assert!(matches!(

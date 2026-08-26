@@ -103,6 +103,7 @@ fn canonical_body_rolls_back_exact_busy_deferred_conflicting_proposal() {
             )),
             generation: deferred_tag.generation(),
             locked_commit_progress: false,
+            locked_reproposal_prepare_progress: false,
         },
     );
     let body_command = super::super::v2_runtime::AdapterCommand::BodyAvailable {
@@ -305,6 +306,97 @@ fn local_proposal_commitment_conflict_is_transactional() {
     assert_eq!(adapter.active_subject, active_before);
     assert_eq!(adapter.reducer, reducer_before);
     assert_eq!(adapter.wal.recovered_records().len(), wal_len_before);
+}
+#[test]
+fn wrong_view_local_proposal_completion_preserves_registry_without_becoming_active() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
+    assert!(startup.is_empty());
+    let proposed_subject = subject(0x7d);
+    let leader = adapter.wire_context.leader(0);
+    let proposal = proposal(&adapter.wire_context, leader, proposed_subject);
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+        unreachable!("proposal helper returns a proposal")
+    };
+    let manifest = proposal.manifest;
+    let (durable, validated) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+    let round = reducer::Round::new(manifest.round.height, manifest.round.view);
+    let core_subject = reducer::Subject::new(Hash::new(manifest.subject.encode()).into());
+    let commitment = validated.execution_commitment();
+    let current = adapter.current_tag();
+    let wrong_view =
+        reducer::EventTag::new(current.height(), current.view() + 1, current.generation());
+    assert!(adapter.active_subject.is_none());
+    let publications_before = adapter.status_publication_attempts;
+
+    let outcome = adapter
+        .local_proposal_ready(wrong_view, manifest.clone(), &durable, &validated)
+        .expect("wrong-view local completion stutters");
+
+    assert_eq!(
+        outcome.disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::WrongView)
+    );
+    assert_eq!(
+        adapter.registry.manifests.get(&(round, core_subject)),
+        Some(&manifest),
+        "the independently durable manifest remains trusted"
+    );
+    assert_eq!(
+        adapter
+            .registry
+            .execution_commitments
+            .get(&(round, core_subject))
+            .copied(),
+        Some(commitment),
+        "the independently fsynced validation commitment remains trusted"
+    );
+    assert!(
+        adapter.active_subject.is_none(),
+        "an ignored obsolete completion cannot replace the current active subject"
+    );
+    assert_eq!(
+        adapter.status_publication_attempts,
+        publications_before + 1,
+        "the stale subject must be rolled back before the only status publication"
+    );
+}
+#[test]
+fn rejected_nonleader_local_proposal_completion_restores_the_active_subject() {
+    let directory = TempDir::new().expect("temporary directory");
+    let context = context();
+    let leader = context.leader(0);
+    let nonleader = (leader + 1) % u32::try_from(context.roster.len()).expect("small roster");
+    let (mut adapter, startup) = SumeragiV2Adapter::open_with_aggregator(
+        directory.path().join("nonleader-safety.wal"),
+        verified_genesis(context.clone()),
+        Some(nonleader),
+        reducer::Generation::new(1),
+        [0x23; 32],
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("open nonleader");
+    assert!(startup.is_empty());
+    let proposal = proposal(&context, leader, subject(0x7e));
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+        unreachable!("proposal helper returns a proposal")
+    };
+    let manifest = proposal.manifest;
+    let (durable, validated) = validated_receipts_for_manifest(&context, &manifest);
+    assert!(adapter.active_subject.is_none());
+
+    assert!(matches!(
+        adapter.local_proposal_ready(adapter.current_tag(), manifest, &durable, &validated,),
+        Err(AdapterError::Reducer(
+            reducer::ReducerError::NotCurrentLeader
+        ))
+    ));
+    assert!(
+        adapter.active_subject.is_none(),
+        "a transactional reducer rejection cannot install the speculative subject"
+    );
 }
 #[test]
 fn post_decision_selected_lifecycles_cannot_reopen_the_reclaimed_owner_epoch() {
@@ -1138,6 +1230,74 @@ fn recovered_validation_authority_uses_locked_certificate_round() {
     assert_eq!(authority.len(), 1);
     assert!(authority.authorizes(certificate_round, locked_subject));
     assert!(!authority.authorizes(proposal_round, locked_subject));
+}
+#[test]
+fn recovered_lockless_highest_prepare_retains_exact_validation_authority() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let round = wire::ConsensusRound {
+        context_id: adapter.wire_context.id(),
+        height: adapter.wire_context.height,
+        view: 0,
+    };
+    let prepared_subject = subject(0xAB);
+    let wire_prepare = wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Prepare,
+        subject: prepared_subject,
+        execution_commitment: execution_commitment(0xAB),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0xAB; 96],
+    };
+    let core_context = adapter.reducer.context().clone();
+    let prepare = adapter
+        .registry
+        .qc_to_core(&wire_prepare, &adapter.wire_context)
+        .expect("register the durable highest PrepareQC");
+    let local_validator = adapter
+        .registry
+        .validator_id(0)
+        .expect("local fixture validator");
+    adapter.reducer = reducer::Reducer::recover(
+        core_context,
+        Some(local_validator),
+        reducer::Generation::new(2),
+        [reducer::WalEntry::new(
+            reducer::PersistenceId::new(1),
+            reducer::WalRecord::ObservePrepare(prepare),
+        )],
+    )
+    .expect("recover the lockless durable highest PrepareQC");
+    assert!(adapter.reducer.durable_state().locked().is_none());
+    assert_eq!(
+        adapter
+            .replayed_highest_prepare_certificate_ref()
+            .expect("project the replayed highest Prepare reference"),
+        Some(wire_prepare.as_ref())
+    );
+    let authority = adapter
+        .recovered_validation_authority(&[])
+        .expect("mint the recovered highest-Prepare frontier");
+    assert_eq!(authority.len(), 1);
+    assert!(authority.authorizes(round, prepared_subject));
+
+    let (runtime, startup) = super::super::v2_runtime::SerializedV2Runtime::new(
+        adapter,
+        Vec::new(),
+        Instant::now(),
+        Duration::from_secs(10),
+        super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+    )
+    .expect("wrap the recovered adapter in the serialized runtime");
+    assert!(startup.is_empty());
+    assert_eq!(
+        runtime
+            .replayed_highest_prepare_certificate_ref()
+            .expect("project the replayed highest Prepare through the runtime"),
+        Some(wire_prepare.as_ref())
+    );
 }
 #[test]
 fn timeout_signed_callback_is_restart_scoped_before_control_delivery() {
@@ -2418,6 +2578,7 @@ fn equivocation_flood_is_bounded_and_cannot_starve_commit_qc() {
     assert!(adapter.deferred_inputs.is_empty());
 }
 #[test]
+#[allow(clippy::too_many_lines)]
 fn unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
@@ -2488,6 +2649,56 @@ fn unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics() {
     let proposer = adapter.wire_context.leader(wire_round.view);
     let unsafe_proposal = proposal(&adapter.wire_context, proposer, subject(0xC5));
     let conflicting_proposal = proposal(&adapter.wire_context, proposer, subject(0xC6));
+    let safe_subject = adapter
+        .registry
+        .register_subject(subject(0xC5))
+        .expect("register the proposal subject for the upgraded lock");
+    adapter
+        .registry
+        .register_execution_commitment(core_round, safe_subject, execution_commitment(0xC5))
+        .expect("register the upgraded lock execution commitment");
+    let safe_shares = (0_u32..3)
+        .map(|index| {
+            reducer::SignatureShare::new(
+                adapter
+                    .registry
+                    .validator_id(index)
+                    .expect("fixture validator"),
+                reducer::OpaqueSignature::new(vec![
+                    0xC5,
+                    u8::try_from(index).expect("small validator index"),
+                ]),
+            )
+        })
+        .collect::<Vec<_>>();
+    let safe_prepare = reducer::QuorumCertificate::new(
+        reducer::CertificateRef::new(
+            core_context.id(),
+            core_round,
+            reducer::Phase::Prepare,
+            safe_subject,
+        ),
+        safe_shares,
+    );
+    let upgraded_reducer = reducer::Reducer::recover(
+        core_context.clone(),
+        Some(local_validator),
+        reducer::Generation::new(3),
+        [reducer::WalEntry::new(
+            reducer::PersistenceId::new(1),
+            reducer::WalRecord::LockAndCommit {
+                prepare: safe_prepare,
+                vote: reducer::Vote::new(
+                    core_context.id(),
+                    core_round,
+                    reducer::Phase::Commit,
+                    safe_subject,
+                    local_validator,
+                ),
+            },
+        )],
+    )
+    .expect("recover the same-view upgraded lock");
     let reducer_before = adapter.reducer.clone();
     let registry_before = (
         adapter.registry.subjects.len(),
@@ -2512,6 +2723,21 @@ fn unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics() {
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
     );
     assert!(retransmit.effects().is_empty());
+    adapter.reducer = upgraded_reducer;
+    let (retry_outcome, retry_admission) = adapter
+        .admit_authenticated_payload(&unsafe_proposal.payload)
+        .expect("re-evaluate the exact proposal after the lock generation changes");
+    assert!(
+        retry_outcome.is_none(),
+        "a proposal made safe by the upgraded lock must not remain tombstoned"
+    );
+    assert_eq!(
+        retry_admission
+            .expect("the proposal owns the upgraded consumer epoch")
+            .generation,
+        reducer::Generation::new(3)
+    );
+    adapter.reducer = reducer_before.clone();
     let conflict = adapter
         .receive_verified(conflicting_proposal.clone())
         .expect("report the conflicting proposal fingerprint");
@@ -2545,6 +2771,139 @@ fn unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics() {
     );
     assert_eq!(adapter.active_subject, active_subject_before);
     assert!(!adapter.fail_closed);
+}
+#[test]
+fn current_locked_reproposal_prepare_uses_progress_only_after_local_binding() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let locked_subject = subject(0xD3);
+    let locked_execution_commitment = execution_commitment(0xD3);
+    let core_subject = reducer::Subject::new(Hash::new(locked_subject.encode()).into());
+    let core_context = adapter.reducer.context().clone();
+    let locked_round = reducer::Round::new(core_context.height(), 0);
+    assert_eq!(
+        adapter
+            .registry
+            .register_subject(locked_subject)
+            .expect("register locked reproposal subject"),
+        core_subject
+    );
+    adapter
+        .registry
+        .register_execution_commitment(locked_round, core_subject, locked_execution_commitment)
+        .expect("register the historical lock commitment");
+    let shares = (0_u32..3)
+        .map(|index| {
+            reducer::SignatureShare::new(
+                adapter
+                    .registry
+                    .validator_id(index)
+                    .expect("fixture validator"),
+                reducer::OpaqueSignature::new(vec![
+                    0xD3,
+                    u8::try_from(index).expect("small fixture validator index"),
+                ]),
+            )
+        })
+        .collect::<Vec<_>>();
+    let prepare = reducer::QuorumCertificate::new(
+        reducer::CertificateRef::new(
+            core_context.id(),
+            locked_round,
+            reducer::Phase::Prepare,
+            core_subject,
+        ),
+        shares.clone(),
+    );
+    let timeout = reducer::TimeoutCertificate::new(
+        core_context.id(),
+        locked_round,
+        vec![reducer::TimeoutSignatureGroup::new(Some(prepare), shares)],
+    );
+    let local_validator = adapter
+        .registry
+        .validator_id(0)
+        .expect("local fixture validator");
+    adapter.reducer = reducer::Reducer::recover(
+        core_context,
+        Some(local_validator),
+        reducer::Generation::new(2),
+        [reducer::WalEntry::new(
+            reducer::PersistenceId::new(1),
+            reducer::WalRecord::InstallTimeout(timeout),
+        )],
+    )
+    .expect("recover a TC-promoted lock without a local Commit intent");
+    let current_tag = adapter.current_tag();
+    assert!(current_tag.view() > locked_round.view());
+    let locked = adapter
+        .reducer
+        .durable_state()
+        .locked()
+        .expect("the highest PrepareQC becomes the durable lock");
+    assert_eq!(locked.round(), locked_round);
+    assert!(
+        adapter
+            .reducer
+            .durable_state()
+            .commit_intent_for_lock(locked)
+            .is_none(),
+        "TC promotion alone cannot manufacture a closed-view Commit intent"
+    );
+    let current_round = wire::ConsensusRound {
+        context_id: adapter.wire_context.id(),
+        height: current_tag.height(),
+        view: current_tag.view(),
+    };
+    let exact_prepare = wire::Vote {
+        round: current_round,
+        proposal_round: current_round,
+        phase: wire::GlobalPhase::Prepare,
+        subject: locked_subject,
+        execution_commitment: locked_execution_commitment,
+        signer: 1,
+        signature: vec![0xD4],
+    };
+    assert!(
+        !adapter.is_exact_locked_reproposal_prepare_vote(&exact_prepare),
+        "remote wire data cannot bootstrap its own local execution binding"
+    );
+    adapter
+        .registry
+        .register_execution_commitment(
+            reducer::Round::new(current_tag.height(), current_tag.view()),
+            core_subject,
+            locked_execution_commitment,
+        )
+        .expect("bind the locally validated current-round reproposal");
+    assert!(adapter.is_exact_locked_reproposal_prepare_vote(&exact_prepare));
+    let exact_message =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(exact_prepare.clone()));
+    assert!(adapter.wire_ingress_may_use_progress(&exact_message.payload));
+    assert!(
+        adapter.authenticated_ingress_is_progress(&AuthenticatedConsensusMessage::for_test(
+            exact_message
+        ))
+    );
+
+    let mut stale = exact_prepare.clone();
+    stale.round.view = locked_round.view();
+    stale.proposal_round = stale.round;
+    assert!(!adapter.is_exact_locked_reproposal_prepare_vote(&stale));
+    let mut future = exact_prepare.clone();
+    future.round.view = current_tag.view() + 1;
+    future.proposal_round = future.round;
+    assert!(!adapter.is_exact_locked_reproposal_prepare_vote(&future));
+    let mut wrong_subject = exact_prepare.clone();
+    wrong_subject.subject = subject(0xD5);
+    assert!(!adapter.is_exact_locked_reproposal_prepare_vote(&wrong_subject));
+    let mut wrong_commitment = exact_prepare.clone();
+    wrong_commitment.execution_commitment = execution_commitment(0xD5);
+    assert!(!adapter.is_exact_locked_reproposal_prepare_vote(&wrong_commitment));
+    let mut commit = exact_prepare;
+    commit.phase = wire::GlobalPhase::Commit;
+    assert!(!adapter.is_exact_locked_reproposal_prepare_vote(&commit));
 }
 #[test]
 fn admission_keeps_only_the_exact_locked_commit_vote_beyond_one_rotation() {

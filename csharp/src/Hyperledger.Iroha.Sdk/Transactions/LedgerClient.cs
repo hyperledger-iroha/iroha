@@ -36,7 +36,7 @@ public sealed class LedgerClient
     }
 
     /// <summary>
-    /// Guided flow that quotes, signs, submits, and waits for the terminal pipeline result.
+    /// Guided flow that quotes, signs, submits, and waits for authoritative pipeline finality.
     /// </summary>
     public async Task<QuotedTransactionSubmission> QuoteSignAndSubmitAsync(
         TransactionBuilder transaction,

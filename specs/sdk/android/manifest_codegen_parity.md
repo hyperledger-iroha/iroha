@@ -164,9 +164,12 @@ generic transaction builders.
   validation rules described in `specs/ivm.md` and reuse the Norito
   fixture used by the Rust admission tests.
 - **Governance drafts (`governance.rs`).** ✅ Android now ships typed builders for
-  `ProposeDeployContract`, `CastZkBallot`, `CastPlainBallot`, `EnactReferendum`,
-  `FinalizeReferendum`, and `PersistCouncilForEpoch`. The generated reference documents their
-  schema hashes, while `java/iroha_android/src/test/java/org/hyperledger/iroha/android/governance/GovernanceInstructionBuilderTests.java`
+  certificate-only proposal instructions, `CreateParliamentGovernanceAttemptV1`,
+  `SubmitParliamentLifecycleTransitionV1`, standalone `CastZkBallot` and
+  `CastPlainBallot`, and `PersistCouncilForEpoch`. There is no finalization,
+  enactment, or equal public Parliament-ballot builder. The generated reference
+  documents their schema hashes, while
+  `java/iroha_android/src/test/java/org/hyperledger/iroha/android/governance/GovernanceInstructionBuilderTests.java`
   exercises round-trip coverage so SDK integrations stay aligned with the Rust data model.
 
 ## 4. Generator & Fixture Outputs

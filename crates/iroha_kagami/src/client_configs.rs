@@ -187,8 +187,7 @@ fn normalize_names(raw: Vec<String>) -> Result<Vec<String>> {
 fn render_client_config(base: &BaseConfig, domain: &str, key_pair: &KeyPair) -> Zeroizing<String> {
     let public_key = key_pair.public_key().to_string();
     let private_key = Zeroizing::new(ExposedPrivateKey(key_pair.private_key().clone()).to_string());
-    let network_id =
-        norito::literal::format("hash", &base.network_id.to_string().to_ascii_uppercase());
+    let network_id = base.network_id.to_string();
     let mut rendered = Zeroizing::new(format!(
         concat!(
             "chain = \"{chain}\"\n",
@@ -246,7 +245,7 @@ web_login = "demo"
         assert_eq!(base.chain, "demo-chain");
         assert_eq!(
             base.network_id.to_string(),
-            "32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149"
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
         );
         assert_eq!(base.torii_url, "http://127.0.0.1:8080/");
         let auth = base.basic_auth.expect("basic auth present");

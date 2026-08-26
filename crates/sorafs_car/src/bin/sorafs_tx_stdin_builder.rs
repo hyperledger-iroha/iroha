@@ -58,8 +58,7 @@ Subcommands:
 
 Options:
   capacity-declaration --summary=<path>
-  replication-order --summary=<path> --issued-epoch=<u64> --deadline-epoch=<u64> \
-[--musubi-archive-id-hex=<64-lowercase-hex>]
+  replication-order --summary=<path> [--musubi-archive-id-hex=<64-lowercase-hex>]
   complete-order --order-id-hex=<64-hex> --provider-id-hex=<64-hex> --completion-epoch=<positive-u64> \
 --expected-owner=<account-id> --assignment-revision=<positive-u64> \
 --signer-policy-id-hex=<64-hex> --signer-policy-revision=<positive-u64> \
@@ -80,6 +79,13 @@ fn run_capacity_declaration(args: impl Iterator<Item = String>) -> Result<(), St
         }
     }
     let summary = read_json_map(summary_path.as_deref(), "declaration summary")?;
+    for redundant in ["valid_from_epoch", "valid_until_epoch"] {
+        if summary.contains_key(redundant) {
+            return Err(format!(
+                "`{redundant}` is derived from the canonical capacity payload and must be omitted"
+            ));
+        }
+    }
     let declaration_b64 = require_string(&summary, "declaration_b64")?;
     let declaration_bytes = BASE64_STD
         .decode(declaration_b64.as_bytes())
@@ -97,8 +103,8 @@ fn run_capacity_declaration(args: impl Iterator<Item = String>) -> Result<(), St
         canonical_bytes,
         declaration.committed_capacity_gib,
         require_u64(&summary, "registered_epoch")?,
-        require_u64(&summary, "valid_from_epoch")?,
-        require_u64(&summary, "valid_until_epoch")?,
+        declaration.valid_from,
+        declaration.valid_until,
         metadata,
     );
     print_instruction_json(InstructionBox::from(RegisterCapacityDeclaration::new(
@@ -107,15 +113,11 @@ fn run_capacity_declaration(args: impl Iterator<Item = String>) -> Result<(), St
 }
 fn run_replication_order(args: impl Iterator<Item = String>) -> Result<(), String> {
     let mut summary_path = None;
-    let mut issued_epoch = None;
-    let mut deadline_epoch = None;
     let mut musubi_archive = None;
     for arg in args {
         let (key, value) = split_option(&arg)?;
         match key {
             "--summary" => set_once(&mut summary_path, value.to_owned(), key)?,
-            "--issued-epoch" => set_once(&mut issued_epoch, parse_u64(value, key)?, key)?,
-            "--deadline-epoch" => set_once(&mut deadline_epoch, parse_u64(value, key)?, key)?,
             "--musubi-archive-id-hex" => set_once(
                 &mut musubi_archive,
                 ArchiveId::new(parse_hex_32(value, "musubi_archive_id_hex")?),
@@ -134,14 +136,18 @@ fn run_replication_order(args: impl Iterator<Item = String>) -> Result<(), Strin
     order
         .validate()
         .map_err(|err| format!("replication order validation failed: {err}"))?;
-    let issued_epoch = issued_epoch.ok_or_else(|| "missing `--issued-epoch=<u64>`".to_owned())?;
-    let deadline_epoch =
-        deadline_epoch.ok_or_else(|| "missing `--deadline-epoch=<u64>`".to_owned())?;
+    let order_id = ReplicationOrderId::new(order.order_id);
+    if order_id.is_auto() {
+        return Err(
+            "generic replication-order builder cannot issue a reserved automatic order id"
+                .to_owned(),
+        );
+    }
     let instruction = IssueReplicationOrder::new(
-        ReplicationOrderId::new(order.order_id),
+        order_id,
         to_bytes(&order).map_err(|err| format!("failed to re-encode replication order: {err}"))?,
-        issued_epoch,
-        deadline_epoch,
+        order.issued_at,
+        order.deadline_at,
     );
     let instruction = match musubi_archive {
         Some(archive_id) => instruction.for_musubi_archive(archive_id),

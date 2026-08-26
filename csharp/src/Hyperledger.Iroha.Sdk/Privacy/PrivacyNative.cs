@@ -24,7 +24,7 @@ public enum PrivacyProtocolIdV1 : uint
     PqMaspStarkV0 = 11,
 }
 
-/// <summary>Stable ABI-22 result of validating one typed local compiled-profile catalog.</summary>
+/// <summary>Stable ABI-23 result of validating one typed local compiled-profile catalog.</summary>
 public enum PrivacyCompiledProfileCatalogValidationStatusV1
 {
     Valid = 0,
@@ -38,7 +38,7 @@ public enum PrivacyCompiledProfileCatalogValidationStatusV1
     InvalidCatalog = 8,
 }
 
-/// <summary>Stable ABI-22 result of validating the Rust-derived exact-12 fixture bundle.</summary>
+/// <summary>Stable ABI-23 result of validating the Rust-derived exact-12 fixture bundle.</summary>
 public enum PrivacyExact12FixtureValidationStatusV1
 {
     Valid = 0,
@@ -221,7 +221,7 @@ public static class PrivacyNative
     public const int PrivacyCompiledProfileCatalogArchiveMaxBytes = 256 * 1024;
     public const int PrivacyExact12FixtureBundleMaxBytes =
         PrivacyExact12FixtureCodecV1.MaxArchiveBytes;
-    public const uint RequiredBridgeAbiVersion = 22;
+    public const uint RequiredBridgeAbiVersion = 23;
     // Do not inherit the comparatively small worker stacks used by foreign managed runtimes.
     private const int NativeWorkerStackBytes = 16 * 1024 * 1024;
     private const string LibraryName = "connect_norito_bridge";
@@ -477,7 +477,7 @@ public static class PrivacyNative
 
     /// <summary>
     /// Strictly validate canonical committed Exact12 manifest bytes and compare every complete
-    /// compiled-profile result with this ABI-22 binary's native-validated local catalog.
+    /// compiled-profile result with this ABI-23 binary's native-validated local catalog.
     /// </summary>
     /// <remarks>
     /// A valid result is a structural and local-tuple prerequisite only. This method cannot mint

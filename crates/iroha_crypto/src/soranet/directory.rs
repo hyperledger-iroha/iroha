@@ -98,23 +98,10 @@ fn read_guard_directory_snapshot_file_with_hook(
     if named_before.len() > max_bytes {
         return Err(guard_directory_snapshot_too_large());
     }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(GUARD_DIRECTORY_O_NOFOLLOW_FLAG);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    let mut file = options.open(path)?;
+    let mut file = open_guard_directory_snapshot_file(path)?;
     let opened_before = file.metadata()?;
     pinned.validate_file(&opened_before)?;
-    if !guard_directory_metadata_identifies_same_file(&named_before, &opened_before)
+    if !guard_directory_path_identifies_open_file(path, &named_before, &file)?
         || opened_before.len() > max_bytes
     {
         return Err(io::Error::new(
@@ -145,8 +132,8 @@ fn read_guard_directory_snapshot_file_with_hook(
             "guard directory snapshot byte count cannot be represented as u64",
         )
     })?;
-    if !guard_directory_metadata_identifies_same_file(&opened_before, &opened_after)
-        || !guard_directory_metadata_identifies_same_file(&opened_after, &named_after)
+    if !guard_directory_open_metadata_identifies_same_file(&opened_before, &opened_after)
+        || !guard_directory_path_identifies_open_file(path, &named_after, &file)?
         || opened_before.len() != opened_after.len()
         || opened_after.len() != named_after.len()
         || opened_after.len() != observed_bytes
@@ -205,9 +192,11 @@ impl PinnedGuardDirectoryPath {
                 "guard directory snapshot parent must be a direct directory",
             ));
         }
-        let parent = fs::File::open(&parent_path)?;
+        let parent = open_guard_directory_parent(&parent_path)?;
         let opened = parent.metadata()?;
-        if !opened.is_dir() || !guard_directory_metadata_identifies_same_file(&named, &opened) {
+        if !opened.is_dir()
+            || !guard_directory_parent_path_identifies_open_file(&parent_path, &named, &parent)?
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "guard directory snapshot parent changed while opening",
@@ -232,7 +221,11 @@ impl PinnedGuardDirectoryPath {
         if guard_directory_metadata_is_link(&named)
             || !named.is_dir()
             || !opened.is_dir()
-            || !guard_directory_metadata_identifies_same_file(&named, &opened)
+            || !guard_directory_parent_path_identifies_open_file(
+                &self.parent_path,
+                &named,
+                &self.parent,
+            )?
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -350,7 +343,7 @@ fn guard_directory_metadata_is_link(metadata: &fs::Metadata) -> bool {
     false
 }
 #[cfg(unix)]
-fn guard_directory_metadata_identifies_same_file(
+fn guard_directory_open_metadata_identifies_same_file(
     left: &fs::Metadata,
     right: &fs::Metadata,
 ) -> bool {
@@ -358,22 +351,108 @@ fn guard_directory_metadata_identifies_same_file(
     left.dev() == right.dev() && left.ino() == right.ino()
 }
 #[cfg(windows)]
-fn guard_directory_metadata_identifies_same_file(
-    left: &fs::Metadata,
-    right: &fs::Metadata,
+fn guard_directory_open_metadata_identifies_same_file(
+    _left: &fs::Metadata,
+    _right: &fs::Metadata,
 ) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
+    true
 }
 #[cfg(not(any(unix, windows)))]
-fn guard_directory_metadata_identifies_same_file(
+fn guard_directory_open_metadata_identifies_same_file(
     _left: &fs::Metadata,
     _right: &fs::Metadata,
 ) -> bool {
     false
+}
+
+#[cfg(unix)]
+fn open_guard_directory_snapshot_file(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(GUARD_DIRECTORY_O_NOFOLLOW_FLAG);
+    options.open(path)
+}
+
+#[cfg(windows)]
+fn open_guard_directory_snapshot_file(path: &Path) -> io::Result<fs::File> {
+    super::windows_file_identity::open_direct_file(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_guard_directory_snapshot_file(path: &Path) -> io::Result<fs::File> {
+    fs::File::open(path)
+}
+
+#[cfg(windows)]
+fn open_guard_directory_parent(path: &Path) -> io::Result<fs::File> {
+    super::windows_file_identity::open_direct_directory(path)
+}
+
+#[cfg(not(windows))]
+fn open_guard_directory_parent(path: &Path) -> io::Result<fs::File> {
+    fs::File::open(path)
+}
+
+#[cfg(unix)]
+fn guard_directory_path_identifies_open_file(
+    _path: &Path,
+    named: &fs::Metadata,
+    opened: &fs::File,
+) -> io::Result<bool> {
+    Ok(guard_directory_open_metadata_identifies_same_file(
+        named,
+        &opened.metadata()?,
+    ))
+}
+
+#[cfg(windows)]
+fn guard_directory_path_identifies_open_file(
+    path: &Path,
+    _named: &fs::Metadata,
+    opened: &fs::File,
+) -> io::Result<bool> {
+    super::windows_file_identity::path_identifies_file(path, opened)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn guard_directory_path_identifies_open_file(
+    _path: &Path,
+    _named: &fs::Metadata,
+    _opened: &fs::File,
+) -> io::Result<bool> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn guard_directory_parent_path_identifies_open_file(
+    _path: &Path,
+    named: &fs::Metadata,
+    opened: &fs::File,
+) -> io::Result<bool> {
+    Ok(guard_directory_open_metadata_identifies_same_file(
+        named,
+        &opened.metadata()?,
+    ))
+}
+
+#[cfg(windows)]
+fn guard_directory_parent_path_identifies_open_file(
+    path: &Path,
+    _named: &fs::Metadata,
+    opened: &fs::File,
+) -> io::Result<bool> {
+    super::windows_file_identity::path_identifies_directory(path, opened)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn guard_directory_parent_path_identifies_open_file(
+    _path: &Path,
+    _named: &fs::Metadata,
+    _opened: &fs::File,
+) -> io::Result<bool> {
+    Ok(false)
 }
 /// Norito-encoded guard directory snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]

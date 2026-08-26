@@ -258,7 +258,7 @@ mod model {
         /// Nominated Proof‑of‑Stake mode
         Npos,
     }
-    // Bridge Norito codec to core slice decoding for strict-safe consumers.
+    // Bridge Norito codec to the bounded core slice-decoding path.
     impl<'a> norito::core::DecodeFromSlice<'a> for SumeragiConsensusMode {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
             let mut s: &'a [u8] = bytes;

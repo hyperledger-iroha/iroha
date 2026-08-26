@@ -131,6 +131,9 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
+    "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
+    "connect_norito_parliament_timed_ovn_ballot_from_proof_v1",
     "iroha_privacy_compiled_profile_catalog_v1",
     "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",
@@ -519,8 +522,8 @@ def _validate_root_identity(root: Path, payload: dict[str, object]) -> None:
         header.read_text(encoding="utf-8"),
         re.MULTILINE,
     )
-    if header_abis != ["22"]:
-        raise ValidationError("authoritative NoritoBridge header ABI is not exact 22")
+    if header_abis != ["23"]:
+        raise ValidationError("authoritative NoritoBridge header ABI is not exact 23")
 
     bridge_source = root / "crates/connect_norito_bridge/src/lib.rs"
     _regular_file(bridge_source, "authoritative NoritoBridge source")
@@ -541,8 +544,8 @@ def _validate_root_identity(root: Path, payload: dict[str, object]) -> None:
         protocol.read_text(encoding="utf-8"),
         re.MULTILINE,
     )
-    if protocol_abis != ["22"]:
-        raise ValidationError("authoritative privacy bridge ABI is not exact 22")
+    if protocol_abis != ["23"]:
+        raise ValidationError("authoritative privacy bridge ABI is not exact 23")
 
 
 def _load_manifest(manifest_path: Path, root: Path) -> dict[str, object]:
@@ -566,8 +569,8 @@ def _load_manifest(manifest_path: Path, root: Path) -> dict[str, object]:
         or SEMVER.fullmatch(payload["version"]) is None
     ):
         raise ValidationError("artifact version is not canonical")
-    if payload["native_bridge_abi_version"] != 22:
-        raise ValidationError("artifact does not bind exact native bridge ABI 22")
+    if payload["native_bridge_abi_version"] != 23:
+        raise ValidationError("artifact does not bind exact native bridge ABI 23")
     production = payload["privacy_production_enabled"]
     if type(production) is not bool:
         raise ValidationError("privacy_production_enabled must be boolean")

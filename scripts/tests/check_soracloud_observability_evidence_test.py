@@ -59,9 +59,9 @@ def test_valid_evidence_passes(tmp_path: Path) -> None:
     assert MODULE.main(["--evidence", str(evidence_path)]) == 0
 
 
-def test_missing_required_metric_fails(tmp_path: Path) -> None:
+def test_missing_required_inrou_metric_fails(tmp_path: Path) -> None:
     payload = evidence_payload()
-    del payload["metrics"]["model_host_stale_heartbeats"]
+    del payload["metrics"]["inrou_lifecycle"]
     evidence_path = tmp_path / "evidence.json"
     evidence_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -94,7 +94,7 @@ def test_retired_private_session_evidence_fails(tmp_path: Path) -> None:
 
 def test_disabled_alert_fails(tmp_path: Path) -> None:
     payload = evidence_payload()
-    payload["alerts"]["model_host_stale_heartbeats"]["enabled"] = False
+    payload["alerts"]["disk_pressure"]["enabled"] = False
     evidence_path = tmp_path / "evidence.json"
     evidence_path.write_text(json.dumps(payload), encoding="utf-8")
 

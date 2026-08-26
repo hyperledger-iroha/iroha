@@ -322,15 +322,15 @@ def test_zk_x509_public_apis_require_nominal_network_id() -> None:
     assert submit.args.kwarg is None
 
 
-def test_pyo3_boundary_and_native_signer_revision_are_exact_abi22_v5() -> None:
+def test_pyo3_boundary_and_native_signer_revision_are_exact_abi23_v5() -> None:
     rust = (RUST_BRIDGE / "lib.rs").read_text(encoding="utf-8")
     vk_rust = (RUST_BRIDGE / "zk_vk_draft.rs").read_text(encoding="utf-8")
     native_bridge = (REPO / "crates" / "connect_norito_bridge" / "src" / "lib.rs").read_text(
         encoding="utf-8"
     )
 
-    assert "norito::json::from_value::<NetworkId>" in rust
-    assert "canonical_network_id_literal(&inner)? != value" in rust
+    assert "value.parse::<NetworkId>()" in rust
+    assert "canonical_network_id_literal(&inner) != value" in rust
     assert "NetworkId must carry the canonical Iroha hash marker bit" in rust
     assert "RETIRED_NETWORK_FIELDS: [&str; 7]" in rust
     for retired in RETIRED_DOMAIN_NAMES:
@@ -366,6 +366,6 @@ def test_pyo3_boundary_and_native_signer_revision_are_exact_abi22_v5() -> None:
     signer_start = rust.index("fn sign_query_request(")
     signer_signature = rust[signer_start : rust.index(") -> PyResult", signer_start)]
     assert "network_id: &NetworkId" in signer_signature
-    assert "assert_eq!(connect_norito_bridge_abi_version_py(), 22);" in rust
+    assert "assert_eq!(connect_norito_bridge_abi_version_py(), 23);" in rust
     assert "const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 5;" in native_bridge
     assert "native_signer_jni_contract_revision_is_the_v5_network_id_hard_cut" in native_bridge

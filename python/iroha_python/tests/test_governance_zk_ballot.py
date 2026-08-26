@@ -8,7 +8,9 @@ import pytest
 from iroha_python import GovernanceLockCustody
 from iroha_python.address import AccountAddress
 from iroha_python.client import (
+    GovernanceManifestProvenance,
     GovernanceLockRecord,
+    GovernanceProposalDeployContract,
     LocalSigningContext,
     ToriiCanonicalRequestAuth,
     ToriiClient,
@@ -93,11 +95,9 @@ def _governance_mutation_payloads() -> tuple[tuple[str, str, dict[str, Any]], ..
             "/v1/gov/proposals/deploy-contract",
             {
                 "contract_alias": "router::universal",
-                "abi_version": "1",
+                "abi_version": 1,
                 "code_hash": "11" * 32,
                 "abi_hash": "22" * 32,
-                "window": {"lower": 10, "upper": 20},
-                "mode": "Zk",
                 "manifest_provenance": {
                     "signer": "ed25519:public",
                     "signature": "signature",
@@ -115,17 +115,6 @@ def _governance_mutation_payloads() -> tuple[tuple[str, str, dict[str, Any]], ..
                 "amount": CANONICAL_LARGE_FRACTION,
                 "duration_blocks": 5,
                 "direction": "Aye",
-            },
-        ),
-        (
-            "governance_submit_parliament_ballot",
-            "/v1/gov/parliament/ballots",
-            {
-                "authority": CANONICAL_AUTHORITY,
-                "network_id": GOVERNANCE_NETWORK_ID,
-                "proposal_id": "33" * 32,
-                "body": "policy-jury",
-                "decision": "approve",
             },
         ),
         (
@@ -152,20 +141,19 @@ def _governance_mutation_payloads() -> tuple[tuple[str, str, dict[str, Any]], ..
                 },
             },
         ),
-        (
-            "governance_finalize_referendum",
-            "/v1/gov/finalize",
-            {
-                "referendum_id": "44" * 32,
-                "proposal_id": "44" * 32,
-            },
-        ),
-        (
-            "governance_enact_proposal",
-            "/v1/gov/enact",
-            {"proposal_id": "55" * 32},
-        ),
     )
+
+
+def _governance_deploy_draft_response() -> dict[str, Any]:
+    return {
+        "proposal_id": "11" * 32,
+        "tx_instructions": [
+            {
+                "wire_id": "iroha_data_model::isi::governance::ProposeDeployContract",
+                "payload_hex": "00ff",
+            }
+        ],
+    }
 
 
 def _governance_client(session: RecordingSession) -> ToriiClient:
@@ -180,14 +168,12 @@ def _governance_client(session: RecordingSession) -> ToriiClient:
 _GOVERNANCE_BALLOT_METHODS = frozenset(
     {
         "governance_submit_plain_ballot",
-        "governance_submit_parliament_ballot",
         "governance_submit_zk_ballot_v1",
         "governance_submit_zk_ballot_proof_v1",
     }
 )
 _GOVERNANCE_CANONICAL_AUTH_METHODS = _GOVERNANCE_BALLOT_METHODS | {
     "governance_deploy_contract_proposal",
-    "governance_enact_proposal",
 }
 
 
@@ -202,6 +188,15 @@ def test_governance_legacy_zk_ballot_surface_is_absent() -> None:
     assert not hasattr(ToriiClient, "governance_submit_zk_ballot")
     assert hasattr(ToriiClient, "governance_submit_zk_ballot_v1")
     assert hasattr(ToriiClient, "governance_submit_zk_ballot_proof_v1")
+
+
+def test_proposal_backed_legacy_governance_surfaces_are_absent() -> None:
+    for method in (
+        "governance_submit_parliament_ballot",
+        "governance_finalize_referendum",
+        "governance_enact_proposal",
+    ):
+        assert not hasattr(ToriiClient, method)
 
 
 def test_governance_ballot_rejects_foreign_network_and_retired_identity_before_dispatch() -> None:
@@ -502,60 +497,13 @@ def test_governance_zk_routes_validate_context_and_envelope_before_dispatch(
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = _governance_client(session)
     index = {
-        "governance_submit_zk_ballot_v1": 3,
-        "governance_submit_zk_ballot_proof_v1": 4,
+        "governance_submit_zk_ballot_v1": 2,
+        "governance_submit_zk_ballot_proof_v1": 3,
     }[method_name]
     base = _governance_mutation_payloads()[index][2]
 
     with pytest.raises((TypeError, ValueError)):
         _invoke_governance(client, method_name, {**base, **payload})
-
-    assert session.calls == []
-
-
-def test_governance_finalize_and_enact_require_closed_exact_inputs_before_dispatch() -> None:
-    session = RecordingSession(StubResponse(payload={"ok": True}))
-    client = _governance_client(session)
-
-    with pytest.raises((TypeError, ValueError), match="referendum_id"):
-        client.governance_finalize_referendum(
-            {"referendum_id": " ref-1 ", "proposal_id": "44" * 32}
-        )
-    for referendum_id in ("ref/1", ".hidden", "ref%31", "投票", "a" * 129):
-        with pytest.raises(ValueError, match="referendum_id"):
-            client.governance_finalize_referendum(
-                {"referendum_id": referendum_id, "proposal_id": "44" * 32}
-            )
-    with pytest.raises(ValueError, match="exactly 64 lowercase"):
-        client.governance_finalize_referendum(
-            {"referendum_id": "AA" * 32, "proposal_id": "aa" * 32}
-        )
-    with pytest.raises(ValueError, match="exactly 64 lowercase"):
-        client.governance_finalize_referendum(
-            {"referendum_id": "44" * 32, "proposal_id": "AA" * 32}
-        )
-    with pytest.raises(ValueError, match="must equal proposal_id"):
-        client.governance_finalize_referendum(
-            {"referendum_id": "44" * 32, "proposal_id": "55" * 32}
-        )
-    with pytest.raises(ValueError, match="unknown field `window`"):
-        client.governance_enact_proposal(
-            {"proposal_id": "55" * 32, "window": {"lower": 1, "upper": 2}},
-            canonical_auth=GOVERNANCE_AUTH,
-        )
-    with pytest.raises(ValueError, match="does not accept private-key fields"):
-        client.governance_enact_proposal(
-            {
-                "proposal_id": "55" * 32,
-                "metadata": {"privateKey": "must-not-cross-torii"},
-            },
-            canonical_auth=GOVERNANCE_AUTH,
-        )
-    for proposal_id in ("0x" + "55" * 32, "AA" * 32, " " + "55" * 32):
-        with pytest.raises(ValueError, match="exactly 64 lowercase"):
-            client.governance_enact_proposal(
-                {"proposal_id": proposal_id}, canonical_auth=GOVERNANCE_AUTH
-            )
 
     assert session.calls == []
 
@@ -582,7 +530,12 @@ def test_governance_mutations_preserve_supported_canonical_payloads(
     path: str,
     payload: dict[str, Any],
 ) -> None:
-    session = RecordingSession(StubResponse(payload={"ok": True}))
+    response_payload = (
+        _governance_deploy_draft_response()
+        if method_name == "governance_deploy_contract_proposal"
+        else {"ok": True}
+    )
+    session = RecordingSession(StubResponse(payload=response_payload))
     client = _governance_client(session)
 
     _invoke_governance(client, method_name, payload)
@@ -602,7 +555,7 @@ def test_governance_mutations_preserve_supported_canonical_payloads(
     assert json.loads(session.calls[0]["data"].decode("utf-8")) == expected
 
 
-def test_governance_deploy_rejects_retired_limits_and_unknown_nested_objects() -> None:
+def test_governance_deploy_rejects_retired_controls_and_unknown_nested_objects() -> None:
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = _governance_client(session)
     payload = _governance_mutation_payloads()[0][2]
@@ -622,26 +575,66 @@ def test_governance_deploy_rejects_retired_limits_and_unknown_nested_objects() -
             },
             canonical_auth=GOVERNANCE_AUTH,
         )
-    with pytest.raises(ValueError, match="unknown field `clock`"):
-        client.governance_deploy_contract_proposal(
-            {**payload, "window": {"lower": 10, "upper": 20, "clock": "block"}},
-            canonical_auth=GOVERNANCE_AUTH,
-        )
+    for retired_field, retired_value in (
+        ("window", {"lower": 10, "upper": 20}),
+        ("mode", "Zk"),
+    ):
+        with pytest.raises(ValueError, match=f"unknown field `{retired_field}`"):
+            client.governance_deploy_contract_proposal(
+                {**payload, retired_field: retired_value},
+                canonical_auth=GOVERNANCE_AUTH,
+            )
 
     assert session.calls == []
 
 
 def test_governance_deploy_preserves_exact_manifest_provenance_wire_object() -> None:
-    session = RecordingSession(StubResponse(payload={"ok": True}))
+    session = RecordingSession(
+        StubResponse(payload=_governance_deploy_draft_response())
+    )
     client = _governance_client(session)
     payload = _governance_mutation_payloads()[0][2]
 
-    client.governance_deploy_contract_proposal(
+    draft = client.governance_deploy_contract_proposal(
         payload, canonical_auth=GOVERNANCE_AUTH
     )
 
     encoded = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert encoded["manifest_provenance"] == payload["manifest_provenance"]
+    assert draft.proposal_id == "11" * 32
+    assert len(draft.tx_instructions) == 1
+
+
+@pytest.mark.parametrize(
+    "response_payload",
+    [
+        {"ok": True},
+        {
+            **_governance_deploy_draft_response(),
+            "ok": True,
+        },
+        {
+            "proposal_id": "11" * 32,
+            "tx_instructions": [
+                {
+                    "wire_id": "ProposeDeployContract",
+                    "payload_hex": "00ff",
+                }
+            ],
+        },
+    ],
+)
+def test_governance_deploy_rejects_noncanonical_draft_response(
+    response_payload: dict[str, Any],
+) -> None:
+    session = RecordingSession(StubResponse(payload=response_payload))
+    client = _governance_client(session)
+
+    with pytest.raises(RuntimeError):
+        client.governance_deploy_contract_proposal(
+            _governance_mutation_payloads()[0][2],
+            canonical_auth=GOVERNANCE_AUTH,
+        )
 
 
 @pytest.mark.parametrize(
@@ -679,25 +672,19 @@ def test_governance_deploy_rejects_incomplete_or_non_string_provenance(
         {"contract_address": "addr"},
         {"contract_alias": None},
         {"abi_version": None},
-        {"abi_version": "2"},
-        {"abi_version": " 1"},
+        {"abi_version": "1"},
+        {"abi_version": 2},
+        {"abi_version": True},
         {"code_hash": None},
         {"abi_hash": None},
         {"code_hash": ":" + "11" * 32},
         {"code_hash": " " + "11" * 32},
         {"code_hash": "11" * 32 + " "},
+        {"code_hash": "AA" * 32},
         {"code_hash": "blake2b32:" + "11" * 32 + ":ignored"},
         {"code_hash": "sha256:" + "11" * 32},
-        {"window": {"lower": 10}},
-        {"window": {"upper": 20}},
-        {"window": {"lower": "10", "upper": 20}},
-        {"window": {"lower": True, "upper": 20}},
-        {"window": {"lower": -1, "upper": 20}},
-        {"window": {"lower": 0, "upper": 1 << 64}},
-        {"window": {"lower": 21, "upper": 20}},
-        {"mode": "quadratic"},
-        {"mode": "pLaIn"},
-        {"mode": " Zk"},
+        {"code_hash_hex": "11" * 32},
+        {"abi_hash_hex": "22" * 32},
     ],
 )
 def test_governance_deploy_rejects_invalid_required_contract_before_dispatch(
@@ -715,8 +702,10 @@ def test_governance_deploy_rejects_invalid_required_contract_before_dispatch(
     assert session.calls == []
 
 
-def test_governance_deploy_requires_one_target_and_emits_canonical_mode() -> None:
-    session = RecordingSession(StubResponse(payload={"ok": True}))
+def test_governance_deploy_requires_exactly_one_target() -> None:
+    session = RecordingSession(
+        StubResponse(payload=_governance_deploy_draft_response())
+    )
     client = _governance_client(session)
     base = _governance_mutation_payloads()[0][2]
 
@@ -733,44 +722,63 @@ def test_governance_deploy_requires_one_target_and_emits_canonical_mode() -> Non
         )
     assert session.calls == []
 
-    client.governance_deploy_contract_proposal(
-        {**base, "mode": "Plain"}, canonical_auth=GOVERNANCE_AUTH
-    )
+    client.governance_deploy_contract_proposal(base, canonical_auth=GOVERNANCE_AUTH)
     encoded = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert encoded["mode"] == "Plain"
+    assert "window" not in encoded
+    assert "mode" not in encoded
 
 
-def test_governance_parliament_requires_canonical_policy_jury_body() -> None:
-    session = RecordingSession(StubResponse(payload={"ok": True}))
-    client = _governance_client(session)
-    payload = _governance_mutation_payloads()[2][2]
+def test_governance_deploy_proposal_read_model_uses_typed_field_names() -> None:
+    payload = {
+        "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+        "code_hash": "11" * 32,
+        "abi_hash": "22" * 32,
+        "abi_version": 1,
+        "manifest_provenance": {
+            "signer": "ed25519:public",
+            "signature": "signature",
+        },
+    }
 
-    with pytest.raises(ValueError, match="canonical Parliament body"):
-        client.governance_submit_parliament_ballot(
-            {**payload, "body": "PolicyJury"},
-            canonical_auth=GOVERNANCE_AUTH,
-        )
+    proposal = GovernanceProposalDeployContract.from_payload(payload)
 
-    assert session.calls == []
+    assert proposal.code_hash == payload["code_hash"]
+    assert proposal.abi_hash == payload["abi_hash"]
+    assert proposal.abi_version == 1
+    assert proposal.manifest_provenance == GovernanceManifestProvenance(
+        signer="ed25519:public",
+        signature="signature",
+    )
 
 
 @pytest.mark.parametrize(
-    "decision", ["Approve", "Reject", "Abstain", "APPROVE", " approve"]
+    "payload",
+    [
+        {
+            "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+            "code_hash_hex": "11" * 32,
+            "abi_hash": "22" * 32,
+            "abi_version": 1,
+        },
+        {
+            "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+            "code_hash": "11" * 32,
+            "abi_hash": "22" * 32,
+            "abi_version": "1",
+        },
+        {
+            "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+            "code_hash": "11" * 32,
+            "abi_hash": "22" * 32,
+            "abi_version": 1,
+        },
+    ],
 )
-def test_governance_parliament_requires_canonical_lowercase_decision(
-    decision: str,
+def test_governance_deploy_proposal_read_model_rejects_old_shapes(
+    payload: dict[str, Any],
 ) -> None:
-    session = RecordingSession(StubResponse(payload={"ok": True}))
-    client = _governance_client(session)
-    payload = _governance_mutation_payloads()[2][2]
-
-    with pytest.raises(ValueError, match="must be approve, reject, or abstain"):
-        client.governance_submit_parliament_ballot(
-            {**payload, "decision": decision},
-            canonical_auth=GOVERNANCE_AUTH,
-        )
-
-    assert session.calls == []
+    with pytest.raises(TypeError):
+        GovernanceProposalDeployContract.from_payload(payload)
 
 
 def test_governance_lock_record_preserves_fraction_above_u64() -> None:

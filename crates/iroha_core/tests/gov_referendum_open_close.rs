@@ -5,15 +5,12 @@
     clippy::too_many_lines,
     clippy::items_after_statements
 )]
-#[path = "common/governance.rs"]
-mod governance_fixture;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{
-        GovernancePipeline, GovernanceProposalRecord, GovernanceProposalStatus,
-        GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
-        GovernanceStageApproval, GovernanceStageApprovals, State, World, WorldReadOnly,
+        GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus, State,
+        World, WorldReadOnly,
     },
 };
 use iroha_data_model::{
@@ -21,24 +18,9 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     events::data::governance::GovernanceEvent,
-    governance::types::{
-        AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBody,
-        ProposalKind,
-    },
     prelude::{Account, Domain},
 };
 use mv::storage::StorageReadOnly;
-fn deploy_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
-    iroha_data_model::smart_contract::ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
-        &iroha_test_samples::ALICE_ID,
-        0,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
-    )
-    .expect("deploy contract address")
-}
 #[test]
 fn referendum_open_and_close_by_height() {
     use nonzero_ext::nonzero;
@@ -56,8 +38,7 @@ fn referendum_open_and_close_by_height() {
     state.set_gov(cfg);
     // Block H=1: create a proposed referendum with explicit [2,3] window.
     let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let pid = [0xAB; 32];
-    let rid = hex::encode(pid);
+    let rid = "standalone-window".to_owned();
     {
         let mut sblock1 = state.block(header1);
         let mut stx1 = sblock1.transaction();
@@ -70,56 +51,6 @@ fn referendum_open_and_close_by_height() {
                 mode: GovernanceReferendumMode::Plain,
             },
         );
-        let proposal = GovernanceProposalRecord {
-            proposer: iroha_test_samples::ALICE_ID.clone(),
-            kind: ProposalKind::DeployContract(DeployContractProposal {
-                contract_address: deploy_contract_address(),
-                code_hash_hex: ContractCodeHash::from_hex_str(&hex::encode([0x11; 32]))
-                    .expect("code hash"),
-                abi_hash_hex: ContractAbiHash::from_hex_str(&hex::encode([0x22; 32]))
-                    .expect("abi hash"),
-                abi_version: AbiVersion::new(1),
-                manifest_provenance: None,
-            }),
-            created_height: header1.height().get(),
-            status: GovernanceProposalStatus::Proposed,
-            pipeline: GovernancePipeline::seeded(
-                header1.height().get(),
-                stx1.world.governance_referenda().get(&rid),
-                &stx1.gov,
-            ),
-            parliament_snapshot: governance_fixture::single_member_parliament_snapshot(
-                &iroha_test_samples::ALICE_ID,
-                header1.height().get(),
-            ),
-            finalization_evidence: None,
-            enacted_at_height: None,
-        };
-        stx1.world.governance_proposals_mut().insert(pid, proposal);
-        let mut approvals = GovernanceStageApprovals::default();
-        for body in [
-            ParliamentBody::RulesCommittee,
-            ParliamentBody::AgendaCouncil,
-            ParliamentBody::InterestPanel,
-            ParliamentBody::ReviewPanel,
-            ParliamentBody::PolicyJury,
-            ParliamentBody::OversightCommittee,
-        ] {
-            approvals.stages.insert(
-                body,
-                GovernanceStageApproval {
-                    epoch: 0,
-                    approvers: Default::default(),
-                    rejections: Default::default(),
-                    abstentions: Default::default(),
-                    required: 0,
-                    quorum_bps: 0,
-                },
-            );
-        }
-        stx1.world
-            .governance_stage_approvals_mut()
-            .insert(rid.clone(), approvals);
         stx1.apply();
         let has_opened_at_h1 = sblock1.world.take_external_events().iter().any(|event| {
             matches!(
@@ -145,13 +76,6 @@ fn referendum_open_and_close_by_height() {
             .copied()
             .expect("referendum should persist after H=1");
         assert_eq!(referendum.status, GovernanceReferendumStatus::Proposed);
-        let approvals = view
-            .world()
-            .governance_stage_approvals()
-            .get(&rid)
-            .expect("stage approvals should persist after H=1");
-        assert!(approvals.quorum_met(ParliamentBody::RulesCommittee, 0));
-        assert!(approvals.quorum_met(ParliamentBody::AgendaCouncil, 0));
     }
     // Block H=2: opens.
     let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);

@@ -154,7 +154,7 @@ pub(crate) struct RegisterNameInput {
     pub(crate) metadata: Metadata,
 }
 /// Errors returned by the ledger-backed SNS helpers.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum SnsError {
     /// The requested entity is missing from authoritative state.
     #[error("{0}")]

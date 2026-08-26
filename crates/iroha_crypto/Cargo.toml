@@ -17,12 +17,11 @@ default = ["application"]
 dev-tools = []
 # General application surface. Consensus-only consumers should use
 # `consensus` so they do not pull PQC and batch-verification helpers.
-application = ["std", "rand", "json", "ecc-batch", "bfv-accel", "pqc"]
+application = ["rand", "json", "ecc-batch", "bfv-accel", "pqc"]
 # Cryptography required by consensus and canonical node identities.
-consensus = ["std", "rand", "bls"]
+consensus = ["rand", "bls"]
 # Complete shipping node surface.
 node-crypto = ["application", "consensus"]
-std = []
 json = ["norito/json", "mv"]
 bfv-accel = []
 # Enable support for TC26 GOST (Streebog + GOST R 34.10-2012) algorithms.
@@ -35,17 +34,8 @@ sm-ffi-openssl = ["dep:openssl"]
 sm-neon = ["dep:sm4-neon", "dep:sm3-neon"]
 sm-neon-force = ["sm", "sm-neon", "sm4-neon/force-neon", "sm3-neon/force-neon"]
 crypto-parity-tests = ["dep:amcl", "dep:openssl", "dep:secp256k1"]
-bench = []
 # Enable support for BLS signatures. Disabled by default due to long compile times.
-# Backend selection:
-# - bls-backend-blstrs: pure Rust blstrs backend (no arkworks)
-# - default (no bls-backend-blstrs): w3f-bls backend
-bls = ["bls-backend-w3f", "dep:blstrs", "dep:group", "dep:pairing"]
-bls-backend-blstrs = ["bls", "dep:blstrs", "dep:group", "dep:subtle", "dep:pairing", "dep:w3f-bls"]
-# Baseline backend (enabled when bls is set and bls-backend-blstrs is NOT set)
-bls-backend-w3f = ["bls", "dep:w3f-bls"]
-# Replace structures and methods with FFI equivalents to facilitate dynamic linkage (mainly used in smartcontracts)
-#ffi_import = ["iroha_ffi", "iroha_primitives/ffi_import"]
+bls = ["dep:blst", "dep:blstrs", "dep:group", "dep:pairing", "dep:subtle", "dep:w3f-bls"]
 
 # Expose FFI API for dynamic linking (Internal use only)
 ffi_export = ["iroha_ffi", "iroha_primitives/ffi_export"]
@@ -54,8 +44,6 @@ ffi_export = ["iroha_ffi", "iroha_primitives/ffi_export"]
 rand = []
 # Enable parallel helpers for Merkle tree construction
 rayon = ["dep:rayon"]
-# Prepare ECDSA MSM-based batch under this feature (currently delegates to per-sig)
-secp256k1-msm-batch = []
 # Enable elliptic-curve batch verification (deterministic) where available.
 # - Ed25519 uses ed25519-dalek's MSM-based batch verify with a deterministic transcript
 # - Secp256k1 remains per-signature (no secure MSM batch included); kept for symmetry
@@ -87,6 +75,7 @@ sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
 hkdf = { version = "0.12.4", default-features = false, features = ["std"] }
 w3f-bls = { version = "0.1.9", default-features = false, optional = true, features = ["std"] }
 rayon = { version = "1.11.0", optional = true }
+blst = { version = "0.3.16", default-features = false, optional = true }
 blstrs = { version = "0.7.1", default-features = false, optional = true }
 group = { version = "0.13", default-features = false, optional = true }
 subtle = { version = "2.6.1", default-features = false, optional = true }
@@ -148,17 +137,6 @@ norito = { workspace = true, default-features = false, features = ["compression"
 num-bigint = "0.4.6"
 lazy_static = "1.5.0"
 tempfile = "3.23.0"
-
-# Utility binary used to detect the available BLS backend at build time.
-[[bin]]
-name = "bls-variant-detect"
-path = "src/bin/bls_variant_detect.rs"
-required-features = ["dev-tools", "bls", "bls-backend-blstrs"]
-
-[[bin]]
-name = "bls_check"
-path = "src/bin/bls_check.rs"
-required-features = ["dev-tools", "bls"]
 
 [[bin]]
 name = "gost_perf_check"

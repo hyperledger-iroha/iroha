@@ -778,6 +778,7 @@ fn exact_sccp_fixture_block(
     let mut block = SignedBlock::presigned(provisional_signature, header, vec![transaction]);
     // Exercise the active NPoS-effects header commitment in the exact SCCP fixture.
     block.set_npos_consensus_effects(Some(NposConsensusEffects {
+        finalized_global_beacon_pulse: None,
         vrf_epoch_seals: Vec::new(),
         v2_evidence_admissions: Vec::new(),
         penalty_actions: vec![NposPenaltyAction::MarkVrfPenaltiesApplied(

@@ -1058,7 +1058,7 @@ ProtectedDeferredProgressIndices(node) ==
 
 ProtectedDeferredProgressInvariant ==
   \A node \in ValidatorIds:
-    /\ Cardinality(ProtectedDeferredProgressIndices(node)) <= 2 * N + 3
+    /\ Cardinality(ProtectedDeferredProgressIndices(node)) <= 3 * N + 3
     /\ \A left, right \in ProtectedDeferredProgressIndices(node):
          SameProtectedProgressSlot(
            asyncDeferredProgressQueues[node][left],

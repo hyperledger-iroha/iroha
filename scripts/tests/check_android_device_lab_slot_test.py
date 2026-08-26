@@ -908,7 +908,7 @@ def write_candidate_binding_v2(
             "generation_memory_enforcement_profile": (
                 device_lab.KAGEMUSHA_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V1
             ),
-            "bridge_abi_version": 22,
+            "bridge_abi_version": 23,
             "artifact_count": len(report_artifacts),
             "artifacts": report_artifacts,
             "topup_finality_roster_file_name": "topup-finality-roster-v4.norito",
@@ -2203,7 +2203,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         cls._authority_directory.cleanup()
 
     def test_kagemusha_production_evidence_requires_current_v4_bridge(self) -> None:
-        self.assertEqual(device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION, 22)
+        self.assertEqual(device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION, 23)
 
     def test_apk_verifier_executes_the_complete_pinned_java_jar_authority(self) -> None:
         main_apk, _, certificate_sha256 = signed_candidate_apk_fixture()

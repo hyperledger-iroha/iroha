@@ -70,6 +70,8 @@ const PIPELINE_STATUS_VALUES = new Set([
 ]);
 const PIPELINE_FAILURE_STATUSES = new Set(["Rejected", "Expired"]);
 const PIPELINE_STATUS_RESOLUTION_VALUES = new Set(["queue", "cache", "state"]);
+const TRANSACTION_ADMISSION_SUCCESS_STATUSES = Object.freeze([202]);
+const TRANSACTION_SUBMISSION_OPTION_KEYS = new Set(["signal", "headers"]);
 const TRANSACTION_STATUS_READ_OPTION_KEYS = new Set(["signal", "headers", "scope"]);
 const TRANSACTION_STATUS_POLL_OPTION_KEYS = new Set([
   "signal",
@@ -1702,7 +1704,11 @@ export class ToriiBrowserClient {
 
   /** Submit exact locally signed version-1 transaction bytes to the pipeline. */
   submitTransaction(signedTransaction, options = {}) {
-    const opts = requireObject(options, "submitTransaction options");
+    const opts = requireSupportedOptions(
+      options,
+      "submitTransaction options",
+      TRANSACTION_SUBMISSION_OPTION_KEYS,
+    );
     const body = requireTransactionBytes(
       signedTransaction,
       "submitTransaction signedTransaction",
@@ -1717,7 +1723,7 @@ export class ToriiBrowserClient {
       },
       oneShot: true,
       signal: signalFrom(opts),
-      successStatuses: opts.successStatuses ?? [200, 201, 202, 204],
+      successStatuses: TRANSACTION_ADMISSION_SUCCESS_STATUSES,
       responseObserver: (response) => {
         requireMatchingReceiptHashHeader(
           response,

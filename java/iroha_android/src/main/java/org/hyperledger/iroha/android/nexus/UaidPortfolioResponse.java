@@ -38,7 +38,7 @@ public final class UaidPortfolioResponse {
 
     public UaidPortfolioTotals(final long accounts, final long positions) {
       if (accounts < 0L || positions < 0L) {
-        throw new IllegalArgumentException("portfolio totals must be non-negative");
+        throw new IllegalArgumentException("UAID portfolio totals must be non-negative");
       }
       this.accounts = accounts;
       this.positions = positions;

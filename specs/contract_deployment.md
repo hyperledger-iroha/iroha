@@ -189,9 +189,12 @@ native transactions rather than by a separate Torii deployment limiter.
   `gov_protected_namespaces` list never makes lifecycle mutation permissionless.
 - Proposals created with `ProposeDeployContract` (or the Torii
   `/v1/gov/proposals/deploy-contract` endpoint) capture
-  `(contract_address, code_hash, abi_hash, abi_version)`.
-- Once the referendum passes, `EnactReferendum` marks the proposal Enacted and
-  admission will accept deployments that carry matching metadata and code.
+  `(contract_address, code_hash, abi_hash, abi_version, manifest_provenance)` as
+  one typed immutable proposal fingerprint.
+- Parliament constructs the certificate automatically after the final required
+  body result and Core executes the bound deployment effect at the exact due
+  height. Only an `Enacted` exact-match proposal admits the protected deployment;
+  clients cannot submit a finalization or enactment instruction.
 - Transactions must include `gov_contract_address=<contract-address>`. CLI
   helpers populate the governance metadata automatically when you pass
   `--contract-address` or `--contract-alias`.
@@ -224,9 +227,10 @@ native transactions rather than by a separate Torii deployment limiter.
   and optionally writes it to disk.
 - `iroha contract code get --code-hash <hex> --out <path>` downloads
   the stored `.to` image.
-- Governance helpers (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
-  `iroha_cli app gov protected set/get`) orchestrate the protected-namespace workflow and
-  expose JSON artefacts for auditing.
+- Governance helpers (`iroha_cli app gov deploy propose`,
+  `iroha_cli app gov deploy audit`, and `iroha_cli app gov protected set/get`)
+  orchestrate the protected-namespace workflow and expose JSON artefacts for
+  auditing. Core owns certificate execution; there is no CLI enactment helper.
 
 ## Testing & coverage
 
@@ -235,9 +239,9 @@ native transactions rather than by a separate Torii deployment limiter.
   chunks, hash/artifact failure retention, direct-registration races,
   cancellation, event emission, cleanup, and cap enforcement. State tests
   cover snapshot and tiered restoration of partial uploads.
-- `crates/iroha_core/tests/gov_enact_deploy.rs` validates manifest insertion via
-  enactment, and `crates/iroha_core/tests/gov_protected_gate.rs` exercises
-  protected-namespace admission end-to-end.
+- Focused Parliament due-certificate tests validate automatic manifest insertion,
+  and `crates/iroha_core/tests/gov_protected_gate.rs` exercises protected-namespace
+  admission end-to-end.
 - Kura has a two-lane interrupted-`FilesApplied` restart regression for exact
   path rollback and chain preservation. CLI tests cover multi-MiB bounded
   transactions, one-chunk and skip behavior, stable metadata, and ordered emit

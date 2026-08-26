@@ -13,7 +13,6 @@ import {
 
 const HF_COMMIT_OID_PATTERN_V1 = /^[0-9a-f]{40}$/;
 const HF_REPO_ID_MAX_BYTES_V1 = 96;
-const HF_MODEL_NAME_MAX_BYTES_V1 = 128;
 const IROHA_NAME_MAX_BYTES_V1 = 255;
 const REJECTED_SIGNING_SECRET_FIELDS = [
   "privateKeyHex",
@@ -21,12 +20,11 @@ const REJECTED_SIGNING_SECRET_FIELDS = [
   "private_key",
   "private_key_hex",
 ];
-const PROVENANCE_SCHEMA = "soracloud.hf.deploy.provenance.v1";
+const PROVENANCE_SCHEMA = "soracloud.hf.shared_lease_join.provenance.v1";
 const APP_INFRA_PROVENANCE_SCHEMA = "soracloud.app.infra.provenance.v1";
-const HF_DEPLOY_PAYLOAD_FIELDS = new Set([
+const HF_SHARED_LEASE_JOIN_PAYLOAD_FIELDS = new Set([
   "repo_id",
   "revision",
-  "model_name",
   "service_name",
   "apartment_name",
   "storage_class",
@@ -269,17 +267,6 @@ function requireCanonicalHfRepoIdValue(value, label) {
     )
   ) {
     throw new TypeError(`${label} must be one exact fully-qualified namespace/repository identifier`);
-  }
-  return value;
-}
-
-function requireCanonicalHfTokenValue(value, label) {
-  requireCanonicalStringValue(value, label);
-  if (
-    utf8ByteLength(value) > HF_MODEL_NAME_MAX_BYTES_V1 ||
-    /[\p{Cc}\p{White_Space}]/u.test(value)
-  ) {
-    throw new TypeError(`${label} must be an exact canonical HF token without whitespace`);
   }
   return value;
 }
@@ -877,13 +864,13 @@ function requireAllowedDraftPayloadFields(payload) {
       throw new TypeError(`draft payload.${field} is not accepted`);
     }
   }
-  for (const field of HF_DEPLOY_PAYLOAD_FIELDS) {
+  for (const field of HF_SHARED_LEASE_JOIN_PAYLOAD_FIELDS) {
     if (field in payload && !Object.hasOwn(payload, field)) {
       throw new TypeError(`draft payload.${field} must be an own property`);
     }
   }
   for (const field of Object.getOwnPropertyNames(payload)) {
-    if (!HF_DEPLOY_PAYLOAD_FIELDS.has(field)) {
+    if (!HF_SHARED_LEASE_JOIN_PAYLOAD_FIELDS.has(field)) {
       throw new TypeError(`draft payload.${field} is not accepted`);
     }
     const descriptor = Object.getOwnPropertyDescriptor(payload, field);
@@ -901,7 +888,7 @@ function requireAllowedDraftPayloadFields(payload) {
     if (!Object.hasOwn(payload, field)) {
       throw new TypeError(`draft payload.${field} must be an own property`);
     }
-    if (!HF_DEPLOY_PAYLOAD_FIELDS.has(field)) {
+    if (!HF_SHARED_LEASE_JOIN_PAYLOAD_FIELDS.has(field)) {
       throw new TypeError(`draft payload.${field} is not accepted`);
     }
   }
@@ -910,7 +897,6 @@ function requireAllowedDraftPayloadFields(payload) {
 function requireAssembledDraftPayloadShape(payload) {
   requireAllowedDraftPayloadFields(payload);
   requireCanonicalHfRepoIdValue(payload.repo_id, "draft payload.repo_id");
-  requireCanonicalHfTokenValue(payload.model_name, "draft payload.model_name");
   requireCanonicalIrohaNameValue(payload.service_name, "draft payload.service_name");
   requireCanonicalStringValue(
     payload.lease_asset_definition_id,
@@ -966,33 +952,17 @@ function requireAssembledDraftPayloadShape(payload) {
   }
 }
 
-function generatedServiceSigningPayload(payload) {
-  return {
-    service_name: payload.service_name,
-    repo_id: payload.repo_id,
-    revision: payload.revision,
-  };
-}
-
-function generatedApartmentSigningPayload(payload) {
-  return {
-    apartment_name: payload.apartment_name,
-    service_name: payload.service_name,
-  };
-}
-
 /**
- * Build an unsigned `/v1/soracloud/hf/deploy` draft.
+ * Build an unsigned `/v1/soracloud/hf/lease/join` draft.
  *
- * @param {{ repoId: string, revision: string, modelName: string, serviceName: string, apartmentName: string | null, storageClass: "hot" | "warm" | "cold", leaseTermMs: number | bigint | string, leaseAssetDefinitionId: string, baseFee: import("./numericV1.js").KotodamaQuantity | string | bigint }} input
- * @returns {{ payload: Record<string, unknown>, provenancePayloads: { deploy: Record<string, unknown>, generatedService: Record<string, unknown>, generatedApartment: Record<string, unknown> | null } }}
+ * @param {{ repoId: string, revision: string, serviceName: string, apartmentName: string | null, storageClass: "hot" | "warm" | "cold", leaseTermMs: number | bigint | string, leaseAssetDefinitionId: string, baseFee: import("./numericV1.js").KotodamaQuantity | string | bigint }} input
+ * @returns {{ payload: Record<string, unknown>, provenancePayloads: { join: Record<string, unknown> } }}
  */
-export function buildSoracloudHfDeployDraft(input = {}) {
+export function buildSoracloudHfSharedLeaseJoinDraft(input = {}) {
   rejectSoracloudSigningSecrets(input);
   requireExactObject(input, "input", [
     "repoId",
     "revision",
-    "modelName",
     "serviceName",
     "apartmentName",
     "storageClass",
@@ -1007,7 +977,6 @@ export function buildSoracloudHfDeployDraft(input = {}) {
   const payload = {
     repo_id: requireCanonicalHfRepoIdValue(input.repoId, "repoId"),
     revision: requireHfCommitOid(input),
-    model_name: requireCanonicalHfTokenValue(input.modelName, "modelName"),
     service_name: requireCanonicalIrohaNameValue(input.serviceName, "serviceName"),
     apartment_name: apartmentName,
     storage_class: normalizeStorageClass(input.storageClass),
@@ -1017,20 +986,8 @@ export function buildSoracloudHfDeployDraft(input = {}) {
   };
 
   const provenancePayloads = {
-    deploy: canonicalSigningPayload("hf_deploy", payload),
-    generatedService: canonicalSigningPayload("generated_service", {
-      service_name: payload.service_name,
-      repo_id: payload.repo_id,
-      revision: payload.revision,
-    }),
-    generatedApartment: null,
+    join: canonicalSigningPayload("hf_shared_lease_join", payload),
   };
-  if (payload.apartment_name !== null) {
-    provenancePayloads.generatedApartment = canonicalSigningPayload("generated_apartment", {
-      apartment_name: payload.apartment_name,
-      service_name: payload.service_name,
-    });
-  }
   return { payload, provenancePayloads };
 }
 
@@ -1424,68 +1381,26 @@ export function upgradeSoracloudAppInfraInstruction(manifest, provenance) {
 }
 
 /**
- * Assemble a deploy request from an unsigned draft and externally signed provenance.
+ * Assemble a shared-lease join request from an unsigned draft and externally signed provenance.
  *
  * @param {{ payload: Record<string, unknown>, provenancePayloads?: Record<string, unknown> }} draft
- * @param {{ deploy: { signer: string, signature: string }, generatedService: { signer: string, signature: string }, generatedApartment: { signer: string, signature: string } | null }} provenances
- * @returns {{ payload: Record<string, unknown>, provenance: { signer: string, signature: string }, generated_service_provenance: { signer: string, signature: string }, generated_apartment_provenance: { signer: string, signature: string } | null }}
+ * @param {{ join: { signer: string, signature: string } }} provenances
+ * @returns {{ payload: Record<string, unknown>, provenance: { signer: string, signature: string } }}
  */
-export function assembleSoracloudHfDeployRequest(draft, provenances = {}) {
+export function assembleSoracloudHfSharedLeaseJoinRequest(draft, provenances = {}) {
   rejectSoracloudSigningSecrets(draft);
   requireExactObject(draft, "draft", ["payload", "provenancePayloads"]);
   requireExactObject(draft.provenancePayloads, "draft provenancePayloads", [
-    "deploy",
-    "generatedService",
-    "generatedApartment",
+    "join",
   ]);
   if (typeof draft.payload !== "object" || draft.payload == null || Array.isArray(draft.payload)) {
     throw new TypeError("draft payload is required");
   }
   requireAssembledDraftPayloadShape(draft.payload);
-  requireDraftSigningPayload(draft, "deploy", "hf_deploy", draft.payload);
-  requireDraftSigningPayload(
-    draft,
-    "generatedService",
-    "generated_service",
-    generatedServiceSigningPayload(draft.payload),
-  );
-  requireExactObject(provenances, "provenances", [
-    "deploy",
-    "generatedService",
-    "generatedApartment",
-  ], ["deploy", "generatedService"]);
-  const request = {
+  requireDraftSigningPayload(draft, "join", "hf_shared_lease_join", draft.payload);
+  requireExactObject(provenances, "provenances", ["join"], ["join"]);
+  return {
     payload: cloneCanonical(draft.payload),
-    provenance: requireProvenance(provenances, "deploy"),
-    generated_service_provenance: requireProvenance(provenances, "generatedService"),
-    generated_apartment_provenance: null,
+    provenance: requireProvenance(provenances, "join"),
   };
-  if (draft.payload.apartment_name !== null) {
-    requireDraftSigningPayload(
-      draft,
-      "generatedApartment",
-      "generated_apartment",
-      generatedApartmentSigningPayload(draft.payload),
-    );
-    request.generated_apartment_provenance = requireProvenance(
-      provenances,
-      "generatedApartment",
-    );
-  } else {
-    if (
-      !Object.hasOwn(draft.provenancePayloads, "generatedApartment") ||
-      draft.provenancePayloads.generatedApartment !== null
-    ) {
-      throw new TypeError(
-        "draft provenancePayloads.generatedApartment must be null without an apartment",
-      );
-    }
-    if (!Object.hasOwn(provenances, "generatedApartment")) {
-      throw new TypeError("generatedApartment provenance is required");
-    }
-    if (provenances.generatedApartment !== null) {
-      throw new TypeError("generatedApartment provenance must be null without an apartment");
-    }
-  }
-  return request;
 }

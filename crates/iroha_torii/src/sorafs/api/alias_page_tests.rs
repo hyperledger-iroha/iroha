@@ -42,6 +42,7 @@ fn alias_page_projects_only_the_bounded_selection() {
         Metadata::default(),
     );
     successor.approve(3, None);
+    successor.retire(4, None);
     tx.world_mut_for_testing()
         .pin_manifests_mut_for_testing()
         .insert(successor_digest, successor);
@@ -64,12 +65,25 @@ fn alias_page_projects_only_the_bounded_selection() {
     assert_eq!(page.total_count, 2);
     assert_eq!(page.entries.len(), 1);
     assert_eq!(page.entries[0].alias.alias_label(), "sora/a-valid");
+    let differently_cased = collect_alias_page(view.world(), 0, 1, Some("SORA"), None)
+        .expect("case-sensitive namespace filter");
+    assert_eq!(differently_cased.total_count, 0);
+    assert!(differently_cased.entries.is_empty());
     assert_eq!(
         page.entries[0].lineage.head_hex,
         hex::encode(successor_digest.as_bytes())
     );
     assert_eq!(page.entries[0].lineage.depth_to_head, 1);
-    assert!(page.entries[0].lineage.approved_successor.is_some());
+    let approved_successor = page.entries[0]
+        .lineage
+        .approved_successor
+        .as_ref()
+        .expect("retired successor retains approval history");
+    assert_eq!(approved_successor.approved_epoch, Some(3));
+    assert!(matches!(
+        approved_successor.status,
+        crate::sorafs::registry::ManifestStatusProjection::Retired { epoch: 4 }
+    ));
     assert!(matches!(
         collect_alias_page(view.world(), 1, 1, None, None),
         Err(PinRegistryError::MissingAliasManifest { .. })

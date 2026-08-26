@@ -144,11 +144,11 @@ or run the script directly.
 
 ### December 2026
 
-- Rust Norito restricted debug-only environment toggles (`NORITO_TRACE`,
-  `NORITO_DISABLE_PACKED_STRUCT`, GPU/parallel stage1 transition hooks) to
-  debug/test builds and now uses fixed defaults in release mode. The Java
-  binding exposes no environment overrides, so behaviour remains aligned; this
-  note records the parity check for the release-mode change.
+- Rust Norito restricted debug-only environment toggles (`NORITO_TRACE` and
+  GPU/parallel stage1 transition hooks) to debug/test builds and now uses fixed
+  defaults in release mode. The Java binding exposes no environment overrides,
+  so behaviour remains aligned; this note records the parity check for the
+  release-mode change.
 
 ### December 2027
 

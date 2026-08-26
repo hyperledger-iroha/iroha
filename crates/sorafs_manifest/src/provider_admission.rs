@@ -1493,8 +1493,11 @@ mod tests {
     }
     fn sample_vrf_key() -> ProviderVrfPublicKeyV1 {
         let (public, private) =
-            iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![0x34; 32]))
-                .expect("fixture BLS keypair");
+            iroha_crypto::BlsNormal::try_keypair(iroha_crypto::KeyGenOption::UseSeed(vec![
+                0x34;
+                32
+            ]))
+            .expect("fixture BLS keypair");
         let pair: iroha_crypto::KeyPair = (public, private).into();
         ProviderVrfPublicKeyV1::BlsNormal(
             pair.public_key()

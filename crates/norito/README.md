@@ -12,16 +12,16 @@ pure macro packages; they cannot also expose normal library items. For that
 reason `norito_derive` must remain separate and the macros cannot live directly
 inside `norito`.
 
-`norito` depends on `norito_derive` optionally and re-exports its macros when
-the `derive` feature is enabled. By default, `norito` enables `derive`,
-`compression`, `columnar`, `json`, `json-std-io`, and `strict-safe`. If you
-disable default features, add back what you need, e.g.:
+`norito` always re-exports its derive macros. By default, it enables
+`compression`, `columnar`, `json`, and `json-std-io`. Panic containment is
+always enabled for fallible decoders. If you disable default features, add back
+only the runtime facilities you need, e.g.:
 
 ```toml
 [dependencies]
-# Enable derive macros only (no compression)
-norito = { version = "*", default-features = false, features = ["derive"] }
-# Or: enable compression without derives
+# Derive macros remain available without default runtime facilities.
+norito = { version = "*", default-features = false }
+# Or enable compression explicitly.
 # norito = { version = "*", default-features = false, features = ["compression"] }
 ```
 
@@ -78,11 +78,8 @@ compression, and columnar-layout micro-benchmarks.
 
 ## Optional features
 
-- `packed-seq`: Use packed layouts for variable-sized collections (Vec, maps, sets). Reduces per-element overhead by writing a compact offset table followed by a contiguous data segment.
-- `packed-struct`: Hybrid packed-struct layout for derives. With `compact-len`, emits a bitset of fields that require explicit sizes, then only those size varints, then the data block.
-- `compact-len`: Use a compact varint encoding for length prefixes (for strings, option/result payloads, and per-element collection layouts). Can be combined with or without `packed-seq`.
 - `columnar`: Enables experimental Norito Column Blocks (NCB) for adaptive columnar encodings used in scan-heavy paths.
-- `strict-safe`: Catch panics inside fallible decode and return `Error::DecodePanic`; prefer slice-based parsing with bounds checks.
+- Fallible decode always catches deserializer panics and returns `Error::DecodePanic`; this safety boundary is not feature-selectable.
 - `simd-accel`: Enable SIMD-accelerated CRC64 selection when the CPU supports it (deterministic; same output across hardware).
 - `json`: Enable the native JSON parser/writer (`norito::json::{to_json, to_json_fast, from_json, from_json_fast}`), typed derives, DOM helpers, and streaming IO adapters.
 - `json-std-io`: Add std::io streaming helpers (`norito::json::{to_writer, from_reader}`) on top of the native JSON stack.
@@ -92,7 +89,7 @@ compression, and columnar-layout micro-benchmarks.
 - `metal-crc64` / `cuda-crc64`: Offload CRC64 to Metal/CUDA when payloads exceed the GPU cutoff (default 192 KiB, override with `NORITO_GPU_CRC64_MIN_BYTES`), falling back to SIMD/CPU deterministically.
 - `stage1-validate`: Debug-only validator for Stage‑1 accelerated backends. When enabled in debug builds, compares accelerated tapes against the scalar reference for inputs up to 256 KiB and falls back on mismatch. Adds a small overhead in debug builds only.
 
-## Compatibility
+## V1 layout selection
 
 Norito uses explicit header flags for layout selection. Header-framed helpers
 validate the header (major/minor) and apply the header flag byte as the
@@ -100,7 +97,7 @@ authoritative layout selection; unknown bits are rejected. Bare decoders
 (`codec::Decode`) are internal-only for hashing/bench scenarios and always use
 the v1 default layout (`COMPACT_LEN`, `0x02`) with no heuristics. Use
 `norito::core::DecodeFlagsGuard::enter(0)` only when encoding or decoding
-legacy fixed-width length-prefix payloads.
+the explicit fixed-width V1 length-prefix layout.
 
 Decoding details:
 - `from_compressed_bytes` returns an owning `ArchivedBox<T>` so archived payload
@@ -193,7 +190,7 @@ Decode helpers return structured errors instead of panicking in common malformed
 - `SchemaMismatch` — schema hash differs from the expected type
 - `NestingDepthExceeded` — a recursive owned value exceeds the deterministic 256-level decode bound
 - `InvalidUtf8`, `InvalidTag`, `InvalidNonZero` — malformed value encodings
-- `DecodePanic` — when `strict-safe` is enabled, panics inside `try_deserialize` are caught and mapped to this error
+- `DecodePanic` — panics inside `try_deserialize` are caught and mapped to this error
 
 Top-level helpers validate the header and checksum and scope decode flags before
 reconstructing the value. `decode_from_bytes` also installs a resource budget
@@ -340,17 +337,13 @@ so hostile input cannot recurse without bound during construction or drop.
 
 ## Telemetry (adaptive encoders and compression)
 
-Norito exposes lightweight counters for adaptive two-pass decisions and compression choices.
+Norito exposes lightweight counters for columnar layout decisions and compression choices.
 
 - Columnar adaptive (small-N two-pass AoS vs NCB):
   - Snapshot: `norito::columnar::adaptive_metrics_snapshot()`
   - JSON: `norito::columnar::adaptive_metrics_json_string()` (feature `json`)
   - Optional per-pass times: enable `adaptive-telemetry` feature
   - Optional decision logs: enable `adaptive-telemetry-log` (and `adaptive-telemetry` for times)
-
-- Bare codec adaptive (`codec::encode_adaptive` two-pass):
-  - Snapshot/JSON: `norito::codec::{adaptive_metrics_snapshot, adaptive_metrics_json_string}`
-  - Logs with `adaptive-telemetry-log`
 
 - Headered compression (`core::to_bytes_auto` / `to_compressed_bytes`):
   - Snapshot/JSON: `norito::core::{compression_metrics_snapshot, compression_metrics_json_string}`
@@ -365,7 +358,6 @@ With per-pass timings in snapshots and decision logs:
 
 ```
 cargo run -p norito --example telemetry_dump --features adaptive-telemetry,adaptive-telemetry-log
-```
 ```
 
 Benchmarks comparing Norito JSON encode/decode strategies live in

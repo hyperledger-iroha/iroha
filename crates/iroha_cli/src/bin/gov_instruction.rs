@@ -342,8 +342,6 @@ fn propose_sccp_route_governance(
                 network_id: client.network_id,
                 action: action.clone(),
             },
-            window: None,
-            mode: None,
         })],
         metadata,
         fee_payment,

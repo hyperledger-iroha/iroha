@@ -438,7 +438,7 @@ const CONTAINER_SIGNED_GENESIS: &str = "/genesis/genesis.signed.nrt";
 const CONTAINER_PEER_CONFIG: &str = "/config/peer.toml";
 const CONTAINER_STORAGE: &str = "/storage";
 const GENESIS_PUBLIC_KEY_FILE_SOURCE: &str = "${IROHA_GENESIS_PUBLIC_KEY_FILE:?set IROHA_GENESIS_PUBLIC_KEY_FILE to an owner-controlled genesis public-key file}";
-const GENESIS_EXPECTED_HASH_FILE_SOURCE: &str = "${IROHA_GENESIS_EXPECTED_HASH_FILE:?set IROHA_GENESIS_EXPECTED_HASH_FILE to an owner-controlled exact genesis hash file}";
+const GENESIS_EXPECTED_HASH_FILE_SOURCE: &str = "${IROHA_GENESIS_EXPECTED_HASH_FILE:?set IROHA_GENESIS_EXPECTED_HASH_FILE to an owner-controlled checked genesis network-identity file}";
 const GENESIS_SIGNED_FILE_SOURCE: &str = "${IROHA_GENESIS_SIGNED_FILE:?set IROHA_GENESIS_SIGNED_FILE to an owner-prepared signed genesis block}";
 fn artifact_source<'a>(
     settings: &'a GenesisArtifactSettings,
@@ -703,7 +703,10 @@ fn lowercase_hex(bytes: &[u8]) -> String {
 }
 fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> String {
     let launch = runtime.map_or_else(
-        || "export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH && exec iroha3d".to_owned(),
+        || {
+            "export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH_FILE && exec iroha3d"
+                .to_owned()
+        },
         |runtime| {
             let sora = if runtime.requires_sora_profile {
                 " --sora"
@@ -753,8 +756,8 @@ fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> Strin
     printf '%s\n' \"$$GENESIS_PUBLIC_KEY\" | grep -Eq '^[^[:space:]]+$$' && \\
     test \"$$(wc -l < \"$$GENESIS_EXPECTED_HASH_FILE\")\" -eq 1 && \\
     test -z \"$$(tail -c 1 < \"$$GENESIS_EXPECTED_HASH_FILE\")\" && \\
-    IFS= read -r GENESIS_EXPECTED_HASH < \"$$GENESIS_EXPECTED_HASH_FILE\" && \\
-    printf '%s\n' \"$$GENESIS_EXPECTED_HASH\" | grep -Eq '^[0-9a-f]{{63}}[13579bdf]$$' && \\
+    IFS= read -r GENESIS_NETWORK_ID < \"$$GENESIS_EXPECTED_HASH_FILE\" && \\
+    printf '%s\n' \"$$GENESIS_NETWORK_ID\" | grep -Eq '^hash:[0-9A-F]{{63}}[13579BDF]#[0-9A-F]{{4}}$$' && \\
     {launch}
 ""#
     )
@@ -1209,7 +1212,8 @@ mod tests {
             map.insert(
                 "GENESIS_EXPECTED_HASH".into(),
                 Value::String(
-                    "0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
+                    "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                        .to_owned(),
                 ),
             );
             let mock_env = mock_env_from_value(value);

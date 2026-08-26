@@ -135,16 +135,15 @@ public final class TransferWirePayloadEncoder {
    * discriminant instead of relying on the process-global address default.
    */
   public static String decodeAccountIdPayload(byte[] payload, int chainDiscriminant) {
-    return decodeAccountIdPayload(
-        payload, chainDiscriminant, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+    return decodeAccountIdPayload(payload, chainDiscriminant, NoritoCodec.DEFAULT_FLAGS);
   }
 
   /** Decodes a bare {@code AccountId} payload with explicit chain and Norito flags. */
   public static String decodeAccountIdPayload(
-      byte[] payload, int chainDiscriminant, int flags, int flagsHint) {
+      byte[] payload, int chainDiscriminant, int flags) {
     Objects.requireNonNull(payload, "payload");
     requireChainDiscriminant(chainDiscriminant);
-    final NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
+    final NoritoDecoder decoder = new NoritoDecoder(payload, flags);
     final AccountId accountId = new AccountIdAdapter().decode(decoder);
     if (decoder.remaining() != 0) {
       throw new IllegalArgumentException("Trailing bytes after AccountId payload");
@@ -467,8 +466,7 @@ public final class TransferWirePayloadEncoder {
               ? decodeAccountIdPayload(
                   encodedAccountPayload,
                   chainDiscriminant,
-                  NoritoCodec.DEFAULT_FLAGS,
-                  NoritoHeader.MINOR_VERSION)
+                  NoritoCodec.DEFAULT_FLAGS)
               : account.renderI105(chainDiscriminant);
       final String definitionAddress =
           AssetDefinitionIdEncoder.encodeFromBytes(definition.definitionBytes());
@@ -588,7 +586,7 @@ public final class TransferWirePayloadEncoder {
               decoder.readLength((decoder.flags() & NoritoHeader.COMPACT_LEN) != 0),
               "TransferBox::Asset payload");
       final byte[] payload = decoder.readBytes(payloadLength);
-      final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+      final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
       final TransferAssetPayload transfer = decodeTransferStruct(child);
       if (child.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after TransferBox::Asset payload");
@@ -765,7 +763,7 @@ public final class TransferWirePayloadEncoder {
               decoder.readLength((decoder.flags() & NoritoHeader.COMPACT_LEN) != 0),
               "multisig policy payload");
       final byte[] payload = decoder.readBytes(payloadLength);
-      final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+      final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
       final int version =
           Math.toIntExact(decodeSizedTypedField(child, UINT8_ADAPTER, "multisig version"));
       final int threshold =
@@ -785,7 +783,7 @@ public final class TransferWirePayloadEncoder {
               decoder.readLength((decoder.flags() & NoritoHeader.COMPACT_LEN) != 0),
               "multisig members payload");
       final byte[] payload = decoder.readBytes(payloadLength);
-      final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+      final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
       final int count = checkedLength(child.readUInt(64), "multisig member count");
       final List<AccountAddress.MultisigMemberPayload> members = new ArrayList<>(count);
       for (int index = 0; index < count; index++) {
@@ -795,7 +793,7 @@ public final class TransferWirePayloadEncoder {
                 "multisig member " + index + " payload");
         final byte[] memberPayload = child.readBytes(memberLength);
         final NoritoDecoder memberDecoder =
-            new NoritoDecoder(memberPayload, child.flags(), child.flagsHint());
+            new NoritoDecoder(memberPayload, child.flags());
         final byte[] publicKeyPayload =
             decodeSizedTypedField(
                 memberDecoder, BYTE_VECTOR_ADAPTER, "multisig member " + index + " public key");
@@ -933,7 +931,7 @@ public final class TransferWirePayloadEncoder {
 
     private BigInteger decodeFieldBigInt(NoritoDecoder decoder) {
       final byte[] payload = decodeSizedRawField(decoder, "quantity mantissa");
-      final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+      final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
       final int byteLength = checkedLength(child.readUInt(32), "quantity mantissa byte length");
       final byte[] twosComplement = child.readBytes(byteLength);
       if (child.remaining() != 0) {
@@ -955,7 +953,7 @@ public final class TransferWirePayloadEncoder {
       if (payload.length != 4) {
         throw new IllegalArgumentException("quantity scale payload must be 4 bytes");
       }
-      final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+      final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
       final long value = UINT32_ADAPTER.decode(child);
       if (child.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after quantity scale payload");
@@ -1038,7 +1036,7 @@ public final class TransferWirePayloadEncoder {
 
   private static AssetBalanceScopePayload decodeAssetBalanceScopePayload(byte[] payload) {
     final NoritoDecoder decoder =
-        new NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+        new NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS);
     final long tag = UINT32_ADAPTER.decode(decoder);
     if (tag == 0L) {
       if (decoder.remaining() != 0) {
@@ -1048,13 +1046,13 @@ public final class TransferWirePayloadEncoder {
     }
     if (tag == 1L) {
       final byte[] field = decodeSizedRawField(decoder, "dataspace asset scope");
-      final NoritoDecoder child = new NoritoDecoder(field, decoder.flags(), decoder.flagsHint());
+      final NoritoDecoder child = new NoritoDecoder(field, decoder.flags());
       final byte[] idPayload = decodeSizedRawField(child, "dataspace asset scope id");
       if (idPayload.length != 8) {
         throw new IllegalArgumentException("dataspace asset scope must contain a u64");
       }
       final NoritoDecoder idDecoder =
-          new NoritoDecoder(idPayload, child.flags(), child.flagsHint());
+          new NoritoDecoder(idPayload, child.flags());
       final long dataspaceId = idDecoder.readUInt(64);
       if (idDecoder.remaining() != 0) {
         throw new IllegalArgumentException(
@@ -1157,7 +1155,7 @@ public final class TransferWirePayloadEncoder {
             decoder.readLength((decoder.flags() & NoritoHeader.COMPACT_LEN) != 0),
             fieldName + " payload");
     final byte[] payload = decoder.readBytes(payloadLength);
-    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
     final T value = adapter.decode(child);
     if (child.remaining() != 0) {
       throw new IllegalArgumentException("Trailing bytes after " + fieldName + " payload");

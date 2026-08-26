@@ -344,7 +344,7 @@ fn decode_bounded_frame<T>(
     maximum_allocated_bytes: usize,
 ) -> Result<(T, usize), Error>
 where
-    T: for<'de> norito::core::NoritoDeserialize<'de>,
+    T: norito::core::NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de>,
 {
     let elements = frame.len().checked_mul(8).ok_or(Error::CapacityLimit)?;
     let limits = norito::DecodeLimits::new(

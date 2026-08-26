@@ -2934,16 +2934,16 @@ fn usage() -> String {
   sorafs_cli deploy --payload=PATH --client-config=PATH [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
   sorafs_cli car pack --input=PATH --car-out=PATH [--chunker-handle=HANDLE] [--plan-out=PATH] [--summary-out=PATH]
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
-  sorafs_cli manifest submit --manifest=PATH --torii-url=URL --network-id=GENESIS_HASH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
+  sorafs_cli manifest submit --manifest=PATH --torii-url=URL --network-id=NETWORK_ID (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
   sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=HTTPS_ORIGIN | --gateway-url=HTTPS_URL) --provider-id-hex=HEX32 --bearer-token-env=VAR [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
-  sorafs_cli pdp enqueue|next|submit|status|export --torii-url=HTTPS_ORIGIN --network-id=GENESIS_HASH --operator-private-key-file=PATH [operation options; run `sorafs_cli pdp` for details]
-  sorafs_cli reputation snapshot --torii-url=URL --network-id=GENESIS_HASH --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
-  sorafs_cli reputation fetch --torii-url=URL --network-id=GENESIS_HASH --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
-  sorafs_cli reputation watch --torii-url=URL --network-id=GENESIS_HASH --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
+  sorafs_cli pdp enqueue|next|submit|status|export --torii-url=HTTPS_ORIGIN --network-id=NETWORK_ID --operator-private-key-file=PATH [operation options; run `sorafs_cli pdp` for details]
+  sorafs_cli reputation snapshot --torii-url=URL --network-id=NETWORK_ID --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
+  sorafs_cli reputation fetch --torii-url=URL --network-id=NETWORK_ID --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
+  sorafs_cli reputation watch --torii-url=URL --network-id=NETWORK_ID --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
   sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID --proof=PATH] [--summary-out=PATH]
   sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=awaiting_proof|proof_submitted|verified|failed|repaired] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE] [--format=table|json]
   sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N --end-epoch=N] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE]
@@ -2984,9 +2984,9 @@ fn usage() -> String {
 }
 fn reputation_usage() -> String {
     "Usage:
-  sorafs_cli reputation snapshot --torii-url=URL --network-id=GENESIS_HASH --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
-  sorafs_cli reputation fetch --torii-url=URL --network-id=GENESIS_HASH --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
-  sorafs_cli reputation watch --torii-url=URL --network-id=GENESIS_HASH --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
+  sorafs_cli reputation snapshot --torii-url=URL --network-id=NETWORK_ID --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
+  sorafs_cli reputation fetch --torii-url=URL --network-id=NETWORK_ID --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
+  sorafs_cli reputation watch --torii-url=URL --network-id=NETWORK_ID --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
   sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID --proof=PATH] [--summary-out=PATH]"
         .to_string()
 }
@@ -14236,7 +14236,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         "missing required `--authority=ACCOUNT_ID` for `sorafs_cli manifest submit`".to_string()
     })?;
     let network_id = network_id.ok_or_else(|| {
-        "missing required `--network-id=GENESIS_HASH` for `sorafs_cli manifest submit`".to_string()
+        "missing required `--network-id=NETWORK_ID` for `sorafs_cli manifest submit`".to_string()
     })?;
     authority_network_prefix =
         authority_network_prefix.or_else(|| infer_i105_network_prefix(&authority_str));
@@ -14842,7 +14842,7 @@ fn parse_reputation_auth_option(
         }
         "--network-id" => {
             *network_id = Some(value.parse().map_err(|_| {
-                format!("`--network-id` must be a canonical genesis hash for `{context}`")
+                format!("`--network-id` must be a canonical checked NetworkId for `{context}`")
             })?);
             Ok(true)
         }
@@ -14861,7 +14861,7 @@ fn load_reputation_request_auth(
         format!("missing required `--auth-private-key-file=PATH` for `{context}`")
     })?;
     let network_id = network_id
-        .ok_or_else(|| format!("missing required `--network-id=GENESIS_HASH` for `{context}`"))?;
+        .ok_or_else(|| format!("missing required `--network-id=NETWORK_ID` for `{context}`"))?;
     if private_key_path.as_os_str().is_empty() {
         return Err(format!(
             "`--auth-private-key-file` must not be empty for `{context}`"
@@ -20675,7 +20675,7 @@ mod tests {
             None,
             Metadata::default(),
         );
-        record.status = PinStatus::Approved(5);
+        record.approve(5, None);
         PinManifestFinalizedRecordV1 {
             finalized_cursor: PinManifestFinalizedCursorV1 {
                 height: 17,
@@ -20781,6 +20781,7 @@ mod tests {
         assert_eq!(validated.por_root, manifest.por_root);
         let mut pending = finalized.clone();
         pending.manifest.status = PinStatus::Pending;
+        pending.manifest.approved_epoch = None;
         assert!(
             validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &pending)
                 .expect_err("pending record must fail")

@@ -96,7 +96,7 @@ fn encoder_rejects_incomplete_field_bitset_dependencies() {
     ] {
         norito::core::reset_decode_state();
         let error = {
-            let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
             norito::to_bytes(&value).expect_err("encoder must reject incomplete dependencies")
         };
         assert!(matches!(

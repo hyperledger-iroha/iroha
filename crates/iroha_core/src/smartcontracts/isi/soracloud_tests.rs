@@ -77,34 +77,33 @@ use iroha_data_model::{
         DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheDeterministicRoundingModeV1,
         FheExecutionPolicyV1, FheGovernanceBundleV1, FheJobInputRefV1, FheJobOperationV1,
         FheJobSpecV1, FheParamLifecycleV1, FheParamSetV1, FheSchemeV1, SECRET_ENVELOPE_VERSION_V1,
-        SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-        SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
-        SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1, SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1,
-        SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
+        SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1, SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+        SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1, SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1,
+        SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1,
         SORACLOUD_FHE_INPUT_ADMISSION_GAS_SCHEDULE_ID_V1,
         SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES, SecretEnvelopeEncryptionV1,
         SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1, SoraCapabilityPolicyV1,
         SoraCertifiedResponsePolicyV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
-        SoraContainerRuntimeV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
-        SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1,
-        SoraHfPlacementRecordV1, SoraHfPlacementStatusV1, SoraHfResourceProfileV1,
-        SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1, SoraHttpServiceEconomicsV1,
-        SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1, SoraInrouManifestV1,
-        SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
-        SoraModelHostCapabilityRecordV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
+        SoraContainerRuntimeV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
+        SoraHttpServiceEconomicsV1, SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1,
+        SoraInrouManifestV1, SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
+        SoraMailboxContractV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
         SoraPublishedInrouGuestImageArtifactV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
-        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-        SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
+        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeDeterministicValidatorHostV1,
+        SoraRuntimeReceiptV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+        SoraServiceMailboxMessageV1, SoraServiceManifestV1, SoraServiceRuntimeStateV1,
+        SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
         SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1,
-        SoracloudRuntimeProvenancePurposeV1, encode_inrou_host_advertise_provenance_payload,
-        encode_soracloud_runtime_provenance_preimage_v1,
+        encode_inrou_host_advertise_provenance_payload,
     },
     sorafs::pin_registry::ManifestDigest,
 };
 use iroha_primitives::json::Json;
 use iroha_primitives::numeric::Quantity;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID};
+use iroha_test_samples::{
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, SAMPLE_GENESIS_ACCOUNT_ID,
+};
 use sha2::{Digest, Sha256};
 use std::{
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
@@ -149,7 +148,23 @@ macro_rules! soracloud_transaction_at {
         let mut $stx = $state_block.transaction();
     };
 }
+macro_rules! soracloud_transaction_at_height {
+    ($state:ident, $header:ident, $state_block:ident, $stx:ident, $height:expr) => {
+        let $header =
+            ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
+                header.set_height(NonZeroU64::new($height).expect("nonzero test block height"));
+            })
+            .as_ref()
+            .header();
+        let mut $state_block = $state.block($header);
+        let mut $stx = $state_block.transaction();
+    };
+}
 macro_rules! permissioned_soracloud_transaction {
+    ($kura:ident, $state:ident, $header:ident, $state_block:ident, $stx:ident) => {
+        permissioned_soracloud_state!($kura, $state);
+        soracloud_transaction!($state, $header, $state_block, $stx);
+    };
     ($kura:ident, $state:ident, $state_block:ident, $stx:ident) => {
         permissioned_soracloud_state!($kura, $state);
         soracloud_transaction!($state, block_header, $state_block, $stx);
@@ -6084,6 +6099,7 @@ fn soracloud_fhe_governance_enforces_exact_scope_and_monotonic_lifecycle()
         bundle: bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -6272,6 +6288,7 @@ fn deploy_fhe_job_test_service(
         bundle: bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, state_transaction)?;
@@ -15248,13 +15265,6 @@ fn training_model_text_helpers_reject_rewrites_and_preserve_free_form_reasons() 
             .expect("rollback reason bytes must be preserved"),
         " restore audited baseline "
     );
-    assert_eq!(
-        validate_model_host_violation_detail(Some(" heartbeat evidence ".to_owned()))
-            .expect("violation detail bytes must be preserved")
-            .as_deref(),
-        Some(" heartbeat evidence ")
-    );
-    assert!(validate_model_host_violation_detail(Some(" \t ".to_owned())).is_err());
 }
 
 fn sample_uploaded_model_bundle(
@@ -15276,32 +15286,9 @@ fn sample_uploaded_model_bundle(
         plaintext_bytes: 4_096,
         ciphertext_bytes: 4_352,
         chunk_manifest_root: Hash::new(b"chunk-manifest-root"),
-        upload_recipient: iroha_data_model::soracloud::SoraUploadedModelEncryptionRecipientV1 {
-            schema_version:
-                iroha_data_model::soracloud::SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
-            key_id: "soracloud-upload".to_string(),
-            key_version: NonZeroU32::new(1).expect("non-zero key version"),
-            kem: iroha_data_model::soracloud::SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256,
-            aead: iroha_data_model::soracloud::SoraUploadedModelKeyWrapAeadV1::Aes256Gcm,
-            public_key_bytes: vec![3u8; 32],
-            public_key_fingerprint: Hash::new([3u8; 32]),
-        },
-        wrapped_bundle_key: iroha_data_model::soracloud::SoraUploadedModelWrappedKeyV1 {
-            schema_version: iroha_data_model::soracloud::SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
-            recipient_key_id: "soracloud-upload".to_string(),
-            recipient_key_version: NonZeroU32::new(1).expect("non-zero key version"),
-            kem: iroha_data_model::soracloud::SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256,
-            aead: iroha_data_model::soracloud::SoraUploadedModelKeyWrapAeadV1::Aes256Gcm,
-            ephemeral_public_key: vec![4u8; 32],
-            nonce: vec![5u8; 12],
-            wrapped_key_ciphertext: vec![6u8; 48],
-            ciphertext_hash: Hash::new([6u8; 48]),
-            aad_digest: Hash::new(b"wrapped-aad"),
-        },
         pricing_policy: iroha_data_model::soracloud::SoraUploadedModelPricingPolicyV1 {
             storage_price: Quantity::zero(),
         },
-        decryption_policy_ref: "policy/private-release".to_string(),
     }
 }
 fn uploaded_model_bundle_provenance(bundle: &SoraUploadedModelBundleV1) -> ManifestProvenance {
@@ -15472,6 +15459,7 @@ fn deploy_uploaded_model_service(
         bundle: service_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&service_bundle),
     }
     .execute(&ALICE_ID, state_transaction)
@@ -15535,11 +15523,11 @@ fn sample_agent_manifest_with_capabilities(
 }
 fn agent_deploy_provenance(
     manifest: AgentApartmentManifestV1,
-    lease_ticks: u64,
+    lease_blocks: u64,
     autonomy_budget_units: u64,
 ) -> ManifestProvenance {
     let payload =
-        encode_agent_deploy_provenance_payload(manifest, lease_ticks, Some(autonomy_budget_units))
+        encode_agent_deploy_provenance_payload(manifest, lease_blocks, autonomy_budget_units)
             .expect("agent deploy payload");
     ManifestProvenance {
         signer: ALICE_KEYPAIR.public_key().clone(),
@@ -15710,7 +15698,6 @@ fn model_weight_rollback_provenance(
 fn hf_shared_lease_join_provenance(
     repo_id: &str,
     resolved_revision: &str,
-    model_name: &str,
     service_name: &iroha_data_model::name::Name,
     apartment_name: Option<&iroha_data_model::name::Name>,
     storage_class: StorageClass,
@@ -15722,7 +15709,6 @@ fn hf_shared_lease_join_provenance(
         &ALICE_KEYPAIR,
         repo_id,
         resolved_revision,
-        model_name,
         service_name,
         apartment_name,
         storage_class,
@@ -15736,7 +15722,6 @@ fn hf_shared_lease_join_provenance_for(
     key_pair: &KeyPair,
     repo_id: &str,
     resolved_revision: &str,
-    model_name: &str,
     service_name: &iroha_data_model::name::Name,
     apartment_name: Option<&iroha_data_model::name::Name>,
     storage_class: StorageClass,
@@ -15747,7 +15732,6 @@ fn hf_shared_lease_join_provenance_for(
     let payload = encode_hf_shared_lease_join_provenance_payload(
         repo_id,
         resolved_revision,
-        model_name,
         service_name.as_ref(),
         apartment_name.map(iroha_data_model::name::Name::as_ref),
         storage_class,
@@ -15765,7 +15749,6 @@ fn hf_shared_lease_join_provenance_for(
 fn hf_shared_lease_renew_provenance(
     repo_id: &str,
     resolved_revision: &str,
-    model_name: &str,
     service_name: &iroha_data_model::name::Name,
     apartment_name: Option<&iroha_data_model::name::Name>,
     storage_class: StorageClass,
@@ -15776,7 +15759,6 @@ fn hf_shared_lease_renew_provenance(
     let payload = encode_hf_shared_lease_renew_provenance_payload(
         repo_id,
         resolved_revision,
-        model_name,
         service_name.as_ref(),
         apartment_name.map(iroha_data_model::name::Name::as_ref),
         storage_class,
@@ -15812,18 +15794,6 @@ fn hf_shared_lease_leave_provenance(
         signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
     }
 }
-fn sample_hf_resource_profile() -> SoraHfResourceProfileV1 {
-    SoraHfResourceProfileV1 {
-        required_model_bytes: 1024 * 1024 * 1024,
-        backend_family: SoraHfBackendFamilyV1::Transformers,
-        model_format: SoraHfModelFormatV1::Safetensors,
-        selected_weight_file_count: 2,
-        weight_selection_commitment: Hash::new(b"sample-hf-weight-selection"),
-        disk_cache_bytes_floor: 1024 * 1024 * 1024,
-        ram_bytes_floor: 2 * 1024 * 1024 * 1024,
-        vram_bytes_floor: 0,
-    }
-}
 #[test]
 fn consensus_hf_repo_parser_and_source_id_reject_alias_spellings() {
     const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -15841,137 +15811,6 @@ fn consensus_hf_repo_parser_and_source_id_reject_alias_spellings() {
         hf_source_id("OpenAI/GPT-OSS", COMMIT).expect("uppercase canonical source ID"),
         hf_source_id("openai/GPT-OSS", COMMIT).expect("lowercase canonical source ID")
     );
-}
-#[test]
-fn consensus_hf_model_name_parser_rejects_whitespace_aliases() {
-    assert_eq!(
-        parse_hf_model_name("gpt_oss").expect("canonical HF model name"),
-        "gpt_oss"
-    );
-    for noncanonical in [" gpt_oss", "gpt_oss ", "gpt oss", "gpt\noss"] {
-        assert_invalid_parameter_contains(
-            parse_hf_model_name(noncanonical)
-                .expect_err("HF model-name whitespace aliases must fail"),
-            "whitespace",
-        );
-    }
-}
-fn sample_hf_compute_reservation_cap(lease_term_ms: u64) -> Quantity {
-    hf_shared_lease_max_compute_reservation_fee_v1(&sample_hf_resource_profile(), lease_term_ms)
-        .expect("sample HF compute reservation cap")
-}
-#[test]
-fn hf_compute_reservation_cap_covers_every_v1_host_tariff_and_size_bucket() {
-    let gib = 1024_u64 * 1024 * 1024;
-    let profiles = [
-        SoraHfResourceProfileV1 {
-            required_model_bytes: 2 * gib,
-            backend_family: SoraHfBackendFamilyV1::Transformers,
-            model_format: SoraHfModelFormatV1::Safetensors,
-            selected_weight_file_count: 2,
-            weight_selection_commitment: Hash::new(b"small-hf-weight-selection"),
-            disk_cache_bytes_floor: 2 * gib,
-            ram_bytes_floor: 4 * gib,
-            vram_bytes_floor: 0,
-        },
-        SoraHfResourceProfileV1 {
-            required_model_bytes: 3 * gib,
-            backend_family: SoraHfBackendFamilyV1::Transformers,
-            model_format: SoraHfModelFormatV1::Safetensors,
-            selected_weight_file_count: 2,
-            weight_selection_commitment: Hash::new(b"medium-hf-weight-selection"),
-            disk_cache_bytes_floor: 4 * gib,
-            ram_bytes_floor: 4 * gib,
-            vram_bytes_floor: 0,
-        },
-        SoraHfResourceProfileV1 {
-            required_model_bytes: 9 * gib,
-            backend_family: SoraHfBackendFamilyV1::Transformers,
-            model_format: SoraHfModelFormatV1::Safetensors,
-            selected_weight_file_count: 2,
-            weight_selection_commitment: Hash::new(b"large-hf-weight-selection"),
-            disk_cache_bytes_floor: 12 * gib,
-            ram_bytes_floor: 16 * gib,
-            vram_bytes_floor: 0,
-        },
-    ];
-    for profile in profiles {
-        let cap = hf_shared_lease_max_compute_reservation_fee_v1(&profile, u64::MAX)
-            .expect("canonical compute cap");
-        for policy in hf_host_class_policies() {
-            let per_host = hf_host_class_reservation_fee(policy.host_class, &profile)
-                .expect("V1 host class tariff");
-            let total = (0..hf_adaptive_target_host_count(&profile))
-                .try_fold(Quantity::zero(), |total, _| total.checked_add(&per_host))
-                .expect("placement tariff total");
-            assert!(
-                total <= cap,
-                "{total} for {} exceeds canonical cap {cap}",
-                policy.host_class
-            );
-        }
-    }
-}
-fn sample_hf_placement_record(pool_id: Hash, placement_id: Hash) -> SoraHfPlacementRecordV1 {
-    SoraHfPlacementRecordV1 {
-        schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-        placement_id,
-        source_id: Hash::new(b"sample-placement-source"),
-        pool_id,
-        status: SoraHfPlacementStatusV1::Ready,
-        selection_seed_hash: Hash::new(b"sample-placement-seed"),
-        resource_profile: sample_hf_resource_profile(),
-        eligible_validator_count: 1,
-        adaptive_target_host_count: 1,
-        assigned_hosts: vec![SoraHfPlacementHostAssignmentV1 {
-            validator_account_id: ALICE_ID.clone(),
-            peer_id: PeerId::from(ALICE_ID.expect_single_signatory().clone()).to_string(),
-            role: SoraHfPlacementHostRoleV1::Primary,
-            status: SoraHfPlacementHostStatusV1::Warm,
-            host_class: "cpu.large".to_string(),
-        }],
-        total_reservation_fee: "0.000001".parse().expect("total reservation fee"),
-        last_rebalance_at_ms: 100,
-        last_error: None,
-    }
-}
-fn sample_model_host_capability(
-    validator_account_id: AccountId,
-    advertised_at_ms: u64,
-    heartbeat_expires_at_ms: u64,
-) -> SoraModelHostCapabilityRecordV1 {
-    let peer_id = PeerId::from(validator_account_id.expect_single_signatory().clone()).to_string();
-    SoraModelHostCapabilityRecordV1 {
-        schema_version: SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
-        validator_account_id,
-        peer_id,
-        supported_backends: std::collections::BTreeSet::from([SoraHfBackendFamilyV1::Transformers]),
-        supported_formats: std::collections::BTreeSet::from([SoraHfModelFormatV1::Safetensors]),
-        max_model_bytes: 8 * 1024 * 1024 * 1024,
-        max_disk_cache_bytes: 32 * 1024 * 1024 * 1024,
-        max_ram_bytes: 32 * 1024 * 1024 * 1024,
-        max_vram_bytes: 0,
-        max_concurrent_resident_models: 2,
-        host_class: "cpu.large".to_string(),
-        advertised_at_ms,
-        heartbeat_expires_at_ms,
-    }
-}
-fn model_host_advertise_provenance(
-    capability: &SoraModelHostCapabilityRecordV1,
-) -> ManifestProvenance {
-    model_host_advertise_provenance_for(&ALICE_KEYPAIR, capability)
-}
-fn model_host_advertise_provenance_for(
-    key_pair: &KeyPair,
-    capability: &SoraModelHostCapabilityRecordV1,
-) -> ManifestProvenance {
-    let payload = encode_model_host_advertise_provenance_payload(capability)
-        .expect("model host advertise payload");
-    ManifestProvenance {
-        signer: key_pair.public_key().clone(),
-        signature: checked_signature(key_pair.private_key(), &payload),
-    }
 }
 fn sample_inrou_host_capability(
     validator_account_id: AccountId,
@@ -16093,6 +15932,22 @@ fn inrou_host_reservation_arithmetic_fails_closed_on_overflow() {
         "every retained placement on an aggregate-overcommitted host must fail closed"
     );
 }
+#[test]
+fn inrou_capacity_rejects_storage_reservation_arithmetic_overflow() {
+    let mut bundle = sample_hosted_http_service_bundle("overflow_portal", "1.0.0", 0);
+    bundle.container.resources.ephemeral_storage_bytes =
+        NonZeroU64::new(u64::MAX).expect("nonzero maximum storage");
+    let mut capability = sample_inrou_host_capability(ALICE_ID.clone(), 10, 110);
+    capability.max_storage_bytes = u64::MAX;
+    assert!(
+        inrou_per_replica_storage_bytes(&bundle).is_err(),
+        "per-replica storage arithmetic must fail closed instead of saturating to host capacity"
+    );
+    assert!(
+        inrou_host_supports_bundle(&capability, &bundle, None, 10).is_err(),
+        "a mathematically over-capacity bundle must not be placed on a maximum-sized host"
+    );
+}
 fn inrou_host_advertise_provenance(
     capability: &SoraInrouHostCapabilityRecordV1,
 ) -> ManifestProvenance {
@@ -16118,57 +15973,6 @@ fn inrou_host_withdraw_provenance_for(
     ManifestProvenance {
         signer: key_pair.public_key().clone(),
         signature: checked_signature(key_pair.private_key(), &payload),
-    }
-}
-fn model_host_heartbeat_provenance(
-    validator_account_id: &AccountId,
-    heartbeat_expires_at_ms: u64,
-) -> ManifestProvenance {
-    let payload = encode_model_host_heartbeat_provenance_payload(
-        validator_account_id,
-        heartbeat_expires_at_ms,
-    )
-    .expect("model host heartbeat payload");
-    ManifestProvenance {
-        signer: ALICE_KEYPAIR.public_key().clone(),
-        signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
-    }
-}
-#[test]
-fn model_host_heartbeat_verifier_rejects_cross_purpose_replay() {
-    let heartbeat_expires_at_ms = 160_000;
-    let valid = model_host_heartbeat_provenance(&ALICE_ID, heartbeat_expires_at_ms);
-    verify_model_host_heartbeat_provenance(&ALICE_ID, &ALICE_ID, heartbeat_expires_at_ms, &valid)
-        .expect("correctly purpose-bound heartbeat provenance must verify");
-    let semantic_payload = norito::encode_canonical(&(ALICE_ID.clone(), heartbeat_expires_at_ms))
-        .expect("encode heartbeat semantic payload");
-    let wrong_purpose_preimage = encode_soracloud_runtime_provenance_preimage_v1(
-        SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert,
-        &semantic_payload,
-    )
-    .expect("encode cross-purpose replay preimage");
-    let replay = ManifestProvenance {
-        signer: ALICE_KEYPAIR.public_key().clone(),
-        signature: checked_signature(ALICE_KEYPAIR.private_key(), &wrong_purpose_preimage),
-    };
-    let error = verify_model_host_heartbeat_provenance(
-        &ALICE_ID,
-        &ALICE_ID,
-        heartbeat_expires_at_ms,
-        &replay,
-    )
-    .expect_err("an Inrou-purpose signature must not verify as a heartbeat");
-    assert_invalid_parameter_contains(
-        error,
-        "model host heartbeat provenance signature verification failed",
-    );
-}
-fn model_host_withdraw_provenance(validator_account_id: &AccountId) -> ManifestProvenance {
-    let payload = encode_model_host_withdraw_provenance_payload(validator_account_id)
-        .expect("model host withdraw payload");
-    ManifestProvenance {
-        signer: ALICE_KEYPAIR.public_key().clone(),
-        signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
     }
 }
 #[test]
@@ -16223,72 +16027,12 @@ fn next_soracloud_audit_sequence_includes_hf_shared_lease_events() -> Result<(),
             charged: "0.00001".parse().expect("charged amount"),
             refunded: Quantity::zero(),
             lease_expires_at_ms: 20,
+            failure_reason: None,
             service_name: Some("vision_portal".to_owned()),
             apartment_name: Some("ops_agent".to_owned()),
         },
     );
     assert_eq!(next_soracloud_audit_sequence(&stx)?, 10);
-    Ok(())
-}
-#[test]
-fn model_host_advertise_and_withdraw_updates_authoritative_state() -> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, state);
-    soracloud_transaction!(state, advertise_header, advertise_block, advertise_tx);
-    let capability = sample_model_host_capability(ALICE_ID.clone(), 10, 110);
-    isi::AdvertiseSoracloudModelHost {
-        capability: capability.clone(),
-        provenance: model_host_advertise_provenance(&capability),
-    }
-    .execute(&ALICE_ID, &mut advertise_tx)?;
-    advertise_tx.apply();
-    advertise_block.commit()?;
-    let view = state.view();
-    let advertised = view
-        .world()
-        .soracloud_model_host_capabilities()
-        .get(&ALICE_ID)
-        .expect("advertised capability");
-    assert_eq!(advertised.peer_id, capability.peer_id);
-    soracloud_transaction!(state, withdraw_header, withdraw_block, withdraw_tx);
-    isi::WithdrawSoracloudModelHost {
-        validator_account_id: ALICE_ID.clone(),
-        provenance: model_host_withdraw_provenance(&ALICE_ID),
-    }
-    .execute(&ALICE_ID, &mut withdraw_tx)?;
-    withdraw_tx.apply();
-    withdraw_block.commit()?;
-    let view = state.view();
-    assert!(
-        view.world()
-            .soracloud_model_host_capabilities()
-            .get(&ALICE_ID)
-            .is_none()
-    );
-    Ok(())
-}
-#[test]
-fn model_host_advertise_rejects_zero_signed_record_fields() -> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, state);
-    soracloud_transaction!(state, header, state_block, state_transaction);
-    let canonical = sample_model_host_capability(ALICE_ID.clone(), 10, 110);
-    let mut zero_schema_version = canonical.clone();
-    zero_schema_version.schema_version = 0;
-    let mut zero_advertised_at = canonical;
-    zero_advertised_at.advertised_at_ms = 0;
-
-    for (field, capability) in [
-        ("schema version", zero_schema_version),
-        ("advertised_at_ms", zero_advertised_at),
-    ] {
-        let provenance = model_host_advertise_provenance(&capability);
-        let error = isi::AdvertiseSoracloudModelHost {
-            capability,
-            provenance,
-        }
-        .execute(&ALICE_ID, &mut state_transaction)
-        .expect_err("zero signed model-host fields must not be normalized");
-        assert_invalid_parameter_contains(error, field);
-    }
     Ok(())
 }
 #[test]
@@ -16362,747 +16106,126 @@ fn inrou_host_advertise_requires_exact_active_peer_binding() -> Result<(), eyre:
     Ok(())
 }
 #[test]
-fn load_hf_placement_by_placement_id_rejects_duplicate_authoritative_state()
+fn inrou_host_advertise_rejects_a_noncanonical_validator_record_peer() -> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    soracloud_transaction_at!(state, header, state_block, state_transaction, 10);
+    let noncanonical_peer_id = PeerId::from(BOB_ID.expect_single_signatory().clone()).to_string();
+    state_transaction
+        .world
+        .public_lane_validators
+        .get_mut(&(LaneId::SINGLE, ALICE_ID.clone()))
+        .expect("active validator fixture")
+        .peer_id = noncanonical_peer_id.parse().expect("canonical peer syntax");
+    let mut capability = sample_inrou_host_capability(ALICE_ID.clone(), 10, 110);
+    capability.peer_id = noncanonical_peer_id;
+    let provenance = inrou_host_advertise_provenance(&capability);
+    let error = isi::AdvertiseSoracloudInrouHost {
+        capability,
+        provenance,
+    }
+    .execute(&ALICE_ID, &mut state_transaction)
+    .expect_err("the validator record and advert must both bind to the account signatory");
+    assert_invalid_parameter_contains(error, "single signatory");
+    assert!(
+        state_transaction
+            .world
+            .soracloud_inrou_host_capabilities
+            .get(&ALICE_ID)
+            .is_none(),
+        "a mutually matching but noncanonical record and advert must not publish capability"
+    );
+    Ok(())
+}
+#[test]
+fn hf_shared_lease_audit_sequence_exhaustion_fails_before_authoritative_writes()
 -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, state);
-    soracloud_transaction!(state, header, state_block, state_transaction);
-    let placement_id = Hash::new(b"duplicate-placement");
-    let first = sample_hf_placement_record(Hash::new(b"duplicate-pool-a"), placement_id);
-    let second = sample_hf_placement_record(Hash::new(b"duplicate-pool-b"), placement_id);
-    state_transaction
-        .world
-        .soracloud_hf_placements
-        .insert(first.pool_id, first);
-    state_transaction
-        .world
-        .soracloud_hf_placements
-        .insert(second.pool_id, second);
-    let err = load_hf_placement_by_placement_id(&state_transaction, &placement_id)
-        .expect_err("duplicate placement id must be rejected");
-    assert_invariant_contains(err, "duplicated in authoritative state");
-    Ok(())
-}
-#[test]
-fn hf_ranked_validator_score_uses_digest_prefix_entropy() -> Result<(), eyre::Report> {
-    let seed_hash = Hash::new(b"placement-ranking-seed");
-    let stake_weight = 7_u128;
-    let payload = norito::to_bytes(&(seed_hash, ALICE_ID.clone()))?;
-    let expected_digest = *Hash::new(payload).as_ref();
-    let mut expected_entropy_bytes = [0_u8; 16];
-    expected_entropy_bytes.copy_from_slice(&expected_digest[..16]);
-    let expected_entropy = u128::from_be_bytes(expected_entropy_bytes).saturating_add(1);
-    let (score, digest) = hf_ranked_validator_score(&seed_hash, &ALICE_ID, stake_weight)?;
-    assert_eq!(digest, expected_digest);
-    assert_eq!(score, expected_entropy.saturating_mul(stake_weight));
-    Ok(())
-}
-#[test]
-fn u64_bit_width_reports_zero_and_boundary_widths() {
-    assert_eq!(u64_bit_width(0), 0);
-    assert_eq!(u64_bit_width(1), 1);
-    assert_eq!(u64_bit_width(0xff), 8);
-    assert_eq!(u64_bit_width(u64::MAX), 64);
-}
-#[test]
-fn model_host_heartbeat_marks_assigned_placement_warm() -> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, state);
-    soracloud_transaction!(state, advertise_header, advertise_block, advertise_tx);
-    let capability = sample_model_host_capability(ALICE_ID.clone(), 10, 110);
-    isi::AdvertiseSoracloudModelHost {
-        capability: capability.clone(),
-        provenance: model_host_advertise_provenance(&capability),
-    }
-    .execute(&ALICE_ID, &mut advertise_tx)?;
-    let placement = SoraHfPlacementRecordV1 {
-        schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-        placement_id: Hash::new(b"placement"),
-        source_id: Hash::new(b"source"),
-        pool_id: Hash::new(b"pool"),
-        status: SoraHfPlacementStatusV1::Warming,
-        selection_seed_hash: Hash::new(b"seed"),
-        resource_profile: SoraHfResourceProfileV1 {
-            required_model_bytes: 1_024,
-            backend_family: SoraHfBackendFamilyV1::Transformers,
-            model_format: SoraHfModelFormatV1::Safetensors,
-            selected_weight_file_count: 1,
-            weight_selection_commitment: Hash::new(b"placement-hf-weight-selection"),
-            disk_cache_bytes_floor: 2_048,
-            ram_bytes_floor: 2_048,
-            vram_bytes_floor: 0,
-        },
-        eligible_validator_count: 1,
-        adaptive_target_host_count: 1,
-        assigned_hosts: vec![SoraHfPlacementHostAssignmentV1 {
-            validator_account_id: ALICE_ID.clone(),
-            peer_id: capability.peer_id.clone(),
-            role: SoraHfPlacementHostRoleV1::Primary,
-            status: SoraHfPlacementHostStatusV1::Warming,
-            host_class: capability.host_class.clone(),
-        }],
-        total_reservation_fee: "0.000001".parse().expect("total reservation fee"),
-        last_rebalance_at_ms: 10,
-        last_error: None,
+    let repo_id = "openai/gpt-oss";
+    let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
+    let service_name: iroha_data_model::name::Name =
+        "vision_portal".parse().expect("valid service name");
+    let storage_class = StorageClass::Warm;
+    let lease_term_ms = 60_000_u64;
+    let base_fee: Quantity = "0.00001".parse().expect("base fee");
+    let lease_asset_definition_id = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal").expect("domain"),
+        "xor".parse().expect("xor"),
+    );
+    soracloud_transaction!(state, block_header, state_block, stx);
+    let terminal_event = SoraHfSharedLeaseAuditEventV1 {
+        schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
+        sequence: u64::MAX,
+        action: SoraHfSharedLeaseActionV1::CreateWindow,
+        pool_id: Hash::new(b"terminal-hf-pool"),
+        source_id: Hash::new(b"terminal-hf-source"),
+        account_id: ALICE_ID.clone(),
+        occurred_at_ms: 1,
+        active_member_count: 1,
+        charged: Quantity::zero(),
+        refunded: Quantity::zero(),
+        lease_expires_at_ms: 2,
+        failure_reason: None,
+        service_name: Some(service_name.to_string()),
+        apartment_name: None,
     };
-    record_hf_placement(&mut advertise_tx, placement)?;
-    advertise_tx.apply();
-    advertise_block.commit()?;
-    soracloud_transaction!(state, heartbeat_header, heartbeat_block, heartbeat_tx);
-    isi::HeartbeatSoracloudModelHost {
-        validator_account_id: ALICE_ID.clone(),
-        heartbeat_expires_at_ms: 510,
-        provenance: model_host_heartbeat_provenance(&ALICE_ID, 510),
-    }
-    .execute(&ALICE_ID, &mut heartbeat_tx)?;
-    heartbeat_tx.apply();
-    heartbeat_block.commit()?;
-    let view = state.view();
-    let placement = view
-        .world()
-        .soracloud_hf_placements()
-        .get(&Hash::new(b"pool"))
-        .expect("updated placement");
-    assert_eq!(placement.status, SoraHfPlacementStatusV1::Ready);
-    assert_eq!(
-        placement.assigned_hosts[0].status,
-        SoraHfPlacementHostStatusV1::Warm
-    );
-    Ok(())
-}
-#[test]
-fn model_host_readvertise_updates_assigned_placement_metadata() -> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, state);
-    let pool_id = Hash::new(b"placement-pool");
-    soracloud_transaction_at!(state, initial_header, initial_block, initial_tx, 100);
-    let capability = sample_model_host_capability(ALICE_ID.clone(), 100, 1_000);
-    isi::AdvertiseSoracloudModelHost {
-        capability: capability.clone(),
-        provenance: model_host_advertise_provenance(&capability),
-    }
-    .execute(&ALICE_ID, &mut initial_tx)?;
-    record_hf_shared_lease_pool(
-        &mut initial_tx,
-        sample_hf_shared_lease_pool_record(pool_id, Hash::new(b"metadata-source"), 100),
-    )?;
-    record_hf_placement(
-        &mut initial_tx,
-        SoraHfPlacementRecordV1 {
-            schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-            placement_id: Hash::new(b"metadata-placement"),
-            source_id: Hash::new(b"metadata-source"),
-            pool_id,
-            status: SoraHfPlacementStatusV1::Ready,
-            selection_seed_hash: Hash::new(b"metadata-seed"),
-            resource_profile: sample_hf_resource_profile(),
-            eligible_validator_count: 1,
-            adaptive_target_host_count: 1,
-            assigned_hosts: vec![SoraHfPlacementHostAssignmentV1 {
-                validator_account_id: ALICE_ID.clone(),
-                peer_id: capability.peer_id.clone(),
-                role: SoraHfPlacementHostRoleV1::Primary,
-                status: SoraHfPlacementHostStatusV1::Warm,
-                host_class: capability.host_class.clone(),
-            }],
-            total_reservation_fee: "0.000001".parse().expect("total reservation fee"),
-            last_rebalance_at_ms: 100,
-            last_error: None,
-        },
-    )?;
-    initial_tx.apply();
-    initial_block.commit()?;
-    soracloud_transaction_at!(state, updated_header, updated_block, updated_tx, 200);
-    let mut updated_capability = capability.clone();
-    updated_capability.advertised_at_ms = 200;
-    updated_capability.heartbeat_expires_at_ms = 1_200;
-    updated_capability.peer_id = PeerId::from(BOB_ID.expect_single_signatory().clone()).to_string();
-    updated_capability.host_class = "cpu.small".to_string();
-    isi::AdvertiseSoracloudModelHost {
-        capability: updated_capability.clone(),
-        provenance: model_host_advertise_provenance(&updated_capability),
-    }
-    .execute(&ALICE_ID, &mut updated_tx)?;
-    updated_tx.apply();
-    updated_block.commit()?;
-    let view = state.view();
-    let advertised = view
-        .world()
-        .soracloud_model_host_capabilities()
-        .get(&ALICE_ID)
-        .expect("updated capability");
-    assert_eq!(advertised.peer_id, updated_capability.peer_id);
-    assert_eq!(advertised.host_class, updated_capability.host_class);
-    let placement = view
-        .world()
-        .soracloud_hf_placements()
-        .get(&pool_id)
-        .expect("updated placement");
-    assert_eq!(placement.last_rebalance_at_ms, 200);
-    assert_eq!(
-        placement.total_reservation_fee,
-        "0.0000005"
-            .parse::<Quantity>()
-            .expect("total reservation fee")
-    );
-    assert_eq!(placement.assigned_hosts.len(), 1);
-    assert_eq!(
-        placement.assigned_hosts[0].peer_id,
-        updated_capability.peer_id
-    );
-    assert_eq!(
-        placement.assigned_hosts[0].host_class,
-        updated_capability.host_class
-    );
-    Ok(())
-}
-#[test]
-fn reconcile_soracloud_model_hosts_promotes_warm_replica_after_primary_expiry()
--> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, state);
-    let charlie_id = AccountId::new(checked_keypair().public_key().clone());
-    let pool_id = Hash::new(b"pool");
-    soracloud_transaction_at!(state, initial_header, initial_block, initial_tx, 100);
-    insert_active_public_lane_validator(&mut initial_tx, BOB_ID.clone(), 900);
-    insert_active_public_lane_validator(&mut initial_tx, charlie_id.clone(), 800);
-    let alice_capability = sample_model_host_capability(ALICE_ID.clone(), 10, 110);
-    let bob_capability = sample_model_host_capability(BOB_ID.clone(), 10, 500);
-    let charlie_capability = sample_model_host_capability(charlie_id.clone(), 10, 500);
-    record_model_host_capability(&mut initial_tx, alice_capability.clone())?;
-    record_model_host_capability(&mut initial_tx, bob_capability.clone())?;
-    record_model_host_capability(&mut initial_tx, charlie_capability.clone())?;
-    record_hf_shared_lease_pool(
-        &mut initial_tx,
-        sample_hf_shared_lease_pool_record(pool_id, Hash::new(b"source"), 100),
-    )?;
-    record_hf_placement(
-        &mut initial_tx,
-        SoraHfPlacementRecordV1 {
-            schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-            placement_id: Hash::new(b"placement"),
-            source_id: Hash::new(b"source"),
-            pool_id,
-            status: SoraHfPlacementStatusV1::Ready,
-            selection_seed_hash: Hash::new(b"seed"),
-            resource_profile: sample_hf_resource_profile(),
-            eligible_validator_count: 3,
-            adaptive_target_host_count: 2,
-            assigned_hosts: vec![
-                SoraHfPlacementHostAssignmentV1 {
-                    validator_account_id: ALICE_ID.clone(),
-                    peer_id: alice_capability.peer_id.clone(),
-                    role: SoraHfPlacementHostRoleV1::Primary,
-                    status: SoraHfPlacementHostStatusV1::Warm,
-                    host_class: alice_capability.host_class.clone(),
-                },
-                SoraHfPlacementHostAssignmentV1 {
-                    validator_account_id: BOB_ID.clone(),
-                    peer_id: bob_capability.peer_id.clone(),
-                    role: SoraHfPlacementHostRoleV1::Replica,
-                    status: SoraHfPlacementHostStatusV1::Warm,
-                    host_class: bob_capability.host_class.clone(),
-                },
-            ],
-            total_reservation_fee: "0.000003".parse().expect("total reservation fee"),
-            last_rebalance_at_ms: 100,
-            last_error: None,
-        },
-    )?;
-    initial_tx.apply();
-    initial_block.commit()?;
-    soracloud_transaction_at!(state, reconcile_header, reconcile_block, reconcile_tx, 111);
-    isi::ReconcileSoracloudModelHosts.execute(&ALICE_ID, &mut reconcile_tx)?;
-    reconcile_tx.apply();
-    reconcile_block.commit()?;
-    let view = state.view();
-    let host_violation_evidence = view
-        .world()
-        .soracloud_model_host_violation_evidence()
+    stx.world
+        .soracloud_hf_shared_lease_audit_events
+        .insert(u64::MAX, terminal_event.clone());
+    let source_count = stx.world.soracloud_hf_sources.iter().count();
+    let pool_count = stx.world.soracloud_hf_shared_lease_pools.iter().count();
+    let member_count = stx.world.soracloud_hf_shared_lease_members.iter().count();
+    let audit_count = stx
+        .world
+        .soracloud_hf_shared_lease_audit_events
         .iter()
-        .map(|(_evidence_id, record)| record.clone())
-        .collect::<Vec<_>>();
-    let placement = view
-        .world()
-        .soracloud_hf_placements()
-        .get(&pool_id)
-        .expect("reconciled placement");
-    assert_eq!(placement.status, SoraHfPlacementStatusV1::Degraded);
-    assert_eq!(placement.eligible_validator_count, 2);
-    assert_eq!(placement.last_rebalance_at_ms, 111);
+        .count();
+
+    let error = isi::JoinSoracloudHfSharedLease {
+        repo_id: repo_id.to_owned(),
+        resolved_revision: resolved_revision.to_owned(),
+        service_name: service_name.clone(),
+        apartment_name: None,
+        storage_class,
+        lease_term_ms,
+        lease_asset_definition_id: lease_asset_definition_id.clone(),
+        base_fee: base_fee.clone(),
+        provenance: hf_shared_lease_join_provenance(
+            repo_id,
+            resolved_revision,
+            &service_name,
+            None,
+            storage_class,
+            lease_term_ms,
+            &lease_asset_definition_id,
+            &base_fee,
+        ),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("shared-lease join must fail when the audit sequence is exhausted");
+    assert_invariant_contains(error, "audit sequence is exhausted");
+    assert_eq!(stx.world.soracloud_hf_sources.iter().count(), source_count);
     assert_eq!(
-        placement.last_error.as_deref(),
-        Some("assigned host heartbeat expired")
-    );
-    assert_eq!(placement.assigned_hosts.len(), 2);
-    assert_eq!(
-        placement.assigned_hosts[0].validator_account_id,
-        BOB_ID.clone()
-    );
-    assert_eq!(
-        placement.assigned_hosts[0].role,
-        SoraHfPlacementHostRoleV1::Primary
-    );
-    assert_eq!(
-        placement.assigned_hosts[0].status,
-        SoraHfPlacementHostStatusV1::Warm
-    );
-    assert_eq!(placement.assigned_hosts[1].validator_account_id, charlie_id);
-    assert_eq!(
-        placement.assigned_hosts[1].role,
-        SoraHfPlacementHostRoleV1::Replica
+        stx.world.soracloud_hf_shared_lease_pools.iter().count(),
+        pool_count
     );
     assert_eq!(
-        placement.assigned_hosts[1].status,
-        SoraHfPlacementHostStatusV1::Warming
+        stx.world.soracloud_hf_shared_lease_members.iter().count(),
+        member_count
     );
-    assert!(
-        placement
-            .assigned_hosts
+    assert_eq!(
+        stx.world
+            .soracloud_hf_shared_lease_audit_events
             .iter()
-            .all(|assignment| assignment.validator_account_id != ALICE_ID.clone())
-    );
-    assert_eq!(host_violation_evidence.len(), 1);
-    assert_eq!(
-        host_violation_evidence[0].kind,
-        SoraModelHostViolationKindV1::AssignedHeartbeatMiss
-    );
-    assert_eq!(host_violation_evidence[0].strike_count, 1);
-    assert!(!host_violation_evidence[0].penalty_applied);
-    Ok(())
-}
-#[test]
-fn reconcile_soracloud_model_hosts_is_idempotent_after_primary_eviction() -> Result<(), eyre::Report>
-{
-    permissioned_soracloud_state!(kura, state);
-    let charlie_id = AccountId::new(checked_keypair().public_key().clone());
-    let pool_id = Hash::new(b"pool");
-    soracloud_transaction_at!(state, initial_header, initial_block, initial_tx, 100);
-    insert_active_public_lane_validator(&mut initial_tx, BOB_ID.clone(), 900);
-    insert_active_public_lane_validator(&mut initial_tx, charlie_id.clone(), 800);
-    let alice_capability = sample_model_host_capability(ALICE_ID.clone(), 10, 110);
-    let bob_capability = sample_model_host_capability(BOB_ID.clone(), 10, 500);
-    let charlie_capability = sample_model_host_capability(charlie_id, 10, 500);
-    record_model_host_capability(&mut initial_tx, alice_capability.clone())?;
-    record_model_host_capability(&mut initial_tx, bob_capability.clone())?;
-    record_model_host_capability(&mut initial_tx, charlie_capability.clone())?;
-    record_hf_shared_lease_pool(
-        &mut initial_tx,
-        sample_hf_shared_lease_pool_record(pool_id, Hash::new(b"source"), 100),
-    )?;
-    record_hf_placement(
-        &mut initial_tx,
-        SoraHfPlacementRecordV1 {
-            schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-            placement_id: Hash::new(b"placement"),
-            source_id: Hash::new(b"source"),
-            pool_id,
-            status: SoraHfPlacementStatusV1::Ready,
-            selection_seed_hash: Hash::new(b"seed"),
-            resource_profile: sample_hf_resource_profile(),
-            eligible_validator_count: 3,
-            adaptive_target_host_count: 2,
-            assigned_hosts: vec![
-                SoraHfPlacementHostAssignmentV1 {
-                    validator_account_id: ALICE_ID.clone(),
-                    peer_id: alice_capability.peer_id.clone(),
-                    role: SoraHfPlacementHostRoleV1::Primary,
-                    status: SoraHfPlacementHostStatusV1::Warm,
-                    host_class: alice_capability.host_class.clone(),
-                },
-                SoraHfPlacementHostAssignmentV1 {
-                    validator_account_id: BOB_ID.clone(),
-                    peer_id: bob_capability.peer_id.clone(),
-                    role: SoraHfPlacementHostRoleV1::Replica,
-                    status: SoraHfPlacementHostStatusV1::Warm,
-                    host_class: bob_capability.host_class.clone(),
-                },
-            ],
-            total_reservation_fee: "0.000003".parse().expect("total reservation fee"),
-            last_rebalance_at_ms: 100,
-            last_error: None,
-        },
-    )?;
-    initial_tx.apply();
-    initial_block.commit()?;
-    soracloud_transaction_at!(
-        state,
-        first_reconcile_header,
-        first_reconcile_block,
-        first_reconcile_tx,
-        111
-    );
-    isi::ReconcileSoracloudModelHosts.execute(&ALICE_ID, &mut first_reconcile_tx)?;
-    first_reconcile_tx.apply();
-    first_reconcile_block.commit()?;
-    let placement_after_first = state
-        .view()
-        .world()
-        .soracloud_hf_placements()
-        .get(&pool_id)
-        .expect("placement after first reconcile")
-        .clone();
-    soracloud_transaction_at!(
-        state,
-        second_reconcile_header,
-        second_reconcile_block,
-        second_reconcile_tx,
-        222
-    );
-    isi::ReconcileSoracloudModelHosts.execute(&ALICE_ID, &mut second_reconcile_tx)?;
-    second_reconcile_tx.apply();
-    second_reconcile_block.commit()?;
-    let view = state.view();
-    let placement_after_second = view
-        .world()
-        .soracloud_hf_placements()
-        .get(&pool_id)
-        .expect("placement after second reconcile");
-    assert_eq!(*placement_after_second, placement_after_first);
-    Ok(())
-}
-#[test]
-fn report_model_host_violation_slashes_and_evicts_warmup_no_show() -> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, mut state);
-    let placement_id = Hash::new(b"warmup-placement");
-    let pool_id = Hash::new(b"warmup-pool");
-    let source_id = Hash::new(b"warmup-source");
-    let stake_asset_definition_id = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("wonderland", "universal").expect("domain"),
-        "stake".parse().expect("stake"),
-    );
-    state.nexus.get_mut().staking.stake_asset_id = stake_asset_definition_id.to_string();
-    state.nexus.get_mut().staking.stake_escrow_account_id = ALICE_ID.to_string();
-    state.nexus.get_mut().staking.slash_sink_account_id = ALICE_ID.to_string();
-    soracloud_transaction_at!(state, setup_header, setup_block, setup_tx, 100);
-    configure_staking_assets_for_validator_slash_test(&mut setup_tx, &BOB_ID, 1_000)?;
-    insert_active_public_lane_validator(&mut setup_tx, BOB_ID.clone(), 1_000);
-    let bob_capability = sample_model_host_capability(BOB_ID.clone(), 10, 1_000);
-    record_model_host_capability(&mut setup_tx, bob_capability.clone())?;
-    record_hf_shared_lease_pool(
-        &mut setup_tx,
-        sample_hf_shared_lease_pool_record(pool_id, source_id, 100),
-    )?;
-    record_hf_placement(
-        &mut setup_tx,
-        SoraHfPlacementRecordV1 {
-            schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-            placement_id,
-            source_id,
-            pool_id,
-            status: SoraHfPlacementStatusV1::Warming,
-            selection_seed_hash: Hash::new(b"warmup-seed"),
-            resource_profile: sample_hf_resource_profile(),
-            eligible_validator_count: 1,
-            adaptive_target_host_count: 1,
-            assigned_hosts: vec![SoraHfPlacementHostAssignmentV1 {
-                validator_account_id: BOB_ID.clone(),
-                peer_id: bob_capability.peer_id.clone(),
-                role: SoraHfPlacementHostRoleV1::Primary,
-                status: SoraHfPlacementHostStatusV1::Warming,
-                host_class: bob_capability.host_class.clone(),
-            }],
-            total_reservation_fee: "0.000001".parse().expect("total reservation fee"),
-            last_rebalance_at_ms: 100,
-            last_error: None,
-        },
-    )?;
-    setup_tx.apply();
-    setup_block.commit()?;
-    soracloud_transaction_at!(state, report_header, report_block, report_tx, 200);
-    isi::ReportSoracloudModelHostViolation {
-        validator_account_id: BOB_ID.clone(),
-        kind: SoraModelHostViolationKindV1::WarmupNoShow,
-        placement_id: Some(placement_id),
-        detail: Some(" warmup deadline exceeded ".to_string()),
-    }
-    .execute(&ALICE_ID, &mut report_tx)?;
-    report_tx.apply();
-    report_block.commit()?;
-    let view = state.view();
-    let evidence = view
-        .world()
-        .soracloud_model_host_violation_evidence()
-        .iter()
-        .map(|(_evidence_id, record)| record.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].kind, SoraModelHostViolationKindV1::WarmupNoShow);
-    assert_eq!(evidence[0].strike_count, 1);
-    assert!(evidence[0].penalty_applied);
-    assert!(evidence[0].host_evicted);
-    assert!(evidence[0].slash_id.is_some());
-    assert_eq!(evidence[0].pool_id, Some(pool_id));
-    assert_eq!(evidence[0].source_id, Some(source_id));
-    assert_eq!(evidence[0].window_started_at_ms, Some(100));
-    assert_eq!(
-        evidence[0].detail.as_deref(),
-        Some(" warmup deadline exceeded ")
-    );
-    assert!(
-        view.world()
-            .soracloud_model_host_capabilities()
-            .get(&BOB_ID)
-            .is_none()
-    );
-    let bob_validator = view
-        .world()
-        .public_lane_validators()
-        .get(&(LaneId::SINGLE, BOB_ID.clone()))
-        .expect("bob validator after slash");
-    assert_eq!(bob_validator.total_stake, Quantity::from(950_u64));
-    assert_eq!(bob_validator.self_stake, Quantity::from(950_u64));
-    assert!(matches!(
-        bob_validator.status,
-        PublicLaneValidatorStatus::Slashed(_)
-    ));
-    Ok(())
-}
-#[test]
-fn report_model_host_violation_applies_slash_when_heartbeat_miss_reaches_threshold()
--> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, mut state);
-    let placement_id = Hash::new(b"heartbeat-placement");
-    let pool_id = Hash::new(b"heartbeat-pool");
-    let source_id = Hash::new(b"heartbeat-source");
-    let stake_asset_definition_id = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("wonderland", "universal").expect("domain"),
-        "stake".parse().expect("stake"),
-    );
-    state.nexus.get_mut().staking.stake_asset_id = stake_asset_definition_id.to_string();
-    state.nexus.get_mut().staking.stake_escrow_account_id = ALICE_ID.to_string();
-    state.nexus.get_mut().staking.slash_sink_account_id = ALICE_ID.to_string();
-    state
-        .nexus
-        .get_mut()
-        .hf_shared_leases
-        .assigned_heartbeat_miss_strike_threshold = 2;
-    soracloud_transaction_at!(state, setup_header, setup_block, setup_tx, 100);
-    configure_staking_assets_for_validator_slash_test(&mut setup_tx, &BOB_ID, 1_000)?;
-    insert_active_public_lane_validator(&mut setup_tx, BOB_ID.clone(), 1_000);
-    let bob_capability = sample_model_host_capability(BOB_ID.clone(), 10, 1_000);
-    record_model_host_capability(&mut setup_tx, bob_capability.clone())?;
-    record_hf_shared_lease_pool(
-        &mut setup_tx,
-        sample_hf_shared_lease_pool_record(pool_id, source_id, 100),
-    )?;
-    record_hf_placement(
-        &mut setup_tx,
-        SoraHfPlacementRecordV1 {
-            schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-            placement_id,
-            source_id,
-            pool_id,
-            status: SoraHfPlacementStatusV1::Ready,
-            selection_seed_hash: Hash::new(b"heartbeat-seed"),
-            resource_profile: sample_hf_resource_profile(),
-            eligible_validator_count: 1,
-            adaptive_target_host_count: 1,
-            assigned_hosts: vec![SoraHfPlacementHostAssignmentV1 {
-                validator_account_id: BOB_ID.clone(),
-                peer_id: bob_capability.peer_id.clone(),
-                role: SoraHfPlacementHostRoleV1::Primary,
-                status: SoraHfPlacementHostStatusV1::Warm,
-                host_class: bob_capability.host_class.clone(),
-            }],
-            total_reservation_fee: "0.000001".parse().expect("total reservation fee"),
-            last_rebalance_at_ms: 100,
-            last_error: None,
-        },
-    )?;
-    record_model_host_violation_evidence(
-        &mut setup_tx,
-        SoraModelHostViolationEvidenceRecordV1 {
-            schema_version: SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1,
-            evidence_id: Hash::new(b"prior-heartbeat-evidence"),
-            sequence: 1,
-            validator_account_id: BOB_ID.clone(),
-            kind: SoraModelHostViolationKindV1::AssignedHeartbeatMiss,
-            placement_id: Some(placement_id),
-            pool_id: Some(pool_id),
-            source_id: Some(source_id),
-            window_started_at_ms: Some(100),
-            observed_at_ms: 150,
-            detail: Some("first missed heartbeat".to_string()),
-            strike_count: 1,
-            penalty_applied: false,
-            host_evicted: false,
-            slash_id: None,
-        },
-    )?;
-    setup_tx.apply();
-    setup_block.commit()?;
-    soracloud_transaction_at!(state, report_header, report_block, report_tx, 200);
-    isi::ReportSoracloudModelHostViolation {
-        validator_account_id: BOB_ID.clone(),
-        kind: SoraModelHostViolationKindV1::AssignedHeartbeatMiss,
-        placement_id: Some(placement_id),
-        detail: Some("second missed heartbeat".to_string()),
-    }
-    .execute(&ALICE_ID, &mut report_tx)?;
-    report_tx.apply();
-    report_block.commit()?;
-    let view = state.view();
-    let evidence = view
-        .world()
-        .soracloud_model_host_violation_evidence()
-        .iter()
-        .map(|(_evidence_id, record)| record.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(evidence.len(), 2);
-    let latest = evidence
-        .into_iter()
-        .max_by_key(|record| record.sequence)
-        .expect("latest heartbeat evidence");
-    assert_eq!(
-        latest.kind,
-        SoraModelHostViolationKindV1::AssignedHeartbeatMiss
-    );
-    assert_eq!(latest.strike_count, 2);
-    assert!(latest.penalty_applied);
-    assert!(latest.host_evicted);
-    assert!(latest.slash_id.is_some());
-    assert!(
-        view.world()
-            .soracloud_model_host_capabilities()
-            .get(&BOB_ID)
-            .is_none()
-    );
-    let bob_validator = view
-        .world()
-        .public_lane_validators()
-        .get(&(LaneId::SINGLE, BOB_ID.clone()))
-        .expect("bob validator after heartbeat slash");
-    assert_eq!(bob_validator.total_stake, Quantity::from(975_u64));
-    assert_eq!(bob_validator.self_stake, Quantity::from(975_u64));
-    assert!(matches!(
-        bob_validator.status,
-        PublicLaneValidatorStatus::Slashed(_)
-    ));
-    Ok(())
-}
-#[test]
-fn model_host_advertise_contradiction_emits_evidence_and_slashes_validator()
--> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, mut state);
-    let pool_id = Hash::new(b"advert-contradiction-pool");
-    let source_id = Hash::new(b"advert-contradiction-source");
-    let stake_asset_definition_id = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("wonderland", "universal").expect("domain"),
-        "stake".parse().expect("stake"),
-    );
-    state.nexus.get_mut().staking.stake_asset_id = stake_asset_definition_id.to_string();
-    state.nexus.get_mut().staking.stake_escrow_account_id = ALICE_ID.to_string();
-    state.nexus.get_mut().staking.slash_sink_account_id = ALICE_ID.to_string();
-    soracloud_transaction_at!(state, setup_header, setup_block, setup_tx, 100);
-    configure_staking_assets_for_validator_slash_test(&mut setup_tx, &BOB_ID, 1_000)?;
-    Grant::account_permission(
-        Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new(())),
-        BOB_ID.clone(),
-    )
-    .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut setup_tx)?;
-    insert_active_public_lane_validator(&mut setup_tx, BOB_ID.clone(), 1_000);
-    let bob_capability = sample_model_host_capability(BOB_ID.clone(), 10, 1_000);
-    record_model_host_capability(&mut setup_tx, bob_capability.clone())?;
-    record_hf_shared_lease_pool(
-        &mut setup_tx,
-        sample_hf_shared_lease_pool_record(pool_id, source_id, 100),
-    )?;
-    record_hf_placement(
-        &mut setup_tx,
-        SoraHfPlacementRecordV1 {
-            schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-            placement_id: Hash::new(b"advert-contradiction-placement"),
-            source_id,
-            pool_id,
-            status: SoraHfPlacementStatusV1::Ready,
-            selection_seed_hash: Hash::new(b"advert-contradiction-seed"),
-            resource_profile: sample_hf_resource_profile(),
-            eligible_validator_count: 1,
-            adaptive_target_host_count: 1,
-            assigned_hosts: vec![SoraHfPlacementHostAssignmentV1 {
-                validator_account_id: BOB_ID.clone(),
-                peer_id: bob_capability.peer_id.clone(),
-                role: SoraHfPlacementHostRoleV1::Primary,
-                status: SoraHfPlacementHostStatusV1::Warm,
-                host_class: bob_capability.host_class.clone(),
-            }],
-            total_reservation_fee: "0.000001".parse().expect("total reservation fee"),
-            last_rebalance_at_ms: 100,
-            last_error: None,
-        },
-    )?;
-    setup_tx.apply();
-    setup_block.commit()?;
-    let advertise_header =
-        ValidBlock::new_dummy_and_modify_header(&BOB_KEYPAIR.clone().into_parts().1, |header| {
-            header.creation_time_ms = 200;
-        })
-        .as_ref()
-        .header();
-    let mut advertise_block = state.block(advertise_header);
-    let mut advertise_tx = advertise_block.transaction();
-    let mut contradictory_capability = bob_capability.clone();
-    contradictory_capability.advertised_at_ms = 200;
-    contradictory_capability.heartbeat_expires_at_ms = 1_200;
-    contradictory_capability.supported_formats =
-        std::collections::BTreeSet::from([SoraHfModelFormatV1::Gguf]);
-    isi::AdvertiseSoracloudModelHost {
-        capability: contradictory_capability.clone(),
-        provenance: model_host_advertise_provenance_for(&BOB_KEYPAIR, &contradictory_capability),
-    }
-    .execute(&BOB_ID, &mut advertise_tx)?;
-    advertise_tx.apply();
-    advertise_block.commit()?;
-    let view = state.view();
-    assert!(
-        view.world()
-            .soracloud_model_host_capabilities()
-            .get(&BOB_ID)
-            .is_none()
-    );
-    let evidence = view
-        .world()
-        .soracloud_model_host_violation_evidence()
-        .iter()
-        .map(|(_evidence_id, record)| record.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(evidence.len(), 1);
-    assert_eq!(
-        evidence[0].kind,
-        SoraModelHostViolationKindV1::AdvertContradiction
-    );
-    assert!(evidence[0].penalty_applied);
-    assert!(evidence[0].host_evicted);
-    assert!(evidence[0].placement_id.is_none());
-    assert!(
-        evidence[0]
-            .detail
-            .as_deref()
-            .is_some_and(|detail| detail.contains("model format"))
-    );
-    let placement = view
-        .world()
-        .soracloud_hf_placements()
-        .get(&pool_id)
-        .expect("updated placement after contradiction");
-    assert!(
-        placement
-            .assigned_hosts
-            .iter()
-            .all(|assignment| assignment.validator_account_id != BOB_ID.clone())
+            .count(),
+        audit_count
     );
     assert_eq!(
-        placement.last_error.as_deref(),
-        evidence[0].detail.as_deref()
+        stx.world
+            .soracloud_hf_shared_lease_audit_events
+            .get(&u64::MAX),
+        Some(&terminal_event),
+        "audit exhaustion must not overwrite the terminal shared-lease event"
     );
-    let bob_validator = view
-        .world()
-        .public_lane_validators()
-        .get(&(LaneId::SINGLE, BOB_ID.clone()))
-        .expect("bob validator after contradiction slash");
-    assert_eq!(bob_validator.total_stake, Quantity::from(900_u64));
-    assert_eq!(bob_validator.self_stake, Quantity::from(900_u64));
-    assert!(matches!(
-        bob_validator.status,
-        PublicLaneValidatorStatus::Slashed(_)
-    ));
     Ok(())
 }
 #[test]
@@ -17129,7 +16252,6 @@ fn leave_hf_shared_lease_last_member_uses_configured_drain_grace() -> Result<(),
     state.nexus.get_mut().hf_shared_leases.drain_grace = Duration::from_secs(30);
     let repo_id = "openai/gpt-oss";
     let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let model_name = "gpt-oss";
     let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
     let storage_class = StorageClass::Warm;
     let lease_term_ms = 60_000_u64;
@@ -17139,28 +16261,18 @@ fn leave_hf_shared_lease_last_member_uses_configured_drain_grace() -> Result<(),
         "xor".parse().expect("xor"),
     );
     soracloud_transaction!(state, block_header, state_block, stx);
-    let capability = sample_model_host_capability(ALICE_ID.clone(), 1, 1_000_000);
-    isi::AdvertiseSoracloudModelHost {
-        capability: capability.clone(),
-        provenance: model_host_advertise_provenance(&capability),
-    }
-    .execute(&ALICE_ID, &mut stx)?;
     isi::JoinSoracloudHfSharedLease {
         repo_id: repo_id.to_string(),
         resolved_revision: resolved_revision.to_string(),
-        model_name: model_name.to_string(),
         service_name: service_name.clone(),
         apartment_name: None,
         storage_class,
         lease_term_ms,
         lease_asset_definition_id: lease_asset_definition_id.clone(),
         base_fee: base_fee.clone(),
-        resource_profile: Some(sample_hf_resource_profile()),
-        max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
         provenance: hf_shared_lease_join_provenance(
             repo_id,
             resolved_revision,
-            model_name,
             &service_name,
             None,
             storage_class,
@@ -17220,69 +16332,33 @@ fn leave_hf_shared_lease_last_member_uses_configured_drain_grace() -> Result<(),
     Ok(())
 }
 #[test]
-fn generated_hf_metadata_source_remains_pending_with_warm_host_and_healthy_ivm_facade()
--> Result<(), eyre::Report> {
+fn hf_shared_lease_registration_does_not_create_runtime_service() -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, mut state);
     state.nexus.get_mut().fees.fee_sink_account_id = ALICE_ID.to_string();
     let repo_id = "openai/gpt-oss";
     let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let model_name = "gpt-oss";
     let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
     let storage_class = StorageClass::Warm;
     let lease_term_ms = 60_000_u64;
     let base_fee: Quantity = "0.00001".parse().expect("base fee");
     let lease_asset_definition_id = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("domain", "universal").expect("domain"),
+        DomainId::try_new("wonderland", "universal").expect("domain"),
         "xor".parse().expect("xor"),
     );
     let source_id = hf_source_id(repo_id, resolved_revision)?;
-    let bundle = crate::soracloud_runtime::build_soracloud_hf_generated_service_bundle(
-        service_name.clone(),
-        &source_id.to_string(),
-        repo_id,
-        resolved_revision,
-        model_name,
-    )
-    .expect("generated HF fixture host should fit DNS limits");
-    assert_eq!(
-        bundle.container.runtime,
-        iroha_data_model::soracloud::SoraContainerRuntimeV1::Ivm
-    );
-    assert!(bundle.container.inrou.is_none());
-    assert_eq!(
-        bundle.service.execution_plane,
-        iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService
-    );
     soracloud_transaction!(state, block_header, state_block, stx);
-    let capability = sample_model_host_capability(ALICE_ID.clone(), 1, 1_000_000);
-    isi::AdvertiseSoracloudModelHost {
-        capability: capability.clone(),
-        provenance: model_host_advertise_provenance(&capability),
-    }
-    .execute(&ALICE_ID, &mut stx)?;
-    isi::DeploySoracloudService {
-        bundle: bundle.clone(),
-        initial_service_configs: BTreeMap::new(),
-        initial_service_secrets: BTreeMap::new(),
-        provenance: bundle_provenance(&bundle),
-    }
-    .execute(&ALICE_ID, &mut stx)?;
     isi::JoinSoracloudHfSharedLease {
         repo_id: repo_id.to_string(),
         resolved_revision: resolved_revision.to_string(),
-        model_name: model_name.to_string(),
         service_name: service_name.clone(),
         apartment_name: None,
         storage_class,
         lease_term_ms,
         lease_asset_definition_id: lease_asset_definition_id.clone(),
         base_fee: base_fee.clone(),
-        resource_profile: Some(sample_hf_resource_profile()),
-        max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
         provenance: hf_shared_lease_join_provenance(
             repo_id,
             resolved_revision,
-            model_name,
             &service_name,
             None,
             storage_class,
@@ -17293,87 +16369,20 @@ fn generated_hf_metadata_source_remains_pending_with_warm_host_and_healthy_ivm_f
     }
     .execute(&ALICE_ID, &mut stx)?;
     let pool_id = hf_shared_lease_pool_id(source_id, storage_class, lease_term_ms)?;
-    assert_eq!(
+    assert!(
         stx.world
-            .soracloud_hf_sources
-            .get(&source_id)
-            .expect("hf source")
-            .status,
-        SoraHfSourceStatusV1::PendingImport
-    );
-
-    let mut placement = stx
-        .world
-        .soracloud_hf_placements
-        .get(&pool_id)
-        .cloned()
-        .expect("new-window placement");
-    for assignment in &mut placement.assigned_hosts {
-        assignment.status = SoraHfPlacementHostStatusV1::Warm;
-    }
-    record_hf_placement(&mut stx, placement)?;
-    assert_eq!(
-        stx.world
-            .soracloud_hf_sources
-            .get(&source_id)
-            .expect("hf source")
-            .status,
-        SoraHfSourceStatusV1::PendingImport,
-        "a warm host does not turn generated metadata into an imported model"
-    );
-
-    let mut runtime_state = SoraServiceRuntimeStateV1 {
-        schema_version: iroha_data_model::soracloud::SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
-        service_name: service_name.clone(),
-        active_service_version: bundle.service.service_version.clone(),
-        health_status: SoraServiceHealthStatusV1::Healthy,
-        load_factor_bps: 0,
-        materialized_bundle_hash: Hash::new(b"mismatched generated HF bundle"),
-        rollout_handle: None,
-        pending_mailbox_message_count: 0,
-        last_receipt_id: None,
-    };
-    write_soracloud_runtime_state(&mut stx, runtime_state.clone())?;
-    assert_eq!(
-        stx.world
-            .soracloud_hf_sources
-            .get(&source_id)
-            .expect("hf source")
-            .status,
-        SoraHfSourceStatusV1::PendingImport,
-        "generic runtime state for another bundle does not import generated metadata"
-    );
-
-    runtime_state.materialized_bundle_hash = bundle.container.bundle_hash;
-    write_soracloud_runtime_state(&mut stx, runtime_state)?;
-    assert_eq!(
-        stx.world
-            .soracloud_hf_sources
-            .get(&source_id)
-            .expect("hf source")
-            .status,
-        SoraHfSourceStatusV1::PendingImport,
-        "a healthy IVM facade remains inert generated metadata"
+            .soracloud_service_deployments
+            .get(&service_name)
+            .is_none()
     );
     stx.apply();
     state_block.commit()?;
     let view = state.view();
-    let source = view
-        .world()
-        .soracloud_hf_sources()
-        .get(&source_id)
-        .expect("hf source");
-    assert_eq!(source.status, SoraHfSourceStatusV1::PendingImport);
     let member = view
         .world()
         .soracloud_hf_shared_lease_members()
         .get(&(pool_id.to_string(), ALICE_ID.to_string()))
         .expect("new-window member");
-    let placement = view
-        .world()
-        .soracloud_hf_placements()
-        .get(&pool_id)
-        .expect("new-window placement");
     let audit_event = view
         .world()
         .soracloud_hf_shared_lease_audit_events()
@@ -17381,22 +16390,16 @@ fn generated_hf_metadata_source_remains_pending_with_warm_host_and_healthy_ivm_f
         .max_by_key(|(sequence, _)| *sequence)
         .map(|(_, event)| event)
         .expect("new-window audit event");
-    let expected_total = base_fee
-        .checked_add(&member.last_compute_charge)
-        .expect("new-window total charge");
-    assert_eq!(member.last_compute_charge, placement.total_reservation_fee);
-    assert!(member.last_compute_charge <= sample_hf_compute_reservation_cap(lease_term_ms));
-    assert_eq!(audit_event.charged, expected_total);
+    assert_eq!(member.last_charge, base_fee);
+    assert_eq!(audit_event.charged, base_fee);
     Ok(())
 }
 #[test]
 fn renew_hf_shared_lease_active_window_queues_next_window() -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, mut state);
-    state.nexus.get_mut().fees.fee_sink_account_id = ALICE_ID.to_string();
+    state.nexus.get_mut().fees.fee_sink_account_id = BOB_ID.to_string();
     let repo_id = "openai/gpt-oss";
     let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let model_name = "gpt-oss";
-    let renewed_model_name = "gpt-oss-renewed";
     let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
     let renewed_service_name: iroha_data_model::name::Name =
         "vision_portal_v2".parse().expect("valid");
@@ -17405,32 +16408,38 @@ fn renew_hf_shared_lease_active_window_queues_next_window() -> Result<(), eyre::
     let base_fee: Quantity = "0.00001".parse().expect("base fee");
     let renewed_fee: Quantity = "0.000012".parse().expect("renewed fee");
     let lease_asset_definition_id = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("domain", "universal").expect("domain"),
+        DomainId::try_new("wonderland", "universal").expect("domain"),
         "xor".parse().expect("xor"),
     );
     soracloud_transaction!(state, block_header, state_block, stx);
-    let capability = sample_model_host_capability(ALICE_ID.clone(), 1, 1_000_000);
-    isi::AdvertiseSoracloudModelHost {
-        capability: capability.clone(),
-        provenance: model_host_advertise_provenance(&capability),
-    }
-    .execute(&ALICE_ID, &mut stx)?;
+    seed_test_call_hash(&mut stx, 0xD0);
+    Register::account(Account::new(BOB_ID.clone()))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+    Register::asset_definition(AssetDefinition::numeric(
+        lease_asset_definition_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    ))
+    .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+    let initial_balance = Quantity::from(100_000_u32);
+    Mint::asset_quantity(
+        initial_balance.clone(),
+        AssetId::new(lease_asset_definition_id.clone(), ALICE_ID.clone()),
+    )
+    .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
     isi::JoinSoracloudHfSharedLease {
         repo_id: repo_id.to_string(),
         resolved_revision: resolved_revision.to_string(),
-        model_name: model_name.to_string(),
         service_name: service_name.clone(),
         apartment_name: None,
         storage_class,
         lease_term_ms,
         lease_asset_definition_id: lease_asset_definition_id.clone(),
         base_fee: base_fee.clone(),
-        resource_profile: Some(sample_hf_resource_profile()),
-        max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
         provenance: hf_shared_lease_join_provenance(
             repo_id,
             resolved_revision,
-            model_name,
             &service_name,
             None,
             storage_class,
@@ -17450,18 +16459,15 @@ fn renew_hf_shared_lease_active_window_queues_next_window() -> Result<(), eyre::
     isi::RenewSoracloudHfSharedLease {
         repo_id: repo_id.to_string(),
         resolved_revision: resolved_revision.to_string(),
-        model_name: renewed_model_name.to_string(),
         service_name: renewed_service_name.clone(),
         apartment_name: None,
         storage_class,
         lease_term_ms,
         lease_asset_definition_id: lease_asset_definition_id.clone(),
         base_fee: renewed_fee.clone(),
-        resource_profile: Some(sample_hf_resource_profile()),
         provenance: hf_shared_lease_renew_provenance(
             repo_id,
             resolved_revision,
-            renewed_model_name,
             &renewed_service_name,
             None,
             storage_class,
@@ -17496,10 +16502,6 @@ fn renew_hf_shared_lease_active_window_queues_next_window() -> Result<(), eyre::
         .queued_next_window
         .as_ref()
         .expect("queued next window");
-    let active_placement = world
-        .soracloud_hf_placements()
-        .get(&pool_id)
-        .expect("active placement");
     assert_eq!(pool.status, SoraHfSharedLeaseStatusV1::Active);
     assert_eq!(pool.active_member_count, 1);
     assert_eq!(pool.base_fee, base_fee);
@@ -17510,659 +16512,273 @@ fn renew_hf_shared_lease_active_window_queues_next_window() -> Result<(), eyre::
         current_pool_expiry + lease_term_ms
     );
     assert_eq!(queued_next_window.base_fee, renewed_fee);
-    assert_eq!(queued_next_window.model_name, renewed_model_name);
     assert_eq!(queued_next_window.service_name, renewed_service_name);
-    assert_eq!(
-        queued_next_window.compute_reservation_fee,
-        queued_next_window.planned_placement.total_reservation_fee
-    );
-    assert!(!queued_next_window.compute_reservation_fee.is_zero());
     assert_eq!(member.status, SoraHfSharedLeaseMemberStatusV1::Active);
     assert_eq!(
         member.total_paid,
         base_fee.checked_add(&renewed_fee).expect("payment total")
     );
     assert_eq!(member.last_charge, renewed_fee);
-    assert_eq!(
-        member.total_compute_paid,
-        active_placement
-            .total_reservation_fee
-            .checked_add(&queued_next_window.compute_reservation_fee)
-            .expect("compute payment total")
-    );
-    assert_eq!(
-        member.last_compute_charge,
-        queued_next_window.compute_reservation_fee
-    );
     assert_eq!(audit_event.action, SoraHfSharedLeaseActionV1::Renew);
+    assert_eq!(audit_event.charged, renewed_fee);
     assert_eq!(
         audit_event.lease_expires_at_ms,
         queued_next_window.window_expires_at_ms
     );
-    Ok(())
-}
-#[test]
-fn join_hf_shared_lease_after_queued_sponsorship_promotes_next_window() -> Result<(), eyre::Report>
-{
-    permissioned_soracloud_state!(kura, mut state);
-    state.nexus.get_mut().fees.fee_sink_account_id = ALICE_ID.to_string();
-    let repo_id = "openai/gpt-oss";
-    let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let model_name = "gpt-oss";
-    let renewed_model_name = "gpt-oss-renewed";
-    let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
-    let renewed_service_name: iroha_data_model::name::Name =
-        "vision_portal_v2".parse().expect("valid");
-    let rebound_service_name: iroha_data_model::name::Name =
-        "vision_portal_v3".parse().expect("valid");
-    let storage_class = StorageClass::Warm;
-    let lease_term_ms = 60_000_u64;
-    let base_fee: Quantity = "0.00001".parse().expect("base fee");
-    let renewed_fee: Quantity = "0.000012".parse().expect("renewed fee");
-    let lease_asset_definition_id = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("domain", "universal").expect("domain"),
-        "xor".parse().expect("xor"),
-    );
-    {
-        soracloud_transaction!(state, block_header, state_block, stx);
-        seed_test_call_hash(&mut stx, 0xE1);
-        let capability = sample_model_host_capability(ALICE_ID.clone(), 1, 1_000_000);
-        isi::AdvertiseSoracloudModelHost {
-            capability: capability.clone(),
-            provenance: model_host_advertise_provenance(&capability),
-        }
-        .execute(&ALICE_ID, &mut stx)?;
-        isi::JoinSoracloudHfSharedLease {
-            repo_id: repo_id.to_string(),
-            resolved_revision: resolved_revision.to_string(),
-            model_name: model_name.to_string(),
-            service_name: service_name.clone(),
-            apartment_name: None,
-            storage_class,
-            lease_term_ms,
-            lease_asset_definition_id: lease_asset_definition_id.clone(),
-            base_fee: base_fee.clone(),
-            resource_profile: Some(sample_hf_resource_profile()),
-            max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
-            provenance: hf_shared_lease_join_provenance(
-                repo_id,
-                resolved_revision,
-                model_name,
-                &service_name,
-                None,
-                storage_class,
-                lease_term_ms,
-                &lease_asset_definition_id,
-                &base_fee,
-            ),
-        }
-        .execute(&ALICE_ID, &mut stx)?;
-        isi::RenewSoracloudHfSharedLease {
-            repo_id: repo_id.to_string(),
-            resolved_revision: resolved_revision.to_string(),
-            model_name: renewed_model_name.to_string(),
-            service_name: renewed_service_name.clone(),
-            apartment_name: None,
-            storage_class,
-            lease_term_ms,
-            lease_asset_definition_id: lease_asset_definition_id.clone(),
-            base_fee: renewed_fee.clone(),
-            resource_profile: Some(sample_hf_resource_profile()),
-            provenance: hf_shared_lease_renew_provenance(
-                repo_id,
-                resolved_revision,
-                renewed_model_name,
-                &renewed_service_name,
-                None,
-                storage_class,
-                lease_term_ms,
-                &lease_asset_definition_id,
-                &renewed_fee,
-            ),
-        }
-        .execute(&ALICE_ID, &mut stx)?;
-        stx.apply();
-        state_block.commit()?;
-    }
-    let first_pool_expires_at_ms = {
-        let view = state.view();
-        let world = view.world();
+    let total_charged = base_fee
+        .checked_add(&renewed_fee)
+        .expect("initial window plus queued storage charge");
+    assert_eq!(
         world
-            .soracloud_hf_shared_lease_pools()
-            .iter()
-            .next()
-            .map(|(_pool_id, pool)| pool.window_expires_at_ms)
-            .expect("pool")
-    };
-    let queued_placement_id = {
-        let view = state.view();
-        let world = view.world();
-        let source_id = hf_source_id(repo_id, resolved_revision)?;
-        let pool_id = hf_shared_lease_pool_id(source_id, storage_class, lease_term_ms)?;
+            .assets()
+            .get(&AssetId::new(
+                lease_asset_definition_id.clone(),
+                ALICE_ID.clone()
+            ))
+            .expect("sponsor balance")
+            .0
+            .clone(),
+        initial_balance
+            .checked_sub(&total_charged)
+            .expect("sponsor funds both charges")
+    );
+    assert_eq!(
         world
-            .soracloud_hf_shared_lease_pools()
-            .get(&pool_id)
-            .and_then(|pool| pool.queued_next_window.as_ref())
-            .map(|next_window| next_window.planned_placement.placement_id)
-            .expect("queued next-window placement")
-    };
-    soracloud_transaction_at!(
-        state,
-        second_block_header,
-        second_state_block,
-        second_stx,
-        first_pool_expires_at_ms.saturating_add(1)
+            .assets()
+            .get(&AssetId::new(
+                lease_asset_definition_id.clone(),
+                BOB_ID.clone(),
+            ))
+            .expect("fee sink balance")
+            .0
+            .clone(),
+        total_charged,
+        "queueing transfers only the storage lease fees"
     );
-    isi::JoinSoracloudHfSharedLease {
-        repo_id: repo_id.to_string(),
-        resolved_revision: resolved_revision.to_string(),
-        model_name: renewed_model_name.to_string(),
-        service_name: rebound_service_name.clone(),
-        apartment_name: None,
-        storage_class,
-        lease_term_ms,
-        lease_asset_definition_id: lease_asset_definition_id.clone(),
-        base_fee: renewed_fee.clone(),
-        resource_profile: Some(sample_hf_resource_profile()),
-        max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
-        provenance: hf_shared_lease_join_provenance(
-            repo_id,
-            resolved_revision,
-            renewed_model_name,
-            &rebound_service_name,
-            None,
-            storage_class,
-            lease_term_ms,
-            &lease_asset_definition_id,
-            &renewed_fee,
-        ),
-    }
-    .execute(&ALICE_ID, &mut second_stx)?;
-    second_stx.apply();
-    second_state_block.commit()?;
-    let source_id = hf_source_id(repo_id, resolved_revision)?;
-    let pool_id = hf_shared_lease_pool_id(source_id, storage_class, lease_term_ms)?;
-    let member_key = (pool_id.to_string(), ALICE_ID.to_string());
-    let view = state.view();
-    let world = view.world();
-    let pool = world
-        .soracloud_hf_shared_lease_pools()
-        .get(&pool_id)
-        .expect("shared lease pool");
-    let member = world
-        .soracloud_hf_shared_lease_members()
-        .get(&member_key)
-        .expect("shared lease member");
-    let source = world
-        .soracloud_hf_sources()
-        .get(&source_id)
-        .expect("hf source");
-    let placement = world
-        .soracloud_hf_placements()
-        .get(&pool_id)
-        .expect("active placement");
-    let audit_event = world
-        .soracloud_hf_shared_lease_audit_events()
-        .iter()
-        .max_by_key(|(sequence, _event)| *sequence)
-        .map(|(_sequence, event)| event)
-        .expect("latest audit event");
-    assert_eq!(pool.status, SoraHfSharedLeaseStatusV1::Active);
-    assert_eq!(pool.active_member_count, 1);
-    assert!(pool.queued_next_window.is_none());
-    assert_eq!(pool.window_started_at_ms, first_pool_expires_at_ms);
-    assert_eq!(
-        pool.window_expires_at_ms,
-        first_pool_expires_at_ms.saturating_add(lease_term_ms)
-    );
-    assert_eq!(pool.base_fee, renewed_fee);
-    assert_eq!(source.model_name, renewed_model_name);
-    assert_eq!(placement.placement_id, queued_placement_id);
-    assert_eq!(member.status, SoraHfSharedLeaseMemberStatusV1::Active);
-    assert_eq!(member.joined_at_ms, first_pool_expires_at_ms);
-    assert!(member.last_charge.is_zero());
-    assert!(member.last_compute_charge.is_zero());
-    assert!(member.service_bindings.contains(service_name.as_ref()));
-    assert!(
-        member
-            .service_bindings
-            .contains(renewed_service_name.as_ref())
-    );
-    assert!(
-        member
-            .service_bindings
-            .contains(rebound_service_name.as_ref())
-    );
-    assert_eq!(audit_event.action, SoraHfSharedLeaseActionV1::Join);
-    assert!(audit_event.charged.is_zero());
-    assert_eq!(audit_event.lease_expires_at_ms, pool.window_expires_at_ms);
-    Ok(())
-}
-#[test]
-fn join_hf_shared_lease_rejects_when_no_model_host_can_run_profile() -> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, mut state);
-    state.nexus.get_mut().fees.fee_sink_account_id = ALICE_ID.to_string();
-    let repo_id = "openai/gpt-oss";
-    let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let model_name = "gpt-oss";
-    let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
-    let storage_class = StorageClass::Warm;
-    let lease_term_ms = 60_000_u64;
-    let base_fee: Quantity = "0.00001".parse().expect("base fee");
-    let lease_asset_definition_id = AssetDefinitionId::derive_from_components(
+    drop(view);
+    let alternate_asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain"),
-        "xor".parse().expect("xor"),
+        "usd".parse().expect("alternate asset"),
     );
-    soracloud_transaction!(state, block_header, state_block, stx);
-    let error = isi::JoinSoracloudHfSharedLease {
+    soracloud_transaction_at!(state, mismatch_header, mismatch_block, mismatch_tx, 101);
+    let mismatch_error = isi::RenewSoracloudHfSharedLease {
         repo_id: repo_id.to_string(),
         resolved_revision: resolved_revision.to_string(),
-        model_name: model_name.to_string(),
-        service_name: service_name.clone(),
-        apartment_name: None,
-        storage_class,
-        lease_term_ms,
-        lease_asset_definition_id: lease_asset_definition_id.clone(),
-        base_fee: base_fee.clone(),
-        resource_profile: Some(sample_hf_resource_profile()),
-        max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
-        provenance: hf_shared_lease_join_provenance(
-            repo_id,
-            resolved_revision,
-            model_name,
-            &service_name,
-            None,
-            storage_class,
-            lease_term_ms,
-            &lease_asset_definition_id,
-            &base_fee,
-        ),
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("join should fail without an eligible host advert");
-    assert!(
-        error
-            .to_string()
-            .contains("no eligible validator host advert"),
-        "unexpected error: {error}"
-    );
-    Ok(())
-}
-#[test]
-fn join_hf_shared_lease_rejects_noncanonical_compute_cap_before_world_mutation()
--> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, mut state);
-    state.nexus.get_mut().fees.fee_sink_account_id = ALICE_ID.to_string();
-    let repo_id = "openai/gpt-oss";
-    let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let model_name = "gpt-oss";
-    let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
-    let storage_class = StorageClass::Warm;
-    let lease_term_ms = 60_000_u64;
-    let base_fee: Quantity = "0.00001".parse().expect("base fee");
-    let lease_asset_definition_id = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("wonderland", "universal").expect("domain"),
-        "xor".parse().expect("xor"),
-    );
-    soracloud_transaction!(state, block_header, state_block, stx);
-    let source_count_before = stx.world.soracloud_hf_sources.len();
-    let pool_count_before = stx.world.soracloud_hf_shared_lease_pools.len();
-    let member_count_before = stx.world.soracloud_hf_shared_lease_members.len();
-    let audit_count_before = stx.world.soracloud_hf_shared_lease_audit_events.len();
-    let error = isi::JoinSoracloudHfSharedLease {
-        repo_id: repo_id.to_string(),
-        resolved_revision: resolved_revision.to_string(),
-        model_name: model_name.to_string(),
-        service_name: service_name.clone(),
-        apartment_name: None,
-        storage_class,
-        lease_term_ms,
-        lease_asset_definition_id: lease_asset_definition_id.clone(),
-        base_fee: base_fee.clone(),
-        resource_profile: Some(sample_hf_resource_profile()),
-        max_compute_reservation_fee: "0.000001".parse().expect("too-low cap"),
-        provenance: hf_shared_lease_join_provenance(
-            repo_id,
-            resolved_revision,
-            model_name,
-            &service_name,
-            None,
-            storage_class,
-            lease_term_ms,
-            &lease_asset_definition_id,
-            &base_fee,
-        ),
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("noncanonical compute cap must fail");
-    assert_invalid_parameter_contains(error, "canonical V1 cap");
-    assert_eq!(stx.world.soracloud_hf_sources.len(), source_count_before);
-    assert_eq!(
-        stx.world.soracloud_hf_shared_lease_pools.len(),
-        pool_count_before
-    );
-    assert_eq!(
-        stx.world.soracloud_hf_shared_lease_members.len(),
-        member_count_before
-    );
-    assert_eq!(
-        stx.world.soracloud_hf_shared_lease_audit_events.len(),
-        audit_count_before
-    );
-    Ok(())
-}
-#[test]
-fn join_hf_shared_lease_late_join_prorates_compute_and_refunds_existing_members()
--> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, mut state);
-    state.nexus.get_mut().fees.fee_sink_account_id = ALICE_ID.to_string();
-    let repo_id = "openai/gpt-oss";
-    let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let model_name = "gpt-oss";
-    let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
-    let bob_service_name: iroha_data_model::name::Name =
-        "vision_portal_bob".parse().expect("valid");
-    let storage_class = StorageClass::Warm;
-    let lease_term_ms = 60_000_u64;
-    let base_fee: Quantity = "0.00001".parse().expect("base fee");
-    let lease_asset_definition_id = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("domain", "universal").expect("domain"),
-        "xor".parse().expect("xor"),
-    );
-    {
-        soracloud_transaction!(state, block_header, state_block, stx);
-        let capability = sample_model_host_capability(ALICE_ID.clone(), 1, 1_000_000);
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-        Grant::account_permission(
-            Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new(())),
-            BOB_ID.clone(),
-        )
-        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-        Register::asset_definition(AssetDefinition::numeric(
-            lease_asset_definition_id.clone(),
-            "xor".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        ))
-        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-        Mint::asset_quantity(
-            100_000_u32,
-            AssetId::new(lease_asset_definition_id.clone(), ALICE_ID.clone()),
-        )
-        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-        Mint::asset_quantity(
-            100_000_u32,
-            AssetId::new(lease_asset_definition_id.clone(), BOB_ID.clone()),
-        )
-        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-        isi::AdvertiseSoracloudModelHost {
-            capability: capability.clone(),
-            provenance: model_host_advertise_provenance(&capability),
-        }
-        .execute(&ALICE_ID, &mut stx)?;
-        isi::JoinSoracloudHfSharedLease {
-            repo_id: repo_id.to_string(),
-            resolved_revision: resolved_revision.to_string(),
-            model_name: model_name.to_string(),
-            service_name: service_name.clone(),
-            apartment_name: None,
-            storage_class,
-            lease_term_ms,
-            lease_asset_definition_id: lease_asset_definition_id.clone(),
-            base_fee: base_fee.clone(),
-            resource_profile: Some(sample_hf_resource_profile()),
-            max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
-            provenance: hf_shared_lease_join_provenance(
-                repo_id,
-                resolved_revision,
-                model_name,
-                &service_name,
-                None,
-                storage_class,
-                lease_term_ms,
-                &lease_asset_definition_id,
-                &base_fee,
-            ),
-        }
-        .execute(&ALICE_ID, &mut stx)?;
-        stx.apply();
-        state_block.commit()?;
-    }
-    let source_id = hf_source_id(repo_id, resolved_revision)?;
-    let pool_id = hf_shared_lease_pool_id(source_id, storage_class, lease_term_ms)?;
-    let (first_window_started_at_ms, first_window_expires_at_ms, placement_fee) = {
-        let view = state.view();
-        let world = view.world();
-        let pool = world
-            .soracloud_hf_shared_lease_pools()
-            .get(&pool_id)
-            .expect("shared lease pool");
-        let placement = world
-            .soracloud_hf_placements()
-            .get(&pool_id)
-            .expect("placement");
-        (
-            pool.window_started_at_ms,
-            pool.window_expires_at_ms,
-            placement.total_reservation_fee.clone(),
-        )
-    };
-    let second_join_time_ms =
-        first_window_started_at_ms.saturating_add(lease_term_ms.saturating_div(2));
-    let second_block_header =
-        ValidBlock::new_dummy_and_modify_header(&BOB_KEYPAIR.clone().into_parts().1, |header| {
-            header.creation_time_ms = second_join_time_ms;
-        })
-        .as_ref()
-        .header();
-    let mut second_state_block = state.block(second_block_header);
-    let mut second_stx = second_state_block.transaction();
-    seed_test_call_hash(&mut second_stx, 0xE2);
-    isi::JoinSoracloudHfSharedLease {
-        repo_id: repo_id.to_string(),
-        resolved_revision: resolved_revision.to_string(),
-        model_name: model_name.to_string(),
-        service_name: bob_service_name.clone(),
-        apartment_name: None,
-        storage_class,
-        lease_term_ms,
-        lease_asset_definition_id: lease_asset_definition_id.clone(),
-        base_fee: base_fee.clone(),
-        resource_profile: Some(sample_hf_resource_profile()),
-        max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
-        provenance: hf_shared_lease_join_provenance_for(
-            &BOB_KEYPAIR,
-            repo_id,
-            resolved_revision,
-            model_name,
-            &bob_service_name,
-            None,
-            storage_class,
-            lease_term_ms,
-            &lease_asset_definition_id,
-            &base_fee,
-        ),
-    }
-    .execute(&BOB_ID, &mut second_stx)?;
-    second_stx.apply();
-    second_state_block.commit()?;
-    let remaining_ms = first_window_expires_at_ms.saturating_sub(second_join_time_ms);
-    let expected_storage_remaining = prorated_window_fee(&base_fee, remaining_ms, lease_term_ms)?;
-    let expected_storage_join_fee =
-        divide_quantity_by_member_count(&expected_storage_remaining, 2, "test storage join fee")?;
-    let expected_compute_remaining =
-        prorated_window_fee(&placement_fee, remaining_ms, lease_term_ms)?;
-    let expected_compute_join_fee =
-        divide_quantity_by_member_count(&expected_compute_remaining, 2, "test compute join fee")?;
-    let alice_member_key = (pool_id.to_string(), ALICE_ID.to_string());
-    let bob_member_key = (pool_id.to_string(), BOB_ID.to_string());
-    let view = state.view();
-    let world = view.world();
-    let pool = world
-        .soracloud_hf_shared_lease_pools()
-        .get(&pool_id)
-        .expect("shared lease pool");
-    let alice_member = world
-        .soracloud_hf_shared_lease_members()
-        .get(&alice_member_key)
-        .expect("alice shared lease member");
-    let bob_member = world
-        .soracloud_hf_shared_lease_members()
-        .get(&bob_member_key)
-        .expect("bob shared lease member");
-    let initial_balance = Quantity::from(100_000_u32);
-    let total_join_fee = expected_storage_join_fee
-        .checked_add(&expected_compute_join_fee)
-        .expect("total join fee");
-    let alice_balance = world
-        .assets()
-        .get(&AssetId::new(
-            lease_asset_definition_id.clone(),
-            ALICE_ID.clone(),
-        ))
-        .expect("alice lease asset")
-        .0
-        .clone();
-    let bob_balance = world
-        .assets()
-        .get(&AssetId::new(
-            lease_asset_definition_id.clone(),
-            BOB_ID.clone(),
-        ))
-        .expect("bob lease asset")
-        .0
-        .clone();
-    let audit_event = world
-        .soracloud_hf_shared_lease_audit_events()
-        .iter()
-        .max_by_key(|(sequence, _event)| *sequence)
-        .map(|(_sequence, event)| event)
-        .expect("late join audit event");
-    assert_eq!(pool.active_member_count, 2);
-    assert_eq!(alice_member.total_refunded, expected_storage_join_fee);
-    assert_eq!(
-        alice_member.total_compute_refunded,
-        expected_compute_join_fee
-    );
-    assert_eq!(bob_member.total_paid, expected_storage_join_fee);
-    assert_eq!(bob_member.total_compute_paid, expected_compute_join_fee);
-    assert_eq!(bob_member.last_charge, expected_storage_join_fee);
-    assert_eq!(bob_member.last_compute_charge, expected_compute_join_fee);
-    assert!(bob_member.last_compute_charge <= sample_hf_compute_reservation_cap(lease_term_ms));
-    assert_eq!(
-        alice_balance,
-        initial_balance
-            .checked_add(&total_join_fee)
-            .expect("alice reimbursed balance")
-    );
-    assert_eq!(
-        bob_balance,
-        initial_balance
-            .checked_sub(&total_join_fee)
-            .expect("bob debited balance")
-    );
-    assert_eq!(audit_event.charged, total_join_fee);
-    Ok(())
-}
-#[test]
-fn leave_hf_shared_lease_rejects_queued_next_window_sponsor() -> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, mut state);
-    state.nexus.get_mut().fees.fee_sink_account_id = ALICE_ID.to_string();
-    let repo_id = "openai/gpt-oss";
-    let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let model_name = "gpt-oss";
-    let renewed_model_name = "gpt-oss-renewed";
-    let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
-    let renewed_service_name: iroha_data_model::name::Name =
-        "vision_portal_v2".parse().expect("valid");
-    let storage_class = StorageClass::Warm;
-    let lease_term_ms = 60_000_u64;
-    let base_fee: Quantity = "0.00001".parse().expect("base fee");
-    let renewed_fee: Quantity = "0.000012".parse().expect("renewed fee");
-    let lease_asset_definition_id = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("domain", "universal").expect("domain"),
-        "xor".parse().expect("xor"),
-    );
-    soracloud_transaction!(state, block_header, state_block, stx);
-    let capability = sample_model_host_capability(ALICE_ID.clone(), 1, 1_000_000);
-    isi::AdvertiseSoracloudModelHost {
-        capability: capability.clone(),
-        provenance: model_host_advertise_provenance(&capability),
-    }
-    .execute(&ALICE_ID, &mut stx)?;
-    isi::JoinSoracloudHfSharedLease {
-        repo_id: repo_id.to_string(),
-        resolved_revision: resolved_revision.to_string(),
-        model_name: model_name.to_string(),
-        service_name: service_name.clone(),
-        apartment_name: None,
-        storage_class,
-        lease_term_ms,
-        lease_asset_definition_id: lease_asset_definition_id.clone(),
-        base_fee: base_fee.clone(),
-        resource_profile: Some(sample_hf_resource_profile()),
-        max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
-        provenance: hf_shared_lease_join_provenance(
-            repo_id,
-            resolved_revision,
-            model_name,
-            &service_name,
-            None,
-            storage_class,
-            lease_term_ms,
-            &lease_asset_definition_id,
-            &base_fee,
-        ),
-    }
-    .execute(&ALICE_ID, &mut stx)?;
-    isi::RenewSoracloudHfSharedLease {
-        repo_id: repo_id.to_string(),
-        resolved_revision: resolved_revision.to_string(),
-        model_name: renewed_model_name.to_string(),
         service_name: renewed_service_name.clone(),
         apartment_name: None,
         storage_class,
         lease_term_ms,
-        lease_asset_definition_id: lease_asset_definition_id.clone(),
+        lease_asset_definition_id: alternate_asset_definition_id.clone(),
         base_fee: renewed_fee.clone(),
-        resource_profile: Some(sample_hf_resource_profile()),
         provenance: hf_shared_lease_renew_provenance(
             repo_id,
             resolved_revision,
-            renewed_model_name,
             &renewed_service_name,
             None,
             storage_class,
             lease_term_ms,
-            &lease_asset_definition_id,
+            &alternate_asset_definition_id,
             &renewed_fee,
         ),
     }
-    .execute(&ALICE_ID, &mut stx)?;
-    let error = isi::LeaveSoracloudHfSharedLease {
-        repo_id: repo_id.to_string(),
-        resolved_revision: resolved_revision.to_string(),
-        storage_class,
-        lease_term_ms,
-        service_name: Some(service_name.clone()),
-        apartment_name: None,
-        provenance: hf_shared_lease_leave_provenance(
-            repo_id,
-            resolved_revision,
-            storage_class,
-            lease_term_ms,
-            Some(&service_name),
-            None,
-        ),
+    .execute(&ALICE_ID, &mut mismatch_tx)
+    .expect_err("a shared-lease pool must retain one settlement denomination");
+    assert_invariant_contains(mismatch_error, "cannot mix lifetime member accounting");
+    Ok(())
+}
+fn seed_active_inrou_replica_runtime_fixture(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    service_name: &str,
+    service_version: &str,
+) -> Result<(SoraDeploymentBundleV1, SoraInrouReplicaRuntimeStateV1), InstructionExecutionError> {
+    let mut bundle = sample_hosted_http_service_bundle(service_name, service_version, 0);
+    bundle.service.replicas = NonZeroU16::new(1).expect("nonzero replicas");
+    isi::DeploySoracloudService {
+        bundle: bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&bundle),
     }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("queued sponsor should not be able to leave");
+    .execute(&ALICE_ID, state_transaction)?;
+    let mut capability = sample_inrou_host_capability(ALICE_ID.clone(), 1, u64::MAX);
+    capability.supported_guest_isas = BTreeSet::from([SoraInrouGuestIsaV1::Aarch64]);
+    isi::AdvertiseSoracloudInrouHost {
+        capability: capability.clone(),
+        provenance: inrou_host_advertise_provenance(&capability),
+    }
+    .execute(&ALICE_ID, state_transaction)?;
+    let placement = state_transaction
+        .world
+        .soracloud_inrou_service_placements
+        .get(&(service_name.to_owned(), service_version.to_owned()))
+        .and_then(|record| record.placements.first())
+        .cloned()
+        .expect("active Inrou placement fixture");
+    let mut runtime_state = sample_inrou_replica_runtime_state_for(
+        bundle.service.service_name.clone(),
+        service_version,
+        placement.replica_slot,
+        placement.validator_account_id.clone(),
+    );
+    runtime_state.placement_incarnation = placement.placement_incarnation;
+    runtime_state.peer_id = placement.peer_id;
+    runtime_state.selected_guest_isa = placement.selected_guest_isa;
+    runtime_state.materialized_bundle_hash = bundle.container.bundle_hash;
+    let lease_started_height = state_transaction
+        .world
+        .soracloud_service_deployments
+        .get(&runtime_state.service_name)
+        .and_then(|deployment| deployment.service_lease.as_ref())
+        .expect("hosted service lease")
+        .lease_started_height;
+    isi::ReportSoracloudServiceLeaseUsage {
+        service_name: runtime_state.service_name.clone(),
+        lease_started_height,
+        reporting_epoch: runtime_state.reporting_epoch,
+        active_service_version: service_version.to_owned(),
+        replica_slot: runtime_state.replica_slot,
+        placement_incarnation: runtime_state.placement_incarnation,
+        replica_accounted_egress_bytes: 0,
+        finalize_reporter: false,
+    }
+    .execute(&runtime_state.validator_account_id, state_transaction)?;
+    Ok((bundle, runtime_state))
+}
+#[test]
+fn active_inrou_resolver_fails_closed_when_any_lease_volume_expires() -> Result<(), eyre::Report> {
+    permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    let service_name = "lease_volume_gate";
+    let service_version = "1.0.0";
+    let (bundle, _runtime_state) =
+        seed_active_inrou_replica_runtime_fixture(&mut stx, service_name, service_version)?;
     assert!(
-        error
-            .to_string()
-            .contains("cannot leave before it activates"),
-        "unexpected error: {error}"
+        crate::soracloud_runtime::resolve_active_inrou_placement_record(
+            &stx.world,
+            service_name,
+            service_version,
+            stx.block_height(),
+        )
+        .map_err(eyre::Report::msg)?
+        .is_some(),
+        "fixture must begin with an active placement"
+    );
+
+    let expiry_height = 2;
+    let deployment = stx
+        .world
+        .soracloud_service_deployments
+        .get_mut(&bundle.service.service_name)
+        .expect("hosted deployment");
+    let expired_volume = deployment
+        .lease_volume_states
+        .first_mut()
+        .expect("hosted deployment volume");
+    assert!(expired_volume.lease_started_height < expiry_height);
+    expired_volume.lease_expires_height = expiry_height;
+    let validation_error = deployment
+        .validate()
+        .expect_err("a volume expiry may not diverge from the exact hosted-service lease");
+    assert!(validation_error.to_string().contains(
+        "every volume economic start and expiry must exactly match the hosted-service lease"
+    ));
+
+    let error = crate::soracloud_runtime::resolve_active_inrou_placement_record(
+        &stx.world,
+        service_name,
+        service_version,
+        stx.block_height(),
+    )
+    .expect_err("a divergent authoritative volume expiry must fail closed");
+    assert!(
+        error.contains("references a malformed deployment"),
+        "unexpected resolver error: {error}"
+    );
+    Ok(())
+}
+#[test]
+fn active_inrou_resolver_requires_exact_admitted_lease_volume_economics() -> Result<(), eyre::Report>
+{
+    permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    let service_name = "lease_volume_exactness";
+    let service_version = "1.0.0";
+    let (bundle, _runtime_state) =
+        seed_active_inrou_replica_runtime_fixture(&mut stx, service_name, service_version)?;
+    let canonical = stx
+        .world
+        .soracloud_service_deployments
+        .get(&bundle.service.service_name)
+        .cloned()
+        .expect("hosted deployment");
+    crate::soracloud_runtime::validate_soracloud_deployment_lease_volume_bindings(
+        &canonical, &bundle,
+    )
+    .map_err(eyre::Report::msg)?;
+    assert_eq!(
+        canonical
+            .accounted_storage_bytes()
+            .expect("canonical hosted storage accounting must fit in u64"),
+        bundle
+            .service
+            .lease_volumes
+            .iter()
+            .map(|volume| volume.max_total_bytes.get())
+            .sum::<u64>(),
+        "authoritative accounting must exactly project admitted volume byte limits"
+    );
+
+    let assert_rejected = |deployment: &SoraServiceDeploymentStateV1| {
+        let error = crate::soracloud_runtime::validate_soracloud_deployment_lease_volume_bindings(
+            deployment, &bundle,
+        )
+        .expect_err("altered authoritative volume economics must fail closed");
+        assert!(
+            error.contains("lease-volume") || error.contains("admitted"),
+            "unexpected exact-volume error: {error}"
+        );
+    };
+    let mut missing = canonical.clone();
+    missing.lease_volume_states.pop();
+    missing
+        .validate()
+        .expect("missing rows are a cross-record rather than row-local invariant");
+    assert_rejected(&missing);
+
+    let mut wrong_kind = canonical.clone();
+    wrong_kind.lease_volume_states[0].kind = SoraLeaseVolumeKindV1::ConfidentialLeaseVolume;
+    assert_rejected(&wrong_kind);
+    let mut wrong_class = canonical.clone();
+    wrong_class.lease_volume_states[0].storage_class = StorageClass::Hot;
+    assert_rejected(&wrong_class);
+    let mut wrong_mount = canonical.clone();
+    wrong_mount.lease_volume_states[0].mount_path = "/different".to_owned();
+    assert_rejected(&wrong_mount);
+    let mut wrong_bytes = canonical.clone();
+    wrong_bytes.lease_volume_states[0].max_total_bytes = wrong_bytes.lease_volume_states[0]
+        .max_total_bytes
+        .checked_add(1)
+        .expect("fixture byte limit");
+    assert_rejected(&wrong_bytes);
+    let mut wrong_generation = canonical.clone();
+    wrong_generation.lease_volume_states[0].authoritative_generation = 2;
+    wrong_generation
+        .validate()
+        .expect("generation two remains row-local valid but is never live-reachable in v1");
+    assert_rejected(&wrong_generation);
+
+    stx.world
+        .soracloud_service_deployments
+        .insert(bundle.service.service_name.clone(), missing);
+    let error = crate::soracloud_runtime::resolve_active_inrou_placement_record(
+        &stx.world,
+        service_name,
+        service_version,
+        stx.block_height(),
+    )
+    .expect_err("an under-accounted deployment must never resolve as active");
+    assert!(
+        error.contains("noncanonical lease-volume economics"),
+        "unexpected resolver error: {error}"
     );
     Ok(())
 }
@@ -18261,6 +16877,7 @@ fn inrou_reconciliation_keeps_same_lease_host_sticky_and_reassigns_only_new_leas
         bundle: bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -18385,7 +17002,6 @@ fn inrou_reconciliation_keeps_same_lease_host_sticky_and_reassigns_only_new_leas
     lease.accounted_egress_bytes = 0;
     for volume in &mut deployment.lease_volume_states {
         volume.lease_started_height = new_lease_started_height;
-        volume.last_materialized_sequence = None;
     }
 
     set_current_transaction_hash(&mut stx, b"inrou-sticky-renewed-lease");
@@ -18480,94 +17096,9 @@ fn clear_inrou_replica_runtime_state_rejects_missing_placement() -> Result<(), e
 #[test]
 fn set_inrou_replica_runtime_state_records_matching_placement() -> Result<(), eyre::Report> {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
-    let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
     let service_version = "2026.04.28.075015";
-    let mut bundle = sample_bundle(service_name.as_ref(), service_version, 0);
-    bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
-    bundle.container.entrypoint = "/app/bin/service".to_owned();
-    bundle.container.inrou = Some(sample_inrou_manifest());
-    bundle.container.capabilities.network = SoraNetworkPolicyV1::Isolated;
-    bundle.service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
-    bundle.service.lease_volumes = sample_inrou_lease_volumes();
-    bundle.service.state_bindings.clear();
-    bundle.service.handlers.clear();
-    bundle.service.artifacts[0].handler_name = None;
-    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-    isi::DeploySoracloudService {
-        bundle: bundle.clone(),
-        initial_service_configs: BTreeMap::new(),
-        initial_service_secrets: BTreeMap::new(),
-        provenance: bundle_provenance(&bundle),
-    }
-    .execute(&ALICE_ID, &mut stx)?;
-    let (reporting_epoch, lease_started_height) = {
-        let lease = stx
-            .world
-            .soracloud_service_deployments
-            .get(&service_name)
-            .and_then(|deployment| deployment.service_lease.as_ref())
-            .expect("hosted service lease");
-        (lease.reporting_epoch, lease.lease_started_height)
-    };
-    let mut runtime_state = sample_inrou_replica_runtime_state_for(
-        service_name.clone(),
-        service_version,
-        1,
-        ALICE_ID.clone(),
-    );
-    runtime_state.materialized_bundle_hash = bundle.container.bundle_hash;
-    runtime_state.reporting_epoch = reporting_epoch;
-    let mut placement = sample_inrou_service_placement_record_for(
-        service_name.clone(),
-        service_version,
-        &runtime_state,
-    );
-    placement.placements[0].lease_started_height = lease_started_height;
-    placement.placements[0].host_availability = SoraInrouReplicaHostAvailabilityV1::Unavailable;
-    let placement_key = (
-        placement.service_name.as_ref().to_owned(),
-        placement.service_version.clone(),
-    );
-    stx.world
-        .soracloud_inrou_service_placements
-        .insert(placement_key.clone(), placement.clone());
-    let unavailable_error = isi::SetSoracloudInrouReplicaRuntimeState {
-        state: runtime_state.clone(),
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("an unavailable replica host must not publish a serving state");
-    assert_invalid_parameter_contains(unavailable_error, "unavailable Inrou replica host");
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: service_name.clone(),
-        reporting_epoch: runtime_state.reporting_epoch,
-        active_service_version: service_version.to_owned(),
-        replica_slot: runtime_state.replica_slot,
-        placement_incarnation: runtime_state.placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("an unavailable replica host must not open or advance a live reporter checkpoint");
-    placement.placements[0].host_availability = SoraInrouReplicaHostAvailabilityV1::Available;
-    stx.world
-        .soracloud_inrou_service_placements
-        .insert(placement_key, placement);
-    let before_report_error = isi::SetSoracloudInrouReplicaRuntimeState {
-        state: runtime_state.clone(),
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("an assigned replica must report zero usage before serving");
-    assert_invariant_contains(before_report_error, "open its zero usage checkpoint");
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: service_name.clone(),
-        reporting_epoch: runtime_state.reporting_epoch,
-        active_service_version: service_version.to_owned(),
-        replica_slot: runtime_state.replica_slot,
-        placement_incarnation: runtime_state.placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut stx)?;
+    let (_admitted_bundle, runtime_state) =
+        seed_active_inrou_replica_runtime_fixture(&mut stx, "hayahi_live", service_version)?;
     isi::SetSoracloudInrouReplicaRuntimeState {
         state: runtime_state.clone(),
     }
@@ -18604,6 +17135,13 @@ fn set_inrou_replica_runtime_state_rejects_zero_version_and_timestamp() -> Resul
         ),
         placement,
     );
+    let now_ms = stx.block_unix_timestamp_ms().max(1);
+    let mut capability =
+        sample_inrou_host_capability(ALICE_ID.clone(), now_ms, now_ms.saturating_add(10_000));
+    capability.supported_guest_isas = BTreeSet::from([SoraInrouGuestIsaV1::Aarch64]);
+    stx.world
+        .soracloud_inrou_host_capabilities
+        .insert(ALICE_ID.clone(), capability);
     let mut zero_version = canonical.clone();
     zero_version.schema_version = 0;
     let mut zero_timestamp = canonical.clone();
@@ -18623,6 +17161,36 @@ fn set_inrou_replica_runtime_state_rejects_zero_version_and_timestamp() -> Resul
     Ok(())
 }
 #[test]
+fn set_inrou_replica_runtime_state_rejects_unadmitted_bundle_hash_atomically()
+-> Result<(), eyre::Report> {
+    permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    let service_version = "2026.04.28.075015";
+    let (_admitted_bundle, admitted_runtime_state) =
+        seed_active_inrou_replica_runtime_fixture(&mut stx, "hayahi_live", service_version)?;
+    let key = inrou_replica_runtime_key(
+        &admitted_runtime_state.service_name,
+        service_version,
+        admitted_runtime_state.replica_slot,
+    );
+    stx.world
+        .soracloud_inrou_replica_runtime
+        .insert(key.clone(), admitted_runtime_state.clone());
+    let mut forged_runtime_state = admitted_runtime_state.clone();
+    forged_runtime_state.materialized_bundle_hash = Hash::new(b"unadmitted-inrou-bundle");
+    let error = isi::SetSoracloudInrouReplicaRuntimeState {
+        state: forged_runtime_state,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("an assigned validator must not report an unadmitted materialized bundle");
+    assert_invalid_parameter_contains(error, "the admitted bundle hash is");
+    assert_eq!(
+        stx.world.soracloud_inrou_replica_runtime.get(&key),
+        Some(&admitted_runtime_state),
+        "forged runtime telemetry must not replace the last admitted runtime state"
+    );
+    Ok(())
+}
+#[test]
 fn set_inrou_replica_runtime_state_rejects_non_assigned_validator() -> Result<(), eyre::Report> {
     let kura = Kura::blank_kura_for_testing();
     let state = state_with_soracloud_permission_on_chain(
@@ -18633,32 +17201,23 @@ fn set_inrou_replica_runtime_state_rejects_non_assigned_validator() -> Result<()
     Register::account(Account::new(BOB_ID.clone()))
         .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
     insert_active_public_lane_validator(&mut stx, BOB_ID.clone(), 500);
-    let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
     let service_version = "2026.04.28.075015";
-    let assigned_runtime_state = sample_inrou_replica_runtime_state_for(
-        service_name.clone(),
+    let (_admitted_bundle, assigned_runtime_state) =
+        seed_active_inrou_replica_runtime_fixture(&mut stx, "hayahi_live", service_version)?;
+    let key = inrou_replica_runtime_key(
+        &assigned_runtime_state.service_name,
         service_version,
-        1,
-        ALICE_ID.clone(),
+        assigned_runtime_state.replica_slot,
     );
-    let placement = sample_inrou_service_placement_record_for(
-        service_name.clone(),
-        service_version,
-        &assigned_runtime_state,
-    );
-    stx.world.soracloud_inrou_service_placements.insert(
-        (
-            placement.service_name.as_ref().to_owned(),
-            placement.service_version.clone(),
-        ),
-        placement,
-    );
-    let key = inrou_replica_runtime_key(&service_name, service_version, 1);
     stx.world
         .soracloud_inrou_replica_runtime
         .insert(key.clone(), assigned_runtime_state.clone());
-    let stale_runtime_state =
-        sample_inrou_replica_runtime_state_for(service_name, service_version, 1, BOB_ID.clone());
+    let stale_runtime_state = sample_inrou_replica_runtime_state_for(
+        assigned_runtime_state.service_name.clone(),
+        service_version,
+        assigned_runtime_state.replica_slot,
+        BOB_ID.clone(),
+    );
     let error = isi::SetSoracloudInrouReplicaRuntimeState {
         state: stale_runtime_state,
     }
@@ -18676,27 +17235,14 @@ fn set_inrou_replica_runtime_state_rejects_non_assigned_validator() -> Result<()
 fn set_inrou_replica_runtime_state_rejects_mismatched_placement_fields() -> Result<(), eyre::Report>
 {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
-    let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
     let service_version = "2026.04.28.075015";
-    let assigned_runtime_state = sample_inrou_replica_runtime_state_for(
-        service_name.clone(),
+    let (_admitted_bundle, assigned_runtime_state) =
+        seed_active_inrou_replica_runtime_fixture(&mut stx, "hayahi_live", service_version)?;
+    let key = inrou_replica_runtime_key(
+        &assigned_runtime_state.service_name,
         service_version,
-        1,
-        ALICE_ID.clone(),
+        assigned_runtime_state.replica_slot,
     );
-    let placement = sample_inrou_service_placement_record_for(
-        service_name.clone(),
-        service_version,
-        &assigned_runtime_state,
-    );
-    stx.world.soracloud_inrou_service_placements.insert(
-        (
-            placement.service_name.as_ref().to_owned(),
-            placement.service_version.clone(),
-        ),
-        placement,
-    );
-    let key = inrou_replica_runtime_key(&service_name, service_version, 1);
     stx.world
         .soracloud_inrou_replica_runtime
         .insert(key.clone(), assigned_runtime_state.clone());
@@ -18727,35 +17273,22 @@ fn clear_inrou_replica_runtime_state_rejects_non_assigned_validator() -> Result<
     Register::account(Account::new(BOB_ID.clone()))
         .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
     insert_active_public_lane_validator(&mut stx, BOB_ID.clone(), 500);
-    let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
     let service_version = "2026.04.28.075015";
-    let assigned_runtime_state = sample_inrou_replica_runtime_state_for(
-        service_name.clone(),
+    let (_admitted_bundle, assigned_runtime_state) =
+        seed_active_inrou_replica_runtime_fixture(&mut stx, "hayahi_live", service_version)?;
+    let key = inrou_replica_runtime_key(
+        &assigned_runtime_state.service_name,
         service_version,
-        1,
-        ALICE_ID.clone(),
+        assigned_runtime_state.replica_slot,
     );
-    let placement = sample_inrou_service_placement_record_for(
-        service_name.clone(),
-        service_version,
-        &assigned_runtime_state,
-    );
-    stx.world.soracloud_inrou_service_placements.insert(
-        (
-            placement.service_name.as_ref().to_owned(),
-            placement.service_version.clone(),
-        ),
-        placement,
-    );
-    let key = inrou_replica_runtime_key(&service_name, service_version, 1);
     stx.world
         .soracloud_inrou_replica_runtime
         .insert(key.clone(), assigned_runtime_state.clone());
     let error = isi::ClearSoracloudInrouReplicaRuntimeState {
-        service_name,
+        service_name: assigned_runtime_state.service_name.clone(),
         service_version: service_version.to_string(),
-        replica_slot: 1,
         expected_placement_incarnation: assigned_runtime_state.placement_incarnation,
+        replica_slot: assigned_runtime_state.replica_slot,
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("a non-assigned validator clear must fail");
@@ -18776,6 +17309,7 @@ fn deploy_soracloud_service_records_bundle_and_audit_state() -> Result<(), eyre:
         bundle: bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -18799,6 +17333,1176 @@ fn deploy_soracloud_service_records_bundle_and_audit_state() -> Result<(), eyre:
     assert_eq!(deployment.process_generation, 1);
     assert!(deployment.active_rollout.is_none());
     assert_eq!(world.soracloud_service_audit_events().iter().count(), 1);
+    Ok(())
+}
+fn sample_app_infra_manifest_for_bundle(
+    bundle: &SoraDeploymentBundleV1,
+    app_version: &str,
+) -> SoraAppInfraManifestV1 {
+    SoraAppInfraManifestV1 {
+        schema_version: iroha_data_model::soracloud::SORA_APP_INFRA_MANIFEST_VERSION_V1,
+        app_name: "portal_app".parse().expect("valid app name"),
+        app_version: app_version.to_owned(),
+        public_url: "https://portal-app.example.test".to_owned(),
+        static_site: None,
+        services: vec![iroha_data_model::soracloud::SoraAppInfraServiceRefV1 {
+            schema_version: iroha_data_model::soracloud::SORA_APP_INFRA_SERVICE_REF_VERSION_V1,
+            service_name: bundle.service.service_name.clone(),
+            service_version: bundle.service.service_version.clone(),
+            service_manifest_hash: bundle.service_manifest_hash(),
+            container_manifest_hash: bundle.container_manifest_hash(),
+            execution_plane: bundle.service.execution_plane,
+            runtime: bundle.container.runtime,
+            routes: Vec::new(),
+            lease_volumes: Vec::new(),
+            shard: None,
+        }],
+    }
+}
+#[test]
+fn soracloud_audit_sequence_exhaustion_fails_service_and_app_mutations_atomically()
+-> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    let service_bundle = sample_bundle("audit_portal", "1.0.0", 0);
+    let upgrade_bundle = sample_bundle("audit_portal", "1.1.0", 25);
+    let app_manifest = sample_app_infra_manifest_for_bundle(&service_bundle, "1.0.0");
+    let app_upgrade_manifest = sample_app_infra_manifest_for_bundle(&service_bundle, "1.1.0");
+    let service_name = service_bundle.service.service_name.clone();
+    let app_name = app_manifest.app_name.clone();
+    soracloud_transaction!(state, block_header, state_block, stx);
+    isi::DeploySoracloudService {
+        bundle: service_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&service_bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let absent = SoraAppInfraMutationPreconditionV1::AppAbsent;
+    isi::DeploySoracloudAppInfra {
+        manifest: app_manifest.clone(),
+        precondition: absent.clone(),
+        provenance: app_infra_provenance_with_precondition(&app_manifest, &absent),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+
+    let mut exhausted_audit = stx
+        .world
+        .soracloud_service_audit_events
+        .iter()
+        .next()
+        .map(|(_sequence, event)| event.clone())
+        .expect("service deploy audit event");
+    exhausted_audit.sequence = u64::MAX;
+    stx.world
+        .soracloud_service_audit_events
+        .insert(u64::MAX, exhausted_audit.clone());
+    let service_before = stx
+        .world
+        .soracloud_service_deployments
+        .get(&service_name)
+        .cloned()
+        .expect("deployed service state");
+    let app_before = stx
+        .world
+        .soracloud_app_infra_states
+        .get(&app_name)
+        .cloned()
+        .expect("deployed app state");
+    let service_audit_count = stx.world.soracloud_service_audit_events.iter().count();
+    let app_audit_count = stx.world.soracloud_app_infra_audit_events.iter().count();
+
+    let new_service_bundle = sample_bundle("audit_new_portal", "1.0.0", 0);
+    let new_service_error = isi::DeploySoracloudService {
+        bundle: new_service_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&new_service_bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("service deploy must fail when the shared audit sequence is exhausted");
+    assert_invariant_contains(new_service_error, "audit sequence is exhausted");
+
+    let mut new_app_manifest = sample_app_infra_manifest_for_bundle(&service_bundle, "1.0.0");
+    new_app_manifest.app_name = "audit_new_app".parse().expect("valid app name");
+    let new_app_absent = SoraAppInfraMutationPreconditionV1::AppAbsent;
+    let new_app_error = isi::DeploySoracloudAppInfra {
+        manifest: new_app_manifest.clone(),
+        precondition: new_app_absent.clone(),
+        provenance: app_infra_provenance_with_precondition(&new_app_manifest, &new_app_absent),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("app deploy must fail when the shared audit sequence is exhausted");
+    assert_invariant_contains(new_app_error, "audit sequence is exhausted");
+
+    let service_precondition = exact_service_revision_precondition(&service_bundle, 1);
+    let service_error = isi::UpgradeSoracloudService {
+        bundle: upgrade_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: service_precondition.clone(),
+        provenance: bundle_provenance_with_precondition(&upgrade_bundle, &service_precondition),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("service upgrade must fail when the shared audit sequence is exhausted");
+    assert_invariant_contains(service_error, "audit sequence is exhausted");
+
+    let app_precondition = exact_app_infra_precondition(&app_manifest, 1);
+    let app_error = isi::UpgradeSoracloudAppInfra {
+        manifest: app_upgrade_manifest.clone(),
+        precondition: app_precondition.clone(),
+        provenance: app_infra_provenance_with_precondition(
+            &app_upgrade_manifest,
+            &app_precondition,
+        ),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("app upgrade must fail when the shared audit sequence is exhausted");
+    assert_invariant_contains(app_error, "audit sequence is exhausted");
+
+    assert_eq!(
+        stx.world.soracloud_service_deployments.get(&service_name),
+        Some(&service_before),
+        "audit exhaustion must not change authoritative service state"
+    );
+    assert!(
+        stx.world
+            .soracloud_service_deployments
+            .get(&new_service_bundle.service.service_name)
+            .is_none(),
+        "audit exhaustion must not admit a new service deployment"
+    );
+    assert!(
+        stx.world
+            .soracloud_service_revisions
+            .get(&(
+                service_name.as_ref().to_owned(),
+                upgrade_bundle.service.service_version.clone(),
+            ))
+            .is_none(),
+        "audit exhaustion must fail before candidate revision admission"
+    );
+    assert_eq!(
+        stx.world.soracloud_app_infra_states.get(&app_name),
+        Some(&app_before),
+        "audit exhaustion must not change authoritative app state"
+    );
+    assert!(
+        stx.world
+            .soracloud_app_infra_states
+            .get(&new_app_manifest.app_name)
+            .is_none(),
+        "audit exhaustion must not admit a new app topology"
+    );
+    assert_eq!(
+        stx.world.soracloud_service_audit_events.get(&u64::MAX),
+        Some(&exhausted_audit),
+        "audit exhaustion must not overwrite the terminal audit event"
+    );
+    assert_eq!(
+        stx.world.soracloud_service_audit_events.iter().count(),
+        service_audit_count
+    );
+    assert_eq!(
+        stx.world.soracloud_app_infra_audit_events.iter().count(),
+        app_audit_count
+    );
+    Ok(())
+}
+#[test]
+fn runtime_receipt_sequence_is_ledger_owned_and_cannot_be_poisoned() -> Result<(), eyre::Report> {
+    permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    let bundle = sample_bundle("receipt_sequence", "1.0.0", 0);
+    let service_name = bundle.service.service_name.clone();
+    isi::DeploySoracloudService {
+        bundle: bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    isi::SetSoracloudRuntimeState {
+        state: SoraServiceRuntimeStateV1 {
+            schema_version: iroha_data_model::soracloud::SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
+            service_name: service_name.clone(),
+            active_service_version: bundle.service.service_version.clone(),
+            health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+            load_factor_bps: 0,
+            materialized_bundle_hash: bundle.container.bundle_hash,
+        },
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let forged_runtime_state = SoraServiceRuntimeStateV1 {
+        schema_version: iroha_data_model::soracloud::SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
+        service_name: service_name.clone(),
+        active_service_version: bundle.service.service_version.clone(),
+        health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+        load_factor_bps: 0,
+        materialized_bundle_hash: Hash::new(b"unadmitted-generic-runtime-bundle"),
+    };
+    let error = isi::SetSoracloudRuntimeState {
+        state: forged_runtime_state,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("generic runtime state must not report an unadmitted materialized bundle");
+    assert_invalid_parameter_contains(error, "active admitted bundle hash");
+    assert_eq!(
+        stx.world
+            .soracloud_service_runtime
+            .get(&service_name)
+            .expect("canonical runtime state")
+            .materialized_bundle_hash,
+        bundle.container.bundle_hash,
+        "a forged runtime bundle hash must not overwrite admitted state"
+    );
+
+    let mut ingress_receipt = SoraRuntimeReceiptV1 {
+        schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
+        receipt_id: Hash::new(b"ledger-owned-runtime-receipt-sequence"),
+        service_name: service_name.clone(),
+        service_version: bundle.service.service_version.clone(),
+        handler_name: "query".parse().expect("valid handler"),
+        handler_class: SoraServiceHandlerClassV1::Query,
+        request_commitment: Hash::new(b"ledger-owned-runtime-receipt-request"),
+        result_commitment: Hash::new(b"ledger-owned-runtime-receipt-result"),
+        certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
+        emitted_sequence: 0,
+        execution_host: None,
+        mailbox_message_id: None,
+        journal_artifact_hash: None,
+        checkpoint_artifact_hash: None,
+    };
+    ingress_receipt.receipt_id = derive_soracloud_local_read_receipt_id_v1(&ingress_receipt);
+    let expected_sequence = next_soracloud_audit_sequence(&stx)?;
+    let runtime_before = stx
+        .world
+        .soracloud_service_runtime
+        .get(&service_name)
+        .cloned();
+    let receipt_count_before = stx.world.soracloud_runtime_receipts.iter().count();
+
+    let mut unbound_id = ingress_receipt.clone();
+    unbound_id.receipt_id = Hash::new(b"caller-selected-local-read-receipt-id");
+    let error = isi::RecordSoracloudRuntimeReceipt {
+        receipt: unbound_id,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("local-read receipt ids must bind their exact immutable contents");
+    assert_invariant_contains(
+        error,
+        "canonical sequence-independent local-read receipt ID",
+    );
+
+    for claimed_sequence in [1, expected_sequence.saturating_add(10_000), u64::MAX] {
+        let mut poisoned = ingress_receipt.clone();
+        poisoned.emitted_sequence = claimed_sequence;
+        let error = isi::RecordSoracloudRuntimeReceipt { receipt: poisoned }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("caller-controlled runtime receipt sequences must be rejected");
+        assert_invalid_parameter_contains(error, "emitted_sequence must be zero");
+        assert_eq!(
+            stx.world.soracloud_runtime_receipts.iter().count(),
+            receipt_count_before,
+            "rejected sequence claims must not persist a receipt"
+        );
+        assert!(
+            stx.world
+                .soracloud_runtime_receipts
+                .get(&ingress_receipt.receipt_id)
+                .is_none()
+        );
+        assert_eq!(
+            stx.world.soracloud_service_runtime.get(&service_name),
+            runtime_before.as_ref(),
+            "rejected sequence claims must not update runtime state"
+        );
+        assert_eq!(
+            next_soracloud_audit_sequence(&stx)?,
+            expected_sequence,
+            "rejected sequence claims must not advance the authoritative allocator"
+        );
+    }
+
+    isi::RecordSoracloudRuntimeReceipt {
+        receipt: ingress_receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let persisted_receipt = stx
+        .world
+        .soracloud_runtime_receipts
+        .get(&ingress_receipt.receipt_id)
+        .cloned()
+        .expect("zero-sentinel receipt must be persisted");
+    assert_eq!(persisted_receipt.emitted_sequence, expected_sequence);
+    assert_eq!(
+        stx.world.soracloud_service_runtime.get(&service_name),
+        runtime_before.as_ref(),
+        "recording a receipt must not rewrite the independent runtime-health projection"
+    );
+    let runtime_after_success = stx
+        .world
+        .soracloud_service_runtime
+        .get(&service_name)
+        .cloned();
+
+    let replay_error = isi::RecordSoracloudRuntimeReceipt {
+        receipt: ingress_receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("a zero-sentinel replay must not replace the assigned receipt");
+    assert_invariant_contains(replay_error, "has already been recorded");
+    assert_eq!(
+        stx.world
+            .soracloud_runtime_receipts
+            .get(&ingress_receipt.receipt_id),
+        Some(&persisted_receipt)
+    );
+    assert_eq!(
+        stx.world.soracloud_service_runtime.get(&service_name),
+        runtime_after_success.as_ref(),
+        "receipt replay must not update runtime state"
+    );
+
+    let mut terminal_audit = stx
+        .world
+        .soracloud_service_audit_events
+        .iter()
+        .next()
+        .map(|(_sequence, event)| event.clone())
+        .expect("service deployment audit event");
+    terminal_audit.sequence = u64::MAX;
+    stx.world
+        .soracloud_service_audit_events
+        .insert(u64::MAX, terminal_audit.clone());
+    let mut exhausted_receipt = ingress_receipt;
+    exhausted_receipt.result_commitment = Hash::new(b"exhausted-runtime-receipt-result");
+    exhausted_receipt.receipt_id = derive_soracloud_local_read_receipt_id_v1(&exhausted_receipt);
+    let exhaustion_error = isi::RecordSoracloudRuntimeReceipt {
+        receipt: exhausted_receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("runtime receipt admission must fail when the audit allocator is exhausted");
+    assert_invariant_contains(exhaustion_error, "audit sequence is exhausted");
+    assert!(
+        stx.world
+            .soracloud_runtime_receipts
+            .get(&exhausted_receipt.receipt_id)
+            .is_none(),
+        "audit exhaustion must not persist a runtime receipt"
+    );
+    assert_eq!(
+        stx.world.soracloud_service_runtime.get(&service_name),
+        runtime_after_success.as_ref(),
+        "audit exhaustion must fail before runtime-state write-back"
+    );
+    assert_eq!(
+        stx.world.soracloud_service_audit_events.get(&u64::MAX),
+        Some(&terminal_audit),
+        "runtime receipt admission must not overwrite the terminal audit event"
+    );
+    Ok(())
+}
+#[test]
+fn ordered_mailbox_admission_fails_closed_without_consensus_reexecution() -> Result<(), eyre::Report>
+{
+    permissioned_soracloud_transaction!(kura, state, block_header, state_block, stx);
+    let mut bundle = sample_bundle("ordered_mailbox", "1.0.0", 0);
+    bundle.container.capabilities.allow_state_writes = true;
+    bundle.service.container.manifest_hash = Hash::new(Encode::encode(&bundle.container));
+    bundle.service.state_bindings[0].mutability = SoraStateMutabilityV1::ReadWrite;
+    bundle.service.handlers.push(SoraServiceHandlerV1 {
+        handler_name: "update".parse().expect("valid update handler"),
+        class: SoraServiceHandlerClassV1::Update,
+        entrypoint: "apply_update".to_owned(),
+        route_path: Some("/update".to_owned()),
+        certified_response: SoraCertifiedResponsePolicyV1::None,
+        mailbox: Some(SoraMailboxContractV1 {
+            queue_name: "updates".parse().expect("valid mailbox name"),
+            max_pending_messages: NonZeroU32::new(8).expect("nonzero"),
+            max_message_bytes: NonZeroU64::new(1_024).expect("nonzero"),
+            retention_blocks: NonZeroU32::new(32).expect("nonzero"),
+        }),
+    });
+    isi::DeploySoracloudService {
+        bundle: bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+
+    let payload = b"ordered mailbox input".to_vec();
+    let message = SoraServiceMailboxMessageV1 {
+        schema_version: iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+        message_id: Hash::prehashed([0; Hash::LENGTH]),
+        from_service: bundle.service.service_name.clone(),
+        from_service_version: String::new(),
+        from_handler: "update".parse().expect("valid source handler"),
+        to_service: bundle.service.service_name.clone(),
+        to_service_version: String::new(),
+        to_handler: "update".parse().expect("valid destination handler"),
+        payload_commitment: Hash::new(&payload),
+        payload_bytes: payload,
+        delivery_delay_blocks: 0,
+        enqueue_sequence: 0,
+        enqueue_height: 0,
+        available_after_height: 0,
+        expires_at_height: 0,
+    };
+    let disabled = isi::RecordSoracloudMailboxMessage { message }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("ordered mailbox admission must fail closed without consensus re-execution");
+    assert_invariant_contains(
+        disabled,
+        "disabled until consensus can re-execute the exact admitted IVM bundle",
+    );
+    assert!(
+        stx.world.soracloud_mailbox_messages.iter().next().is_none(),
+        "fail-closed admission must not persist mailbox state"
+    );
+    Ok(())
+}
+#[test]
+fn soracloud_app_infra_mutation_preconditions_are_signed_atomic_compare_and_set()
+-> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    let service_bundle = sample_bundle("portal", "1.0.0", 0);
+    let deploy_manifest = sample_app_infra_manifest_for_bundle(&service_bundle, "1.0.0");
+    let upgrade_manifest = sample_app_infra_manifest_for_bundle(&service_bundle, "1.1.0");
+    let next_manifest = sample_app_infra_manifest_for_bundle(&service_bundle, "1.2.0");
+    let app_name = deploy_manifest.app_name.clone();
+    soracloud_transaction!(state, block_header, state_block, stx);
+    isi::DeploySoracloudService {
+        bundle: service_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&service_bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let absent = SoraAppInfraMutationPreconditionV1::AppAbsent;
+    isi::DeploySoracloudAppInfra {
+        manifest: deploy_manifest.clone(),
+        precondition: absent.clone(),
+        provenance: app_infra_provenance_with_precondition(&deploy_manifest, &absent),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+
+    let redeploy_error = isi::DeploySoracloudAppInfra {
+        manifest: deploy_manifest.clone(),
+        precondition: absent.clone(),
+        provenance: app_infra_provenance_with_precondition(&deploy_manifest, &absent),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("app deploy must compare-and-set topology absence");
+    assert_invariant_contains(redeploy_error, "deploy precondition failed");
+    let wrong_mode_error = isi::UpgradeSoracloudAppInfra {
+        manifest: upgrade_manifest.clone(),
+        precondition: absent.clone(),
+        provenance: app_infra_provenance_with_precondition(&upgrade_manifest, &absent),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("app upgrade must require an exact-current-revision condition");
+    assert_invalid_parameter_contains(wrong_mode_error, "ExactCurrentRevision");
+
+    let exact = exact_app_infra_precondition(&deploy_manifest, 1);
+    let stale_preconditions = [
+        SoraAppInfraMutationPreconditionV1::ExactCurrentRevision(
+            SoraAppInfraExactCurrentRevisionPreconditionV1 {
+                app_version: "0.9.0".to_owned(),
+                manifest_hash: deploy_manifest.manifest_hash(),
+                revision_count: 1,
+            },
+        ),
+        SoraAppInfraMutationPreconditionV1::ExactCurrentRevision(
+            SoraAppInfraExactCurrentRevisionPreconditionV1 {
+                app_version: deploy_manifest.app_version.clone(),
+                manifest_hash: Hash::new(b"stale app manifest"),
+                revision_count: 1,
+            },
+        ),
+        SoraAppInfraMutationPreconditionV1::ExactCurrentRevision(
+            SoraAppInfraExactCurrentRevisionPreconditionV1 {
+                app_version: deploy_manifest.app_version.clone(),
+                manifest_hash: deploy_manifest.manifest_hash(),
+                revision_count: 2,
+            },
+        ),
+    ];
+    for precondition in stale_preconditions {
+        let error = isi::UpgradeSoracloudAppInfra {
+            manifest: upgrade_manifest.clone(),
+            precondition: precondition.clone(),
+            provenance: app_infra_provenance_with_precondition(&upgrade_manifest, &precondition),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("stale app topology precondition must fail");
+        assert_invariant_contains(error, "topology revision changed after preflight");
+    }
+
+    let mut tampered = exact.clone();
+    if let SoraAppInfraMutationPreconditionV1::ExactCurrentRevision(precondition) = &mut tampered {
+        precondition.revision_count = 2;
+    }
+    let signature_error = isi::UpgradeSoracloudAppInfra {
+        manifest: upgrade_manifest.clone(),
+        precondition: tampered,
+        provenance: app_infra_provenance_with_precondition(&upgrade_manifest, &exact),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("changing a signed app precondition must invalidate provenance");
+    assert_invalid_parameter_contains(signature_error, "signature verification failed");
+
+    isi::UpgradeSoracloudAppInfra {
+        manifest: upgrade_manifest.clone(),
+        precondition: exact.clone(),
+        provenance: app_infra_provenance_with_precondition(&upgrade_manifest, &exact),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let replay_error = isi::UpgradeSoracloudAppInfra {
+        manifest: upgrade_manifest.clone(),
+        precondition: exact.clone(),
+        provenance: app_infra_provenance_with_precondition(&upgrade_manifest, &exact),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("an exact signed app upgrade must not be replayable");
+    assert_invariant_contains(replay_error, "topology revision changed after preflight");
+    let lost_update_error = isi::UpgradeSoracloudAppInfra {
+        manifest: next_manifest.clone(),
+        precondition: exact.clone(),
+        provenance: app_infra_provenance_with_precondition(&next_manifest, &exact),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("two app upgrades from the same snapshot must not both succeed");
+    assert_invariant_contains(
+        lost_update_error,
+        "topology revision changed after preflight",
+    );
+
+    let current_exact = exact_app_infra_precondition(&upgrade_manifest, 2);
+    let same_revision_error = isi::UpgradeSoracloudAppInfra {
+        manifest: upgrade_manifest.clone(),
+        precondition: current_exact.clone(),
+        provenance: app_infra_provenance_with_precondition(&upgrade_manifest, &current_exact),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("a fresh condition must not readmit the current app topology");
+    assert_invariant_contains(same_revision_error, "must admit a distinct topology");
+
+    let mut exhausted_state = stx
+        .world
+        .soracloud_app_infra_states
+        .get(&app_name)
+        .cloned()
+        .expect("current app topology");
+    exhausted_state.revision_count = u32::MAX;
+    stx.world
+        .soracloud_app_infra_states
+        .insert(app_name.clone(), exhausted_state.clone());
+    let exhausted_precondition = SoraAppInfraMutationPreconditionV1::ExactCurrentRevision(
+        SoraAppInfraExactCurrentRevisionPreconditionV1 {
+            app_version: exhausted_state.current_app_version.clone(),
+            manifest_hash: exhausted_state.current_manifest_hash,
+            revision_count: u32::MAX,
+        },
+    );
+    let audit_count = stx.world.soracloud_app_infra_audit_events.iter().count();
+    let exhausted_provenance =
+        app_infra_provenance_with_precondition(&next_manifest, &exhausted_precondition);
+    let exhausted_error = isi::UpgradeSoracloudAppInfra {
+        manifest: next_manifest,
+        precondition: exhausted_precondition.clone(),
+        provenance: exhausted_provenance,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("app revision count exhaustion must fail closed");
+    assert_invariant_contains(exhausted_error, "revision count is exhausted");
+    assert_eq!(
+        stx.world.soracloud_app_infra_states.get(&app_name),
+        Some(&exhausted_state),
+        "revision count exhaustion must not change app state"
+    );
+    assert_eq!(
+        stx.world.soracloud_app_infra_audit_events.iter().count(),
+        audit_count,
+        "revision count exhaustion must not append an app audit event"
+    );
+    Ok(())
+}
+#[test]
+fn soracloud_service_mutation_preconditions_are_signed_atomic_compare_and_set()
+-> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    let deploy_bundle = sample_bundle("portal", "1.0.0", 0);
+    let upgrade_bundle = sample_bundle("portal", "1.1.0", 25);
+    soracloud_transaction!(state, block_header, state_block, stx);
+    isi::DeploySoracloudService {
+        bundle: deploy_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&deploy_bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+
+    let redeploy_error = isi::DeploySoracloudService {
+        bundle: upgrade_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&upgrade_bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("deploy must compare-and-set service absence at execution");
+    assert_invariant_contains(redeploy_error, "deploy precondition failed");
+
+    let wrong_mode_error = isi::UpgradeSoracloudService {
+        bundle: upgrade_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&upgrade_bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("upgrade must require an exact-current-revision condition");
+    assert_invalid_parameter_contains(wrong_mode_error, "ExactCurrentRevision");
+
+    let service_manifest_hash = deploy_bundle.service_manifest_hash();
+    let container_manifest_hash = deploy_bundle.container_manifest_hash();
+    let zero_generation = SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+        SoraServiceExactCurrentRevisionPreconditionV1 {
+            service_version: "1.0.0".to_owned(),
+            service_manifest_hash,
+            container_manifest_hash,
+            process_generation: 0,
+            config_generation: 0,
+            secret_generation: 0,
+        },
+    );
+    let zero_generation_error = isi::UpgradeSoracloudService {
+        bundle: upgrade_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: zero_generation.clone(),
+        provenance: bundle_provenance_with_precondition(&upgrade_bundle, &zero_generation),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("upgrade must reject a zero process generation");
+    assert_invalid_parameter_contains(zero_generation_error, "positive process generation");
+
+    let stale_preconditions = [
+        (
+            "version drift",
+            SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+                SoraServiceExactCurrentRevisionPreconditionV1 {
+                    service_version: "0.9.0".to_owned(),
+                    service_manifest_hash,
+                    container_manifest_hash,
+                    process_generation: 1,
+                    config_generation: 0,
+                    secret_generation: 0,
+                },
+            ),
+        ),
+        (
+            "service manifest drift",
+            SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+                SoraServiceExactCurrentRevisionPreconditionV1 {
+                    service_version: "1.0.0".to_owned(),
+                    service_manifest_hash: Hash::new(b"stale service manifest"),
+                    container_manifest_hash,
+                    process_generation: 1,
+                    config_generation: 0,
+                    secret_generation: 0,
+                },
+            ),
+        ),
+        (
+            "container manifest drift",
+            SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+                SoraServiceExactCurrentRevisionPreconditionV1 {
+                    service_version: "1.0.0".to_owned(),
+                    service_manifest_hash,
+                    container_manifest_hash: Hash::new(b"stale container manifest"),
+                    process_generation: 1,
+                    config_generation: 0,
+                    secret_generation: 0,
+                },
+            ),
+        ),
+        (
+            "process generation drift",
+            SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+                SoraServiceExactCurrentRevisionPreconditionV1 {
+                    service_version: "1.0.0".to_owned(),
+                    service_manifest_hash,
+                    container_manifest_hash,
+                    process_generation: 2,
+                    config_generation: 0,
+                    secret_generation: 0,
+                },
+            ),
+        ),
+        (
+            "config generation drift",
+            SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+                SoraServiceExactCurrentRevisionPreconditionV1 {
+                    service_version: "1.0.0".to_owned(),
+                    service_manifest_hash,
+                    container_manifest_hash,
+                    process_generation: 1,
+                    config_generation: 1,
+                    secret_generation: 0,
+                },
+            ),
+        ),
+        (
+            "secret generation drift",
+            SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+                SoraServiceExactCurrentRevisionPreconditionV1 {
+                    service_version: "1.0.0".to_owned(),
+                    service_manifest_hash,
+                    container_manifest_hash,
+                    process_generation: 1,
+                    config_generation: 0,
+                    secret_generation: 1,
+                },
+            ),
+        ),
+    ];
+    for (case, precondition) in stale_preconditions {
+        let error = isi::UpgradeSoracloudService {
+            bundle: upgrade_bundle.clone(),
+            initial_service_configs: BTreeMap::new(),
+            initial_service_secrets: BTreeMap::new(),
+            precondition: precondition.clone(),
+            provenance: bundle_provenance_with_precondition(&upgrade_bundle, &precondition),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err(case);
+        assert_invariant_contains(error, "active revision changed after preflight");
+    }
+
+    let exact_precondition = exact_service_revision_precondition(&deploy_bundle, 1);
+    for (case, config_generation, secret_generation) in [("config", 1, 0), ("secret", 0, 1)] {
+        let mut concurrently_mutated = stx
+            .world
+            .soracloud_service_deployments
+            .get(&deploy_bundle.service.service_name)
+            .cloned()
+            .expect("deployed service state");
+        concurrently_mutated.config_generation = config_generation;
+        concurrently_mutated.secret_generation = secret_generation;
+        stx.world.soracloud_service_deployments.insert(
+            deploy_bundle.service.service_name.clone(),
+            concurrently_mutated,
+        );
+        let error = isi::UpgradeSoracloudService {
+            bundle: upgrade_bundle.clone(),
+            initial_service_configs: BTreeMap::new(),
+            initial_service_secrets: BTreeMap::new(),
+            precondition: exact_precondition.clone(),
+            provenance: bundle_provenance_with_precondition(&upgrade_bundle, &exact_precondition),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("a concurrent material mutation must stale the observed upgrade state");
+        assert_invariant_contains(error, "active revision changed after preflight");
+        let mut restored = stx
+            .world
+            .soracloud_service_deployments
+            .get(&deploy_bundle.service.service_name)
+            .cloned()
+            .expect("deployed service state");
+        restored.config_generation = 0;
+        restored.secret_generation = 0;
+        stx.world
+            .soracloud_service_deployments
+            .insert(deploy_bundle.service.service_name.clone(), restored);
+        let restored = stx
+            .world
+            .soracloud_service_deployments
+            .get(&deploy_bundle.service.service_name)
+            .expect("restored deployment");
+        assert_eq!(
+            (restored.config_generation, restored.secret_generation),
+            (0, 0),
+            "restore {case} generation fixture"
+        );
+    }
+    let mut tampered_precondition = exact_precondition.clone();
+    if let SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+        SoraServiceExactCurrentRevisionPreconditionV1 {
+            process_generation, ..
+        },
+    ) = &mut tampered_precondition
+    {
+        *process_generation = 2;
+    }
+    let signature_error = isi::UpgradeSoracloudService {
+        bundle: upgrade_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: tampered_precondition,
+        provenance: bundle_provenance_with_precondition(&upgrade_bundle, &exact_precondition),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("changing a signed precondition must invalidate provenance");
+    assert_invalid_parameter_contains(signature_error, "signature verification failed");
+
+    let mut route_drift_bundle = upgrade_bundle.clone();
+    route_drift_bundle
+        .service
+        .route
+        .as_mut()
+        .expect("sample route")
+        .host = "replacement.example.test".to_owned();
+    let route_drift_error = isi::UpgradeSoracloudService {
+        bundle: route_drift_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: exact_precondition.clone(),
+        provenance: bundle_provenance_with_precondition(&route_drift_bundle, &exact_precondition),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("an upgrade must not replace the deployment route identity");
+    assert_invariant_contains(route_drift_error, "cannot change route identity");
+
+    let mut state_binding_drift_bundle = upgrade_bundle.clone();
+    state_binding_drift_bundle.service.state_bindings[0].max_total_bytes =
+        NonZeroU64::new(4_096).expect("nonzero state quota");
+    let state_binding_drift_error = isi::UpgradeSoracloudService {
+        bundle: state_binding_drift_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: exact_precondition.clone(),
+        provenance: bundle_provenance_with_precondition(
+            &state_binding_drift_bundle,
+            &exact_precondition,
+        ),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("an upgrade must not replace its durable state-binding contract");
+    assert_invariant_contains(
+        state_binding_drift_error,
+        "cannot change durable state-binding contracts",
+    );
+
+    let mut exhausted_deployment = stx
+        .world
+        .soracloud_service_deployments
+        .get(&deploy_bundle.service.service_name)
+        .cloned()
+        .expect("deployed service state");
+    exhausted_deployment.process_generation = u64::MAX;
+    stx.world.soracloud_service_deployments.insert(
+        deploy_bundle.service.service_name.clone(),
+        exhausted_deployment,
+    );
+    let exhausted_precondition = exact_service_revision_precondition(&deploy_bundle, u64::MAX);
+    let exhausted_error = isi::UpgradeSoracloudService {
+        bundle: upgrade_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: exhausted_precondition.clone(),
+        provenance: bundle_provenance_with_precondition(&upgrade_bundle, &exhausted_precondition),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("an exhausted generation must fail instead of preserving a replayable token");
+    assert_invariant_contains(exhausted_error, "process generation is exhausted");
+    assert!(
+        stx.world
+            .soracloud_service_revisions
+            .get(&(
+                deploy_bundle.service.service_name.as_ref().to_owned(),
+                upgrade_bundle.service.service_version.clone(),
+            ))
+            .is_none(),
+        "generation exhaustion must fail before the candidate revision is admitted"
+    );
+    let mut restored_deployment = stx
+        .world
+        .soracloud_service_deployments
+        .get(&deploy_bundle.service.service_name)
+        .cloned()
+        .expect("deployed service state");
+    restored_deployment.process_generation = 1;
+    stx.world.soracloud_service_deployments.insert(
+        deploy_bundle.service.service_name.clone(),
+        restored_deployment,
+    );
+
+    isi::UpgradeSoracloudService {
+        bundle: upgrade_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: exact_precondition.clone(),
+        provenance: bundle_provenance_with_precondition(&upgrade_bundle, &exact_precondition),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let deployment = stx
+        .world
+        .soracloud_service_deployments
+        .get(&deploy_bundle.service.service_name)
+        .expect("upgraded deployment state");
+    assert_eq!(deployment.current_service_version, "1.1.0");
+    assert_eq!(deployment.process_generation, 2);
+    let replay_bundle = sample_bundle("portal", "1.2.0", 25);
+    let replay_error = isi::UpgradeSoracloudService {
+        bundle: replay_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: exact_precondition.clone(),
+        provenance: bundle_provenance_with_precondition(&replay_bundle, &exact_precondition),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("an exact precondition must become stale after one successful upgrade");
+    assert_invariant_contains(replay_error, "active revision changed after preflight");
+    let in_flight_precondition = exact_service_revision_precondition(&upgrade_bundle, 2);
+    let in_flight_error = isi::UpgradeSoracloudService {
+        bundle: replay_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: in_flight_precondition.clone(),
+        provenance: bundle_provenance_with_precondition(&replay_bundle, &in_flight_precondition),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("an upgrade must not supersede an in-flight canary rollout");
+    assert_invariant_contains(in_flight_error, "cannot supersede an active rollout");
+    Ok(())
+}
+fn sample_hosted_http_service_bundle(
+    service_name: &str,
+    service_version: &str,
+    canary_percent: u8,
+) -> SoraDeploymentBundleV1 {
+    let mut bundle = sample_bundle(service_name, service_version, canary_percent);
+    bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
+    bundle.container.inrou = Some(sample_inrou_manifest());
+    bundle.container.entrypoint = "/app/main".to_owned();
+    bundle.service.execution_plane =
+        iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+    bundle.service.economics = SoraHttpServiceEconomicsV1 {
+        schema_version: iroha_data_model::soracloud::SORA_HTTP_SERVICE_ECONOMICS_VERSION_V1,
+        quota_class: "taira-open".to_string(),
+        deployment_deposit: "1".parse().expect("deployment deposit"),
+        prepaid_runtime_balance: "1".parse().expect("runtime balance"),
+        runtime_price_per_block: "0.000000001".parse().expect("runtime price"),
+        storage_price_per_gib_block: "0.000000001".parse().expect("storage price"),
+        egress_price_per_mib: "0.000005".parse().expect("egress price"),
+        lease_duration_blocks: NonZeroU64::new(100).expect("nonzero"),
+    };
+    bundle.service.lease_volumes = sample_inrou_lease_volumes();
+    bundle.service.state_bindings.clear();
+    bundle.service.handlers.clear();
+    bundle.service.artifacts[0].handler_name = None;
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+    bundle
+}
+#[test]
+fn inrou_reconciliation_excludes_inactive_validator_with_live_capability()
+-> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    let mut bundle = sample_hosted_http_service_bundle("portal", "1.0.0", 0);
+    bundle.service.replicas = NonZeroU16::new(1).expect("nonzero replicas");
+    soracloud_transaction_at!(state, deploy_header, deploy_block, deploy_tx, 100);
+    isi::DeploySoracloudService {
+        bundle: bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&bundle),
+    }
+    .execute(&ALICE_ID, &mut deploy_tx)?;
+    let capability = sample_inrou_host_capability(ALICE_ID.clone(), 100, 1_000);
+    isi::AdvertiseSoracloudInrouHost {
+        capability: capability.clone(),
+        provenance: inrou_host_advertise_provenance(&capability),
+    }
+    .execute(&ALICE_ID, &mut deploy_tx)?;
+    let placement_key = (
+        bundle.service.service_name.as_ref().to_owned(),
+        bundle.service.service_version.clone(),
+    );
+    assert_eq!(
+        deploy_tx
+            .world
+            .soracloud_inrou_service_placements
+            .get(&placement_key)
+            .expect("placement after active advert")
+            .placements
+            .len(),
+        1
+    );
+    deploy_tx.apply();
+    deploy_block.commit()?;
+
+    soracloud_transaction_at!(state, reconcile_header, reconcile_block, reconcile_tx, 200);
+    reconcile_tx
+        .world
+        .public_lane_validators
+        .get_mut(&(LaneId::SINGLE, ALICE_ID.clone()))
+        .expect("active validator fixture")
+        .status = PublicLaneValidatorStatus::Exited;
+    assert!(
+        reconcile_tx
+            .world
+            .soracloud_inrou_host_capabilities
+            .get(&ALICE_ID)
+            .is_some_and(|record| record.can_host_replicas_at(200)),
+        "fixture must retain an otherwise-live host advert"
+    );
+    isi::ReconcileSoracloudInrouPlacements.execute(&ALICE_ID, &mut reconcile_tx)?;
+    assert!(
+        reconcile_tx
+            .world
+            .soracloud_inrou_host_capabilities
+            .get(&ALICE_ID)
+            .is_none(),
+        "inactive validator capability must be evicted during reconciliation"
+    );
+    let placement = reconcile_tx
+        .world
+        .soracloud_inrou_service_placements
+        .get(&placement_key)
+        .expect("reconciled placement record");
+    assert_eq!(placement.eligible_validator_count, 0);
+    assert!(placement.placements.is_empty());
+    assert!(placement.last_error.is_some());
+    Ok(())
+}
+#[test]
+fn inrou_peer_rotation_invalidates_stale_capability_and_placement_immediately()
+-> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    let mut bundle = sample_hosted_http_service_bundle("rotated_peer_portal", "1.0.0", 0);
+    bundle.service.replicas = NonZeroU16::new(1).expect("nonzero replicas");
+    soracloud_transaction_at!(state, deploy_header, deploy_block, deploy_tx, 100);
+    isi::DeploySoracloudService {
+        bundle: bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&bundle),
+    }
+    .execute(&ALICE_ID, &mut deploy_tx)?;
+    let capability = sample_inrou_host_capability(ALICE_ID.clone(), 100, 1_000);
+    isi::AdvertiseSoracloudInrouHost {
+        capability: capability.clone(),
+        provenance: inrou_host_advertise_provenance(&capability),
+    }
+    .execute(&ALICE_ID, &mut deploy_tx)?;
+    let placement_key = (
+        bundle.service.service_name.as_ref().to_owned(),
+        bundle.service.service_version.clone(),
+    );
+    assert_eq!(
+        deploy_tx
+            .world
+            .soracloud_inrou_service_placements
+            .get(&placement_key)
+            .expect("placement after active advert")
+            .placements
+            .len(),
+        1
+    );
+    deploy_tx.apply();
+    deploy_block.commit()?;
+
+    soracloud_transaction_at!(state, reconcile_header, reconcile_block, reconcile_tx, 200);
+    reconcile_tx
+        .world
+        .public_lane_validators
+        .get_mut(&(LaneId::SINGLE, ALICE_ID.clone()))
+        .expect("active validator fixture")
+        .peer_id = PeerId::from(BOB_ID.expect_single_signatory().clone());
+    assert!(
+        crate::soracloud_runtime::resolve_active_inrou_replica_assignments(
+            &reconcile_tx.world,
+            bundle.service.service_name.as_ref(),
+            &bundle.service.service_version,
+            200,
+            reconcile_tx.block_height(),
+            |lane_id| reconcile_tx.is_lane_active_for_authority(lane_id),
+        )
+        .map_err(eyre::Report::msg)?
+        .is_empty(),
+        "stale placement must stop serving before a reconcile transaction is committed"
+    );
+    isi::ReconcileSoracloudInrouPlacements.execute(&ALICE_ID, &mut reconcile_tx)?;
+    assert!(
+        reconcile_tx
+            .world
+            .soracloud_inrou_host_capabilities
+            .get(&ALICE_ID)
+            .is_none(),
+        "a capability stale after peer rotation must be pruned"
+    );
+    let placement = reconcile_tx
+        .world
+        .soracloud_inrou_service_placements
+        .get(&placement_key)
+        .expect("reconciled placement record");
+    assert_eq!(placement.eligible_validator_count, 0);
+    assert!(placement.placements.is_empty());
+    Ok(())
+}
+#[test]
+fn inrou_reconciliation_prunes_expired_host_capability() -> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    let mut bundle = sample_hosted_http_service_bundle("expired_portal", "1.0.0", 0);
+    bundle.service.replicas = NonZeroU16::new(1).expect("nonzero replicas");
+    soracloud_transaction_at!(state, deploy_header, deploy_block, deploy_tx, 100);
+    isi::DeploySoracloudService {
+        bundle: bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&bundle),
+    }
+    .execute(&ALICE_ID, &mut deploy_tx)?;
+    let capability = sample_inrou_host_capability(ALICE_ID.clone(), 100, 150);
+    isi::AdvertiseSoracloudInrouHost {
+        capability: capability.clone(),
+        provenance: inrou_host_advertise_provenance(&capability),
+    }
+    .execute(&ALICE_ID, &mut deploy_tx)?;
+    let placement_key = (
+        bundle.service.service_name.as_ref().to_owned(),
+        bundle.service.service_version.clone(),
+    );
+    assert_eq!(
+        deploy_tx
+            .world
+            .soracloud_inrou_service_placements
+            .get(&placement_key)
+            .expect("placement before capability expiry")
+            .placements
+            .len(),
+        1
+    );
+    deploy_tx.apply();
+    deploy_block.commit()?;
+
+    soracloud_transaction_at!(state, reconcile_header, reconcile_block, reconcile_tx, 200);
+    isi::ReconcileSoracloudInrouPlacements.execute(&ALICE_ID, &mut reconcile_tx)?;
+    assert!(
+        reconcile_tx
+            .world
+            .soracloud_inrou_host_capabilities
+            .get(&ALICE_ID)
+            .is_none(),
+        "expired Inrou capability must be pruned authoritatively"
+    );
+    let placement = reconcile_tx
+        .world
+        .soracloud_inrou_service_placements
+        .get(&placement_key)
+        .expect("placement after capability expiry");
+    assert_eq!(placement.eligible_validator_count, 0);
+    assert!(placement.placements.is_empty());
     Ok(())
 }
 #[test]
@@ -18850,6 +18554,7 @@ fn deploy_soracloud_service_rejects_missing_replica_private_http_service_data_vo
         bundle: bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -18888,18 +18593,17 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
         bundle: bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let (reporting_epoch, lease_started_height) = {
-        let lease = stx
-            .world
-            .soracloud_service_deployments
-            .get(&bundle.service.service_name)
-            .and_then(|deployment| deployment.service_lease.as_ref())
-            .expect("hosted service lease");
-        (lease.reporting_epoch, lease.lease_started_height)
-    };
+    let lease_started_height = stx
+        .world
+        .soracloud_service_deployments
+        .get(&bundle.service.service_name)
+        .and_then(|deployment| deployment.service_lease.as_ref())
+        .expect("hosted service lease")
+        .lease_started_height;
     let runtime_state = sample_inrou_replica_runtime_state_for(
         bundle.service.service_name.clone(),
         &bundle.service.service_version,
@@ -18912,6 +18616,8 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
         &runtime_state,
     );
     placement.placements[0].lease_started_height = lease_started_height;
+    let mut placement = placement;
+    placement.desired_replica_count = bundle.service.replicas.get();
     stx.world.soracloud_inrou_service_placements.insert(
         (
             placement.service_name.as_ref().to_owned(),
@@ -18919,8 +18625,23 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
         ),
         placement,
     );
+    let now_ms = stx.block_unix_timestamp_ms().max(1);
+    let mut capability =
+        sample_inrou_host_capability(ALICE_ID.clone(), now_ms, now_ms.saturating_add(10_000));
+    capability.supported_guest_isas = BTreeSet::from([SoraInrouGuestIsaV1::Aarch64]);
+    stx.world
+        .soracloud_inrou_host_capabilities
+        .insert(ALICE_ID.clone(), capability);
+    let (lease_started_height, reporting_epoch) = stx
+        .world
+        .soracloud_service_deployments
+        .get(&bundle.service.service_name)
+        .and_then(|deployment| deployment.service_lease.as_ref())
+        .map(|lease| (lease.lease_started_height, lease.reporting_epoch))
+        .expect("hosted service lease");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -18929,8 +18650,16 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
         finalize_reporter: false,
     }
     .execute(&ALICE_ID, &mut stx)?;
+    stx.apply();
+    state_block.commit()?;
+
+    let successor_height = lease_started_height
+        .checked_add(1)
+        .expect("the test lease height has a successor");
+    soracloud_transaction_at_height!(state, usage_header, usage_block, usage_tx, successor_height);
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -18938,8 +18667,8 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
         replica_accounted_egress_bytes: 1024 * 1024,
         finalize_reporter: false,
     }
-    .execute(&ALICE_ID, &mut stx)?;
-    let deployment = stx
+    .execute(&ALICE_ID, &mut usage_tx)?;
+    let deployment = usage_tx
         .world
         .soracloud_service_deployments
         .get(&bundle.service.service_name)
@@ -18953,6 +18682,46 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
             .last_status_reason
             .as_deref()
             .is_some_and(|reason| { reason.contains("prepaid runtime balance exhausted") })
+    );
+    Ok(())
+}
+#[test]
+fn lease_volume_mutation_fails_before_revision_admission() -> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    let deploy_bundle = sample_hosted_http_service_bundle("portal", "1.0.0", 0);
+    let mut upgrade_bundle = sample_hosted_http_service_bundle("portal", "1.1.0", 25);
+    upgrade_bundle.service.lease_volumes[0].max_total_bytes =
+        NonZeroU64::new(16 * 1024 * 1024 * 1024).expect("nonzero");
+    let service_name = deploy_bundle.service.service_name.clone();
+    soracloud_transaction!(state, block_header, state_block, stx);
+    isi::DeploySoracloudService {
+        bundle: deploy_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&deploy_bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let precondition = exact_service_revision_precondition(&deploy_bundle, 1);
+    let error = isi::UpgradeSoracloudService {
+        bundle: upgrade_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: precondition.clone(),
+        provenance: bundle_provenance_with_precondition(&upgrade_bundle, &precondition),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("a rolling revision must not mutate lease-volume economics");
+    assert_invariant_contains(error, "cannot change lease-volume identity or economics");
+    assert!(
+        stx.world
+            .soracloud_service_revisions
+            .get(&(
+                service_name.as_ref().to_owned(),
+                upgrade_bundle.service.service_version.clone(),
+            ))
+            .is_none(),
+        "lease-volume mutation must fail before candidate revision admission"
     );
     Ok(())
 }
@@ -18981,18 +18750,17 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         bundle: bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let (reporting_epoch, lease_started_height) = {
-        let lease = stx
-            .world
-            .soracloud_service_deployments
-            .get(&bundle.service.service_name)
-            .and_then(|deployment| deployment.service_lease.as_ref())
-            .expect("hosted service lease");
-        (lease.reporting_epoch, lease.lease_started_height)
-    };
+    let lease_started_height = stx
+        .world
+        .soracloud_service_deployments
+        .get(&bundle.service.service_name)
+        .and_then(|deployment| deployment.service_lease.as_ref())
+        .expect("hosted service lease")
+        .lease_started_height;
     let alice_runtime = sample_inrou_replica_runtime_state_for(
         bundle.service.service_name.clone(),
         &bundle.service.service_version,
@@ -19009,9 +18777,9 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     let mut bob_assignment = placement.placements[0].clone();
     bob_assignment.replica_slot = 2;
     bob_assignment.placement_incarnation = Hash::new(b"placement-2");
+    let bob_placement_incarnation = bob_assignment.placement_incarnation;
     bob_assignment.validator_account_id = BOB_ID.clone();
     bob_assignment.peer_id = PeerId::from(BOB_ID.expect_single_signatory().clone()).to_string();
-    let bob_placement_incarnation = bob_assignment.placement_incarnation;
     placement.desired_replica_count = 2;
     placement.eligible_validator_count = 2;
     placement.placements.push(bob_assignment);
@@ -19022,6 +18790,29 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         ),
         placement,
     );
+    let now_ms = stx.block_unix_timestamp_ms().max(1);
+    for validator in [&*ALICE_ID, &*BOB_ID] {
+        let mut capability =
+            sample_inrou_host_capability(validator.clone(), now_ms, now_ms.saturating_add(10_000));
+        capability.supported_guest_isas = BTreeSet::from([SoraInrouGuestIsaV1::Aarch64]);
+        stx.world
+            .soracloud_inrou_host_capabilities
+            .insert(validator.clone(), capability);
+    }
+    let reporting_epoch = stx
+        .world
+        .soracloud_service_deployments
+        .get(&bundle.service.service_name)
+        .and_then(|deployment| deployment.service_lease.as_ref())
+        .expect("hosted service lease")
+        .reporting_epoch;
+    let lease_started_height = stx
+        .world
+        .soracloud_service_deployments
+        .get(&bundle.service.service_name)
+        .and_then(|deployment| deployment.service_lease.as_ref())
+        .expect("hosted service lease")
+        .lease_started_height;
     for (authority, replica_slot) in [(&*ALICE_ID, 1_u16), (&*BOB_ID, 2_u16)] {
         let placement_incarnation = if replica_slot == 1 {
             alice_placement_incarnation
@@ -19030,6 +18821,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         };
         isi::ReportSoracloudServiceLeaseUsage {
             service_name: bundle.service.service_name.clone(),
+            lease_started_height,
             reporting_epoch,
             active_service_version: bundle.service.service_version.clone(),
             replica_slot,
@@ -19039,6 +18831,13 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         }
         .execute(authority, &mut stx)?;
     }
+    stx.apply();
+    state_block.commit()?;
+    let successor_height = lease_started_height
+        .checked_add(1)
+        .expect("the test lease height has a successor");
+    soracloud_transaction_at_height!(state, block_header, state_block, stx, successor_height);
+
     let baseline = stx
         .world
         .soracloud_service_deployments
@@ -19050,11 +18849,75 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     mismatched_volume_clock
         .validate()
         .expect_err("leased-volume economics must match the containing service lease");
-    let alice_bytes = u64::MAX - 5;
+    let zero_incarnation_error = isi::ReportSoracloudServiceLeaseUsage {
+        service_name: bundle.service.service_name.clone(),
+        lease_started_height: 0,
+        reporting_epoch,
+        active_service_version: bundle.service.service_version.clone(),
+        replica_slot: 1,
+        placement_incarnation: alice_placement_incarnation,
+        replica_accounted_egress_bytes: 0,
+        finalize_reporter: false,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("a zero lease incarnation must fail closed");
+    assert_invalid_parameter_contains(
+        zero_incarnation_error,
+        "lease_started_height must be greater than zero",
+    );
+
+    let next_lease_started_height = lease_started_height
+        .checked_add(1)
+        .expect("fixture lease incarnation has a successor");
+    let mut next_incarnation = baseline.clone();
+    let next_incarnation_lease = next_incarnation
+        .service_lease
+        .as_mut()
+        .expect("hosted service lease");
+    assert!(next_lease_started_height < next_incarnation_lease.lease_expires_height);
+    next_incarnation_lease.lease_started_height = next_lease_started_height;
+    for volume in &mut next_incarnation.lease_volume_states {
+        volume.lease_started_height = next_lease_started_height;
+    }
+    next_incarnation
+        .validate()
+        .expect("successor lease incarnation fixture must remain valid");
+    stx.world.soracloud_service_deployments.insert(
+        bundle.service.service_name.clone(),
+        next_incarnation.clone(),
+    );
+    let stale_incarnation_error = isi::ReportSoracloudServiceLeaseUsage {
+        service_name: bundle.service.service_name.clone(),
+        lease_started_height,
+        reporting_epoch,
+        active_service_version: bundle.service.service_version.clone(),
+        replica_slot: 1,
+        placement_incarnation: alice_placement_incarnation,
+        replica_accounted_egress_bytes: 0,
+        finalize_reporter: false,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err(
+        "a report for an old lease must be rejected even when epoch, revision, and slot match",
+    );
+    assert_invalid_parameter_contains(stale_incarnation_error, "lease-incarnation CAS expected");
+    assert_eq!(
+        stx.world
+            .soracloud_service_deployments
+            .get(&bundle.service.service_name),
+        Some(&next_incarnation),
+        "a stale lease report must not mutate the current incarnation",
+    );
+    stx.world
+        .soracloud_service_deployments
+        .insert(bundle.service.service_name.clone(), baseline.clone());
+
+    let alice_bytes = 1024 * 1024;
     let bob_bytes = 10;
 
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -19065,6 +18928,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .execute(&ALICE_ID, &mut stx)?;
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -19079,7 +18943,8 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         .get(&bundle.service.service_name)
         .and_then(|deployment| deployment.service_lease.clone())
         .expect("first ordered lease");
-    assert_eq!(first_lease.accounted_egress_bytes, u128::from(u64::MAX) + 5);
+    let first_accounted_bytes = u128::from(alice_bytes) + u128::from(bob_bytes);
+    assert_eq!(first_lease.accounted_egress_bytes, first_accounted_bytes);
     assert_eq!(first_lease.egress_reporter_checkpoints.len(), 2);
     assert!(
         first_lease
@@ -19113,6 +18978,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         .expect_err("reporter checkpoint state growth must be protocol bounded");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch.saturating_add(2),
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -19124,6 +18990,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .expect_err("a report outside the current or exact successor epoch must be rejected");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch.saturating_add(2),
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -19149,10 +19016,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         first_lease.egress_reporter_checkpoints
     );
     assert_eq!(renewed_lease.lease_started_height, lease_started_height);
-    assert_eq!(
-        renewed_lease.accounted_egress_bytes,
-        u128::from(u64::MAX) + 5
-    );
+    assert_eq!(renewed_lease.accounted_egress_bytes, first_accounted_bytes);
     let retained_lease =
         build_http_service_lease_state(&next_bundle, Some(&checkpointed_deployment), 2, false)?
             .expect("retained lease");
@@ -19168,6 +19032,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
 
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -19189,6 +19054,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     );
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -19200,6 +19066,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .expect_err("an active assignment must not seal its reporter checkpoint");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -19211,6 +19078,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .expect_err("a reporter checkpoint must not decrease");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -19220,6 +19088,10 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("a validator must not spoof another replica slot");
+
+    stx.apply();
+    state_block.commit()?;
+    soracloud_transaction_at_height!(state, block_header, state_block, stx, 4);
 
     let placement_key = (
         bundle.service.service_name.as_ref().to_owned(),
@@ -19231,15 +19103,24 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         .get(&placement_key)
         .cloned()
         .expect("two-reporter placement");
-    let alice_assignment = retired_alice_placement.placements[0].clone();
-    retired_alice_placement
+    let alice_assignment_index = retired_alice_placement
         .placements
-        .retain(|assignment| assignment.replica_slot != 1);
+        .iter()
+        .position(|assignment| {
+            assignment.replica_slot == 1 && assignment.validator_account_id == *ALICE_ID
+        })
+        .expect("Alice placement");
+    let alice_assignment = retired_alice_placement.placements[alice_assignment_index].clone();
+    let successor_assignment = &mut retired_alice_placement.placements[alice_assignment_index];
+    successor_assignment.validator_account_id = CARPENTER_ID.clone();
+    successor_assignment.peer_id =
+        PeerId::from(CARPENTER_ID.expect_single_signatory().clone()).to_string();
     stx.world
         .soracloud_inrou_service_placements
         .insert(placement_key.clone(), retired_alice_placement.clone());
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -19252,6 +19133,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     let terminal_alice_bytes = alice_bytes + 1;
     let terminal = isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -19270,13 +19152,19 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         .and_then(|deployment| deployment.service_lease.as_ref())
         .and_then(|lease| {
             lease.egress_reporter_checkpoints.iter().find(|checkpoint| {
-                checkpoint.replica_slot == 1 && checkpoint.validator_account_id == *ALICE_ID
+                checkpoint.assignment.placement.replica_slot == 1
+                    && checkpoint.assignment.placement.validator_account_id == *ALICE_ID
             })
         })
         .expect("finalized Alice checkpoint");
     assert!(finalized_checkpoint.finalize_reporter);
+    assert_eq!(
+        finalized_checkpoint.accounted_egress_bytes, terminal_alice_bytes,
+        "a former reporter's one terminal update must retain final in-flight usage"
+    );
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -19286,20 +19174,31 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     }
     .execute(&ALICE_ID, &mut stx)
     .expect_err("a sealed former reporter must not advance again");
-    retired_alice_placement.placements.push(alice_assignment);
-    retired_alice_placement
-        .placements
-        .sort_by_key(|assignment| assignment.replica_slot);
+    retired_alice_placement.placements[alice_assignment_index] = alice_assignment;
     stx.world
         .soracloud_inrou_service_placements
         .insert(placement_key, retired_alice_placement);
-    isi::ReportSoracloudServiceLeaseUsage {
+    let reopen_with_increase_error = isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
         placement_incarnation: alice_placement_incarnation,
         replica_accounted_egress_bytes: terminal_alice_bytes + 1,
+        finalize_reporter: false,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("a finalized checkpoint must reopen at its exact terminal byte value");
+    assert_invalid_parameter_contains(reopen_with_increase_error, "exact terminal byte value");
+    isi::ReportSoracloudServiceLeaseUsage {
+        service_name: bundle.service.service_name.clone(),
+        lease_started_height,
+        reporting_epoch,
+        active_service_version: bundle.service.service_version.clone(),
+        replica_slot: 1,
+        placement_incarnation: alice_placement_incarnation,
+        replica_accounted_egress_bytes: terminal_alice_bytes,
         finalize_reporter: false,
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -19310,11 +19209,48 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         .and_then(|deployment| deployment.service_lease.as_ref())
         .and_then(|lease| {
             lease.egress_reporter_checkpoints.iter().find(|checkpoint| {
-                checkpoint.replica_slot == 1 && checkpoint.validator_account_id == *ALICE_ID
+                checkpoint.assignment.placement.replica_slot == 1
+                    && checkpoint.assignment.placement.validator_account_id == *ALICE_ID
             })
         })
         .expect("reopened Alice checkpoint");
     assert!(!reopened_checkpoint.finalize_reporter);
+    assert_eq!(
+        reopened_checkpoint.accounted_egress_bytes, terminal_alice_bytes,
+        "reopening must preserve the finalized checkpoint's terminal counter"
+    );
+
+    stx.apply();
+    state_block.commit()?;
+    soracloud_transaction_at_height!(state, block_header, state_block, stx, 5);
+    isi::ReportSoracloudServiceLeaseUsage {
+        service_name: bundle.service.service_name.clone(),
+        lease_started_height,
+        reporting_epoch,
+        active_service_version: bundle.service.service_version.clone(),
+        replica_slot: 1,
+        placement_incarnation: alice_placement_incarnation,
+        replica_accounted_egress_bytes: terminal_alice_bytes + 1,
+        finalize_reporter: false,
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let increased_checkpoint = stx
+        .world
+        .soracloud_service_deployments
+        .get(&bundle.service.service_name)
+        .and_then(|deployment| deployment.service_lease.as_ref())
+        .and_then(|lease| {
+            lease.egress_reporter_checkpoints.iter().find(|checkpoint| {
+                checkpoint.assignment.placement.replica_slot == 1
+                    && checkpoint.assignment.placement.validator_account_id == *ALICE_ID
+            })
+        })
+        .expect("increased Alice checkpoint");
+    assert_eq!(
+        increased_checkpoint.accounted_egress_bytes,
+        terminal_alice_bytes + 1,
+        "a reopened checkpoint may resume monotonic reporting in a later block"
+    );
 
     let mut capped_deployment = baseline.clone();
     let capped_lease = capped_deployment.service_lease.as_mut().expect("lease");
@@ -19323,7 +19259,10 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     capped_lease.egress_reporter_checkpoints = (0
         ..SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1)
         .map(|index| SoraServiceLeaseEgressCheckpointV1 {
-            active_service_version: format!("retired-{index:04}"),
+            assignment: SoraServiceLeaseReporterAssignmentV1 {
+                service_version: format!("retired-{index:04}"),
+                ..capped_checkpoint.assignment.clone()
+            },
             accounted_egress_bytes: 1,
             finalize_reporter: true,
             ..capped_checkpoint.clone()
@@ -19341,6 +19280,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     );
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -19352,6 +19292,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .expect_err("a full current-epoch table must reject a new identity without rollover");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 2,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -19363,6 +19304,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .expect_err("rollover must reject a skipped reporting epoch");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -19374,6 +19316,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .expect_err("rollover must reject a nonzero successor counter");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -19393,9 +19336,14 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         ))
         .cloned()
         .expect("reporter placement");
-    manager_unassigned_placement
+    let manager_assignment = manager_unassigned_placement
         .placements
-        .retain(|assignment| assignment.validator_account_id != *ALICE_ID);
+        .iter_mut()
+        .find(|assignment| assignment.validator_account_id == *ALICE_ID)
+        .expect("Alice placement");
+    manager_assignment.validator_account_id = CARPENTER_ID.clone();
+    manager_assignment.peer_id =
+        PeerId::from(CARPENTER_ID.expect_single_signatory().clone()).to_string();
     stx.world.soracloud_inrou_service_placements.insert(
         (
             bundle.service.service_name.as_ref().to_owned(),
@@ -19405,6 +19353,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     );
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 1,
@@ -19428,6 +19377,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     );
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -19450,10 +19400,26 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         .as_mut()
         .expect("lease")
         .egress_reporter_checkpoints[0];
-    actively_placed_checkpoint.active_service_version = bundle.service.service_version.clone();
-    actively_placed_checkpoint.replica_slot = 2;
-    actively_placed_checkpoint.placement_incarnation = bob_placement_incarnation;
-    actively_placed_checkpoint.validator_account_id = BOB_ID.clone();
+    let active_bob_assignment = stx
+        .world
+        .soracloud_inrou_service_placements
+        .get(&(
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ))
+        .and_then(|record| {
+            record
+                .placements
+                .iter()
+                .find(|placement| placement.replica_slot == 2)
+                .map(|placement| (placement.clone(), record.reconciled_at_ms))
+        })
+        .expect("active Bob assignment");
+    actively_placed_checkpoint.assignment.service_version = bundle.service.service_version.clone();
+    actively_placed_checkpoint.assignment.placement = active_bob_assignment.0;
+    actively_placed_checkpoint
+        .assignment
+        .placement_reconciled_at_ms = active_bob_assignment.1;
     actively_placed_deployment
         .service_lease
         .as_mut()
@@ -19462,17 +19428,15 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         .sort_by(|left, right| {
             (
                 left.reporting_epoch,
-                left.active_service_version.as_str(),
-                left.replica_slot,
-                left.placement_incarnation,
-                &left.validator_account_id,
+                left.assignment.service_version.as_str(),
+                left.assignment.placement.replica_slot,
+                &left.assignment.placement.validator_account_id,
             )
                 .cmp(&(
                     right.reporting_epoch,
-                    right.active_service_version.as_str(),
-                    right.replica_slot,
-                    right.placement_incarnation,
-                    &right.validator_account_id,
+                    right.assignment.service_version.as_str(),
+                    right.assignment.placement.replica_slot,
+                    &right.assignment.placement.validator_account_id,
                 ))
         });
     stx.world.soracloud_service_deployments.insert(
@@ -19481,6 +19445,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     );
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -19502,6 +19467,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         .insert(bundle.service.service_name.clone(), overflowing_deployment);
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -19526,6 +19492,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     );
     let audit_exhaustion_error = isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height: capped_lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -19550,6 +19517,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
         .insert(bundle.service.service_name.clone(), capped_deployment);
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -19583,10 +19551,12 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     let successor_checkpoint = &rolled_lease.egress_reporter_checkpoints[0];
     assert_eq!(successor_checkpoint.reporting_epoch, reporting_epoch + 1);
     assert_eq!(
-        successor_checkpoint.placement_incarnation,
-        bob_placement_incarnation
+        successor_checkpoint
+            .assignment
+            .placement
+            .validator_account_id,
+        *BOB_ID
     );
-    assert_eq!(successor_checkpoint.validator_account_id, *BOB_ID);
     assert_eq!(successor_checkpoint.accounted_egress_bytes, 0);
     assert!(!successor_checkpoint.finalize_reporter);
     let rollover_event = latest_service_audit_event(&stx, &bundle.service.service_name)
@@ -19616,6 +19586,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     assert_eq!(rollover.settled_egress_bytes, 7 + 4_096);
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -19659,6 +19630,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
 
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height: capped_lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -19670,6 +19642,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     .expect_err("an A-to-B-to-A delayed report must not target the returned placement");
     isi::ReportSoracloudServiceLeaseUsage {
         service_name: bundle.service.service_name.clone(),
+        lease_started_height: capped_lease_started_height,
         reporting_epoch: reporting_epoch + 1,
         active_service_version: bundle.service.service_version.clone(),
         replica_slot: 2,
@@ -19756,6 +19729,7 @@ fn deploy_soracloud_service_accepts_required_inline_materials() -> Result<(), ey
             "db/password".to_string(),
             sample_service_secret_envelope(),
         )]),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: {
             let payload =
                 iroha_data_model::soracloud::encode_bundle_with_materials_provenance_payload(
@@ -19768,6 +19742,7 @@ fn deploy_soracloud_service_accepts_required_inline_materials() -> Result<(), ey
                         "db/password".to_string(),
                         sample_service_secret_envelope(),
                     )]),
+                    &SoraServiceMutationPreconditionV1::ServiceAbsent,
                 )
                 .expect("bundle payload");
             ManifestProvenance {
@@ -19797,7 +19772,199 @@ fn deploy_soracloud_service_accepts_required_inline_materials() -> Result<(), ey
     Ok(())
 }
 #[test]
-fn upgrade_deterministic_soracloud_service_starts_canary_rollout() -> Result<(), eyre::Report> {
+fn service_material_generation_exhaustion_fails_closed() -> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    let deploy_bundle = sample_bundle("portal", "1.0.0", 0);
+    let upgrade_bundle = sample_bundle("portal", "1.1.0", 25);
+    let service_name = deploy_bundle.service.service_name.clone();
+    soracloud_transaction!(state, block_header, state_block, stx);
+    isi::DeploySoracloudService {
+        bundle: deploy_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&deploy_bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+
+    let config_name = "runtime/overflow";
+    let config_value = Json::from(norito::json!(true));
+    let config_payload = iroha_data_model::soracloud::encode_set_service_config_provenance_payload(
+        service_name.as_ref(),
+        config_name,
+        &config_value,
+    )?;
+    let mut deployment = stx
+        .world
+        .soracloud_service_deployments
+        .get(&service_name)
+        .cloned()
+        .expect("deployed service state");
+    deployment.config_generation = u64::MAX;
+    stx.world
+        .soracloud_service_deployments
+        .insert(service_name.clone(), deployment);
+    let config_error = isi::SetSoracloudServiceConfig {
+        service_name: service_name.clone(),
+        config_name: config_name.to_owned(),
+        value_json: config_value.clone(),
+        provenance: ManifestProvenance {
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &config_payload),
+        },
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("direct config mutation must reject an exhausted generation");
+    assert_invariant_contains(config_error, "config generation is exhausted");
+    assert!(
+        !stx.world
+            .soracloud_service_deployments
+            .get(&service_name)
+            .expect("deployment")
+            .service_configs
+            .contains_key(config_name),
+        "failed config mutation must not persist its value"
+    );
+
+    let secret_name = "runtime/secret-overflow";
+    let secret = sample_service_secret_envelope();
+    let secret_payload = iroha_data_model::soracloud::encode_set_service_secret_provenance_payload(
+        service_name.as_ref(),
+        secret_name,
+        &secret,
+    )?;
+    let mut deployment = stx
+        .world
+        .soracloud_service_deployments
+        .get(&service_name)
+        .cloned()
+        .expect("deployed service state");
+    deployment.config_generation = 0;
+    deployment.secret_generation = u64::MAX;
+    stx.world
+        .soracloud_service_deployments
+        .insert(service_name.clone(), deployment);
+    let secret_error = isi::SetSoracloudServiceSecret {
+        service_name: service_name.clone(),
+        secret_name: secret_name.to_owned(),
+        secret: secret.clone(),
+        provenance: ManifestProvenance {
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &secret_payload),
+        },
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("direct secret mutation must reject an exhausted generation");
+    assert_invariant_contains(secret_error, "secret generation is exhausted");
+    assert!(
+        !stx.world
+            .soracloud_service_deployments
+            .get(&service_name)
+            .expect("deployment")
+            .service_secrets
+            .contains_key(secret_name),
+        "failed secret mutation must not persist its envelope"
+    );
+
+    let initial_configs = BTreeMap::from([(config_name.to_owned(), config_value)]);
+    let config_precondition = SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+        SoraServiceExactCurrentRevisionPreconditionV1 {
+            service_version: deploy_bundle.service.service_version.clone(),
+            service_manifest_hash: deploy_bundle.service_manifest_hash(),
+            container_manifest_hash: deploy_bundle.container_manifest_hash(),
+            process_generation: 1,
+            config_generation: u64::MAX,
+            secret_generation: 0,
+        },
+    );
+    let config_upgrade_payload =
+        iroha_data_model::soracloud::encode_bundle_with_materials_provenance_payload(
+            &upgrade_bundle,
+            &initial_configs,
+            &BTreeMap::new(),
+            &config_precondition,
+        )?;
+    let mut deployment = stx
+        .world
+        .soracloud_service_deployments
+        .get(&service_name)
+        .cloned()
+        .expect("deployed service state");
+    deployment.config_generation = u64::MAX;
+    deployment.secret_generation = 0;
+    stx.world
+        .soracloud_service_deployments
+        .insert(service_name.clone(), deployment);
+    let config_upgrade_error = isi::UpgradeSoracloudService {
+        bundle: upgrade_bundle.clone(),
+        initial_service_configs: initial_configs,
+        initial_service_secrets: BTreeMap::new(),
+        precondition: config_precondition,
+        provenance: ManifestProvenance {
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &config_upgrade_payload),
+        },
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("inline upgrade config must reject an exhausted generation");
+    assert_invariant_contains(config_upgrade_error, "config generation is exhausted");
+
+    let initial_secrets = BTreeMap::from([(secret_name.to_owned(), secret)]);
+    let secret_precondition = SoraServiceMutationPreconditionV1::ExactCurrentRevision(
+        SoraServiceExactCurrentRevisionPreconditionV1 {
+            service_version: deploy_bundle.service.service_version.clone(),
+            service_manifest_hash: deploy_bundle.service_manifest_hash(),
+            container_manifest_hash: deploy_bundle.container_manifest_hash(),
+            process_generation: 1,
+            config_generation: 0,
+            secret_generation: u64::MAX,
+        },
+    );
+    let secret_upgrade_payload =
+        iroha_data_model::soracloud::encode_bundle_with_materials_provenance_payload(
+            &upgrade_bundle,
+            &BTreeMap::new(),
+            &initial_secrets,
+            &secret_precondition,
+        )?;
+    let mut deployment = stx
+        .world
+        .soracloud_service_deployments
+        .get(&service_name)
+        .cloned()
+        .expect("deployed service state");
+    deployment.config_generation = 0;
+    deployment.secret_generation = u64::MAX;
+    stx.world
+        .soracloud_service_deployments
+        .insert(service_name.clone(), deployment);
+    let secret_upgrade_error = isi::UpgradeSoracloudService {
+        bundle: upgrade_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: initial_secrets,
+        precondition: secret_precondition,
+        provenance: ManifestProvenance {
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &secret_upgrade_payload),
+        },
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("inline upgrade secret must reject an exhausted generation");
+    assert_invariant_contains(secret_upgrade_error, "secret generation is exhausted");
+    assert!(
+        stx.world
+            .soracloud_service_revisions
+            .get(&(
+                service_name.as_ref().to_owned(),
+                upgrade_bundle.service.service_version.clone(),
+            ))
+            .is_none(),
+        "material generation exhaustion must fail before candidate revision admission"
+    );
+    Ok(())
+}
+#[test]
+fn upgrade_soracloud_service_starts_canary_rollout() -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, state);
     let deploy_bundle = sample_bundle("portal", "1.0.0", 0);
     let upgrade_bundle = sample_bundle("portal", "1.1.0", 25);
@@ -19806,6 +19973,7 @@ fn upgrade_deterministic_soracloud_service_starts_canary_rollout() -> Result<(),
         bundle: deploy_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&deploy_bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -19813,7 +19981,11 @@ fn upgrade_deterministic_soracloud_service_starts_canary_rollout() -> Result<(),
         bundle: upgrade_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
-        provenance: bundle_provenance(&upgrade_bundle),
+        precondition: exact_service_revision_precondition(&deploy_bundle, 1),
+        provenance: bundle_provenance_with_precondition(
+            &upgrade_bundle,
+            &exact_service_revision_precondition(&deploy_bundle, 1),
+        ),
     }
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
@@ -19828,6 +20000,8 @@ fn upgrade_deterministic_soracloud_service_starts_canary_rollout() -> Result<(),
     let active_rollout = deployment.active_rollout.as_ref().expect("active rollout");
     assert_eq!(deployment.current_service_version, "1.1.0");
     assert_eq!(deployment.revision_count, 2);
+    assert_eq!(active_rollout.baseline_version, "1.0.0");
+    assert_eq!(active_rollout.candidate_version, "1.1.0");
     assert_eq!(active_rollout.canary_percent, 25);
     assert_eq!(active_rollout.stage, SoraRolloutStageV1::Canary);
     assert_eq!(world.soracloud_service_audit_events().iter().count(), 2);
@@ -19857,15 +20031,18 @@ fn upgrade_inrou_service_rejects_partial_canary_before_revision_admission()
         bundle: deploy_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&deploy_bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
 
+    let upgrade_precondition = exact_service_revision_precondition(&deploy_bundle, 1);
     let error = isi::UpgradeSoracloudService {
         bundle: upgrade_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
-        provenance: bundle_provenance(&upgrade_bundle),
+        precondition: upgrade_precondition.clone(),
+        provenance: bundle_provenance_with_precondition(&upgrade_bundle, &upgrade_precondition),
     }
     .execute(&ALICE_ID, &mut stx)
     .expect_err("first-release Inrou upgrades must reject split revision-private disks");
@@ -19895,7 +20072,7 @@ fn build_rollout_state_rejects_out_of_range_canary_percent() {
     let mut bundle = sample_bundle("portal", "1.1.0", 25);
     bundle.service.rollout.canary_percent = 101;
 
-    let error = build_rollout_state(&bundle, 7, Some("1.0.0".to_owned()))
+    let error = build_rollout_state(&bundle, 7, "1.0.0".to_owned())
         .expect_err("out-of-range rollout percentages must not be clamped");
 
     assert!(
@@ -19913,19 +20090,22 @@ fn rollout_step_requires_branch_specific_explicit_promotion_target() -> Result<(
         bundle: deploy_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&deploy_bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
+    let upgrade_precondition = exact_service_revision_precondition(&deploy_bundle, 1);
     isi::UpgradeSoracloudService {
         bundle: upgrade_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
-        provenance: bundle_provenance(&upgrade_bundle),
+        precondition: upgrade_precondition.clone(),
+        provenance: bundle_provenance_with_precondition(&upgrade_bundle, &upgrade_precondition),
     }
     .execute(&ALICE_ID, &mut stx)?;
     let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
     let rollout_handle = latest_service_audit_event(&stx, &service_name)
-        .and_then(|event| event.rollout_handle)
+        .and_then(|event| event.rollout_state.map(|rollout| rollout.rollout_handle))
         .expect("rollout handle");
     let governance_tx_hash = Hash::new(b"gov-hash");
 
@@ -19957,10 +20137,7 @@ fn rollout_step_requires_branch_specific_explicit_promotion_target() -> Result<(
         }
         .execute(&ALICE_ID, &mut stx)
         .expect_err("rollout branch/target mismatch must fail");
-        assert!(
-            error.to_string().contains(expected),
-            "unexpected error: {error}"
-        );
+        assert_invalid_parameter_contains(error, expected);
     }
     Ok(())
 }
@@ -19974,6 +20151,7 @@ fn unhealthy_rollout_auto_rolls_back_to_baseline() -> Result<(), eyre::Report> {
         bundle: deploy_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&deploy_bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -19981,12 +20159,16 @@ fn unhealthy_rollout_auto_rolls_back_to_baseline() -> Result<(), eyre::Report> {
         bundle: upgrade_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
-        provenance: bundle_provenance(&upgrade_bundle),
+        precondition: exact_service_revision_precondition(&deploy_bundle, 1),
+        provenance: bundle_provenance_with_precondition(
+            &upgrade_bundle,
+            &exact_service_revision_precondition(&deploy_bundle, 1),
+        ),
     }
     .execute(&ALICE_ID, &mut stx)?;
     let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
     let rollout_handle = latest_service_audit_event(&stx, &service_name)
-        .and_then(|event| event.rollout_handle)
+        .and_then(|event| event.rollout_state.map(|rollout| rollout.rollout_handle))
         .expect("rollout handle");
     let governance_tx_hash = Hash::new(b"gov-hash");
     isi::AdvanceSoracloudRollout {
@@ -20004,6 +20186,53 @@ fn unhealthy_rollout_auto_rolls_back_to_baseline() -> Result<(), eyre::Report> {
         ),
     }
     .execute(&ALICE_ID, &mut stx)?;
+    let mut exhausted_deployment = stx
+        .world
+        .soracloud_service_deployments
+        .get(&service_name)
+        .cloned()
+        .expect("deployment state");
+    exhausted_deployment.process_generation = u64::MAX;
+    stx.world
+        .soracloud_service_deployments
+        .insert(service_name.clone(), exhausted_deployment);
+    let exhausted_error = isi::AdvanceSoracloudRollout {
+        service_name: service_name.clone(),
+        rollout_handle: rollout_handle.clone(),
+        healthy: false,
+        promote_to_percent: None,
+        governance_tx_hash,
+        provenance: rollout_provenance(
+            &service_name,
+            &rollout_handle,
+            false,
+            None,
+            governance_tx_hash,
+        ),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("automatic rollback must fail when process generation is exhausted");
+    assert_invariant_contains(exhausted_error, "process generation is exhausted");
+    let exhausted_state = stx
+        .world
+        .soracloud_service_deployments
+        .get(&service_name)
+        .expect("deployment state");
+    assert_eq!(exhausted_state.current_service_version, "1.1.0");
+    assert_eq!(
+        exhausted_state
+            .active_rollout
+            .as_ref()
+            .expect("active rollout")
+            .health_failures,
+        1,
+        "failed overflow transition must not persist the attempted health update"
+    );
+    let mut restored_deployment = exhausted_state.clone();
+    restored_deployment.process_generation = 2;
+    stx.world
+        .soracloud_service_deployments
+        .insert(service_name.clone(), restored_deployment);
     isi::AdvanceSoracloudRollout {
         service_name: service_name.clone(),
         rollout_handle: rollout_handle.clone(),
@@ -20058,19 +20287,22 @@ fn automatic_rollback_rebuilds_baseline_hosted_lease_after_plane_change() -> Res
         bundle: deploy_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&deploy_bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
+    let upgrade_precondition = exact_service_revision_precondition(&deploy_bundle, 1);
     isi::UpgradeSoracloudService {
         bundle: upgrade_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
-        provenance: bundle_provenance(&upgrade_bundle),
+        precondition: upgrade_precondition.clone(),
+        provenance: bundle_provenance_with_precondition(&upgrade_bundle, &upgrade_precondition),
     }
     .execute(&ALICE_ID, &mut stx)?;
     let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
     let rollout_handle = latest_service_audit_event(&stx, &service_name)
-        .and_then(|event| event.rollout_handle)
+        .and_then(|event| event.rollout_state.map(|rollout| rollout.rollout_handle))
         .expect("rollout handle");
     let governance_tx_hash = Hash::new(b"gov-hosted-baseline-rollback");
     for _ in 0..2 {
@@ -20122,6 +20354,7 @@ fn rollback_soracloud_service_reuses_admitted_revision() -> Result<(), eyre::Rep
         bundle: deploy_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&deploy_bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -20129,10 +20362,43 @@ fn rollback_soracloud_service_reuses_admitted_revision() -> Result<(), eyre::Rep
         bundle: upgrade_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
-        provenance: bundle_provenance(&upgrade_bundle),
+        precondition: exact_service_revision_precondition(&deploy_bundle, 1),
+        provenance: bundle_provenance_with_precondition(
+            &upgrade_bundle,
+            &exact_service_revision_precondition(&deploy_bundle, 1),
+        ),
     }
     .execute(&ALICE_ID, &mut stx)?;
     let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let mut exhausted_deployment = stx
+        .world
+        .soracloud_service_deployments
+        .get(&service_name)
+        .cloned()
+        .expect("deployment state");
+    exhausted_deployment.process_generation = u64::MAX;
+    stx.world
+        .soracloud_service_deployments
+        .insert(service_name.clone(), exhausted_deployment);
+    let exhausted_error = isi::RollbackSoracloudService {
+        service_name: service_name.clone(),
+        target_version: "1.0.0".to_string(),
+        provenance: rollback_provenance(&service_name, "1.0.0"),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("explicit rollback must fail when process generation is exhausted");
+    assert_invariant_contains(exhausted_error, "process generation is exhausted");
+    let exhausted_state = stx
+        .world
+        .soracloud_service_deployments
+        .get(&service_name)
+        .expect("deployment state");
+    assert_eq!(exhausted_state.current_service_version, "1.1.0");
+    let mut restored_deployment = exhausted_state.clone();
+    restored_deployment.process_generation = 2;
+    stx.world
+        .soracloud_service_deployments
+        .insert(service_name.clone(), restored_deployment);
     isi::RollbackSoracloudService {
         service_name: service_name.clone(),
         target_version: "1.0.0".to_string(),
@@ -20154,6 +20420,82 @@ fn rollback_soracloud_service_reuses_admitted_revision() -> Result<(), eyre::Rep
     Ok(())
 }
 #[test]
+fn rollback_soracloud_service_rejects_retained_revision_with_changed_identity()
+-> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    let deploy_bundle = sample_bundle("portal", "1.0.0", 0);
+    let upgrade_bundle = sample_bundle("portal", "1.1.0", 0);
+    soracloud_transaction!(state, block_header, state_block, stx);
+    isi::DeploySoracloudService {
+        bundle: deploy_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&deploy_bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let precondition = exact_service_revision_precondition(&deploy_bundle, 1);
+    isi::UpgradeSoracloudService {
+        bundle: upgrade_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: precondition.clone(),
+        provenance: bundle_provenance_with_precondition(&upgrade_bundle, &precondition),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+
+    let service_name = deploy_bundle.service.service_name.clone();
+    let mut incompatible = deploy_bundle;
+    incompatible.service.service_version = "0.9.0".to_owned();
+    incompatible
+        .service
+        .route
+        .as_mut()
+        .expect("sample service route")
+        .host = "legacy-portal.example.test".to_owned();
+    incompatible
+        .validate_for_admission()
+        .expect("retained revision is individually valid but has a distinct route identity");
+    stx.world.soracloud_service_revisions.insert(
+        (
+            service_name.as_ref().to_owned(),
+            incompatible.service.service_version.clone(),
+        ),
+        incompatible,
+    );
+    let mut deployment_before = stx
+        .world
+        .soracloud_service_deployments
+        .get(&service_name)
+        .cloned()
+        .expect("deployment state");
+    deployment_before.revision_count = 3;
+    stx.world
+        .soracloud_service_deployments
+        .insert(service_name.clone(), deployment_before.clone());
+    let audit_count_before = stx.world.soracloud_service_audit_events.len();
+
+    let error = isi::RollbackSoracloudService {
+        service_name: service_name.clone(),
+        target_version: "0.9.0".to_owned(),
+        provenance: rollback_provenance(&service_name, "0.9.0"),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("rollback must not activate a retained revision with a distinct route identity");
+    assert_invariant_contains(error, "cannot change route identity");
+    assert_eq!(
+        stx.world.soracloud_service_deployments.get(&service_name),
+        Some(&deployment_before),
+        "identity rejection must precede deployment mutation"
+    );
+    assert_eq!(
+        stx.world.soracloud_service_audit_events.len(),
+        audit_count_before,
+        "identity rejection must precede audit allocation"
+    );
+    Ok(())
+}
+#[test]
 fn mutate_soracloud_state_records_authoritative_service_state() -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, state);
     let bundle = sample_bundle_with_state_binding(
@@ -20172,6 +20514,7 @@ fn mutate_soracloud_state_records_authoritative_service_state() -> Result<(), ey
         bundle: bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -21951,6 +22294,7 @@ fn record_soracloud_decryption_request_persists_policy_snapshot() -> Result<(), 
         bundle: bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -22388,6 +22732,7 @@ fn rollback_soracloud_model_weight_updates_authoritative_registry_state() -> Res
         bundle: bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -22514,6 +22859,7 @@ fn soracloud_uploaded_model_register_uses_approved_sorafs_pin_without_storing_ch
         bundle: service_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&service_bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -22547,6 +22893,7 @@ fn soracloud_uploaded_model_register_rejects_missing_pending_or_retired_sorafs_p
         bundle: service_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&service_bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -22749,7 +23096,7 @@ fn soracloud_uploaded_model_register_rejects_malformed_bundle_manifest_fields()
 -> Result<(), eyre::Report> {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
     deploy_uploaded_model_service(&mut stx)?;
-    let adversarial_mutations: [fn(&mut SoraUploadedModelBundleV1); 8] = [
+    let adversarial_mutations: [fn(&mut SoraUploadedModelBundleV1); 6] = [
         |bundle| {
             bundle.schema_version = SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1 + 1;
         },
@@ -22767,12 +23114,6 @@ fn soracloud_uploaded_model_register_rejects_malformed_bundle_manifest_fields()
         },
         |bundle| {
             bundle.modalities = vec!["text".to_string(), "text".to_string()];
-        },
-        |bundle| {
-            bundle.decryption_policy_ref.clear();
-        },
-        |bundle| {
-            bundle.wrapped_bundle_key.recipient_key_id = "other-recipient".to_string();
         },
     ];
     for (index, mutate) in adversarial_mutations.into_iter().enumerate() {
@@ -22816,6 +23157,7 @@ fn soracloud_uploaded_model_register_rejects_disallowed_service_plane() -> Resul
         bundle: service_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&service_bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -22993,6 +23335,7 @@ fn soracloud_uploaded_model_finalize_uses_sorafs_pin_metadata_without_chunks()
         bundle: service_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
         initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
         provenance: bundle_provenance(&service_bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -23009,6 +23352,8 @@ fn soracloud_uploaded_model_finalize_uses_sorafs_pin_metadata_without_chunks()
     let training_config_hash = Hash::new(b"training-config");
     let reproducibility_hash = Hash::new(b"reproducibility");
     let provenance_attestation_hash = Hash::new(b"provenance-attestation");
+    let weight_sequence = next_soracloud_audit_sequence(&stx)?;
+    let artifact_sequence = weight_sequence.checked_add(1).expect("sequence capacity");
     isi::FinalizeSoracloudUploadedModelBundle {
         service_name: service_name.clone(),
         model_name: "vision_model".to_string(),
@@ -23042,6 +23387,25 @@ fn soracloud_uploaded_model_finalize_uses_sorafs_pin_metadata_without_chunks()
         .get(&(service_name.as_ref().to_owned(), "vision_model".to_string()))
         .expect("model registry");
     assert_eq!(registry.current_version.as_deref(), Some("v1"));
+    assert_eq!(registry.updated_sequence, weight_sequence);
+    let weight = stx
+        .world
+        .soracloud_model_weight_versions
+        .get(&(
+            service_name.as_ref().to_owned(),
+            "vision_model".to_string(),
+            bundle.weight_version.clone(),
+        ))
+        .expect("model weight");
+    assert_eq!(weight.registered_sequence, weight_sequence);
+    assert_eq!(
+        stx.world
+            .soracloud_model_weight_audit_events
+            .get(&weight_sequence)
+            .expect("model-weight audit")
+            .sequence,
+        weight_sequence
+    );
     let artifact = stx
         .world
         .soracloud_model_artifacts
@@ -23053,6 +23417,19 @@ fn soracloud_uploaded_model_finalize_uses_sorafs_pin_metadata_without_chunks()
     assert_eq!(
         artifact.chunk_manifest_root,
         Some(bundle.chunk_manifest_root)
+    );
+    assert_eq!(artifact.registered_sequence, artifact_sequence);
+    assert_eq!(
+        stx.world
+            .soracloud_model_artifact_audit_events
+            .get(&artifact_sequence)
+            .expect("model-artifact audit")
+            .sequence,
+        artifact_sequence
+    );
+    assert_eq!(
+        crate::soracloud_runtime::latest_soracloud_sequence(&stx.world),
+        artifact_sequence
     );
     Ok(())
 }
@@ -23085,6 +23462,7 @@ fn soracloud_uploaded_model_finalize_rejects_unregistered_bundle() -> Result<(),
             ))
             .is_none()
     );
+
     Ok(())
 }
 #[test]
@@ -23219,6 +23597,95 @@ fn soracloud_uploaded_model_finalize_rejects_malformed_identifiers() -> Result<(
             .to_string()
             .contains("surrounding whitespace")
     );
+
+    let mut padded_model_name_instruction = sample_uploaded_model_finalize_instruction(
+        &bundle,
+        "uploaded-artifact-invalid-padded-model-name",
+        bundle.bundle_root,
+    );
+    padded_model_name_instruction.model_name = " vision_model ".to_string();
+    assert!(
+        padded_model_name_instruction
+            .execute(&ALICE_ID, &mut stx)
+            .is_err()
+    );
+
+    let mut padded_model_id_instruction = sample_uploaded_model_finalize_instruction(
+        &bundle,
+        "uploaded-artifact-invalid-padded-model-id",
+        bundle.bundle_root,
+    );
+    padded_model_id_instruction.model_id = format!(" {} ", bundle.model_id);
+    assert!(
+        padded_model_id_instruction
+            .execute(&ALICE_ID, &mut stx)
+            .is_err()
+    );
+
+    let mut padded_artifact_id_instruction = sample_uploaded_model_finalize_instruction(
+        &bundle,
+        "uploaded-artifact-invalid-padded-artifact-id",
+        bundle.bundle_root,
+    );
+    padded_artifact_id_instruction.artifact_id =
+        " uploaded-artifact-invalid-padded-artifact-id ".to_string();
+    assert!(
+        padded_artifact_id_instruction
+            .execute(&ALICE_ID, &mut stx)
+            .is_err()
+    );
+
+    let mut padded_weight_version_instruction = sample_uploaded_model_finalize_instruction(
+        &bundle,
+        "uploaded-artifact-invalid-padded-weight-version",
+        bundle.bundle_root,
+    );
+    padded_weight_version_instruction.weight_version = format!(" {} ", bundle.weight_version);
+    assert!(
+        padded_weight_version_instruction
+            .execute(&ALICE_ID, &mut stx)
+            .is_err()
+    );
+
+    let mut padded_dataset_instruction = sample_uploaded_model_finalize_instruction(
+        &bundle,
+        "uploaded-artifact-invalid-padded-dataset",
+        bundle.bundle_root,
+    );
+    padded_dataset_instruction.dataset_ref = " dataset://upload ".to_string();
+    assert!(
+        padded_dataset_instruction
+            .execute(&ALICE_ID, &mut stx)
+            .is_err()
+    );
+
+    let mut noncanonical_model_name_instruction = sample_uploaded_model_finalize_instruction(
+        &bundle,
+        "uploaded-artifact-invalid-noncanonical-model-name",
+        bundle.bundle_root,
+    );
+    let canonical_model_name = "caf\u{e9}";
+    let canonical_name_provenance = uploaded_model_finalize_provenance(
+        &noncanonical_model_name_instruction.service_name,
+        canonical_model_name,
+        &noncanonical_model_name_instruction.model_id,
+        &noncanonical_model_name_instruction.artifact_id,
+        &noncanonical_model_name_instruction.weight_version,
+        noncanonical_model_name_instruction.bundle_root,
+        noncanonical_model_name_instruction.weight_artifact_hash,
+        &noncanonical_model_name_instruction.dataset_ref,
+        noncanonical_model_name_instruction.training_config_hash,
+        noncanonical_model_name_instruction.reproducibility_hash,
+        noncanonical_model_name_instruction.provenance_attestation_hash,
+    );
+    noncanonical_model_name_instruction.model_name = "cafe\u{301}".to_string();
+    noncanonical_model_name_instruction.provenance = canonical_name_provenance;
+    assert!(
+        noncanonical_model_name_instruction
+            .execute(&ALICE_ID, &mut stx)
+            .is_err()
+    );
+
     assert_eq!(
         stx.world
             .soracloud_model_artifacts
@@ -23238,8 +23705,8 @@ fn soracloud_uploaded_model_finalize_rejects_malformed_identifiers() -> Result<(
     Ok(())
 }
 #[test]
-fn soracloud_uploaded_model_finalize_rejects_duplicate_weight_version() -> Result<(), eyre::Report>
-{
+fn soracloud_uploaded_model_finalize_rejects_duplicate_release_across_model_names()
+-> Result<(), eyre::Report> {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
     deploy_uploaded_model_service(&mut stx)?;
     let digest = ManifestDigest::new([0xD9; 32]);
@@ -23272,6 +23739,52 @@ fn soracloud_uploaded_model_finalize_rejects_duplicate_weight_version() -> Resul
             ))
             .is_none()
     );
+
+    let mut cross_model_instruction = sample_uploaded_model_finalize_instruction(
+        &bundle,
+        "uploaded-artifact-replayed-cross-model",
+        bundle.bundle_root,
+    );
+    let cross_model_name = "alternate_model";
+    let cross_model_provenance = uploaded_model_finalize_provenance(
+        &cross_model_instruction.service_name,
+        cross_model_name,
+        &cross_model_instruction.model_id,
+        &cross_model_instruction.artifact_id,
+        &cross_model_instruction.weight_version,
+        cross_model_instruction.bundle_root,
+        cross_model_instruction.weight_artifact_hash,
+        &cross_model_instruction.dataset_ref,
+        cross_model_instruction.training_config_hash,
+        cross_model_instruction.reproducibility_hash,
+        cross_model_instruction.provenance_attestation_hash,
+    );
+    cross_model_instruction.model_name = cross_model_name.to_string();
+    cross_model_instruction.provenance = cross_model_provenance;
+    assert!(
+        cross_model_instruction
+            .execute(&ALICE_ID, &mut stx)
+            .is_err()
+    );
+    assert!(
+        stx.world
+            .soracloud_model_registries
+            .get(&("portal".to_string(), cross_model_name.to_string()))
+            .is_none()
+    );
+    assert!(
+        stx.world
+            .soracloud_model_artifacts
+            .get(&(
+                "portal".to_string(),
+                "uploaded-artifact-replayed-cross-model".to_string(),
+            ))
+            .is_none()
+    );
+    crate::soracloud_runtime::validate_finalized_soracloud_uploaded_model_release(
+        &stx.world, &bundle,
+    )
+    .expect("a rejected cross-model replay must leave the original release executable");
     Ok(())
 }
 #[test]

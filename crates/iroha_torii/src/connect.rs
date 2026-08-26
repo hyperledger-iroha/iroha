@@ -595,7 +595,9 @@ impl Bus {
             per_ip_counts: Arc::new(Mutex::new(HashMap::new())),
             handshake_buckets: Arc::new(Mutex::new(HashMap::new())),
         };
-        bus.start_cleaner();
+        if cfg.enabled {
+            bus.start_cleaner();
+        }
         bus
     }
     fn start_cleaner(&self) {
@@ -839,7 +841,6 @@ impl Bus {
         entry.clone()
     }
     /// Register one-time tokens for a new session.
-    #[allow(dead_code)]
     pub async fn register_tokens(
         &self,
         sid: Sid,

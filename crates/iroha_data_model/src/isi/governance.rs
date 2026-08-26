@@ -3,29 +3,29 @@
 //! These canonical data-model types are serialized into transactions and are executed by the
 //! corresponding core governance paths. They also define the exact CLI and Torii draft surfaces;
 //! endpoint-local aliases are not part of the instruction format.
-#[cfg(feature = "governance")]
-use crate::governance::types::ParliamentBody;
-use std::{string::String, vec::Vec};
-#[cfg(not(feature = "governance"))]
-type ParliamentBody = ();
 #[cfg(not(feature = "governance"))]
 pub use self::at_window_placeholder::AtWindow;
 #[cfg(feature = "governance")]
 pub use crate::governance::types::AtWindow;
 #[cfg(test)]
 use crate::isi::bridge::SccpRouteGovernanceActionV1;
+pub use crate::parliament_types::{CouncilDerivationKind, VotingMode};
 use crate::{
+    governance::types::{AbiVersion, ContractAbiHash, ContractCodeHash},
     isi::sorafs::SorafsProviderGovernanceActionV1,
     prelude::*,
     runtime::RuntimeUpgradeManifest,
     smart_contract::manifest::ManifestProvenance,
-    validation_fee::{
-        ValidationFeePlainElectorateRulesV1, ValidationFeePolicyV1,
-        ValidationFeeTreasuryPayoutBindingV1,
-    },
+    validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
 };
 use iroha_primitives::numeric::Quantity;
 use norito::codec::{Decode, Encode};
+use std::{string::String, vec::Vec};
+
+/// Attempt-based SORA Parliament instruction surface.
+pub mod parliament;
+pub use parliament::*;
+
 #[cfg(not(feature = "governance"))]
 mod at_window_placeholder {
     use super::*;
@@ -44,122 +44,17 @@ mod at_window_placeholder {
         pub upper: u64,
     }
 }
-/// Voting mode for a referendum
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
-)]
-pub enum VotingMode {
-    /// Zero-knowledge voting flow (default ballot type).
-    Zk,
-    /// Plain-text quadratic voting flow.
-    Plain,
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonSerialize for VotingMode {
-    fn json_serialize(&self, out: &mut String) {
-        norito::json::write_json_string(
-            match self {
-                Self::Zk => "Zk",
-                Self::Plain => "Plain",
-            },
-            out,
-        );
-    }
-    fn json_serialize_to(
-        &self,
-        out: &mut dyn norito::json::JsonWriteSink,
-    ) -> Result<(), norito::json::BoundedJsonError> {
-        norito::json::write_json_string_to(
-            match self {
-                Self::Zk => "Zk",
-                Self::Plain => "Plain",
-            },
-            out,
-        )
-    }
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonDeserialize for VotingMode {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let value = parser.parse_string()?;
-        match value.as_str() {
-            "Zk" => Ok(Self::Zk),
-            "Plain" => Ok(Self::Plain),
-            other => Err(norito::json::Error::unknown_field(other.to_owned())),
-        }
-    }
-}
-/// Council derivation method.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Default,
-    Encode,
-    Decode,
-    iroha_schema::IntoSchema,
-)]
-pub enum CouncilDerivationKind {
-    /// Derived automatically from deterministic bonded-citizen sortition.
-    Sortition,
-    /// Supplied explicitly by an authorized parliament administrator.
-    #[default]
-    Manual,
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonSerialize for CouncilDerivationKind {
-    fn json_serialize(&self, out: &mut String) {
-        let label = match self {
-            CouncilDerivationKind::Sortition => "Sortition",
-            CouncilDerivationKind::Manual => "Manual",
-        };
-        norito::json::write_json_string(label, out);
-    }
-    fn json_serialize_to(
-        &self,
-        out: &mut dyn norito::json::JsonWriteSink,
-    ) -> Result<(), norito::json::BoundedJsonError> {
-        let label = match self {
-            CouncilDerivationKind::Sortition => "Sortition",
-            CouncilDerivationKind::Manual => "Manual",
-        };
-        norito::json::write_json_string_to(label, out)
-    }
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonDeserialize for CouncilDerivationKind {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let value = parser.parse_string()?;
-        match value.as_str() {
-            "Sortition" => Ok(CouncilDerivationKind::Sortition),
-            "Manual" => Ok(CouncilDerivationKind::Manual),
-            other => Err(norito::json::Error::unknown_field(other.to_owned())),
-        }
-    }
-}
 /// Propose deployment of an IVM bytecode (`.to`) by hash
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct ProposeDeployContract {
     /// Canonical public contract address targeted by the proposal.
     pub contract_address: crate::smart_contract::ContractAddress,
-    /// Blake2b-32 hash of the compiled `.to` bytecode slated for deployment (lowercase hex).
-    pub code_hash_hex: String,
-    /// Blake2b-32 hash of the ABI surface expected by the host (lowercase hex).
-    pub abi_hash_hex: String,
-    /// ABI version (e.g., "1") supplied by the proposer.
-    pub abi_version: String,
-    /// Optional enactment window override (inclusive)
-    pub window: Option<AtWindow>,
-    /// Optional voting mode for the referendum created by this proposal (default Zk)
-    pub mode: Option<VotingMode>,
+    /// Blake2b-32 hash of the compiled `.to` bytecode slated for deployment.
+    pub code_hash: ContractCodeHash,
+    /// Blake2b-32 hash of the ABI surface expected by the host.
+    pub abi_hash: ContractAbiHash,
+    /// Exact first-release ABI version; admission currently requires version one.
+    pub abi_version: AbiVersion,
     /// Optional manifest provenance to attest the contract manifest on enactment.
     pub manifest_provenance: Option<ManifestProvenance>,
 }
@@ -172,21 +67,13 @@ impl crate::seal::Instruction for ProposeDeployContract {}
 pub struct ProposeRuntimeUpgradeProposal {
     /// Canonical runtime-upgrade manifest payload.
     pub manifest: RuntimeUpgradeManifest,
-    /// Optional referendum window override (inclusive).
-    pub window: Option<AtWindow>,
-    /// Optional voting mode for the referendum created by this proposal (default Zk).
-    pub mode: Option<VotingMode>,
 }
 impl crate::seal::Instruction for ProposeRuntimeUpgradeProposal {}
 /// Propose one closed SCCP registry action through governance.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct ProposeSccpRouteGovernance {
-    /// Complete network- and action-bound referendum preimage.
+    /// Complete network- and action-bound proposal anchor.
     pub anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
-    /// Optional referendum window override (inclusive).
-    pub window: Option<AtWindow>,
-    /// Optional voting mode for the referendum created by this proposal (default Zk).
-    pub mode: Option<VotingMode>,
 }
 impl crate::seal::Instruction for ProposeSccpRouteGovernance {}
 /// Propose one closed `SoraFS` provider-owner transition through governance.
@@ -194,25 +81,15 @@ impl crate::seal::Instruction for ProposeSccpRouteGovernance {}
 pub struct ProposeSorafsProviderGovernance {
     /// Exact compare-and-set owner transition to execute if enacted.
     pub action: SorafsProviderGovernanceActionV1,
-    /// Optional referendum window override (inclusive).
-    pub window: Option<AtWindow>,
-    /// Optional voting mode for the referendum created by this proposal (default ZK).
-    pub mode: Option<VotingMode>,
 }
 impl crate::seal::Instruction for ProposeSorafsProviderGovernance {}
 /// Propose one validation-fee policy through SORA Parliament.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct ProposeValidationFeePolicy {
-    /// Complete policy to append if Parliament and the referendum approve it.
+    /// Complete policy to append if Parliament certifies it.
     pub policy: ValidationFeePolicyV1,
     /// Exact enacted payout lifecycle required when the policy carries a payout binding.
     pub payout_lifecycle_proposal_id: Option<[u8; 32]>,
-    /// Optional inclusive referendum voting window override.
-    pub referendum_window: Option<AtWindow>,
-    /// Optional voting mode for the referendum (default `Plain`; `Zk` is rejected).
-    pub mode: Option<VotingMode>,
-    /// Exact PLAIN electorate contract bound into the proposal fingerprint.
-    pub plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 }
 impl crate::seal::Instruction for ProposeValidationFeePolicy {}
 /// Propose one exact validation-fee payout lifecycle through SORA Parliament.
@@ -223,12 +100,6 @@ pub struct ProposeValidationFeePayoutLifecycle {
     /// Consensus derives the non-zero lifecycle seal from this complete
     /// binding before accepting the proposal.
     pub payout_binding: ValidationFeeTreasuryPayoutBindingV1,
-    /// Optional inclusive referendum voting window override.
-    pub referendum_window: Option<AtWindow>,
-    /// Optional voting mode for the referendum (default `Plain`; `Zk` is rejected).
-    pub mode: Option<VotingMode>,
-    /// Exact PLAIN electorate contract bound into the proposal fingerprint.
-    pub plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 }
 impl crate::seal::Instruction for ProposeValidationFeePayoutLifecycle {}
 /// Cast a ZK ballot (default voting mode)
@@ -298,145 +169,6 @@ pub struct CastPlainBallot {
     pub direction: u8,
 }
 impl crate::seal::Instruction for CastPlainBallot {}
-/// Enact an approved referendum (host validates certificate separately)
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct EnactReferendum {
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    /// Identifier of the referendum to enact.
-    pub referendum_id: [u8; 32],
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    /// Blake2b-32 hash of the referendum preimage (proposal payload).
-    pub preimage_hash: [u8; 32],
-    /// Window describing when enactment is valid.
-    pub at_window: AtWindow,
-}
-impl crate::seal::Instruction for EnactReferendum {}
-/// Enact a finalized threshold referendum for one exact SCCP route action.
-///
-/// Unlike the generic referendum instruction, this surface carries the full closed preimage and
-/// Core checks it against the stored proposal, exact [`NetworkId`], and canonical referendum id
-/// before applying any registry mutation.
-#[derive(
-    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
-#[norito(deny_unknown_fields)]
-pub struct EnactSccpRouteGovernance {
-    /// Canonical identifier derived from the complete SCCP anchor.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub referendum_id: [u8; 32],
-    /// Full network- and action-bound preimage approved by the referendum.
-    pub anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
-    /// Exact finalized enactment window.
-    pub at_window: AtWindow,
-}
-impl crate::seal::Instruction for EnactSccpRouteGovernance {}
-/// Finalize a referendum: compute tally and emit Approved/Rejected events
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct FinalizeReferendum {
-    /// Identifier of the referendum to finalize.
-    pub referendum_id: String,
-    /// Deterministic proposal id this referendum governs
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub proposal_id: [u8; 32],
-}
-impl crate::seal::Instruction for FinalizeReferendum {}
-/// Record a council approval for a governance proposal.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema,
-)]
-pub struct ApproveGovernanceProposal {
-    /// Parliament body granting the approval (defaults to Agenda Council).
-    #[norito(default)]
-    pub body: ParliamentBody,
-    /// Deterministic proposal id (Blake2b-32) being approved by the council.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub proposal_id: [u8; 32],
-}
-impl crate::seal::Instruction for ApproveGovernanceProposal {}
-/// Equal citizen decision recorded by a seated Parliament member.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
-)]
-pub enum ParliamentDecision {
-    /// Support the proposal at this Parliament stage.
-    Approve,
-    /// Reject the proposal at this Parliament stage.
-    Reject,
-    /// Record presence without supporting or rejecting the proposal.
-    Abstain,
-}
-impl ParliamentDecision {
-    /// Stable lowercase label used by JSON clients.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Approve => "approve",
-            Self::Reject => "reject",
-            Self::Abstain => "abstain",
-        }
-    }
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonSerialize for ParliamentDecision {
-    fn json_serialize(&self, out: &mut String) {
-        norito::json::write_json_string(self.as_str(), out);
-    }
-    fn json_serialize_to(
-        &self,
-        out: &mut dyn norito::json::JsonWriteSink,
-    ) -> Result<(), norito::json::BoundedJsonError> {
-        norito::json::write_json_string_to(self.as_str(), out)
-    }
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonDeserialize for ParliamentDecision {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let value = parser.parse_string()?;
-        match value.as_str() {
-            "approve" => Ok(Self::Approve),
-            "reject" => Ok(Self::Reject),
-            "abstain" => Ok(Self::Abstain),
-            other => Err(norito::json::Error::UnknownField {
-                field: other.to_owned(),
-            }),
-        }
-    }
-}
-/// Cast an equal signed Parliament ballot for a proposal stage.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct CastParliamentBallot {
-    /// Parliament body receiving the ballot.
-    pub body: ParliamentBody,
-    /// Deterministic proposal id (Blake2b-32) being decided by the body.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub proposal_id: [u8; 32],
-    /// Equal citizen decision signed by the transaction authority.
-    pub decision: ParliamentDecision,
-}
-impl crate::seal::Instruction for CastParliamentBallot {}
 /// Persist a council membership for an epoch.
 ///
 /// This instruction records an explicitly administered `members` roster for `epoch` in the WSV.
@@ -569,40 +301,26 @@ macro_rules! impl_governance_decode_from_slice {
 }
 impl_governance_decode_from_slice!(ProposeDeployContract {
     contract_address: crate::smart_contract::ContractAddress,
-    code_hash_hex: String,
-    abi_hash_hex: String,
-    abi_version: String,
-    window: Option<AtWindow>,
-    mode: Option<VotingMode>,
+    code_hash: ContractCodeHash,
+    abi_hash: ContractAbiHash,
+    abi_version: AbiVersion,
     manifest_provenance: Option<ManifestProvenance>,
 });
 impl_governance_decode_from_slice!(ProposeRuntimeUpgradeProposal {
     manifest: RuntimeUpgradeManifest,
-    window: Option<AtWindow>,
-    mode: Option<VotingMode>,
 });
 impl_governance_decode_from_slice!(ProposeSccpRouteGovernance {
     anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
-    window: Option<AtWindow>,
-    mode: Option<VotingMode>,
 });
 impl_governance_decode_from_slice!(ProposeSorafsProviderGovernance {
     action: SorafsProviderGovernanceActionV1,
-    window: Option<AtWindow>,
-    mode: Option<VotingMode>,
 });
 impl_governance_decode_from_slice!(ProposeValidationFeePolicy {
     policy: ValidationFeePolicyV1,
     payout_lifecycle_proposal_id: Option<[u8; 32]>,
-    referendum_window: Option<AtWindow>,
-    mode: Option<VotingMode>,
-    plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 });
 impl_governance_decode_from_slice!(ProposeValidationFeePayoutLifecycle {
     payout_binding: ValidationFeeTreasuryPayoutBindingV1,
-    referendum_window: Option<AtWindow>,
-    mode: Option<VotingMode>,
-    plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 });
 impl_governance_decode_from_slice!(CastZkBallot {
     election_id: String,
@@ -627,29 +345,6 @@ impl_governance_decode_from_slice!(RestituteGovernanceLock {
     owner: AccountId,
     amount: Quantity,
     reason: String,
-});
-impl_governance_decode_from_slice!(EnactReferendum {
-    referendum_id: [u8; 32],
-    preimage_hash: [u8; 32],
-    at_window: AtWindow,
-});
-impl_governance_decode_from_slice!(EnactSccpRouteGovernance {
-    referendum_id: [u8; 32],
-    anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
-    at_window: AtWindow,
-});
-impl_governance_decode_from_slice!(FinalizeReferendum {
-    referendum_id: String,
-    proposal_id: [u8; 32],
-});
-impl_governance_decode_from_slice!(ApproveGovernanceProposal {
-    body: ParliamentBody,
-    proposal_id: [u8; 32],
-});
-impl_governance_decode_from_slice!(CastParliamentBallot {
-    body: ParliamentBody,
-    proposal_id: [u8; 32],
-    decision: ParliamentDecision,
 });
 impl_governance_decode_from_slice!(PersistCouncilForEpoch {
     epoch: u64,
@@ -756,6 +451,43 @@ mod tests {
         duration_blocks: u64,
         direction: u8,
     }
+    #[derive(Encode)]
+    struct LegacyProposeDeployContract {
+        contract_address: crate::smart_contract::ContractAddress,
+        code_hash_hex: String,
+        abi_hash_hex: String,
+        abi_version: String,
+        window: Option<AtWindow>,
+        mode: Option<VotingMode>,
+        manifest_provenance: Option<ManifestProvenance>,
+    }
+    #[derive(Encode)]
+    struct LegacyProposeRuntimeUpgradeProposal {
+        manifest: RuntimeUpgradeManifest,
+        window: Option<AtWindow>,
+        mode: Option<VotingMode>,
+    }
+    #[derive(Encode)]
+    struct LegacyProposeSccpRouteGovernance {
+        anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
+        window: Option<AtWindow>,
+        mode: Option<VotingMode>,
+    }
+    #[derive(Encode)]
+    struct LegacyProposeSorafsProviderGovernance {
+        action: SorafsProviderGovernanceActionV1,
+        window: Option<AtWindow>,
+        mode: Option<VotingMode>,
+    }
+    fn assert_legacy_instruction_payload_rejected<T: Encode>(wire_id: &str, value: &T) {
+        let bare = value.encode();
+        let framed = crate::isi::frame_instruction_payload(wire_id, &bare)
+            .expect("frame forged legacy governance instruction");
+        assert!(
+            crate::isi::decode_instruction_from_pair(wire_id, &framed).is_err(),
+            "retired governance layout decoded under {wire_id}"
+        );
+    }
     #[test]
     fn governance_amount_rejects_negative_numeric_payload() {
         let encoded = ForgedCastPlainBallot {
@@ -772,17 +504,54 @@ mod tests {
     fn encode_roundtrip_basic() {
         let p = ProposeDeployContract {
             contract_address: contract_address(),
-            code_hash_hex: "aa".repeat(32),
-            abi_hash_hex: "bb".repeat(32),
-            abi_version: "1".into(),
-            window: Some(window()),
-            mode: Some(VotingMode::Zk),
+            code_hash: ContractCodeHash::new([0xaa; 32]),
+            abi_hash: ContractAbiHash::new([0xbb; 32]),
+            abi_version: AbiVersion::new(1),
             manifest_provenance: None,
         };
         let enc = norito::codec::Encode::encode(&p);
         let mut cur = enc.as_slice();
         let dec = ProposeDeployContract::decode(&mut cur).unwrap();
         assert_eq!(p, dec);
+    }
+    #[test]
+    fn retired_proposal_control_and_string_hash_layouts_fail_closed() {
+        assert_legacy_instruction_payload_rejected(
+            std::any::type_name::<ProposeDeployContract>(),
+            &LegacyProposeDeployContract {
+                contract_address: contract_address(),
+                code_hash_hex: "aa".repeat(32),
+                abi_hash_hex: "bb".repeat(32),
+                abi_version: "1".to_owned(),
+                window: Some(window()),
+                mode: Some(VotingMode::Zk),
+                manifest_provenance: None,
+            },
+        );
+        assert_legacy_instruction_payload_rejected(
+            std::any::type_name::<ProposeRuntimeUpgradeProposal>(),
+            &LegacyProposeRuntimeUpgradeProposal {
+                manifest: runtime_manifest(),
+                window: Some(window()),
+                mode: Some(VotingMode::Plain),
+            },
+        );
+        assert_legacy_instruction_payload_rejected(
+            std::any::type_name::<ProposeSccpRouteGovernance>(),
+            &LegacyProposeSccpRouteGovernance {
+                anchor: sccp_route_anchor(),
+                window: Some(window()),
+                mode: Some(VotingMode::Plain),
+            },
+        );
+        assert_legacy_instruction_payload_rejected(
+            std::any::type_name::<ProposeSorafsProviderGovernance>(),
+            &LegacyProposeSorafsProviderGovernance {
+                action: sorafs_provider_action(),
+                window: Some(window()),
+                mode: Some(VotingMode::Zk),
+            },
+        );
     }
     #[cfg(feature = "json")]
     #[test]
@@ -815,34 +584,6 @@ mod tests {
     }
     #[cfg(feature = "json")]
     #[test]
-    fn parliament_decision_json_is_exact_lowercase() {
-        for (decision, label) in [
-            (ParliamentDecision::Approve, "approve"),
-            (ParliamentDecision::Reject, "reject"),
-            (ParliamentDecision::Abstain, "abstain"),
-        ] {
-            assert_exact_json(&decision);
-            let json = format!("\"{label}\"");
-            assert_eq!(
-                norito::json::to_json(&decision).expect("serialize parliament decision"),
-                json
-            );
-            assert_eq!(
-                norito::json::from_str::<ParliamentDecision>(&json)
-                    .expect("decode canonical parliament decision"),
-                decision
-            );
-        }
-        for alias in ["Approve", "Reject", "Abstain", " approve", "approve "] {
-            let json = format!("\"{alias}\"");
-            assert!(
-                norito::json::from_str::<ParliamentDecision>(&json).is_err(),
-                "noncanonical parliament decision alias must reject: {alias:?}"
-            );
-        }
-    }
-    #[cfg(feature = "json")]
-    #[test]
     fn council_derivation_json_has_exact_checked_bound() {
         assert_exact_json(&CouncilDerivationKind::Sortition);
         assert_exact_json(&CouncilDerivationKind::Manual);
@@ -851,8 +592,6 @@ mod tests {
     fn runtime_upgrade_proposal_roundtrip() {
         let ins = ProposeRuntimeUpgradeProposal {
             manifest: runtime_manifest(),
-            window: Some(window()),
-            mode: Some(VotingMode::Plain),
         };
         let enc = norito::codec::Encode::encode(&ins);
         let mut cur = enc.as_slice();
@@ -863,8 +602,6 @@ mod tests {
     fn sccp_route_governance_proposal_roundtrip() {
         let ins = ProposeSccpRouteGovernance {
             anchor: sccp_route_anchor(),
-            window: Some(window()),
-            mode: Some(VotingMode::Plain),
         };
         let enc = norito::codec::Encode::encode(&ins);
         let mut cur = enc.as_slice();
@@ -875,8 +612,6 @@ mod tests {
     fn sorafs_provider_governance_proposal_roundtrip() {
         let instruction = ProposeSorafsProviderGovernance {
             action: sorafs_provider_action(),
-            window: Some(window()),
-            mode: Some(VotingMode::Zk),
         };
         let encoded = instruction.encode();
         let decoded = ProposeSorafsProviderGovernance::decode(&mut encoded.as_slice())
@@ -890,17 +625,6 @@ mod tests {
         let mut cur = enc.as_slice();
         let dec = AtWindow::decode(&mut cur).unwrap();
         assert_eq!(win, dec);
-    }
-    #[test]
-    fn approve_proposal_roundtrip() {
-        let ins = ApproveGovernanceProposal {
-            body: ParliamentBody::AgendaCouncil,
-            proposal_id: [0xAA; 32],
-        };
-        let enc = norito::codec::Encode::encode(&ins);
-        let mut cur = enc.as_slice();
-        let dec = ApproveGovernanceProposal::decode(&mut cur).unwrap();
-        assert_eq!(ins, dec);
     }
     #[test]
     fn at_window_decodes_from_slice_via_norito() {
@@ -919,27 +643,19 @@ mod tests {
     fn governance_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(ProposeDeployContract {
             contract_address: contract_address(),
-            code_hash_hex: "aa".repeat(32),
-            abi_hash_hex: "bb".repeat(32),
-            abi_version: "1".into(),
-            window: Some(window()),
-            mode: Some(VotingMode::Zk),
+            code_hash: ContractCodeHash::new([0xaa; 32]),
+            abi_hash: ContractAbiHash::new([0xbb; 32]),
+            abi_version: AbiVersion::new(1),
             manifest_provenance: None,
         });
         assert_slice_roundtrip(ProposeRuntimeUpgradeProposal {
             manifest: runtime_manifest(),
-            window: Some(window()),
-            mode: Some(VotingMode::Plain),
         });
         assert_slice_roundtrip(ProposeSccpRouteGovernance {
             anchor: sccp_route_anchor(),
-            window: Some(window()),
-            mode: Some(VotingMode::Plain),
         });
         assert_slice_roundtrip(ProposeSorafsProviderGovernance {
             action: sorafs_provider_action(),
-            window: Some(window()),
-            mode: Some(VotingMode::Zk),
         });
         assert_slice_roundtrip(CastZkBallot {
             election_id: "referendum-1".to_owned(),
@@ -965,24 +681,6 @@ mod tests {
             amount: 50_u64.into(),
             reason: "appeal accepted".to_owned(),
         });
-        assert_slice_roundtrip(EnactReferendum {
-            referendum_id: [0x11; 32],
-            preimage_hash: [0x22; 32],
-            at_window: window(),
-        });
-        assert_slice_roundtrip(FinalizeReferendum {
-            referendum_id: "referendum-1".to_owned(),
-            proposal_id: [0x33; 32],
-        });
-        assert_slice_roundtrip(ApproveGovernanceProposal {
-            body: ParliamentBody::AgendaCouncil,
-            proposal_id: [0x44; 32],
-        });
-        assert_slice_roundtrip(CastParliamentBallot {
-            body: ParliamentBody::PolicyJury,
-            proposal_id: [0x45; 32],
-            decision: ParliamentDecision::Reject,
-        });
         assert_slice_roundtrip(PersistCouncilForEpoch {
             epoch: 7,
             members: vec![account(1), account(2)],
@@ -1007,11 +705,9 @@ mod tests {
             &registry,
             ProposeDeployContract {
                 contract_address: contract_address(),
-                code_hash_hex: "aa".repeat(32),
-                abi_hash_hex: "bb".repeat(32),
-                abi_version: "1".into(),
-                window: Some(window()),
-                mode: Some(VotingMode::Zk),
+                code_hash: ContractCodeHash::new([0xaa; 32]),
+                abi_hash: ContractAbiHash::new([0xbb; 32]),
+                abi_version: AbiVersion::new(1),
                 manifest_provenance: None,
             },
         );
@@ -1019,16 +715,12 @@ mod tests {
             &registry,
             ProposeRuntimeUpgradeProposal {
                 manifest: runtime_manifest(),
-                window: Some(window()),
-                mode: Some(VotingMode::Plain),
             },
         );
         assert_registry_decodes(
             &registry,
             ProposeSorafsProviderGovernance {
                 action: sorafs_provider_action(),
-                window: Some(window()),
-                mode: Some(VotingMode::Zk),
             },
         );
         assert_registry_decodes(
@@ -1039,14 +731,6 @@ mod tests {
                 amount: 1_000_u64.into(),
                 duration_blocks: 100,
                 direction: 0,
-            },
-        );
-        assert_registry_decodes(
-            &registry,
-            CastParliamentBallot {
-                body: ParliamentBody::PolicyJury,
-                proposal_id: [0x45; 32],
-                decision: ParliamentDecision::Approve,
             },
         );
         assert_registry_decodes(

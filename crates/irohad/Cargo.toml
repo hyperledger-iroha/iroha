@@ -43,6 +43,10 @@ accel-cuda = ["fastpq-gpu", "iroha_core/cuda", "ivm/cuda", "norito/codec-gpu-cud
 # daemon binary in an isolated target directory when an adversarial network
 # test explicitly requests it.
 test-network-message-control = ["iroha_core/test-network-native-amx-fault-injection"]
+# Dedicated non-shipping daemon used only by the four-validator Parliament
+# integration corridor. It injects proof-valid beacon and TLE shares for this
+# daemon's exact roster seat and does not alter consensus verification.
+test-network-parliament-signers = ["iroha_core/test-network-parliament-signers"]
 fastpq-gpu = ["fastpq_prover/fastpq-gpu", "iroha_core/fastpq-gpu"]
 zk-stark = ["dep:sha2", "iroha_core/zk-stark", "iroha_torii/zk-stark"]
 sm = [
@@ -123,8 +127,9 @@ sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_node = { path = "../sorafs_node" }
 
-# Optional deps for recovery diagnostics (feature: dag-recovery-verify)
+# Optional deps for recovery diagnostics (features: dag-recovery-verify, zk-stark)
 sha2 = { version = "0.10.9", optional = true, default-features = false }
+zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 hex = { workspace = true }
 nonzero_ext = { workspace = true, optional = true }
 
@@ -143,7 +148,7 @@ x25519-dalek = { version = "2.0.1", default-features = false, features = ["stati
 blake3 = { workspace = true }
 
 [dev-dependencies]
-iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests"] }
+iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests", "sumeragi-main-loop-tests"] }
 iroha_p2p = { workspace = true, features = ["test-fixtures"] }
 serial_test = "3.5.0"
 tempfile = { workspace = true }

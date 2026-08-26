@@ -1,10 +1,11 @@
 //! Stable, bounded file reads for persistent `SoraNet` security snapshots.
 #![allow(unexpected_cfgs)]
+#[cfg(unix)]
+use std::{ffi::OsString, path::Component};
 use std::{
-    ffi::OsString,
     fs,
     io::{self, Read as _, Seek as _, Write},
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 use tempfile::NamedTempFile;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -113,6 +114,7 @@ impl CustodiedSnapshotPath {
         validate_custodied_ancestor_chain(&self.parent_path, self.owner_uid, false)?;
         Ok(())
     }
+    #[cfg(unix)]
     pub(super) fn sync_parent(&self) -> io::Result<()> {
         self.verify_parent()?;
         self.parent.sync_all()?;
@@ -226,6 +228,7 @@ impl<W: Write> Write for BoundedWriter<W> {
         self.inner.flush()
     }
 }
+#[cfg(unix)]
 fn validate_absolute_ledger_path(path: &Path) -> io::Result<()> {
     if !path.is_absolute() {
         return Err(io::Error::new(
@@ -247,6 +250,7 @@ fn validate_absolute_ledger_path(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
+#[cfg(unix)]
 fn prepare_canonical_parent(configured_parent: &Path) -> io::Result<PathBuf> {
     let mut missing = Vec::<OsString>::new();
     let mut existing = configured_parent.to_path_buf();
@@ -620,15 +624,7 @@ fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> b
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-#[cfg(windows)]
-fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-}
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn metadata_identifies_same_file(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }

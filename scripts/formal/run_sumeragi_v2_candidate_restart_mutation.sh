@@ -189,6 +189,9 @@ run_mutant ingress-class-outer-commit-response "$INGRESS_CLASS_MODULE" \
   ingress_class_outer_commit_response_drop_bug.cfg OuterProgressClassAligned
 run_mutant ingress-class-runtime-locked-commit "$INGRESS_CLASS_MODULE" \
   ingress_class_runtime_locked_commit_drop_bug.cfg RuntimeProgressClassAligned
+run_mutant ingress-class-runtime-locked-reproposal-prepare "$INGRESS_CLASS_MODULE" \
+  ingress_class_runtime_locked_reproposal_prepare_drop_bug.cfg \
+  RuntimeProgressClassAligned
 run_mutant ingress-class-runtime-prepare-qc "$INGRESS_CLASS_MODULE" \
   ingress_class_runtime_prepare_qc_drop_bug.cfg RuntimeProgressClassAligned
 run_mutant ingress-class-runtime-commit-qc "$INGRESS_CLASS_MODULE" \
@@ -227,4 +230,4 @@ echo "[tlc] exact candidate identity distinguishes context, view, generation, pa
 echo "[tlc] compact crash/replay reconstruction replaces the volatile signature witness with exact crash authority and retains body and application negative controls without preserving the obsolete exclusive RestartReplay order"
 echo "[tlc] stale-generation completion and dropped reconstruction mutants fail their named invariants"
 echo "[tlc] exact outer Progress and runtime Progress/Normal/bypass partitions reject every single-family mutation"
-echo "[tlc] 6 repaired cases passed; 39 mutants failed their named invariants"
+echo "[tlc] 6 repaired cases passed; 41 mutants failed their named invariants"

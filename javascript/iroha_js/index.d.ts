@@ -4758,9 +4758,10 @@ export interface ToriiLaneGovernanceSnapshot {
 
 export interface ToriiGovernanceProposalSnapshot {
   proposed: number;
-  approved: number;
   rejected: number;
   enacted: number;
+  superseded: number;
+  execution_failed: number;
 }
 
 export interface ToriiGovernanceProtectedNamespaceSnapshot {
@@ -4805,15 +4806,209 @@ export interface ToriiGovernanceStatusSnapshot {
 
 export type ToriiGovernanceProposalStatus =
   | "Proposed"
-  | "Approved"
   | "Rejected"
-  | "Enacted";
+  | "Enacted"
+  | "Superseded"
+  | "ExecutionFailed";
 
 export interface ToriiGovernanceDeployContractProposal {
   contract_address: string;
-  code_hash_hex: string;
-  abi_hash_hex: string;
-  abi_version: string;
+  code_hash: string;
+  abi_hash: string;
+  abi_version: 1;
+  manifest_provenance: ToriiGovernanceManifestProvenance | null;
+}
+
+export interface ToriiGovernanceManifestProvenance {
+  signer: string;
+  signature: string;
+}
+
+export interface ToriiGovernanceRuntimeUpgradeSbomDigest {
+  algorithm: string;
+  digest: string;
+}
+
+export interface ToriiGovernanceRuntimeUpgradeManifest {
+  name: string;
+  description: string;
+  abi_version: 1;
+  abi_hash: ReadonlyArray<number>;
+  added_syscalls: readonly [];
+  added_pointer_types: readonly [];
+  start_height: number;
+  end_height: number;
+  sbom_digests: ReadonlyArray<ToriiGovernanceRuntimeUpgradeSbomDigest>;
+  slsa_attestation: string;
+  provenance: ReadonlyArray<ToriiGovernanceManifestProvenance>;
+}
+
+export interface ToriiGovernanceRuntimeUpgradeProposal {
+  manifest: ToriiGovernanceRuntimeUpgradeManifest;
+}
+
+export interface ToriiGovernanceSccpRouteProposal {
+  anchor: {
+    network_id: string;
+    action: Readonly<SccpRouteGovernanceActionInput>;
+  };
+}
+
+export type ToriiGovernanceValidationFeeChargingMode = Readonly<
+  | { charging_mode: "DISABLED"; value: null }
+  | { charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION"; value: null }
+>;
+
+export interface ToriiGovernanceValidationFeePayoutRecipient {
+  account_id: string;
+  share: "0.25";
+}
+
+export interface ToriiGovernanceValidationFeePayoutBinding {
+  contract_address: string;
+  code_hash: ReadonlyArray<number>;
+  entrypoint: "autonomous_validation_fee_tick";
+  treasury_account_id: string;
+  ds_asset_id: string;
+  xor_asset_id: string;
+  pool_vault_account_id: string;
+  batch_ds: "10";
+  min_xor_out: "4";
+  max_xor_out: "100";
+  recipients: ReadonlyArray<ToriiGovernanceValidationFeePayoutRecipient>;
+}
+
+export interface ToriiGovernanceValidationFeePolicyV1 {
+  schema_version: 1;
+  network_id: string;
+  policy_version: string;
+  previous_policy_hash: ReadonlyArray<number> | null;
+  ds_asset_id: string;
+  ds_scale: 2;
+  fee: string;
+  treasury_account_id: string;
+  charging_mode: ToriiGovernanceValidationFeeChargingMode;
+  effective_from_height: string;
+  expires_after_height: string | null;
+  exemption_classes: ReadonlyArray<"TREASURY_PAYOUT">;
+  treasury_payout_binding: ToriiGovernanceValidationFeePayoutBinding | null;
+}
+
+export interface ToriiGovernanceValidationFeePolicyProposal {
+  proposal_operator: string;
+  policy: ToriiGovernanceValidationFeePolicyV1;
+  payout_lifecycle_proposal_id: ReadonlyArray<number> | null;
+}
+
+export interface ToriiGovernanceValidationFeePayoutLifecycleProposal {
+  proposal_operator: string;
+  payout_binding: ToriiGovernanceValidationFeePayoutBinding;
+}
+
+export type ToriiGovernanceMusubiPackageScope = Readonly<
+  | { kind: "DataspaceRoot"; value: null }
+  | { kind: "Domain"; value: string }
+>;
+
+export interface ToriiGovernanceMusubiPackageId {
+  home_dataspace: number;
+  scope: ToriiGovernanceMusubiPackageScope;
+  name: string;
+}
+
+export type ToriiGovernanceMusubiPrereleaseIdentifier = Readonly<
+  | { kind: "Numeric"; value: number }
+  | { kind: "AlphaNumeric"; value: string }
+>;
+
+export interface ToriiGovernanceMusubiVersion {
+  major: number;
+  minor: number;
+  patch: number;
+  prerelease: ReadonlyArray<ToriiGovernanceMusubiPrereleaseIdentifier>;
+}
+
+export interface ToriiGovernanceMusubiReleaseId {
+  package: ToriiGovernanceMusubiPackageId;
+  version: ToriiGovernanceMusubiVersion;
+}
+
+export interface ToriiGovernanceMusubiAliasPricingPolicy {
+  revision: number;
+  length_1_xor: number;
+  length_2_xor: number;
+  length_3_xor: number;
+  length_4_xor: number;
+  length_5_to_32_xor: number;
+}
+
+export interface ToriiGovernanceMusubiRegistryPolicy {
+  version: 1;
+  revision: number;
+  mode: Readonly<
+    | { kind: "Closed"; value: null }
+    | { kind: "Allowlisted"; value: null }
+    | { kind: "Open"; value: null }
+  >;
+  allowlisted_dataspaces: ReadonlyArray<number>;
+  alias_pricing: ToriiGovernanceMusubiAliasPricingPolicy;
+}
+
+export type ToriiGovernanceMusubiAction = Readonly<
+  | {
+      kind: "RecoverPackageOwners";
+      value: {
+        package: ToriiGovernanceMusubiPackageId;
+        owners: ReadonlyArray<string>;
+        expected_revision: number;
+      };
+    }
+  | {
+      kind: "RetargetAlias";
+      value: {
+        alias: string;
+        target: ToriiGovernanceMusubiPackageId;
+        expected_revision: number;
+      };
+    }
+  | {
+      kind: "TakedownArtifact";
+      value: {
+        release: ToriiGovernanceMusubiReleaseId;
+        reason: string;
+        expected_artifact_governance_revision: number;
+      };
+    }
+  | {
+      kind: "SetRegistryPolicy";
+      value: {
+        policy: ToriiGovernanceMusubiRegistryPolicy;
+        expected_revision: number;
+      };
+    }
+>;
+
+export type ToriiGovernanceSorafsProviderAction = Readonly<
+  | {
+      action: "establish";
+      value: { provider_id: ReadonlyArray<number>; owner: string };
+    }
+  | {
+      action: "rebind";
+      value: {
+        provider_id: ReadonlyArray<number>;
+        expected_owner: string;
+        next_owner: string;
+      };
+    }
+  | {
+      action: "remove";
+      value: { provider_id: ReadonlyArray<number>; expected_owner: string };
+    }
+>;
+
+export interface ToriiGovernanceSorafsProviderProposal {
+  action: ToriiGovernanceSorafsProviderAction;
 }
 
 export interface ToriiGovernanceContractResponse {
@@ -4823,11 +5018,35 @@ export interface ToriiGovernanceContractResponse {
   code_hash_hex: string | null;
 }
 
-export interface ToriiGovernanceProposalKind {
-  variant: string;
-  deploy_contract: ToriiGovernanceDeployContractProposal | null;
-  raw: Record<string, unknown>;
-}
+export type ToriiGovernanceProposalKind =
+  | Readonly<{
+      variant: "DeployContract";
+      deploy_contract: ToriiGovernanceDeployContractProposal;
+    }>
+  | Readonly<{
+      variant: "RuntimeUpgrade";
+      runtime_upgrade: ToriiGovernanceRuntimeUpgradeProposal;
+    }>
+  | Readonly<{
+      variant: "SccpRouteGovernance";
+      sccp_route_governance: ToriiGovernanceSccpRouteProposal;
+    }>
+  | Readonly<{
+      variant: "ValidationFeePolicy";
+      validation_fee_policy: ToriiGovernanceValidationFeePolicyProposal;
+    }>
+  | Readonly<{
+      variant: "ValidationFeePayoutLifecycle";
+      validation_fee_payout_lifecycle: ToriiGovernanceValidationFeePayoutLifecycleProposal;
+    }>
+  | Readonly<{
+      variant: "MusubiRegistryGovernance";
+      musubi_registry_governance: ToriiGovernanceMusubiAction;
+    }>
+  | Readonly<{
+      variant: "SorafsProviderGovernance";
+      sorafs_provider_governance: ToriiGovernanceSorafsProviderProposal;
+    }>;
 
 export interface ToriiGovernanceProposalRecord {
   proposer: string;
@@ -4911,20 +5130,6 @@ export interface ToriiProtectedNamespacesGetResponse {
   namespaces: string[];
 }
 
-export interface ToriiGovernanceFinalizeRequest {
-  referendumId: string;
-  proposalId: string;
-}
-
-export interface ToriiGovernanceWindow {
-  lower: number | string | bigint;
-  upper: number | string | bigint;
-}
-
-export interface ToriiGovernanceEnactRequest {
-  proposalId: string;
-}
-
 export interface ToriiGovernanceDraftInstruction {
   wire_id: string;
   payload_hex?: string | null;
@@ -4937,6 +5142,446 @@ export interface ToriiGovernanceDraftResponse {
   accepted?: boolean;
   reason?: string | null;
 }
+
+export interface ToriiGovernanceProposalInstructionDraftV1 {
+  wire_id: string;
+  payload_hex: string;
+}
+
+export interface ToriiGovernanceProposalDraftResponseV1 {
+  proposal_id: string;
+  tx_instructions: readonly [ToriiGovernanceProposalInstructionDraftV1];
+}
+
+export const PARLIAMENT_API_VERSION_V1: 1;
+export const PARLIAMENT_ATTEMPT_DRAFT_PATH_V1: "/v1/gov/parliament/attempts/draft";
+export const PARLIAMENT_ATTEMPT_READ_PATH_V1: "/v1/gov/parliament/attempts/{governance_attempt_id}";
+export const PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ_PATH_V1: "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context";
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_PATH_V1: "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof";
+export const PARLIAMENT_TLE_RELEASE_CONTEXT_READ_PATH_V1: "/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context";
+export const PARLIAMENT_TLE_PARTIAL_RELEASE_PATH_V1: "/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release";
+export const PARLIAMENT_TRANSITION_DRAFT_PATH_V1: "/v1/gov/parliament/transitions/draft";
+export const PARLIAMENT_ATTEMPT_CREATE_WIRE_ID_V1: "iroha.governance.parliament.attempt.create.v1";
+export const PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1: "iroha.governance.parliament.transition.submit.v1";
+export const PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1: 16777216;
+export const PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1: 3624;
+export const PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1: 2858;
+export const PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1: 1000;
+export const PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1: 31;
+export const PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1: 4194304;
+export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1: 8388608;
+
+export type ParliamentProposalTagV1 =
+  | "DeployContract"
+  | "RuntimeUpgrade"
+  | "SccpRouteGovernance"
+  | "ValidationFeePolicy"
+  | "ValidationFeePayoutLifecycle"
+  | "MusubiRegistryGovernance"
+  | "SorafsProviderGovernance";
+
+export type ParliamentPublicTransitionTagV1 =
+  | "EscalateRisk"
+  | "CompleteQualification"
+  | "RegisterSortitionRequest"
+  | "ConsumeSortitionPulseBatch"
+  | "BeginInvitationAcceptance"
+  | "FailBodyElectionNoRoster"
+  | "SealBodyRoster"
+  | "AdvanceBodyPhase"
+  | "RecordAttemptAbsence"
+  | "EndorsePublicFinding"
+  | "RegisterBallotAttempt"
+  | "CloseBallotRegistration"
+  | "FreezeBallotSurvivors"
+  | "FreezeTimedOvnCorpus"
+  | "BeginBallotOpeningBatch"
+  | "FailBallotNoResult"
+  | "FinalizeOpenedBallot"
+  | "RecordInvitationResponse"
+  | "RegisterBallotParticipant"
+  | "RecordBallotDropout"
+  | "FailPublicFindingNoResult";
+
+export interface ParliamentTransitionLayoutV1 {
+  readonly noritoIndex: number;
+  readonly jsonTag: ParliamentPublicTransitionTagV1;
+  readonly jsonPayloadRequired: boolean;
+  readonly eventKindIndex: number;
+}
+
+export interface ParliamentAutomaticExecutionOutcomeLayoutV1 {
+  readonly noritoIndex: number;
+  readonly jsonTag: "Enacted" | "Superseded" | "ExecutionFailed";
+  readonly jsonPayloadRequired: boolean;
+  readonly eventKind: "MarkEnacted" | "MarkSuperseded" | "MarkExecutionFailed";
+  readonly eventKindIndex: 17 | 18 | 19;
+}
+
+export type ParliamentNoResultKindTagV1 =
+  | "PublicFindingQuorumUnreachable"
+  | "PublicFindingDeadlineExpired"
+  | "BallotRegistrationDeadlineExpired"
+  | "BallotSurvivorDeadlineExpired"
+  | "BallotCommitmentDeadlineExpired"
+  | "BallotReleasePulseUnavailable"
+  | "BallotOpeningDeadlineExpired";
+
+export interface ParliamentNoResultKindLayoutV1 {
+  readonly noritoIndex: number;
+  readonly jsonTag: ParliamentNoResultKindTagV1;
+}
+
+export const PARLIAMENT_PUBLIC_TRANSITIONS_V1: ReadonlyArray<ParliamentTransitionLayoutV1>;
+/** Read/audit-only inventory; these tags are never accepted by the public builder. */
+export const PARLIAMENT_AUTOMATIC_EXECUTION_OUTCOMES_V1: ReadonlyArray<ParliamentAutomaticExecutionOutcomeLayoutV1>;
+export const PARLIAMENT_NO_RESULT_KINDS_V1: ReadonlyArray<ParliamentNoResultKindLayoutV1>;
+export const PARLIAMENT_BODY_STATE_FIELDS_V1: ReadonlyArray<
+  | "body"
+  | "body_instance_id"
+  | "status"
+  | "public_finding_opened_at_height"
+  | "public_finding_phase_blocks"
+  | "public_finding_deadline_height"
+  | "no_result_kind"
+  | "no_result_height"
+>;
+export const PARLIAMENT_CERTIFICATE_BODY_BINDING_FIELDS_V1: ReadonlyArray<string>;
+export const PARLIAMENT_PUBLIC_FINDING_CERTIFICATE_FIELDS_V1: ReadonlyArray<
+  "endorsement_root" | "endorsing_assignments" | "endorsements" | "quorum"
+>;
+
+export interface ParliamentMusubiPackageIdV1 {
+  home_dataspace: number;
+  scope: ToriiGovernanceMusubiPackageScope;
+  /** Exact Norito JSON tuple encoding of `MusubiPackageNameV1`. */
+  name: readonly [string];
+}
+
+export interface ParliamentMusubiReleaseIdV1 {
+  package: ParliamentMusubiPackageIdV1;
+  version: ToriiGovernanceMusubiVersion;
+}
+
+export type ParliamentMusubiActionV1 = Readonly<
+  | {
+      kind: "RecoverPackageOwners";
+      value: {
+        package: ParliamentMusubiPackageIdV1;
+        owners: ReadonlyArray<string>;
+        expected_revision: number;
+      };
+    }
+  | {
+      kind: "RetargetAlias";
+      value: {
+        /** Exact Norito JSON tuple encoding of `MusubiAliasNameV1`. */
+        alias: readonly [string];
+        target: ParliamentMusubiPackageIdV1;
+        expected_revision: number;
+      };
+    }
+  | {
+      kind: "TakedownArtifact";
+      value: {
+        release: ParliamentMusubiReleaseIdV1;
+        /** Exact Norito JSON tuple encoding of `MusubiReasonV1`. */
+        reason: readonly [string];
+        expected_artifact_governance_revision: number;
+      };
+    }
+  | {
+      kind: "SetRegistryPolicy";
+      value: {
+        policy: ToriiGovernanceMusubiRegistryPolicy;
+        expected_revision: number;
+      };
+    }
+>;
+
+export type ParliamentSorafsProviderActionV1 = Readonly<
+  | {
+      action: "establish";
+      value: {
+        /** Exact Norito JSON tuple encoding of `ProviderId`. */
+        provider_id: readonly [ReadonlyArray<number>];
+        owner: string;
+      };
+    }
+  | {
+      action: "rebind";
+      value: {
+        provider_id: readonly [ReadonlyArray<number>];
+        expected_owner: string;
+        next_owner: string;
+      };
+    }
+  | {
+      action: "remove";
+      value: {
+        provider_id: readonly [ReadonlyArray<number>];
+        expected_owner: string;
+      };
+    }
+>;
+
+export type ParliamentProposalV1 =
+  | Readonly<{
+      kind: "DeployContract";
+      payload: ToriiGovernanceDeployContractProposal;
+    }>
+  | Readonly<{
+      kind: "RuntimeUpgrade";
+      payload: ToriiGovernanceRuntimeUpgradeProposal;
+    }>
+  | Readonly<{
+      kind: "SccpRouteGovernance";
+      payload: ToriiGovernanceSccpRouteProposal;
+    }>
+  | Readonly<{
+      kind: "ValidationFeePolicy";
+      payload: ToriiGovernanceValidationFeePolicyProposal;
+    }>
+  | Readonly<{
+      kind: "ValidationFeePayoutLifecycle";
+      payload: ToriiGovernanceValidationFeePayoutLifecycleProposal;
+    }>
+  | Readonly<{
+      kind: "MusubiRegistryGovernance";
+      payload: ParliamentMusubiActionV1;
+    }>
+  | Readonly<{
+      kind: "SorafsProviderGovernance";
+      payload: { action: ParliamentSorafsProviderActionV1 };
+    }>;
+
+export type ParliamentLifecycleTransitionV1 =
+  | { transition: "CompleteQualification" }
+  | {
+      transition: Exclude<ParliamentPublicTransitionTagV1, "CompleteQualification">;
+      payload: Record<string, unknown>;
+    };
+
+export interface ParliamentAttemptDraftRequestV1 {
+  version: 1;
+  proposal: ParliamentProposalV1;
+  attempt_sequence: number;
+}
+
+export interface ParliamentTransitionDraftRequestV1 {
+  version: 1;
+  governance_attempt_id: string;
+  transition: ParliamentLifecycleTransitionV1;
+}
+
+export interface ParliamentInstructionDraftV1 {
+  wire_id: string;
+  payload_hex: string;
+}
+
+export interface ParliamentAttemptDraftResponseV1 {
+  version: 1;
+  proposal_content_id: string;
+  governance_attempt_id: string;
+  tx_instructions: readonly [ParliamentInstructionDraftV1];
+}
+
+export interface ParliamentTransitionDraftResponseV1 {
+  version: 1;
+  governance_attempt_id: string;
+  transition_kind: { kind: ParliamentPublicTransitionTagV1 };
+  transition_digest: ReadonlyArray<number>;
+  tx_instructions: readonly [ParliamentInstructionDraftV1];
+}
+
+export interface ParliamentAttemptReadResponseV1 extends Record<string, unknown> {
+  version: 1;
+  current_height: number | bigint;
+  attempt: Record<string, unknown> & { id: string };
+  policy_version: number | bigint;
+  required_bodies: ReadonlyArray<Record<string, unknown>>;
+  body_states: ReadonlyArray<ParliamentBodyStateProjectionV1>;
+  certificate: Record<string, unknown> | null;
+  terminal_height: number | bigint | null;
+  execution_failure_root: ReadonlyArray<number> | null;
+  superseding_head: Record<string, unknown> | null;
+  state_payload_hex: string;
+}
+
+export interface ParliamentBodyStateProjectionV1 {
+  body: string;
+  body_instance_id: string | null;
+  status: Record<string, unknown> | null;
+  public_finding_opened_at_height: number | bigint | null;
+  public_finding_phase_blocks: number | bigint | null;
+  public_finding_deadline_height: number | bigint | null;
+  no_result_kind: { reason: ParliamentNoResultKindTagV1 } | null;
+  no_result_height: number | bigint | null;
+}
+
+export interface ParliamentTleAdaptiveDealerCommitmentV1 {
+  dealer_index: number;
+  coefficient_commitments: ReadonlyArray<ReadonlyArray<number>>;
+  constant_pok_commitment: ReadonlyArray<number>;
+  constant_pok_response: ReadonlyArray<number>;
+}
+
+export interface ParliamentTleAdaptivePublicShareV1 {
+  index: number;
+  participant_hash: ReadonlyArray<number>;
+  public_key_share: ReadonlyArray<number>;
+}
+
+/** Complete public transcript required for independent adaptive-partial verification. */
+export interface ParliamentTleKeySessionPublicStateV1 {
+  version: 1;
+  key_session_id: string;
+  network_id: ReadonlyArray<number>;
+  roster_hash: ReadonlyArray<number>;
+  committee_size: number;
+  threshold: number;
+  generator_h: ReadonlyArray<number>;
+  generator_v: ReadonlyArray<number>;
+  qualified_dealers: ReadonlyArray<number>;
+  qualified_dealer_commitments: ReadonlyArray<ParliamentTleAdaptiveDealerCommitmentV1>;
+  dkg_event_hash: ReadonlyArray<number>;
+  group_public_key: ReadonlyArray<number>;
+  public_shares: ReadonlyArray<ParliamentTleAdaptivePublicShareV1>;
+  transcript_hash: ReadonlyArray<number>;
+}
+
+export interface ParliamentTimedOvnReleaseIdentityProjectionV1 {
+  tle_key_session_id: string;
+  governance_attempt_id: string;
+  body_instance_id: string;
+  ballot_attempt_id: string;
+  survivor_corpus_root: ReadonlyArray<number>;
+  no_recovery_root: ReadonlyArray<number>;
+  target_finalized_height: number | bigint;
+  parameter_hash: ReadonlyArray<number>;
+}
+
+export type ParliamentTimedOvnCastingPhaseV1 =
+  | "Registered"
+  | "RegistrationClosed"
+  | "SurvivorsFrozen";
+
+export interface ParliamentTimedOvnSessionProjectionV1 {
+  network_id: ReadonlyArray<number>;
+  proposal_content_id: string;
+  governance_attempt_id: string;
+  body_instance_id: string;
+  ballot_attempt_id: string;
+  parameter_hash: ReadonlyArray<number>;
+  tle_key_session_id: string;
+  tle_key_transcript_hash: ReadonlyArray<number>;
+  tle_master_public_key: ReadonlyArray<number>;
+}
+
+export interface ParliamentTimedOvnCastingContextResponseV1 {
+  version: 1;
+  current_height: number | bigint;
+  phase: ParliamentTimedOvnCastingPhaseV1;
+  session: ParliamentTimedOvnSessionProjectionV1;
+  registration_opened_at_finalized_height: number | bigint;
+  target_finalized_height: number | bigint;
+  tle_key_session: ParliamentTleKeySessionPublicStateV1;
+  registration_records_hex: ReadonlyArray<string>;
+  survivor_participant_hashes: ReadonlyArray<ReadonlyArray<number>> | null;
+  release_identity: ParliamentTimedOvnReleaseIdentityProjectionV1 | null;
+  archive_norito_base64: string;
+}
+
+export interface ParliamentTleReleaseContextResponseV1 {
+  version: 1;
+  current_height: number | bigint;
+  ballot_attempt_id: string;
+  governance_attempt_id: string;
+  body_instance_id: string;
+  status: { status: "Opening" };
+  release_height: number | bigint;
+  opening_deadline_height: number | bigint;
+  tle_key_session: ParliamentTleKeySessionPublicStateV1;
+  release_identity: ParliamentTimedOvnReleaseIdentityProjectionV1;
+  identity_digest: ReadonlyArray<number>;
+  identity_payload_hex: string;
+}
+
+export interface ParliamentTlePartialReleaseShareV1 {
+  key_session_id: string;
+  identity_digest: ReadonlyArray<number>;
+  participant_index: number;
+  sigma: ReadonlyArray<number>;
+  proof_x: ReadonlyArray<number>;
+  proof_y: ReadonlyArray<number>;
+  z_s: ReadonlyArray<number>;
+  z_r: ReadonlyArray<number>;
+  z_u: ReadonlyArray<number>;
+}
+
+export interface ParliamentAttemptDraftOptionsV1 extends RequiredCanonicalRequestOptions {
+  expectedProposalContentId: string;
+  expectedGovernanceAttemptId: string;
+}
+
+export interface ParliamentTransitionDraftOptionsV1 extends RequiredCanonicalRequestOptions {
+  expectedTransitionDigest: BinaryLike;
+}
+
+export interface ParliamentTlePartialReleaseOptionsV1 extends RequiredCanonicalRequestOptions {
+  expectedKeySessionId: string;
+  expectedIdentityDigest: BinaryLike;
+  committeeSize: number;
+}
+
+export function parliamentAttemptReadPathV1(governanceAttemptId: string): string;
+export function parliamentTimedOvnCastingContextReadPathV1(ballotAttemptId: string): string;
+export function parliamentTimedOvnCastingProofPathV1(ballotAttemptId: string): string;
+export function parliamentTleReleaseContextReadPathV1(ballotAttemptId: string): string;
+export function parliamentTlePartialReleasePathV1(ballotAttemptId: string): string;
+export function buildParliamentAttemptDraftRequestV1(
+  proposal: ParliamentProposalV1,
+  attemptSequence: number,
+): ParliamentAttemptDraftRequestV1;
+export function buildParliamentTransitionDraftRequestV1(
+  governanceAttemptId: string,
+  transition: ParliamentLifecycleTransitionV1,
+): ParliamentTransitionDraftRequestV1;
+export function normalizeParliamentAttemptDraftResponseV1(
+  value: unknown,
+  bindings: {
+    expectedProposalContentId: string;
+    expectedGovernanceAttemptId: string;
+  },
+): ParliamentAttemptDraftResponseV1;
+export function normalizeParliamentTransitionDraftResponseV1(
+  value: unknown,
+  bindings: {
+    expectedGovernanceAttemptId: string;
+    expectedTransitionKind: ParliamentPublicTransitionTagV1;
+    expectedTransitionDigest: BinaryLike;
+  },
+): ParliamentTransitionDraftResponseV1;
+export function normalizeParliamentAttemptReadResponseV1(
+  value: unknown,
+  expectedGovernanceAttemptId: string,
+): ParliamentAttemptReadResponseV1;
+export function normalizeParliamentTimedOvnCastingContextResponseV1(
+  value: unknown,
+  expectedBallotAttemptId: string,
+): ParliamentTimedOvnCastingContextResponseV1;
+export function normalizeParliamentTleReleaseContextResponseV1(
+  value: unknown,
+  expectedBallotAttemptId: string,
+): ParliamentTleReleaseContextResponseV1;
+export function normalizeParliamentTlePartialReleaseShareV1(
+  value: unknown,
+  bindings: {
+    expectedKeySessionId: string;
+    expectedIdentityDigest: BinaryLike;
+    committeeSize: number;
+  },
+): ParliamentTlePartialReleaseShareV1;
 
 export interface MinistryAgendaProposalDraftRequest {
   proposal: MinistryAgendaProposalV1;
@@ -5037,9 +5682,7 @@ export interface ToriiGovernanceDeployContractProposalRequest {
   contractAlias?: string;
   codeHash: string | BinaryLike;
   abiHash: string | BinaryLike;
-  abiVersion?: "1";
-  window?: ToriiGovernanceWindow | null;
-  mode?: "Zk" | "Plain";
+  abiVersion?: 1;
   manifestProvenance?: ToriiGovernanceManifestProvenanceInput | null;
 }
 
@@ -5051,28 +5694,6 @@ export interface ToriiGovernancePlainBallotRequest {
   amount: QuantityInput;
   durationBlocks: number | string | bigint;
   direction: ToriiGovernanceBallotDirection;
-}
-
-export type ToriiGovernanceParliamentBody =
-  | "rules-committee"
-  | "agenda-council"
-  | "interest-panel"
-  | "review-panel"
-  | "policy-jury"
-  | "oversight-committee"
-  | "fma-committee";
-
-export type ToriiGovernanceParliamentDecision =
-  | "approve"
-  | "reject"
-  | "abstain";
-
-export interface ToriiGovernanceParliamentBallotRequest {
-  authority: string;
-  networkId: NetworkId;
-  proposalId: string;
-  body: ToriiGovernanceParliamentBody;
-  decision: ToriiGovernanceParliamentDecision;
 }
 
 export interface ToriiGovernanceZkBallotV1Request {
@@ -7345,27 +7966,17 @@ export interface ReportKaigiRelayHealthInput {
   notes?: string | null;
 }
 
-export type GovernanceVotingMode = "Zk" | "Plain";
-
-export interface GovernanceWindowInput {
-  lower: NumericLike;
-  upper: NumericLike;
-}
-
 export interface ProposeDeployContractInstructionInput {
   contractAddress: string;
   codeHash: HashLike;
   abiHash: HashLike;
-  abiVersion?: "1";
-  window?: GovernanceWindowInput | null;
-  votingMode?: GovernanceVotingMode | null;
+  abiVersion?: 1;
   manifestProvenance?: ToriiGovernanceManifestProvenanceInput | null;
 }
 
 export interface ProposeSccpRouteGovernanceInstructionInput {
+  networkId: NetworkId;
   action: SccpRouteGovernanceActionInput;
-  window?: GovernanceWindowInput | null;
-  mode?: GovernanceVotingMode | null;
 }
 
 export interface CastZkBallotInstructionInput {
@@ -7389,19 +8000,6 @@ export interface CastPlainBallotInstructionInput {
   amount: QuantityInput;
   durationBlocks: NumericLike;
   direction?: number | string;
-}
-
-export interface EnactReferendumInstructionInput {
-  referendumId: HashLike;
-  preimageHash: HashLike;
-  window?: GovernanceWindowInput | null;
-}
-
-export interface FinalizeReferendumInstructionInput {
-  /** Exact lowercase 32-byte proposal digest; must equal `proposalId`. */
-  referendumId: string;
-  /** Proposal digest bytes, or the same exact lowercase digest string as `referendumId`. */
-  proposalId: HashLike;
 }
 
 export interface PersistCouncilForEpochInstructionInput {
@@ -9494,30 +10092,6 @@ export interface CastPlainBallotTransactionInput {
   privateKeyAlgorithm?: string | null;
 }
 
-export interface EnactReferendumTransactionInput {
-  networkId: NetworkId;
-  authority: string;
-  enactment: EnactReferendumInstructionInput;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
-}
-
-export interface FinalizeReferendumTransactionInput {
-  networkId: NetworkId;
-  authority: string;
-  finalization: FinalizeReferendumInstructionInput;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
-}
-
 export interface PersistCouncilForEpochTransactionInput {
   networkId: NetworkId;
   authority: string;
@@ -11042,6 +11616,32 @@ export declare class ToriiClient {
   getGovernanceUnlockStats(options: RequiredCanonicalRequestOptions): Promise<Record<string, unknown> | null>;
   getGovernanceUnlockStatsTyped(options: RequiredCanonicalRequestOptions): Promise<ToriiGovernanceUnlockStats>;
   getGovernanceCouncilCurrent(options: RequiredCanonicalRequestOptions): Promise<ToriiGovernanceCouncilCurrentResponse>;
+  draftParliamentAttemptV1(
+    proposal: ParliamentProposalV1,
+    attemptSequence: number,
+    options: ParliamentAttemptDraftOptionsV1,
+  ): Promise<ParliamentAttemptDraftResponseV1>;
+  getParliamentAttemptV1(
+    governanceAttemptId: string,
+    options: RequiredCanonicalRequestOptions,
+  ): Promise<ParliamentAttemptReadResponseV1>;
+  getParliamentTimedOvnCastingContextV1(
+    ballotAttemptId: string,
+    options: RequiredCanonicalRequestOptions,
+  ): Promise<ParliamentTimedOvnCastingContextResponseV1>;
+  getParliamentTleReleaseContextV1(
+    ballotAttemptId: string,
+    options: RequiredCanonicalRequestOptions,
+  ): Promise<ParliamentTleReleaseContextResponseV1>;
+  requestParliamentTlePartialReleaseV1(
+    ballotAttemptId: string,
+    options: ParliamentTlePartialReleaseOptionsV1,
+  ): Promise<ParliamentTlePartialReleaseShareV1>;
+  draftParliamentTransitionV1(
+    governanceAttemptId: string,
+    transition: ParliamentLifecycleTransitionV1,
+    options: ParliamentTransitionDraftOptionsV1,
+  ): Promise<ParliamentTransitionDraftResponseV1>;
   draftMinistryAgendaProposal(
     payload: MinistryAgendaProposalDraftRequest,
     options: RequiredCanonicalRequestOptions,
@@ -11050,32 +11650,12 @@ export declare class ToriiClient {
     proposalId: string,
     options: RequiredCanonicalRequestOptions,
   ): Promise<MinistryAgendaProposalGetResponse>;
-  governanceFinalizeReferendum(
-    payload: ToriiGovernanceFinalizeRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiGovernanceDraftResponse | null>;
-  governanceFinalizeReferendumTyped(
-    payload: ToriiGovernanceFinalizeRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiGovernanceDraftResponse>;
-  governanceEnactProposal(
-    payload: ToriiGovernanceEnactRequest,
-    options: RequiredCanonicalRequestOptions,
-  ): Promise<ToriiGovernanceDraftResponse | null>;
-  governanceEnactProposalTyped(
-    payload: ToriiGovernanceEnactRequest,
-    options: RequiredCanonicalRequestOptions,
-  ): Promise<ToriiGovernanceDraftResponse>;
   governanceProposeDeployContract(
     payload: ToriiGovernanceDeployContractProposalRequest,
     options: RequiredCanonicalRequestOptions,
-  ): Promise<ToriiGovernanceDraftResponse>;
+  ): Promise<ToriiGovernanceProposalDraftResponseV1>;
   governanceSubmitPlainBallot(
     payload: ToriiGovernancePlainBallotRequest,
-    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
-  ): Promise<ToriiGovernanceBallotResponse>;
-  governanceSubmitParliamentBallot(
-    payload: ToriiGovernanceParliamentBallotRequest,
     options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<ToriiGovernanceBallotResponse>;
   governanceSubmitZkBallotV1(
@@ -12421,12 +13001,6 @@ export function buildCastZkBallotTransaction(
 export function buildCastPlainBallotTransaction(
   input: CastPlainBallotTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
-export function buildEnactReferendumTransaction(
-  input: EnactReferendumTransactionInput & FeePaymentRequired,
-): SignedTransactionResult;
-export function buildFinalizeReferendumTransaction(
-  input: FinalizeReferendumTransactionInput & FeePaymentRequired,
-): SignedTransactionResult;
 export function buildPersistCouncilForEpochTransaction(
   input: PersistCouncilForEpochTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
@@ -13035,14 +13609,6 @@ export function buildCastPlainBallotInstruction(
   input: CastPlainBallotInstructionInput,
 ): object;
 
-export function buildEnactReferendumInstruction(
-  input: EnactReferendumInstructionInput,
-): object;
-
-export function buildFinalizeReferendumInstruction(
-  input: FinalizeReferendumInstructionInput,
-): object;
-
 export function buildPersistCouncilForEpochInstruction(
   input: PersistCouncilForEpochInstructionInput,
 ): object;
@@ -13192,11 +13758,10 @@ export function extractToriiFeatureConfig(
 
 export type SoracloudStorageClass = "hot" | "warm" | "cold";
 
-export interface SoracloudHfDeployDraftInput {
+export interface SoracloudHfSharedLeaseJoinDraftInput {
   repoId: string;
   /** Full 40-character lowercase Hugging Face commit OID. */
   revision: string;
-  modelName: string;
   serviceName: string;
   apartmentName: string | null;
   storageClass: SoracloudStorageClass;
@@ -13210,10 +13775,9 @@ export interface SoracloudManifestProvenance {
   signature: string;
 }
 
-export interface SoracloudHfDeployPayload {
+export interface SoracloudHfSharedLeaseJoinPayload {
   repo_id: string;
   revision: string;
-  model_name: string;
   service_name: string;
   apartment_name: string | null;
   storage_class: SoracloudStorageClass;
@@ -13232,32 +13796,20 @@ export interface SoracloudSigningPayload<
   payload: TPayload;
 }
 
-export interface SoracloudHfDeployDraft {
-  payload: SoracloudHfDeployPayload;
+export interface SoracloudHfSharedLeaseJoinDraft {
+  payload: SoracloudHfSharedLeaseJoinPayload;
   provenancePayloads: {
-    deploy: SoracloudSigningPayload<
-      SoracloudHfDeployPayload,
-      "soracloud.hf.deploy.provenance.v1",
-      "hf_deploy"
+    join: SoracloudSigningPayload<
+      SoracloudHfSharedLeaseJoinPayload,
+      "soracloud.hf.shared_lease_join.provenance.v1",
+      "hf_shared_lease_join"
     >;
-    generatedService: SoracloudSigningPayload<
-      { service_name: string; repo_id: string; revision: string },
-      "soracloud.hf.deploy.provenance.v1",
-      "generated_service"
-    >;
-    generatedApartment: SoracloudSigningPayload<
-      { apartment_name: string; service_name: string },
-      "soracloud.hf.deploy.provenance.v1",
-      "generated_apartment"
-    > | null;
   };
 }
 
-export interface SoracloudHfDeployRequest {
-  payload: SoracloudHfDeployDraft["payload"];
+export interface SoracloudHfSharedLeaseJoinRequest {
+  payload: SoracloudHfSharedLeaseJoinDraft["payload"];
   provenance: SoracloudManifestProvenance;
-  generated_service_provenance: SoracloudManifestProvenance;
-  generated_apartment_provenance: SoracloudManifestProvenance | null;
 }
 
 export interface SoracloudAppInfraRouteInput {
@@ -13401,9 +13953,9 @@ export interface SoracloudAppReportV1 {
   next_action: string;
 }
 
-export function buildSoracloudHfDeployDraft(
-  input: SoracloudHfDeployDraftInput,
-): SoracloudHfDeployDraft;
+export function buildSoracloudHfSharedLeaseJoinDraft(
+  input: SoracloudHfSharedLeaseJoinDraftInput,
+): SoracloudHfSharedLeaseJoinDraft;
 
 export function buildSoracloudAppInfraDraft(
   input: SoracloudAppInfraDraftInput,
@@ -13470,42 +14022,15 @@ export function upgradeSoracloudAppInfraInstruction(
   provenance: SoracloudManifestProvenance,
 ): { wire_id: string; payload: Record<string, unknown> };
 
-export function assembleSoracloudHfDeployRequest(
-  draft: SoracloudHfDeployDraft,
-  provenances: {
-    deploy: SoracloudManifestProvenance;
-    generatedService: SoracloudManifestProvenance;
-    generatedApartment: SoracloudManifestProvenance | null;
-  },
-): SoracloudHfDeployRequest;
+export function assembleSoracloudHfSharedLeaseJoinRequest(
+  draft: SoracloudHfSharedLeaseJoinDraft,
+  provenances: { join: SoracloudManifestProvenance },
+): SoracloudHfSharedLeaseJoinRequest;
 
 export interface SoracloudTxInstruction {
   wire_id: string;
   /** Non-empty lowercase hexadecimal with an even number of digits. */
   payload_hex: string;
-}
-
-export interface SoracloudUploadedModelEncryptionRecipientV1 {
-  schema_version: 1;
-  key_id: string;
-  key_version: number;
-  kem: { kem: "X25519HkdfSha256"; value: null };
-  aead: { aead: "Aes256Gcm"; value: null };
-  public_key_bytes: string;
-  public_key_fingerprint: string;
-}
-
-export interface SoracloudUploadedModelWrappedKeyV1 {
-  schema_version: 1;
-  recipient_key_id: string;
-  recipient_key_version: number;
-  kem: { kem: "X25519HkdfSha256"; value: null };
-  aead: { aead: "Aes256Gcm"; value: null };
-  ephemeral_public_key: string;
-  nonce: string;
-  wrapped_key_ciphertext: string;
-  ciphertext_hash: string;
-  aad_digest: string;
 }
 
 export interface SoracloudUploadedModelBundleV1 {
@@ -13526,10 +14051,7 @@ export interface SoracloudUploadedModelBundleV1 {
   plaintext_bytes: number;
   ciphertext_bytes: number;
   chunk_manifest_root: string;
-  upload_recipient: SoracloudUploadedModelEncryptionRecipientV1;
-  wrapped_bundle_key: SoracloudUploadedModelWrappedKeyV1;
   pricing_policy: { storage_price: unknown };
-  decryption_policy_ref: string;
 }
 
 export interface SoracloudModelArtifactStatusEntryV1 {

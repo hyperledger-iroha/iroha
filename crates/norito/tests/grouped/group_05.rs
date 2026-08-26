@@ -12,8 +12,6 @@ mod schema_sample_payload;
 mod sequence_len_guard;
 #[path = "../sequence_plan.rs"]
 mod sequence_plan;
-#[path = "../sequential_roundtrip.rs"]
-mod sequential_roundtrip;
 #[path = "../slice_seq_len_varint.rs"]
 mod slice_seq_len_varint;
 #[path = "../stream.rs"]

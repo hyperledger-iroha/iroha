@@ -4,6 +4,10 @@ This document is the source of truth for Norito's on-wire encoding in the
 Iroha workspace. It defines the header, flags, and the canonical length and
 string layouts used across components.
 
+Norito's first-release Rust implementation targets `std` only. There is no
+WASM/no-`std` codec branch, panic containment is always active at fallible
+decode boundaries, and build features do not weaken those safety rules.
+
 ## Header
 
 The Norito header is always present on wire and on disk. It frames the payload
@@ -161,14 +165,14 @@ budget specifies a per-sequence element count, a per-field/blob byte length,
 cumulative element and allocation-byte totals, and a maximum nesting depth.
 Norito validates declared bodies against the bytes remaining before allocating
 temporary storage and returns typed resource-limit errors on violation.
-Compatibility layout fallbacks treat every resource-limit and allocation error
-as terminal: they never retry the same field through an alternate decoder after
-a budget has rejected it.
+Resource-limit and allocation errors are terminal. The V1 decoder never retries
+the same bytes through an alternate layout after a budget has rejected them;
+the header flags select the only layout used for that frame.
 
-Nested decode scopes may tighten but never relax an outer budget. Counters are
-shared with Norito-managed Rayon workers. They are not implicitly copied to
-arbitrary threads created by application-defined deserializers; such code must
-pass a bounded decode operation explicitly. Lazy callers must use
+Nested decode scopes may tighten but never relax an outer budget. Binary value
+decoding is sequential in V1, so its budget counters stay in the calling decode
+scope. Application-defined deserializers that create threads must pass a
+bounded decode operation explicitly. Lazy callers must use
 `stream_seq_iter_with_limits`, `StreamSeqIter::new_with_limits`, or the bounded
 `StreamMapIter` constructors so the iterator owns a cloneable budget context
 and reapplies it for every `next`/`finish` call. No thread-local guard is moved
@@ -181,6 +185,13 @@ complete frame slice, so untrusted readers must use the explicit-limit reader
 API. A host must choose cumulative budgets with enough headroom for temporary
 alignment copies and container metadata; accounting is intentionally
 conservative and may charge both a declared field body and a temporary copy.
+
+All public framed, reader, compressed, and bare-value decoders converge on the
+same exact payload boundary. A decoded value must consume the complete
+checksummed payload; a Rust type's in-memory size is never used as evidence of
+wire consumption. Instrumented decoders report consumption directly, while a
+custom decoder that does not report complete access uses an allocation-free
+canonical byte comparison. Equal-length but byte-different payloads are rejected.
 
 ## Bounded data-model text leaves
 
@@ -264,8 +275,8 @@ builders assign `100_000` ms when no explicit lifetime is selected, and
 stateless admission also enforces the governed
 `transaction.max_time_to_live_ms` ceiling.
 
-The `instructions` field contains the `Executable` enum. Its canonical variant
-tags are stable and append-only:
+The `instructions` field contains the sole first-release `Executable` enum.
+Its canonical variant tags are:
 
 ```text
 0  Instructions(ConstVec<InstructionBox>)
@@ -280,9 +291,7 @@ deployed-contract calls. Each `ExecutableBatchItem` uses tag `0` for
 `Instruction(InstructionBox)` and tag `1` for
 `ContractCall(ContractInvocation)`. Raw IVM bytecode and nested batches are not
 batch-item variants. Nodes reject an empty `Batch`; SDKs should reject one
-before signing. Existing instruction-only transactions continue to use
-`Executable` tag `0`, so adding the mixed form does not rewrite their canonical
-bytes. The append-only variant is advertised by `DATA_MODEL_VERSION = 3`.
+before signing. Instruction-only transactions use `Executable` tag `0`.
 
 Dynamic `InstructionBox` and erased `QueryBox` payloads carry a registry wire
 identifier plus the concrete Norito payload. First-release built-ins use
@@ -291,35 +300,28 @@ explicit, frozen identifiers: instruction IDs are inventoried in
 by `crates/iroha_data_model/tests/fixtures/query_wire_ids_v1.txt`. Encoders emit
 those identifiers rather than deriving new values from the current Rust module
 layout. The golden checks bind each built-in type label to its identifier, so
-swapping two otherwise valid identifiers is also a compatibility failure.
-Registries retain the concrete Rust type name as a decode lookup alias. For
-queries, the frozen built-in mapping takes precedence over an installed
-application registry for canonical encoding and decoding; the application
-registry is then used as a fallback for custom query types. Installation rejects
-a custom query type that claims a type-name or wire-ID key owned by a different
-built-in, while still allowing an alternate alias for the same concrete type.
-Internal refactors can therefore move an implementation without changing
-canonical bytes or breaking already encoded values. New built-ins must add a
-unique identifier and update the corresponding golden inventory; an existing
-V1 identifier must not be renamed or reused for a different layout.
+swapping two otherwise valid identifiers is also a wire-contract failure.
+Registries are direction-separated: concrete Rust type names are internal
+encoding keys, while decoders accept only the registered frozen wire IDs. There
+is no type-name decode alias and no unregistered type-name encoding fallback.
+For queries, the built-in inventory is complete; an application registry may
+add only new concrete types with unique explicit IDs and may not re-register a
+built-in type under an alternate ID. New built-ins must add a unique identifier
+and update the corresponding golden inventory; an existing V1 identifier must
+not be renamed or reused for a different layout.
 
-The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
-Version 4 changes the canonical validation-fee governance layout:
-`ProposeValidationFeePolicy` and `ProposeValidationFeePayoutLifecycle` require
-the exact `plain_electorate_rules` used by their ballot lifecycle—including
-the voting asset, bond-escrow account, and slash-receiver account—and enacted
-registry entries retain the same rules for historical verification. New locks
-retain the same custody identities so lock, release, slash, and restitution
-cannot be redirected by later configuration changes. At the referendum start
-height, the node freezes a canonical, account-sorted PLAIN electorate of at
-most 256 members from the pre-transaction committed state.
-The retained proposal state binds that full electorate, its member count, the
-capture and approval-gate heights, and its domain-separated roster root.
-Verified Parliament projections expose those immutable anchors; proposal read
-APIs may expose the full frozen member list. Missing or inconsistent snapshot
-evidence fails closed for voting, finalization, enactment, and fee admission.
-Version 3 peers and SDKs must therefore reject the version 4 wire contract
-instead of attempting a compatibility decode.
+The only supported SDK/node compatibility handshake is
+`DATA_MODEL_VERSION = 4`. Validation-fee policy and payout-lifecycle proposal
+preimages bind the canonical `proposal_operator`; policy proposals also bind
+the exact payout-lifecycle proposal when a payout binding is present. Enacted
+authorization retains the operator, native proposal fingerprint, canonical
+certificate id, complete `GovernanceCertificateV1`, and exact enacted height.
+Admission validates and derives those bindings rather than accepting a
+validation-fee-specific electorate, snapshot, window, or finalization-evidence
+layout. Proposal-owned `u64` values encoded as JSON numbers are bounded by
+`9,007,199,254,740,991`; canonical decimal-string fields retain the full `u64`
+range. Peers and SDKs reject every other data-model version instead of
+attempting a compatibility decode.
 
 Admission schedules a mixed batch as one global live-state barrier. Items run
 in canonical input order against the same transaction view, and failure of any

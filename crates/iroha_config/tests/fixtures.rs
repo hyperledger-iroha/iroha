@@ -1527,6 +1527,8 @@ fn full_config_parses_fine() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn taira_config_enables_untrusted_cid_hosting() {
+    const TAIRA_VALIDATOR_COUNT: i64 = 4;
+
     let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
@@ -1540,6 +1542,44 @@ fn taira_config_enables_untrusted_cid_hosting() {
             .and_then(|settlement| settlement.get("offline"))
             .is_none(),
         "Taira must not model universal offline-wallet support as backend configuration"
+    );
+    let mcp = doc
+        .get("torii")
+        .and_then(TomlValue::as_table)
+        .and_then(|torii| torii.get("mcp"))
+        .and_then(TomlValue::as_table)
+        .expect("torii.mcp should be configured");
+    assert_eq!(
+        mcp.get("enabled").and_then(TomlValue::as_bool),
+        Some(true),
+        "public Taira should expose MCP"
+    );
+    assert_eq!(
+        mcp.get("profile").and_then(TomlValue::as_str),
+        Some("writer"),
+        "public Taira should expose the writer MCP profile"
+    );
+    assert_eq!(
+        mcp.get("expose_operator_routes")
+            .and_then(TomlValue::as_bool),
+        Some(false),
+        "public Taira must not expose operator MCP routes"
+    );
+    let allowed_tool_prefixes: Vec<_> = mcp
+        .get("allow_tool_prefixes")
+        .and_then(TomlValue::as_array)
+        .expect("public Taira should configure MCP tool prefixes")
+        .iter()
+        .map(|prefix| {
+            prefix
+                .as_str()
+                .expect("public Taira MCP tool prefixes should be strings")
+        })
+        .collect();
+    assert_eq!(
+        allowed_tool_prefixes,
+        ["iroha."],
+        "public Taira should expose only curated iroha.* MCP tools"
     );
     let dataspaces = doc
         .get("nexus")
@@ -1706,24 +1746,36 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .and_then(|sumeragi| sumeragi.get("queues"))
         .and_then(TomlValue::as_table)
         .expect("sumeragi.queues should be configured");
+    let authenticated_non_validator_sources = queues
+        .get("authenticated_non_validator_sources")
+        .and_then(TomlValue::as_integer)
+        .expect("Taira should configure authenticated non-validator ingress sources");
     assert_eq!(
-        queues
-            .get("authenticated_non_validator_sources")
-            .and_then(TomlValue::as_integer),
-        Some(2),
-        "Taira should reserve two independent authenticated non-validator ingress lanes"
+        authenticated_non_validator_sources, 2,
+        "Taira should reserve two independent authenticated non-validator ingress source partitions"
     );
+    let body_bytes = queues
+        .get("body_bytes")
+        .and_then(TomlValue::as_integer)
+        .expect("Taira should configure an aggregate canonical wire-byte budget");
     assert_eq!(
-        queues.get("body_bytes").and_then(TomlValue::as_integer),
-        Some(198 * 1024 * 1024),
-        "Taira aggregate canonical wire-byte budget should isolate its six ingress source lanes"
+        body_bytes,
+        198 * 1024 * 1024,
+        "Taira aggregate canonical wire-byte budget should isolate its six ingress source partitions"
     );
+    let body_source_bytes = queues
+        .get("body_source_bytes")
+        .and_then(TomlValue::as_integer)
+        .expect("Taira should configure a per-source canonical wire-byte budget");
     assert_eq!(
-        queues
-            .get("body_source_bytes")
-            .and_then(TomlValue::as_integer),
-        Some(33 * 1024 * 1024),
+        body_source_bytes,
+        33 * 1024 * 1024,
         "Taira should retain one canonical outer-ingress wire-byte quota per source"
+    );
+    assert_eq!(
+        body_bytes,
+        (TAIRA_VALIDATOR_COUNT + authenticated_non_validator_sources) * body_source_bytes,
+        "Taira aggregate body budget must equal (validator count + authenticated non-validator sources) times the per-source budget"
     );
     let untrusted = doc
         .get("sorafs")

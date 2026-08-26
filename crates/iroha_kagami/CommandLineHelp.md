@@ -33,6 +33,7 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami privacy-bootstrap`↴](#kagami-privacy-bootstrap)
 * [`kagami privacy-bootstrap emit-taira-v1`↴](#kagami-privacy-bootstrap-emit-taira-v1)
 * [`kagami privacy-bootstrap validate-taira-v1`↴](#kagami-privacy-bootstrap-validate-taira-v1)
+* [`kagami privacy-bootstrap validate-taira-nevo-review-v1`↴](#kagami-privacy-bootstrap-validate-taira-nevo-review-v1)
 * [`kagami privacy-bootstrap render-taira-release-v1`↴](#kagami-privacy-bootstrap-render-taira-release-v1)
 * [`kagami verify`↴](#kagami-verify)
 * [`kagami advanced`↴](#kagami-advanced)
@@ -103,8 +104,6 @@ Guided node/bootstrap flow for configuring a peer against an existing network pr
     Canonical local single-lane profile
   - `nexus`:
     Sora Nexus (mainnet)
-  - `taira`:
-    Sora Taira (testnet)
 
 * `--output-dir <PATH>` — Directory where generated config/genesis files will be written
 
@@ -306,9 +305,9 @@ Sign the genesis block
 
 * `-o`, `--out-file <PATH>` — Path to signed genesis output file in Norito format (stdout by default)
 * `--bound-manifest-out <PATH>` — Persist the exact config-bound genesis manifest used to build the signed block. May point to `GENESIS_FILE` to replace the input only after binding succeeds
-* `--expected-hash-out <PATH>` — Write the exact signed consensus-header hash as one lowercase line.
+* `--expected-hash-out <PATH>` — Write the canonical checked NetworkId derived from the exact signed consensus-header hash as one line.
 
-   This also atomically publishes a sibling `*.identity.toml` containing the same exact value as both client `network_id` and `genesis.expected_hash`. Deployment tooling must consume that paired identity artifact rather than assembling the two trust domains independently.
+   Validators and clients must select this same file through `genesis.expected_hash_file` and `network_id_file`, respectively.
 * `-t`, `--topology <TOPOLOGY>` — Use this topology instead of specified in genesis.json. JSON-serialized vector of `PeerId`. For use in `iroha_swarm`.
 
    The final unique topology must be an exact Sumeragi v2 `3f + 1` committee in the range 4..=31.
@@ -669,6 +668,7 @@ Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
 
 * `emit-taira-v1` — Emit all twelve compiled governance activation templates atomically
 * `validate-taira-v1` — Validate an emitted exact-12 instruction set and its digest inventory
+* `validate-taira-nevo-review-v1` — Validate a reviewed Taira NEVO unsigned genesis without creating release artifacts
 * `render-taira-release-v1` — Compose a complete secret-free Taira release plan, config, and genesis
 
 
@@ -696,6 +696,19 @@ Validate an emitted exact-12 instruction set and its digest inventory
 
 * `--instructions <INSTRUCTIONS>` — Canonical genesis instruction JSON array emitted by this command group
 * `--report <REPORT>` — Canonical digest inventory emitted alongside the instruction array
+
+
+
+## `kagami privacy-bootstrap validate-taira-nevo-review-v1`
+
+Validate a reviewed Taira NEVO unsigned genesis without creating release artifacts
+
+**Usage:** `kagami privacy-bootstrap validate-taira-nevo-review-v1 --unsigned-genesis <UNSIGNED_GENESIS> --review <REVIEW>`
+
+###### **Options:**
+
+* `--unsigned-genesis <UNSIGNED_GENESIS>` — Exact unsigned NEVO genesis bound by the review manifest
+* `--review <REVIEW>` — Deterministic public NEVO review manifest binding the unsigned genesis
 
 
 

@@ -54,7 +54,7 @@ fn allocations_during(operation: impl FnOnce()) -> usize {
     ALLOCATIONS.with(Cell::get)
 }
 fn bare_bytes(value: &dyn NoritoSerialize, flags: u8) -> Vec<u8> {
-    let _guard = DecodeFlagsGuard::enter_with_hint(flags, flags);
+    let _guard = DecodeFlagsGuard::enter(flags);
     let exact = value
         .encoded_len_exact()
         .expect("block-signature fixture must have an exact length");
@@ -105,7 +105,7 @@ fn borrowed_block_signature_codec_preserves_tuple_wire_bytes() {
 }
 fn assert_preallocated_serialization_does_not_allocate(value: &dyn NoritoSerialize) {
     let flags = header_flags::COMPACT_LEN;
-    let _guard = DecodeFlagsGuard::enter_with_hint(flags, flags);
+    let _guard = DecodeFlagsGuard::enter(flags);
     let exact = value
         .encoded_len_exact()
         .expect("block signature must have an exact wire length");

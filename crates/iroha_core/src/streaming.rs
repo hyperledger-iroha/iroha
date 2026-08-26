@@ -1393,18 +1393,6 @@ impl StreamingHandle {
         }
         Ok(())
     }
-    /// Install default `SoraNet` routing metadata applied to privacy routes lacking explicit values.
-    #[allow(dead_code)]
-    pub(crate) fn set_soranet_defaults(&mut self, defaults: Option<SoranetRouteDefaults>) {
-        self.soranet_defaults = defaults;
-    }
-    /// Attach `SoraNet` defaults using a builder-style API.
-    #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn with_soranet_defaults(mut self, defaults: SoranetRouteDefaults) -> Self {
-        self.soranet_defaults = Some(defaults);
-        self
-    }
     /// Apply `SoraNet` defaults derived from configuration.
     pub fn set_soranet_config(&mut self, config: &actual::StreamingSoranet) {
         self.soranet_provisioning_enabled = config.enabled;
@@ -3377,22 +3365,18 @@ mod tests {
     };
     use iroha_data_model::{domain::DomainId, events::SharedDataEvent, peer::PeerId};
     use iroha_primitives::addr::SocketAddr;
-    use norito::{
-        decode_from_bytes,
-        streaming::{
-            CapabilityFlags, ChunkDescriptor, EncryptionSuite, EntropyMode, FecScheme,
-            FeedbackHintFrame, HpkeSuite, ManifestAnnounceFrame, ManifestV1, Multiaddr,
-            PrivacyBucketGranularity, PrivacyCapabilities, PrivacyRelay, PrivacyRoute,
-            PrivacyRouteUpdate, ProfileId, ReceiverReport, Resolution, SoranetAccessKind,
-            SoranetChannelId, SoranetRoute, StreamMetadata, TransportCapabilityResolution,
-        },
+    use norito::streaming::{
+        CapabilityFlags, ChunkDescriptor, EncryptionSuite, EntropyMode, FecScheme,
+        FeedbackHintFrame, HpkeSuite, ManifestAnnounceFrame, ManifestV1, Multiaddr,
+        PrivacyBucketGranularity, PrivacyCapabilities, PrivacyRelay, PrivacyRoute,
+        PrivacyRouteUpdate, ProfileId, ReceiverReport, Resolution, SoranetAccessKind,
+        SoranetChannelId, SoranetRoute, StreamMetadata, TransportCapabilityResolution,
     };
     use std::{
         fs,
         path::PathBuf,
         str::FromStr,
         sync::{Arc, Mutex, mpsc},
-        time::{Duration, Instant},
     };
     use tempfile::tempdir;
     fn checked_random_keypair() -> KeyPair {

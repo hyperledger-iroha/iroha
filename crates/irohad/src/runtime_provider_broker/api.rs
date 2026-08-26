@@ -17,6 +17,90 @@ const BROKER_LIFECYCLE_STARTING_V1: u8 = 0;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const BROKER_LIFECYCLE_READY_V1: u8 = 1;
 const BROKER_LIFECYCLE_STOPPING_V1: u8 = 2;
+
+/// Public, credential-free qualification for a consensus signing provider.
+///
+/// `test_marked` is carried by the live provider rather than configuration so
+/// a test implementation cannot masquerade as a production backend merely by
+/// copying an expected handle and revision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConsensusSignerProviderQualificationV1 {
+    /// Monotonic deployment-owned provider revision.
+    pub revision: u64,
+    /// Public policy commitment expected by the daemon catalog.
+    pub policy_digest: [u8; 32],
+    /// Whether this backend is intentionally test-only.
+    pub test_marked: bool,
+}
+
+impl ConsensusSignerProviderQualificationV1 {
+    /// Construct one live public provider qualification.
+    #[must_use]
+    pub const fn new(revision: u64, policy_digest: [u8; 32], test_marked: bool) -> Self {
+        Self {
+            revision,
+            policy_digest,
+            test_marked,
+        }
+    }
+}
+
+/// Payload-free global-beacon broker backend failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GlobalBeaconPartialSignerBrokerBackendErrorV1;
+
+/// Payload-free Parliament TLE broker backend failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParliamentTlePartialReleaseSignerBrokerBackendErrorV1;
+
+/// Authenticated broker-server backend for global beacon partial signatures.
+///
+/// The broker validates the complete public DKG transcript and canonical pulse
+/// slot before calling this trait, then independently verifies the returned
+/// proof. Provider diagnostics and private share material never cross the wire.
+pub trait GlobalBeaconPartialSignerBrokerBackendV1: Send + Sync {
+    /// Return the production runtime handle.
+    fn handle(&self) -> &str;
+    /// Return the live public qualification.
+    fn qualification(
+        &self,
+    ) -> Result<ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1>;
+    /// Sign one exact broker-validated canonical pulse payload.
+    fn sign_partial(
+        &self,
+        session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+        payload: &[u8],
+    ) -> Result<
+        iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1,
+        GlobalBeaconPartialSignerBrokerBackendErrorV1,
+    >;
+}
+
+/// Authenticated broker-server backend for Parliament TLE partial releases.
+///
+/// The server reconstructs and validates the complete public release
+/// projection before calling this trait, then independently verifies the
+/// returned proof-carrying share. Provider diagnostics never cross the wire.
+pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {
+    /// Return the production runtime handle.
+    fn handle(&self) -> &str;
+    /// Return the live public qualification.
+    fn qualification(
+        &self,
+    ) -> Result<
+        ConsensusSignerProviderQualificationV1,
+        ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
+    >;
+    /// Sign one exact broker-validated public release projection.
+    fn sign_projected_partial_release(
+        &self,
+        projection: &iroha_core::tle_release::ValidatedTleReleaseProjectionV1,
+    ) -> Result<
+        iroha_core::tle_release::TlePartialReleaseShareV1,
+        ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
+    >;
+}
+
 /// One-shot lifecycle control shared by a broker launcher and serving thread.
 ///
 /// Readiness publication and shutdown are linearized through a bounded
@@ -178,8 +262,13 @@ impl StockRuntimeProviderBrokerRegistryV1 {
 }
 const fn stock_runtime_provider_slot_is_supported(slot: IrohaRuntimeProviderSlotV1) -> bool {
     let wire_id = slot.wire_id();
-    wire_id >= IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id()
-        && wire_id <= IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id()
+    (wire_id >= IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id()
+        && wire_id <= IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id())
+        || matches!(
+            slot,
+            IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner
+                | IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner
+        )
 }
 impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
     fn resolve(
@@ -758,6 +847,10 @@ define_runtime_provider_backends_v1! {
         optional evidence_viewer_transparency_publisher: Arc< dyn sorafs_node::evidence_viewer::transparency_producer:: EvidenceViewerTransparencyPublisherV1, > => pub fn with_evidence_viewer_transparency_publisher(publisher);
         /// Attach the deployment-owned Soracloud transaction and provenance signer.
         optional soracloud_runtime_mutation_signer: Arc<dyn crate::soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1> => pub fn with_soracloud_runtime_mutation_signer(signer);
+        /// Attach the exact-qualified global threshold-beacon partial signer.
+        optional global_beacon_partial_signer: Arc<dyn GlobalBeaconPartialSignerBrokerBackendV1> => pub fn with_global_beacon_partial_signer(signer);
+        /// Attach the exact-qualified Parliament TLE partial-release signer.
+        optional parliament_tle_partial_release_signer: Arc<dyn ParliamentTlePartialReleaseSignerBrokerBackendV1> => pub fn with_parliament_tle_partial_release_signer(signer);
     }
 }
 

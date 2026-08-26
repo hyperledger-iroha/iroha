@@ -57,7 +57,7 @@ pub enum NexusAppError {
     /// No authority was supplied in the input, config, or approved Connect session.
     #[error("transfer authority is required before building a transfer draft")]
     MissingAuthority,
-    /// The explicit signing public key does not match the transaction authority.
+    /// A supplied or asserted signing public key does not match the transaction authority.
     #[error("signing public key does not match the transaction authority")]
     SigningPublicKeyMismatch,
     /// Wallet signature was malformed.
@@ -232,7 +232,7 @@ pub struct NexusWalletSignature {
     pub signature: Vec<u8>,
 }
 /// Options for finalization and Torii submission.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct NexusFinalizeOptions {
     /// Fixed-Applied wait timing. When omitted, the transaction is submitted without polling.
     pub wait: Option<TransactionWaitOptions>,
@@ -265,7 +265,7 @@ pub trait NexusConnectTransport {
     /// converted into a Nexus-approved account.
     fn await_approval(
         &self,
-        session: &mut NexusConnectSession,
+        session: &NexusConnectSession,
     ) -> Result<NexusApprovedAccount, NexusAppError>;
     /// Request a wallet signature for the canonical payload bytes.
     ///
@@ -311,7 +311,7 @@ impl NexusConnectTransport for UnsupportedConnectTransport {
     }
     fn await_approval(
         &self,
-        _session: &mut NexusConnectSession,
+        _session: &NexusConnectSession,
     ) -> Result<NexusApprovedAccount, NexusAppError> {
         Err(NexusAppError::ConnectTransportUnavailable)
     }
@@ -422,13 +422,32 @@ where
         session: &mut NexusConnectSession,
     ) -> Result<NexusApprovedAccount, NexusAppError> {
         let mut approved = self.connect.await_approval(session)?;
-        approved.signing_public_key = resolve_signing_public_key(
-            &approved.account_id,
-            self.config
-                .signing_public_key
-                .as_ref()
-                .or(Some(&approved.signing_public_key)),
-        )?;
+        for asserted_account in [
+            self.config.authority.as_ref(),
+            session.approved_account.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if asserted_account != &approved.account_id {
+                return Err(NexusAppError::SigningPublicKeyMismatch);
+            }
+        }
+        let approved_signing_public_key =
+            resolve_signing_public_key(&approved.account_id, Some(&approved.signing_public_key))?;
+        for asserted_signing_public_key in [
+            session.signing_public_key.as_ref(),
+            self.config.signing_public_key.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let _ = resolve_signing_public_key(
+                &approved.account_id,
+                Some(asserted_signing_public_key),
+            )?;
+        }
+        approved.signing_public_key = approved_signing_public_key;
         session.approved_account = Some(approved.account_id.clone());
         session.signing_public_key = Some(approved.signing_public_key.clone());
         Ok(approved)
@@ -455,6 +474,35 @@ where
         session: &NexusConnectSession,
         signable: &NexusSignableTransaction,
     ) -> Result<NexusWalletSignature, NexusAppError> {
+        for asserted_account in [
+            self.config.authority.as_ref(),
+            session.approved_account.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if asserted_account != &signable.authority {
+                return Err(NexusAppError::SigningPublicKeyMismatch);
+            }
+        }
+        for signing_public_key in [
+            signable.signing_public_key.as_ref(),
+            session.signing_public_key.as_ref(),
+            self.config.signing_public_key.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let _ = resolve_signing_public_key(&signable.authority, Some(signing_public_key))?;
+        }
+        let _ = resolve_signing_public_key(
+            &signable.authority,
+            signable
+                .signing_public_key
+                .as_ref()
+                .or(session.signing_public_key.as_ref())
+                .or(self.config.signing_public_key.as_ref()),
+        )?;
         self.connect.request_signature(session, signable)
     }
     /// Build a signed transaction from a wallet signature, submit it to Torii,
@@ -484,14 +532,22 @@ where
                 signature_bytes.len()
             )));
         }
-        if let Some(signing_public_key) = signable.signing_public_key.as_ref() {
-            ensure_authority_matches_public_key(&signable.authority, signing_public_key)?;
-        } else {
-            let _ = resolve_signing_public_key(
-                &signable.authority,
-                self.config.signing_public_key.as_ref(),
-            )?;
+        for signing_public_key in [
+            signable.signing_public_key.as_ref(),
+            self.config.signing_public_key.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let _ = resolve_signing_public_key(&signable.authority, Some(signing_public_key))?;
         }
+        let _ = resolve_signing_public_key(
+            &signable.authority,
+            signable
+                .signing_public_key
+                .as_ref()
+                .or(self.config.signing_public_key.as_ref()),
+        )?;
         let signature = iroha_crypto::ed25519_parse_signature(&signature_bytes)
             .map_err(|err| NexusAppError::InvalidSignature(err.to_string()))?;
         let signed = signable.builder.build_with_signature(signature);
@@ -540,6 +596,9 @@ where
                 .as_ref()
                 .or(self.config.signing_public_key.as_ref()),
         )?;
+        if let Some(configured_signing_public_key) = self.config.signing_public_key.as_ref() {
+            let _ = resolve_signing_public_key(&authority, Some(configured_signing_public_key))?;
+        }
         let mut resolved_input = input;
         resolved_input.authority = Some(authority);
         let signable = self.build_signable_transfer(&resolved_input, Some(signing_public_key))?;
@@ -556,13 +615,22 @@ where
             .clone()
             .or_else(|| self.config.authority.clone())
             .ok_or(NexusAppError::MissingAuthority)?;
-        let signing_public_key = signing_public_key
-            .or_else(|| self.config.signing_public_key.clone())
-            .or_else(|| authority.try_signatory().cloned());
-        let signature_algorithm = match signing_public_key.as_ref() {
-            Some(public_key) => NexusSignatureAlgorithm::from_public_key(public_key)?,
-            None => return Err(NexusAppError::MissingSigningPublicKey),
-        };
+        for supplied_signing_public_key in [
+            signing_public_key.as_ref(),
+            self.config.signing_public_key.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let _ = resolve_signing_public_key(&authority, Some(supplied_signing_public_key))?;
+        }
+        let signing_public_key = resolve_signing_public_key(
+            &authority,
+            signing_public_key
+                .as_ref()
+                .or(self.config.signing_public_key.as_ref()),
+        )?;
+        let signature_algorithm = NexusSignatureAlgorithm::from_public_key(&signing_public_key)?;
         let mut builder = TransactionBuilder::new(
             self.config.network_id,
             authority.clone(),
@@ -612,7 +680,7 @@ where
             payload_hash_hex,
             authority,
             signature_algorithm,
-            signing_public_key,
+            signing_public_key: Some(signing_public_key),
         })
     }
 }
@@ -644,6 +712,7 @@ mod tests {
     use iroha_crypto::{KeyPair, Signature};
     use iroha_data_model::{asset::AssetDefinitionId, prelude::Name};
     use iroha_primitives::json::Json;
+    use norito::json::Value as JsonValue;
     use std::{cell::RefCell, rc::Rc};
     const FIXTURE: &str = include_str!("../../../fixtures/sdk/nexus_connect_transfer_v1.json");
     fn test_network_id() -> NetworkId {
@@ -702,7 +771,7 @@ mod tests {
         }
         fn await_approval(
             &self,
-            _session: &mut NexusConnectSession,
+            _session: &NexusConnectSession,
         ) -> Result<NexusApprovedAccount, NexusAppError> {
             Ok(NexusApprovedAccount {
                 account_id: self.account.clone(),
@@ -721,6 +790,36 @@ mod tests {
                 algorithm: NexusSignatureAlgorithm::Ed25519,
                 signature: self.signature.clone(),
             })
+        }
+    }
+    #[derive(Debug, Clone)]
+    struct ApprovalKeyConnect {
+        account: AccountId,
+        signing_public_key: PublicKey,
+    }
+    impl NexusConnectTransport for ApprovalKeyConnect {
+        fn start_connect(
+            &self,
+            _config: &NexusAppConfig,
+            _options: NexusConnectOptions,
+        ) -> Result<NexusConnectSession, NexusAppError> {
+            unreachable!("the approval-key fixture starts from an existing caller session")
+        }
+        fn await_approval(
+            &self,
+            _session: &NexusConnectSession,
+        ) -> Result<NexusApprovedAccount, NexusAppError> {
+            Ok(NexusApprovedAccount {
+                account_id: self.account.clone(),
+                signing_public_key: self.signing_public_key.clone(),
+            })
+        }
+        fn request_signature(
+            &self,
+            _session: &NexusConnectSession,
+            _signable: &NexusSignableTransaction,
+        ) -> Result<NexusWalletSignature, NexusAppError> {
+            unreachable!("a mismatched approval key must fail before signing")
         }
     }
     #[derive(Debug, Clone, Default)]
@@ -835,6 +934,16 @@ mod tests {
         let start = FIXTURE.find(&needle).expect("fixture key") + needle.len();
         let rest = &FIXTURE[start..];
         rest[..rest.find('"').expect("fixture string terminator")].to_owned()
+    }
+    fn fixture_error_case(name: &str) -> JsonValue {
+        let root: JsonValue = norito::json::from_str(FIXTURE).expect("decode shared Nexus fixture");
+        root.get("error_cases")
+            .and_then(JsonValue::as_array)
+            .expect("fixture error cases")
+            .iter()
+            .find(|case| case.get("name").and_then(JsonValue::as_str) == Some(name))
+            .cloned()
+            .expect("named fixture error case")
     }
     fn fixture_network_id() -> NetworkId {
         let literal = fixture_string("network_id");
@@ -1099,6 +1208,71 @@ mod tests {
         );
     }
     #[test]
+    fn nexus_app_rejects_shared_fixture_approval_key_substitution() {
+        let account = fixture_account("authority");
+        let configured_public_key = account.expect_single_signatory().clone();
+        let error_case = fixture_error_case("approval signing key mismatch");
+        let approval_frame = error_case
+            .get("approval_frame")
+            .and_then(JsonValue::as_object)
+            .expect("fixture mismatch approval frame");
+        let alternate_public_key = PublicKey::from_bytes(
+            Algorithm::Ed25519,
+            &hex::decode(
+                approval_frame
+                    .get("signing_public_key_hex")
+                    .and_then(JsonValue::as_str)
+                    .expect("alternate fixture approval key hex"),
+            )
+            .expect("decode alternate fixture approval key hex"),
+        )
+        .expect("alternate fixture approval key");
+        let connect = ApprovalKeyConnect {
+            account: account.clone(),
+            signing_public_key: alternate_public_key,
+        };
+        let client = NexusAppClient::new(
+            NexusAppConfig {
+                authority: Some(account),
+                signing_public_key: Some(configured_public_key),
+                ..NexusAppConfig::new(
+                    fixture_string("chain_id")
+                        .parse()
+                        .expect("fixture chain id"),
+                    fixture_network_id(),
+                )
+            },
+            connect,
+            FakeSubmitter::default(),
+        );
+        let mut caller_session = NexusConnectSession {
+            sid: fixture_string("sid"),
+            wallet_launch_uri: fixture_string("wallet_launch_uri"),
+            app_launch_uri: None,
+            token_app: None,
+            token_wallet: None,
+            token_management: None,
+            token_relay: None,
+            approved_account: None,
+            signing_public_key: None,
+        };
+
+        let error = client
+            .await_approval(&mut caller_session)
+            .expect_err("alternate valid approval key must not control fixture authority");
+
+        assert_eq!(
+            error.code(),
+            error_case
+                .get("expected_code")
+                .and_then(JsonValue::as_str)
+                .expect("fixture mismatch error code")
+        );
+        assert_eq!(caller_session.sid, fixture_string("sid"));
+        assert!(caller_session.approved_account.is_none());
+        assert!(caller_session.signing_public_key.is_none());
+    }
+    #[test]
     fn nexus_app_rejects_non_ed25519_signing_key_before_building_draft() {
         let secp_key_pair = checked_secp256k1_keypair();
         let account = AccountId::new(secp_key_pair.public_key().clone());
@@ -1207,9 +1381,7 @@ mod tests {
             .expect_err("all-zero signature material must reject");
         assert_eq!(error.code(), "invalid_signature");
         assert!(
-            error
-                .to_string()
-                .contains("signature payload must not be all zero"),
+            error.to_string().contains("all zero"),
             "unexpected error: {error}"
         );
         assert!(submitter.submitted_hashes.borrow().is_empty());

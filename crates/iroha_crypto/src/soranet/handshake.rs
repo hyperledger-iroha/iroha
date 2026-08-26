@@ -3658,19 +3658,6 @@ fn read_bounded_direct_fixture(
         return Err(fixture_too_large(subject, max_bytes));
     }
 
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(HANDSHAKE_FIXTURE_O_NOFOLLOW_FLAG);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
     #[cfg(not(any(unix, windows)))]
     {
         return Err(io::Error::new(
@@ -3679,12 +3666,12 @@ fn read_bounded_direct_fixture(
         ));
     }
     #[cfg(any(unix, windows))]
-    let mut file = options.open(path)?;
+    let mut file = open_direct_handshake_fixture(path)?;
     #[cfg(any(unix, windows))]
     {
         let opened_before = file.metadata()?;
         validate_direct_fixture_metadata(&opened_before, subject)?;
-        if !fixture_metadata_identifies_same_file(&named_before, &opened_before)
+        if !fixture_path_identifies_open_file(path, &named_before, &file)?
             || opened_before.len() != named_before.len()
             || opened_before.len() > max_bytes as u64
         {
@@ -3713,8 +3700,8 @@ fn read_bounded_direct_fixture(
         let named_after = fs::symlink_metadata(path)?;
         validate_direct_fixture_metadata(&opened_after, subject)?;
         validate_direct_fixture_metadata(&named_after, subject)?;
-        if !fixture_metadata_identifies_same_file(&opened_before, &opened_after)
-            || !fixture_metadata_identifies_same_file(&opened_after, &named_after)
+        if !fixture_open_metadata_identifies_same_file(&opened_before, &opened_after)
+            || !fixture_path_identifies_open_file(path, &named_after, &file)?
             || opened_before.len() != opened_after.len()
             || opened_after.len() != named_after.len()
             || opened_after.len() != bytes.len() as u64
@@ -3750,17 +3737,49 @@ fn fixture_metadata_is_indirect(metadata: &fs::Metadata) -> bool {
     false
 }
 #[cfg(unix)]
-fn fixture_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn fixture_open_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev() && left.ino() == right.ino()
 }
 #[cfg(windows)]
-fn fixture_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
+fn fixture_open_metadata_identifies_same_file(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    true
+}
+
+#[cfg(unix)]
+fn open_direct_handshake_fixture(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(HANDSHAKE_FIXTURE_O_NOFOLLOW_FLAG);
+    options.open(path)
+}
+
+#[cfg(windows)]
+fn open_direct_handshake_fixture(path: &Path) -> io::Result<fs::File> {
+    super::windows_file_identity::open_direct_file(path)
+}
+
+#[cfg(unix)]
+fn fixture_path_identifies_open_file(
+    _path: &Path,
+    named: &fs::Metadata,
+    opened: &fs::File,
+) -> io::Result<bool> {
+    Ok(fixture_open_metadata_identifies_same_file(
+        named,
+        &opened.metadata()?,
+    ))
+}
+
+#[cfg(windows)]
+fn fixture_path_identifies_open_file(
+    path: &Path,
+    _named: &fs::Metadata,
+    opened: &fs::File,
+) -> io::Result<bool> {
+    super::windows_file_identity::path_identifies_file(path, opened)
 }
 fn fixture_too_large(subject: &str, max_bytes: usize) -> io::Error {
     io::Error::new(

@@ -28,15 +28,12 @@ pub enum Profile {
     Local,
     /// Sora Nexus (mainnet).
     Nexus,
-    /// Sora Taira (testnet).
-    Taira,
 }
 impl fmt::Display for Profile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Profile::Local => write!(f, "Local (single lane)"),
             Profile::Nexus => write!(f, "Sora Nexus (mainnet)"),
-            Profile::Taira => write!(f, "Sora Taira (testnet)"),
         }
     }
 }
@@ -144,17 +141,6 @@ impl ProfileDefaults {
                 config_template: Some("configs/soranexus/nexus/config.toml"),
                 genesis_template: "configs/soranexus/nexus/genesis.json",
             },
-            Profile::Taira => Self {
-                chain: "fc56984b-2be7-431d-840e-21514d1883f0",
-                p2p_port: 1337,
-                torii_port: 18080,
-                host: "taira-validator-1.sora.org",
-                trusted_peers: &[
-                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@taira-validator-1.sora.org:1337",
-                ],
-                config_template: Some("configs/soranexus/taira/config.toml"),
-                genesis_template: "configs/soranexus/taira/genesis.json",
-            },
         }
     }
 }
@@ -236,7 +222,7 @@ impl<T: Write> RunArgs<T> for Args {
         let start_command = format!(
             "cd {} && iroha3d {}--config config.toml",
             answers.output_dir.display(),
-            if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
+            if answers.profile == Profile::Nexus {
                 "--sora "
             } else {
                 ""
@@ -261,7 +247,7 @@ impl<T: Write> RunArgs<T> for Args {
         writeln!(writer, "config: {}", config_path.display())?;
         writeln!(writer, "genesis_manifest: {}", genesis_path.display())?;
         writeln!(writer, "guide: {}", guide_path.display())?;
-        if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
+        if answers.profile == Profile::Nexus {
             writeln!(writer, "sora profile: pass --sora when starting iroha3d")?;
         }
         writeln!(
@@ -360,7 +346,7 @@ fn resolve_trusted_peers_pop(
     answers: &Answers,
     keypair: &KeyPair,
 ) -> Result<BTreeMap<PublicKey, Vec<u8>>> {
-    let joins_existing_sora_network = matches!(answers.profile, Profile::Nexus | Profile::Taira);
+    let joins_existing_sora_network = answers.profile == Profile::Nexus;
     if joins_existing_sora_network && args.non_interactive && args.trusted_peers.is_none() {
         return Err(eyre!(
             "non-interactive Sora wizard onboarding requires --trusted-peers with the authoritative full validator roster"
@@ -549,7 +535,7 @@ fn resolve_profile(args: &Args) -> Result<Profile> {
     }
     Select::new(
         "Which profile do you want to set up?",
-        vec![Profile::Local, Profile::Nexus, Profile::Taira],
+        vec![Profile::Local, Profile::Nexus],
     )
     .prompt()
     .wrap_err("failed to read profile selection")
@@ -622,10 +608,6 @@ fn write_wizard_readme(
         Profile::Nexus => {
             "4. Confirm `trusted_peers` and `trusted_peers_pop` are the full operator-authenticated validator roster encoded by the signed genesis; the generated local peer starts as an observer.\n"
         }
-        Profile::Taira => concat!(
-            "4. Confirm `trusted_peers` and `trusted_peers_pop` are the full operator-authenticated validator roster encoded by the signed genesis; the generated local peer starts as an observer.\n",
-            "5. Provision the operator-authenticated Taira lane-manifest set under `manifests/`.\n",
-        ),
         Profile::Local => "",
     };
     let rendered = format!(
@@ -639,7 +621,7 @@ fn write_wizard_readme(
             "This output is staged, not a locally signed replacement for the selected network's genesis.\n\n",
             "## Prerequisites\n\n",
             "1. Obtain the network-authoritative `genesis.signed.nrt` from the operator.\n",
-            "2. Obtain its exact signed genesis hash as `genesis.expected_hash`.\n",
+            "2. Obtain its canonical checked NetworkId, derived from the exact signed genesis hash, as `genesis.expected_hash`.\n",
             "3. Verify both artifacts through the network's authenticated distribution channel.\n\n",
             "{profile_prerequisites}\n",
             "`genesis.json` is a reference manifest and must never be used as `genesis.file`.\n\n",
@@ -681,7 +663,6 @@ fn load_config_template(
                 config_template_path.display()
             )
         })?;
-        prepare_profile_template_for_wizard(&mut value, answers.profile)?;
         ensure_trusted_peer_list(
             &mut value,
             keypair,
@@ -768,7 +749,7 @@ fn apply_overrides(
     );
     streaming.remove("identity_private_key_file");
     set_table(config, "streaming", streaming);
-    if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
+    if answers.profile == Profile::Nexus {
         // `iroha3d --sora` otherwise enables embedded storage. Wizard profiles do not provision
         // the governed gateway-compliance controller required to operate storage safely, so make
         // the operator-authored false explicit and let CLI profile resolution preserve it.
@@ -788,7 +769,7 @@ fn apply_overrides(
     }
     set_array(config, "trusted_peers", peers);
     set_trusted_peers_pop(config, trusted_pops);
-    if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
+    if answers.profile == Profile::Nexus {
         let mut sumeragi = table(config, "sumeragi");
         sumeragi.insert("role".into(), TomlValue::String("observer".into()));
         set_table(config, "sumeragi", sumeragi);
@@ -896,48 +877,6 @@ fn apply_overrides(
         TomlValue::String("genesis.expected_hash".to_owned()),
     );
     set_table(config, "genesis", genesis);
-    Ok(())
-}
-fn prepare_profile_template_for_wizard(config: &mut TomlValue, profile: Profile) -> Result<()> {
-    if profile != Profile::Taira {
-        return Ok(());
-    }
-    let root = config
-        .as_table_mut()
-        .ok_or_else(|| eyre!("wizard profile template root must be a table"))?;
-    let torii = root
-        .get_mut("torii")
-        .and_then(TomlValue::as_table_mut)
-        .ok_or_else(|| eyre!("Taira wizard template must contain a torii table"))?;
-    // The tracked Taira profile includes operator-only services whose runtime secret/provider
-    // bindings are intentionally unresolved. Standalone wizard output must omit those services.
-    torii.remove("kagemusha_commands");
-    torii.remove("account_onboarding");
-    torii.remove("faucet");
-    root.remove("soracloud_runtime");
-    if let Some(discovery) = root
-        .get_mut("sorafs")
-        .and_then(TomlValue::as_table_mut)
-        .and_then(|sorafs| sorafs.get_mut("discovery"))
-        .and_then(TomlValue::as_table_mut)
-    {
-        discovery.insert("discovery_enabled".into(), TomlValue::Boolean(false));
-        discovery.remove("admission");
-    }
-    let registry = root
-        .get_mut("nexus")
-        .and_then(TomlValue::as_table_mut)
-        .and_then(|nexus| nexus.get_mut("registry"))
-        .and_then(TomlValue::as_table_mut)
-        .ok_or_else(|| eyre!("Taira wizard template must contain a nexus.registry table"))?;
-    registry.insert(
-        "manifest_directory".into(),
-        TomlValue::String("manifests".into()),
-    );
-    registry.insert(
-        "cache_directory".into(),
-        TomlValue::String("manifests".into()),
-    );
     Ok(())
 }
 fn load_and_patch_genesis(template_path: &str, chain: &str) -> Result<JsonValue> {
@@ -1483,6 +1422,14 @@ mod tests {
         );
     }
     #[test]
+    fn wizard_profiles_exclude_public_taira_onboarding() {
+        assert_eq!(
+            <Profile as clap::ValueEnum>::value_variants(),
+            &[Profile::Local, Profile::Nexus]
+        );
+        assert!(<Profile as clap::ValueEnum>::from_str("taira", false).is_err());
+    }
+    #[test]
     fn rewrite_address_recomputes_fingerprint() {
         let rewritten = rewrite_address("addr:0.0.0.0:1337#BF18", "1.2.3.4", 9999)
             .expect("rewritten address is valid");
@@ -1610,8 +1557,8 @@ mod tests {
         let path = directory.path().join("README.md");
         write_wizard_readme(
             &path,
-            Profile::Taira,
-            ProfileDefaults::for_profile(Profile::Taira).chain,
+            Profile::Nexus,
+            ProfileDefaults::for_profile(Profile::Nexus).chain,
             checked_wizard_bls_keypair().public_key(),
             Path::new("config.toml"),
             Path::new("genesis.json"),
@@ -1621,7 +1568,7 @@ mod tests {
         let rendered = fs::read_to_string(path).expect("read wizard handoff");
         assert!(rendered.contains("genesis.signed.nrt"));
         assert!(rendered.contains("genesis.expected_hash"));
-        assert!(rendered.contains("operator-authenticated Taira lane-manifest set"));
+        assert!(rendered.contains("operator-authenticated validator roster"));
         assert!(rendered.contains("iroha3d --sora --config config.toml"));
         assert!(!rendered.contains("--genesis-manifest-json"));
     }
@@ -1806,9 +1753,9 @@ mod tests {
     #[test]
     #[expect(
         clippy::too_many_lines,
-        reason = "the profile matrix validates complete generated Nexus and Taira templates through both canonical admission paths"
+        reason = "the scenario validates the complete generated Nexus template through both canonical admission paths"
     )]
-    fn wizard_sora_profile_templates_pass_canonical_and_cli_profile_admission() {
+    fn wizard_nexus_profile_template_passes_canonical_and_cli_profile_admission() {
         let keypair = checked_wizard_bls_keypair();
         let transport_keypair = checked_wizard_transport_keypair();
         let streaming_keypair = checked_wizard_streaming_keypair();
@@ -1825,7 +1772,8 @@ mod tests {
             );
             validator_peers.push(validator.public_key().clone());
         }
-        for profile in [Profile::Nexus, Profile::Taira] {
+        {
+            let profile = Profile::Nexus;
             let defaults = ProfileDefaults::for_profile(profile);
             let answers = Answers {
                 profile,
@@ -1910,24 +1858,6 @@ mod tests {
                 Some(false),
                 "wizard must explicitly keep embedded storage disabled when `--sora` is applied"
             );
-            if profile == Profile::Taira {
-                let registry = root
-                    .get("nexus")
-                    .and_then(TomlValue::as_table)
-                    .and_then(|nexus| nexus.get("registry"))
-                    .and_then(TomlValue::as_table)
-                    .expect("Taira wizard registry table");
-                assert_eq!(
-                    registry
-                        .get("manifest_directory")
-                        .and_then(TomlValue::as_str),
-                    Some("manifests")
-                );
-                assert_eq!(
-                    registry.get("cache_directory").and_then(TomlValue::as_str),
-                    Some("manifests")
-                );
-            }
             let genesis = root
                 .get_mut("genesis")
                 .and_then(TomlValue::as_table_mut)

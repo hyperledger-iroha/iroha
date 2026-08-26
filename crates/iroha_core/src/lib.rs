@@ -104,8 +104,6 @@ mod lane_drain;
 pub mod merge;
 /// Authenticated bounded transfer of certified merge-ledger sidecars.
 pub mod merge_sidecar;
-/// Minimal Merkle Mountain Range for bridge commitments.
-pub mod mmr;
 /// Rebuildable, non-consensus Musubi description and keyword search projection.
 pub mod musubi_search;
 /// Native AMX participant attestation control plane.
@@ -162,6 +160,8 @@ pub mod sumeragi;
 pub mod telemetry;
 /// Network Time Service (scaffolding)
 pub mod time;
+/// Adaptive threshold-BLS timelock-release session and share verification.
+pub mod tle_release;
 /// Shared Torii helpers (query surfaces, filters).
 pub mod torii;
 /// Peer-to-peer Torii ingress proxy envelopes.
@@ -587,7 +587,10 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                             | ConsensusMessageV2Payload::TimeoutCertificate(_)
                             | ConsensusMessageV2Payload::CommitCertificateResponse(_)
                             | ConsensusMessageV2Payload::VrfCommit(_)
-                            | ConsensusMessageV2Payload::VrfReveal(_) => T::ConsensusSafety,
+                            | ConsensusMessageV2Payload::VrfReveal(_)
+                            | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
+                                T::ConsensusSafety
+                            }
                             ConsensusMessageV2Payload::CertifiedBodyRequest(_)
                             | ConsensusMessageV2Payload::CommitCertificateRequest(_) => {
                                 T::Consensus
@@ -1310,7 +1313,7 @@ mod tests {
                 | ncore::header_flags::FIELD_BITSET,
         ] {
             let (bare, flags) = {
-                let _guard = ncore::DecodeFlagsGuard::enter_with_hint(requested, requested);
+                let _guard = ncore::DecodeFlagsGuard::enter(requested);
                 norito::codec::encode_with_header_flags(&fixture)
             };
             assert_eq!(

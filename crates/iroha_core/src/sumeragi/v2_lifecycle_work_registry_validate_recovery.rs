@@ -1546,7 +1546,10 @@ enum ReadyValidateSuccessorIdentityV1 {
 ///
 /// The launched Completion owner retains this token ahead of physical queue
 /// classification so the same-address successor is freshly authenticated and
-/// reduced before any Runtime turn can rediscover Apply.
+/// reduced before any Runtime turn can rediscover Apply. While the token is
+/// parked on an unchanged reducer fence, one ordinary physical completion may
+/// pass through so the exact causal callback can advance that fence; dedicated
+/// lifecycle completions remain behind this owner.
 #[must_use = "the exact Ready Validate successor must be synchronously resolved"]
 pub(in crate::sumeragi) struct ReadyValidateSuccessorV1 {
     identity: ReadyValidateSuccessorIdentityV1,
@@ -1739,13 +1742,19 @@ pub(super) enum PublishedDurableValidateCompletion {
 pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {
     registry: &'registry mut ConcreteLifecycleWorkRegistry,
     store_address: ConcreteWorkAddress,
+    parent: DurableStoreValidateParentV1,
     validate_effect: AdapterEffect,
     validate_digest: LifecycleDigest,
     validate_pending: PendingRuntimeEffectBinding,
     durable_body: DurableBodyReceipt,
     expected_manifest_hash: HashOf<wire::PayloadManifest>,
-    replay_evidence: CertifiedValidateReplayEvidenceV1,
+    replay_evidence: DurableValidateReplayEvidenceV1,
     adapter: crate::sumeragi::v2::PreparedDurableStoreValidateAdapterV1<'adapter>,
+}
+#[derive(Clone, Copy)]
+enum DurableStoreValidateParentV1 {
+    Certified,
+    RecoveredDecision,
 }
 /// Move-only Store projection sealed under its closed Fetch parent and the
 /// exact adapter preview which emitted that child.
@@ -2289,6 +2298,14 @@ fn sealed_successor_candidate_has_exact_geometry(
         })
 }
 impl<'adapter> PreparedCertifiedFetchStoreSuccessor<'_, 'adapter> {
+    /// Borrow the exact Store effect emitted by the direct adapter preview.
+    pub(super) const fn store_effect(&self) -> &AdapterEffect {
+        &self.store_effect
+    }
+    /// Borrow the ordinal-free pending binding projected from the Fetch row.
+    pub(super) const fn pending_effect_binding(&self) -> &PendingRuntimeEffectBinding {
+        &self.store_pending
+    }
     /// Project the exact Store candidate while retaining its Fetch registry cut.
     ///
     /// The lease supplies only coordinator ownership coordinates. Effect,
@@ -2423,13 +2440,27 @@ impl<'adapter> PreparedDurableStoreValidateSuccessor<'_, 'adapter> {
         verified: &VerifiedHeightContext,
     ) -> Result<CandidateAdmission, SealedBodySuccessorProjectionError> {
         let work = sealed_successor_parent(self.registry, self.store_address, lease)?;
-        let ConcreteLifecycleWorkKind::DurableStoreBody(store) = &work.kind else {
-            return Err(SealedBodySuccessorProjectionError::InvalidCarrier);
+        let parent_is_exact = match (self.parent, &work.kind) {
+            (
+                DurableStoreValidateParentV1::Certified,
+                ConcreteLifecycleWorkKind::DurableStoreBody(store),
+            ) => {
+                store.validates(work.digest)
+                    && store.address == self.store_address
+                    && store.durable_receipt == self.durable_body
+                    && store.expected_manifest_hash == self.expected_manifest_hash
+            }
+            (
+                DurableStoreValidateParentV1::RecoveredDecision,
+                ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(store),
+            ) => {
+                store.validates_at(self.store_address, work.digest)
+                    && store.store.durable_body_receipt() == &self.durable_body
+                    && store.store.expected_manifest_hash() == self.expected_manifest_hash
+            }
+            _ => false,
         };
-        if !store.validates(work.digest)
-            || store.address != self.store_address
-            || store.durable_receipt != self.durable_body
-            || store.expected_manifest_hash != self.expected_manifest_hash
+        if !parent_is_exact
             || self.durable_body.manifest_hash() != self.expected_manifest_hash
             || !self
                 .validate_pending
@@ -2443,9 +2474,8 @@ impl<'adapter> PreparedDurableStoreValidateSuccessor<'_, 'adapter> {
         {
             return Err(SealedBodySuccessorProjectionError::InvalidCarrier);
         }
-        let replay_evidence =
-            DurableValidateReplayEvidenceV1::certified(self.replay_evidence.clone());
-        let candidate = replay_evidence
+        let candidate = self
+            .replay_evidence
             .project_sealed_validate_successor_candidate(
                 SealedBodySuccessorProjectionPermit::new(),
                 verified,
@@ -2478,6 +2508,7 @@ impl<'adapter> PreparedDurableStoreValidateSuccessor<'_, 'adapter> {
         let Self {
             registry,
             store_address,
+            parent: parent_origin,
             validate_effect,
             validate_digest,
             validate_pending,
@@ -2488,14 +2519,31 @@ impl<'adapter> PreparedDurableStoreValidateSuccessor<'_, 'adapter> {
         } = self;
         assert_eq!(validate_digest, child_digest);
         assert_eq!(adapter.validate_effect(), &validate_effect);
-        let parent = registry
+        let parent_work = registry
             .entries
             .remove(&store_address)
             .expect("published Validate retains its exact Store parent");
-        let ConcreteLifecycleWorkKind::DurableStoreBody(store) = parent.kind else {
-            panic!("published Validate cannot replace another carrier class")
-        };
-        assert!(store.validates(parent.digest));
+        let ConcreteLifecycleWork {
+            digest: parent_digest,
+            kind: parent_kind,
+        } = parent_work;
+        match (parent_origin, parent_kind) {
+            (
+                DurableStoreValidateParentV1::Certified,
+                ConcreteLifecycleWorkKind::DurableStoreBody(store),
+            ) => {
+                assert!(store.validates(parent_digest));
+                drop(store);
+            }
+            (
+                DurableStoreValidateParentV1::RecoveredDecision,
+                ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(store),
+            ) => {
+                assert!(store.validates_at(store_address, parent_digest));
+                drop(store);
+            }
+            _ => panic!("published Validate cannot replace another carrier class"),
+        }
         let child_address =
             ConcreteWorkAddress::new(store_address.owner, child_ordinal, child_slot)
                 .expect("staged Validate child retains a valid concrete address");
@@ -2505,7 +2553,7 @@ impl<'adapter> PreparedDurableStoreValidateSuccessor<'_, 'adapter> {
             pending: validate_pending,
             durable_receipt: durable_body,
             expected_manifest_hash,
-            replay_evidence: DurableValidateReplayEvidenceV1::certified(replay_evidence),
+            replay_evidence,
         };
         assert!(validate.validates(child_digest));
         let child = ConcreteLifecycleWork {
@@ -2514,7 +2562,6 @@ impl<'adapter> PreparedDurableStoreValidateSuccessor<'_, 'adapter> {
         };
         assert!(child.validates_at(child_address));
         assert!(registry.entries.insert(child_address, child).is_none());
-        drop(store);
         adapter
     }
 }

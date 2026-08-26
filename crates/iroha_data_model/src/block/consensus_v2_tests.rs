@@ -1516,6 +1516,28 @@ mod tests {
             }),
             signature: vec![0x55; 48],
         };
+        let beacon_partial = GlobalBeaconPartialSignature {
+            round: round(&context, 3),
+            partial: GlobalThresholdBeaconPartialSignatureV1 {
+                session_id: [0xA1; 32],
+                signer_index: 2,
+                signature_share: [0xA2; 48],
+                proof: crate::consensus::GlobalThresholdBeaconPartialSignatureProofV1 {
+                    x: [0xA3; 96],
+                    y: [0xA4; 48],
+                    z_s: [0xA5; 32],
+                    z_r: [0xA6; 32],
+                    z_u: [0xA7; 32],
+                },
+            },
+        };
+        assert_eq!(beacon_partial.validate(&context), Ok(()));
+        let mut zero_seat = beacon_partial.clone();
+        zero_seat.partial.signer_index = 0;
+        assert_eq!(
+            zero_seat.validate(&context),
+            Err(ValidationError::SignerOutOfRange)
+        );
         let variants = vec![
             ConsensusMessageV2Payload::Proposal(proposal),
             ConsensusMessageV2Payload::Vote(Vote {
@@ -1571,6 +1593,7 @@ mod tests {
                 vrf_proof: vec![0x99],
                 bls_sig: vec![6],
             }),
+            ConsensusMessageV2Payload::GlobalBeaconPartialSignature(beacon_partial),
         ];
         for payload in variants {
             let message = ConsensusMessageV2::new(payload);

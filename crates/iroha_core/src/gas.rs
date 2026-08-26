@@ -15,15 +15,15 @@
 //!   monotonic with payload sizes and relative complexity.
 use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
 use iroha_data_model::{
-    isi as dm_isi,
-    isi::{Instruction as _, InstructionBox},
-    proof::ProofAttachment,
-    zk::OpenVerifyEnvelope,
+    isi as dm_isi, isi::InstructionBox, proof::ProofAttachment, zk::OpenVerifyEnvelope,
 };
 use norito::decode_canonical;
 #[cfg(test)]
 use parking_lot::ReentrantMutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    borrow::Borrow,
+    sync::atomic::{AtomicU64, Ordering},
+};
 /// Per-instruction family base costs.
 /// Chosen to be small compared to the default per-block gas limit.
 // Tuned to target a simple fee envelope:
@@ -43,6 +43,7 @@ const BASE_EXECUTE_TRIGGER: u64 = 220;
 const BASE_UPGRADE: u64 = 2_000;
 const BASE_LOG: u64 = 8;
 const BASE_CUSTOM: u64 = 128;
+const BASE_REGISTER_PIN_MANIFEST: u64 = BASE_REGISTER;
 const BASE_REGISTER_SMART_CONTRACT: u64 = 320;
 const BASE_KAIGI_CREATE: u64 = 420;
 const BASE_KAIGI_JOIN: u64 = 180;
@@ -66,7 +67,7 @@ pub const DEFAULT_ZK_GAS_PER_COMMITMENT: u64 = 500;
 const FIELD_ELEMENT_BYTES: usize = 32;
 /// Dynamic factors (per-byte) applied to encoded payloads where sensible.
 const PER_BYTE_JSON: u64 = 1; // charge per JSON byte
-const PER_BYTE_GENERIC: u64 = 0; // currently unused; reserved for future
+const PER_BYTE_PIN_MANIFEST: u64 = 1;
 const PER_BYTE_SEALED_COMMITMENT: u64 = 1;
 static ZK_GAS_BASE_VERIFY: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_BASE_VERIFY);
 static ZK_GAS_PER_PUBLIC_INPUT: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_PUBLIC_INPUT);
@@ -232,6 +233,11 @@ fn gas_for_recursive_kagemusha_redeem_v4(
     }
     gas
 }
+fn gas_for_register_pin_manifest(manifest_bytes: usize) -> u64 {
+    BASE_REGISTER_PIN_MANIFEST.saturating_add(
+        PER_BYTE_PIN_MANIFEST.saturating_mul(u64::try_from(manifest_bytes).unwrap_or(u64::MAX)),
+    )
+}
 /// Compute gas for a single instruction using a simple schedule.
 #[allow(clippy::too_many_lines)]
 pub fn meter_instruction(instr: &InstructionBox) -> u64 {
@@ -243,8 +249,7 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
         j.get().len()
     }
     // Downcast by visiting known grouped enums first, then concrete types.
-    // Fall back to Norito-encoded size to keep custom/unknown instructions
-    // bounded deterministically.
+    // Unclassified instructions use the fixed first-release base cost.
     let any = instr.as_any();
     // Register
     if let Some(reg) = any.downcast_ref::<dm_isi::register::RegisterBox>() {
@@ -416,10 +421,13 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     {
         return BASE_REGISTER_SMART_CONTRACT;
     }
-    // Fallback: charge based on Norito-encoded size of the instruction payload
-    // This ensures determinism for unknown/custom instructions under custom executors.
-    let bytes = instr.dyn_encode();
-    BASE_CUSTOM + PER_BYTE_GENERIC.saturating_mul(bytes.len() as u64)
+    if let Some(register) = any.downcast_ref::<dm_isi::sorafs::RegisterPinManifest>() {
+        return gas_for_register_pin_manifest(register.manifest_payload.len());
+    }
+    // Unclassified instructions have a fixed first-release cost. Avoid encoding
+    // the full instruction here: the retired per-byte factor was zero, so that
+    // allocation and traversal could not affect the charged gas.
+    BASE_CUSTOM
 }
 /// Compute gas for a sequence of instructions.
 pub fn meter_instructions(is: &[InstructionBox]) -> u64 {
@@ -467,11 +475,13 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
     0
 }
 /// Return the saturating confidential-gas total for an instruction sequence.
-pub(crate) fn sum_confidential_gas_costs<'a>(
-    instructions: impl IntoIterator<Item = &'a InstructionBox>,
-) -> u64 {
+pub(crate) fn sum_confidential_gas_costs<I>(instructions: I) -> u64
+where
+    I: IntoIterator,
+    I::Item: Borrow<InstructionBox>,
+{
     instructions.into_iter().fold(0_u64, |total, instruction| {
-        total.saturating_add(confidential_gas_cost(instruction))
+        total.saturating_add(confidential_gas_cost(instruction.borrow()))
     })
 }
 #[cfg(test)]
@@ -524,6 +534,24 @@ mod tests {
         assert!(large > small);
     }
     #[test]
+    fn pin_manifest_registration_gas_scales_with_manifest_bytes() {
+        let small = InstructionBox::from(dm_isi::sorafs::RegisterPinManifest::new(
+            vec![0; 1],
+            None,
+            None,
+        ));
+        let large = InstructionBox::from(dm_isi::sorafs::RegisterPinManifest::new(
+            vec![0; 4096],
+            None,
+            None,
+        ));
+        let small = meter_instruction(&small);
+        let large = meter_instruction(&large);
+        assert_eq!(small, BASE_REGISTER_PIN_MANIFEST + 1);
+        assert_eq!(large, BASE_REGISTER_PIN_MANIFEST + 4096);
+        assert_eq!(large - small, 4095);
+    }
+    #[test]
     fn batch_meter_sums_items() {
         let a = sample_account();
         let def: AssetDefinitionId =
@@ -550,11 +578,12 @@ mod tests {
     }
     #[test]
     fn batch_meter_saturates_governed_kaigi_proof_costs() {
-        let _gas_lock = super::lock_confidential_gas_for_tests();
         use iroha_data_model::{
             isi::kaigi::CreateKaigi,
             kaigi::{KaigiId, NewKaigi},
         };
+
+        let _gas_lock = super::lock_confidential_gas_for_tests();
         let original = super::confidential_gas_schedule_for_tests();
         super::configure_confidential_gas(super::ConfidentialGasSchedule {
             base_verify: u64::MAX,
@@ -585,6 +614,41 @@ mod tests {
             "queued confidential-gas accounting must saturate too"
         );
         super::configure_confidential_gas(original);
+    }
+    #[test]
+    fn batch_meter_saturates_on_overflow() {
+        use iroha_data_model::{isi::zk::VerifyProof, proof::VerifyingKeyId};
+
+        let _gas_lock = super::lock_confidential_gas_for_tests();
+        let original = super::confidential_gas_schedule_for_tests();
+        configure_confidential_gas(ConfidentialGasSchedule {
+            base_verify: u64::MAX,
+            per_public_input: 0,
+            per_proof_byte: 0,
+            per_nullifier: 0,
+            per_commitment: 0,
+        });
+        let fixture = halo2_fixture_envelope("halo2/ipa:batch-overflow", [0_u8; 32]);
+        let proof_box = fixture.proof_box("halo2/ipa");
+        let attachment = ProofAttachment::new_ref(
+            proof_box.backend.clone(),
+            proof_box,
+            VerifyingKeyId::new("halo2/ipa", "vk-batch-overflow"),
+        );
+        let instruction: InstructionBox = VerifyProof::new(attachment).into();
+        let gas = meter_instructions(&[instruction.clone(), instruction]);
+        configure_confidential_gas(original);
+
+        assert_eq!(gas, u64::MAX);
+    }
+    #[test]
+    fn unclassified_instruction_has_fixed_cost() {
+        let instruction = InstructionBox::from(dm_isi::SetParameter::new(
+            iroha_data_model::parameter::Parameter::Sumeragi(
+                iroha_data_model::parameter::system::SumeragiParameter::MaxClockDriftMs(1),
+            ),
+        ));
+        assert_eq!(meter_instruction(&instruction), BASE_CUSTOM);
     }
     #[test]
     fn transfer_batch_gas_matches_entry_sum() {

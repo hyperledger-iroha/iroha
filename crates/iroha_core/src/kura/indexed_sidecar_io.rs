@@ -56,6 +56,19 @@ impl Kura {
         &self,
         snapshot: FastpqProofSnapshot,
     ) -> FastpqProofEnqueueResult {
+        self.enqueue_fastpq_proof_snapshot_unless(snapshot, || false)
+    }
+    /// Enqueue a FASTPQ proof attachment unless `cancelled` observes shutdown.
+    ///
+    /// Both admission checks run while holding the proof queue lock. If shutdown
+    /// becomes visible after insertion, the just-inserted tail is removed before
+    /// the lock is released or the block writer is notified. The predicate must
+    /// therefore remain non-blocking and must not call back into Kura.
+    pub(crate) fn enqueue_fastpq_proof_snapshot_unless(
+        &self,
+        snapshot: FastpqProofSnapshot,
+        mut cancelled: impl FnMut() -> bool,
+    ) -> FastpqProofEnqueueResult {
         if self.prune_blocks_sidecar_enqueue() {
             return FastpqProofEnqueueResult::RejectedPruneRecovery;
         }
@@ -99,11 +112,26 @@ impl Kura {
                 telemetry.set_queue_depth(queue.len());
                 return FastpqProofEnqueueResult::RejectedQueueFull { cap };
             }
+            if cancelled() {
+                telemetry.record_event("rejected_shutdown");
+                telemetry.set_queue_depth(queue.len());
+                return FastpqProofEnqueueResult::RejectedShutdown;
+            }
             let should_notify = queue.is_empty();
             queue.push_back(QueuedFastpqProofSnapshot {
                 snapshot,
                 retries: 0,
             });
+            if cancelled() {
+                let removed = queue.pop_back();
+                debug_assert!(
+                    removed.is_some(),
+                    "inserted FASTPQ proof snapshot disappeared"
+                );
+                telemetry.record_event("rejected_shutdown");
+                telemetry.set_queue_depth(queue.len());
+                return FastpqProofEnqueueResult::RejectedShutdown;
+            }
             (queue.len(), should_notify)
         };
         telemetry.record_event("enqueued");
@@ -164,7 +192,6 @@ impl Kura {
                                 "dropping FASTPQ proof snapshot after retry limit"
                             );
                         } else {
-                            telemetry.record_event("retried");
                             queued.retries = next_retries;
                             retry.push_back(queued);
                         }
@@ -177,13 +204,34 @@ impl Kura {
                 }
             }
         }
-        let queue_depth = {
+        let cap = self
+            .fastpq_proof_sidecar_queue_cap
+            .load(Ordering::Relaxed)
+            .max(1);
+        let (queue_depth, requeued, dropped_for_capacity) = {
             let mut queue = self.fastpq_proof_queue.lock();
-            if !retry.is_empty() {
-                queue.extend(retry);
+            let requeued = retry.len().min(cap.saturating_sub(queue.len()));
+            queue.extend(retry.drain(..requeued));
+            let dropped_for_capacity = retry.len();
+            if dropped_for_capacity != 0 {
+                retry.clear();
             }
-            queue.len()
+            (queue.len(), requeued, dropped_for_capacity)
         };
+        for _ in 0..requeued {
+            telemetry.record_event("retried");
+        }
+        for _ in 0..dropped_for_capacity {
+            telemetry.record_event("dropped");
+        }
+        if dropped_for_capacity != 0 {
+            iroha_logger::warn!(
+                dropped = dropped_for_capacity,
+                cap,
+                queue_depth,
+                "dropping FASTPQ proof retries because concurrent enqueues filled the queue"
+            );
+        }
         telemetry.set_queue_depth(queue_depth);
         written
     }

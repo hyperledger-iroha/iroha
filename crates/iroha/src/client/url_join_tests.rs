@@ -5,17 +5,6 @@ use super::{
     require_verifier_backend_registry_label_v1, validate_zk_proofs_filter,
 };
 #[test]
-fn join_prover_reports_paths() {
-    let base = Url::parse("http://localhost:8080/api/").unwrap();
-    let u = join_torii_url(&base, "v1/zk/prover/reports");
-    assert_eq!(u.as_str(), "http://localhost:8080/api/v1/zk/prover/reports");
-    let u2 = join_torii_url(&base, "v1/zk/prover/reports/abcd");
-    assert_eq!(
-        u2.as_str(),
-        "http://localhost:8080/api/v1/zk/prover/reports/abcd"
-    );
-}
-#[test]
 fn join_vote_tally_path() {
     let base = Url::parse("http://localhost:8080/api/").unwrap();
     let u = join_torii_url(&base, "v1/zk/vote/tally");

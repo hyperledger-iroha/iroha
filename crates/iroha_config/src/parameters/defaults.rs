@@ -207,68 +207,6 @@ pub mod soracloud_runtime {
     pub const EGRESS_RATE_PER_MINUTE: Option<u32> = None;
     /// Default outbound byte budget per service/minute. `None` means budget is unset.
     pub const EGRESS_MAX_BYTES_PER_MINUTE: Option<u64> = None;
-    /// Hugging Face integration defaults for the embedded runtime manager.
-    pub mod hf {
-        /// Default Hugging Face Hub base URL used for repo file downloads.
-        pub const HUB_BASE_URL: &str = "https://huggingface.co";
-        /// Default Hugging Face Hub API base URL used for model metadata lookups.
-        pub const API_BASE_URL: &str = "https://huggingface.co/api";
-        /// Default per-request timeout when talking to Hugging Face surfaces.
-        pub const REQUEST_TIMEOUT_MS: u64 = 15_000;
-        /// Maximum redirects followed by the local Hugging Face importer.
-        pub const IMPORT_MAX_REDIRECTS: u8 = 4;
-        /// Hard maximum number of configured cross-origin redirect origins.
-        pub const IMPORT_REDIRECT_ALLOWED_ORIGINS_LIMIT: usize = 32;
-        /// Default maximum number of Hub files imported into the shared local cache for one source.
-        pub const IMPORT_MAX_FILES: u32 = 32;
-        /// Hard maximum number of Hub files imported for one source.
-        pub const IMPORT_MAX_FILES_LIMIT: u32 = 128;
-        /// Default maximum size of one imported Hub file.
-        pub const IMPORT_MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
-        /// Hard maximum size of one imported Hub file.
-        pub const IMPORT_MAX_FILE_BYTES_LIMIT: u64 = 512 * 1024 * 1024;
-        /// Default aggregate import budget for one Hub source.
-        pub const IMPORT_MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-        /// Hard aggregate import budget for one Hub source.
-        pub const IMPORT_MAX_TOTAL_BYTES_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
-        /// Default maximum in-memory Hugging Face model-info response.
-        pub const MODEL_INFO_MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
-        /// Hard maximum in-memory Hugging Face model-info response.
-        pub const MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT: u64 = 16 * 1024 * 1024;
-        /// Default file-selection allowlist used by the HF importer.
-        pub fn import_file_allowlist() -> Vec<String> {
-            vec![
-                "config.json".to_owned(),
-                "generation_config.json".to_owned(),
-                "tokenizer.json".to_owned(),
-                "tokenizer_config.json".to_owned(),
-                "special_tokens_map.json".to_owned(),
-                "merges.txt".to_owned(),
-                "vocab.json".to_owned(),
-                "vocab.txt".to_owned(),
-                "tokenizer.model".to_owned(),
-                "sentencepiece.bpe.model".to_owned(),
-                "preprocessor_config.json".to_owned(),
-                "processor_config.json".to_owned(),
-                "chat_template.jinja".to_owned(),
-                "*.gguf".to_owned(),
-                "*.safetensors".to_owned(),
-                "*.safetensors.index.json".to_owned(),
-                "pytorch_model.bin".to_owned(),
-                "pytorch_model.bin.index.json".to_owned(),
-                "rust_model.ot".to_owned(),
-            ]
-        }
-        /// Exact HTTPS origins admitted for cross-origin Hub download redirects.
-        pub fn import_redirect_allowed_origins() -> Vec<String> {
-            vec![
-                "https://cas-bridge.xethub.hf.co".to_owned(),
-                "https://cdn-lfs.hf.co".to_owned(),
-                "https://cdn-lfs-us-1.hf.co".to_owned(),
-                "https://us.aws.cdn.hf.co".to_owned(),
-            ]
-        }
-    }
     /// Default root directory for Soracloud runtime-manager state.
     pub fn state_dir() -> PathBuf {
         PathBuf::from(STATE_DIR)
@@ -3184,14 +3122,6 @@ pub mod nexus {
     pub mod hf_shared_leases {
         /// Drain grace window after the last member leaves a shared HF lease pool (milliseconds).
         pub const DRAIN_GRACE_MS: u64 = 5_000;
-        /// Slash ratio applied when an assigned host never finishes warmup before expiry.
-        pub const WARMUP_NO_SHOW_SLASH_BPS: u16 = 500;
-        /// Slash ratio applied when repeated assigned-host heartbeat misses cross the threshold.
-        pub const ASSIGNED_HEARTBEAT_MISS_SLASH_BPS: u16 = 250;
-        /// Strike threshold for assigned-host heartbeat misses within one reservation window.
-        pub const ASSIGNED_HEARTBEAT_MISS_STRIKE_THRESHOLD: u32 = 3;
-        /// Slash ratio applied when a host advert is provably self-contradictory.
-        pub const ADVERT_CONTRADICTION_SLASH_BPS: u16 = 1_000;
     }
     /// Encrypted uploaded-model registry admission defaults.
     pub mod uploaded_models {
@@ -4193,44 +4123,63 @@ pub mod governance {
     pub const PARLIAMENT_ALTERNATE_SIZE: Option<usize> = None;
     /// Default council quorum requirement expressed in basis points (ceil-divided).
     pub const PARLIAMENT_QUORUM_BPS: u16 = 6_667;
+    /// Consensus block-height span during which selected primaries and alternates may respond.
+    pub const PARLIAMENT_INVITATION_PHASE_BLOCKS: u64 = 3_600;
+    /// Consensus block-height span for public-finding endorsements after Reflection begins.
+    pub const PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS: u64 = 3_600;
     /// Default Rules Committee size.
-    pub const PARLIAMENT_RULES_COMMITTEE_SIZE: usize = 7;
+    pub const PARLIAMENT_RULES_COMMITTEE_SIZE: usize = 50;
     /// Default Agenda Council size.
-    pub const PARLIAMENT_AGENDA_COUNCIL_SIZE: usize = 9;
+    pub const PARLIAMENT_AGENDA_COUNCIL_SIZE: usize = 150;
     /// Default Interest Panel size.
-    pub const PARLIAMENT_INTEREST_PANEL_SIZE: usize = 11;
+    pub const PARLIAMENT_INTEREST_PANEL_SIZE: usize = 12;
     /// Default Review Panel size.
-    pub const PARLIAMENT_REVIEW_PANEL_SIZE: usize = 13;
+    pub const PARLIAMENT_REVIEW_PANEL_SIZE: usize = 150;
+    /// Default Coordination Council size.
+    pub const PARLIAMENT_COORDINATION_COUNCIL_SIZE: usize = 150;
     /// Default Policy Jury size (larger to cover high-impact items).
-    pub const PARLIAMENT_POLICY_JURY_SIZE: usize = 25;
+    pub const PARLIAMENT_POLICY_JURY_SIZE: usize = 500;
+    /// Maximum Confirmation Jury size. The actual target is twice the first Jury size.
+    pub const PARLIAMENT_CONFIRMATION_JURY_SIZE: usize = 1_000;
     /// Default Oversight Committee size.
-    pub const PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE: usize = 7;
-    /// Default MPC/FMA board size.
-    pub const PARLIAMENT_FMA_COMMITTEE_SIZE: usize = 5;
+    pub const PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE: usize = 50;
+    /// Default MPC Committee size.
+    pub const PARLIAMENT_MPC_COMMITTEE_SIZE: usize = 50;
+    /// Default FMA Committee size.
+    pub const PARLIAMENT_FMA_COMMITTEE_SIZE: usize = 50;
+    /// Timed-OVN deterministic block-height defaults and first-release resource ceilings.
+    pub mod parliament_timed_ovn {
+        /// Consensus block-height span allotted to proof-validated registration submissions.
+        pub const REGISTRATION_PHASE_BLOCKS: u64 = 3_600;
+        /// Consensus block-height span allotted to freezing pre-ballot dropouts and survivors.
+        pub const SURVIVOR_FREEZE_PHASE_BLOCKS: u64 = 300;
+        /// Consensus block-height span allotted to the exact masked-ballot commitment corpus.
+        pub const COMMITMENT_PHASE_BLOCKS: u64 = 3_600;
+        /// Consensus block-height span between commitment close and the earliest timed release.
+        pub const RELEASE_DELAY_BLOCKS: u64 = 600;
+        /// Consensus block-height grace window for aggregate opening after release begins.
+        pub const OPENING_PHASE_BLOCKS: u64 = 600;
+        /// Retry attempts permitted after the initial private ballot attempt (hard cap: 16).
+        pub const MAX_BALLOT_RETRIES: u32 = 3;
+        /// Hard first-release ceiling preventing retry-driven state/time amplification.
+        pub const MAX_BALLOT_RETRIES_LIMIT: u32 = 16;
+        /// Maximum entries retained in any registration, survivor, or ballot corpus (cap: 1,000).
+        pub const MAX_CORPUS_ENTRIES: u32 = 1_000;
+        /// Hard first-release corpus ceiling, matching the bounded timed-OVN decoder.
+        pub const MAX_CORPUS_ENTRIES_LIMIT: u32 = 1_000;
+    }
     /// Default citizen service cooldown in blocks after accepting a seat.
-    pub const CITIZEN_SEAT_COOLDOWN_BLOCKS: u64 = 10_000;
+    pub const CITIZEN_SEAT_COOLDOWN_BLOCKS: u64 = 0;
     /// Default maximum seats a single citizen may hold per epoch.
-    pub const CITIZEN_MAX_SEATS_PER_EPOCH: u32 = 1;
+    pub const CITIZEN_MAX_SEATS_PER_EPOCH: u32 = u32::MAX;
     /// Default number of declines that do not trigger a slash per epoch.
-    pub const CITIZEN_FREE_DECLINES_PER_EPOCH: u32 = 1;
+    pub const CITIZEN_FREE_DECLINES_PER_EPOCH: u32 = u32::MAX;
     /// Slash applied when a citizen declines after exhausting the free budget (basis points).
-    pub const CITIZEN_DECLINE_SLASH_BPS: u16 = 250;
+    pub const CITIZEN_DECLINE_SLASH_BPS: u16 = 0;
     /// Slash applied when a citizen fails to appear for an assigned seat (basis points).
-    pub const CITIZEN_NO_SHOW_SLASH_BPS: u16 = 1_000;
-    /// Slash applied when misconduct is recorded for an assigned seat (basis points).
-    pub const CITIZEN_MISCONDUCT_SLASH_BPS: u16 = 5_000;
-    /// Default SLA (blocks) for opening a referendum after proposal submission.
-    pub const PIPELINE_STUDY_SLA_BLOCKS: u64 = 20;
-    /// Default SLA (blocks) for the referendum voting window.
-    pub const PIPELINE_REVIEW_SLA_BLOCKS: u64 = 100;
-    /// Default SLA (blocks) for recording the referendum decision.
-    pub const PIPELINE_DECISION_SLA_BLOCKS: u64 = 1;
-    /// Default SLA (blocks) to enact an approved proposal after decision.
-    pub const PIPELINE_ENACTMENT_SLA_BLOCKS: u64 = 200;
-    /// Default SLA (blocks) for rules committee approval.
-    pub const PIPELINE_RULES_SLA_BLOCKS: u64 = 20;
-    /// Default SLA (blocks) for agenda council scheduling.
-    pub const PIPELINE_AGENDA_SLA_BLOCKS: u64 = 40;
+    pub const CITIZEN_NO_SHOW_SLASH_BPS: u16 = 0;
+    /// Legacy service-outcome slash, disabled; misconduct uses ordinary adjudication.
+    pub const CITIZEN_MISCONDUCT_SLASH_BPS: u16 = 0;
     /// Default per-binding reward amount ("1" XOR).
     pub const VIRAL_FOLLOW_REWARD_AMOUNT: &str = "1";
     /// Default sender bonus amount ("0.1" XOR).

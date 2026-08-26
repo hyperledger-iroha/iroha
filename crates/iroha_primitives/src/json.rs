@@ -111,14 +111,60 @@ impl Json {
         norito::core::reserve_decode_arc_allocation::<String>()?;
         Ok(Self(Arc::new(value)))
     }
+    fn take_wire_text_field(bytes: &[u8]) -> Result<(&[u8], usize), norito::core::Error> {
+        if !norito::core::use_packed_struct() {
+            let (field_len, field_header_len) = norito::core::inspect_len_from_slice(bytes)?;
+            let field_end = field_header_len
+                .checked_add(field_len)
+                .ok_or(norito::core::Error::LengthMismatch)?;
+            let field = bytes
+                .get(field_header_len..field_end)
+                .ok_or(norito::core::Error::LengthMismatch)?;
+            return Ok((field, field_end));
+        }
+
+        if norito::core::use_field_bitset() {
+            // The one String field is self-delimiting, so no explicit field size is legal.
+            if bytes.first() != Some(&0) {
+                return Err(norito::core::Error::NonCanonicalEncoding);
+            }
+            let field = bytes.get(1..).ok_or(norito::core::Error::LengthMismatch)?;
+            let (text_len, header_len) = norito::core::inspect_len_from_slice(field)?;
+            if text_len > MAX_JSON_BYTES {
+                return Err(norito::core::Error::Message(format!(
+                    "Json payload exceeds the {MAX_JSON_BYTES}-byte UTF-8 limit"
+                )));
+            }
+            let field_len = header_len
+                .checked_add(text_len)
+                .ok_or(norito::core::Error::LengthMismatch)?;
+            let field = field
+                .get(..field_len)
+                .ok_or(norito::core::Error::LengthMismatch)?;
+            let used = 1usize
+                .checked_add(field_len)
+                .ok_or(norito::core::Error::LengthMismatch)?;
+            return Ok((field, used));
+        }
+
+        let (offsets, header_len, data_len, tail_len) =
+            norito::core::decode_packed_offsets_slice(bytes, 1)?;
+        let data_end = header_len
+            .checked_add(data_len)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let data = bytes
+            .get(header_len..data_end)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let field = data
+            .get(offsets[0]..offsets[1])
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let used = data_end
+            .checked_add(tail_len)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        Ok((field, used))
+    }
     fn decode_wire_text(bytes: &[u8]) -> Result<(String, usize), norito::core::Error> {
-        let (field_len, field_header_len) = norito::core::inspect_len_from_slice(bytes)?;
-        let field_end = field_header_len
-            .checked_add(field_len)
-            .ok_or(norito::core::Error::LengthMismatch)?;
-        let field = bytes
-            .get(field_header_len..field_end)
-            .ok_or(norito::core::Error::LengthMismatch)?;
+        let (field, used) = Self::take_wire_text_field(bytes)?;
         let (len, header_len) = norito::core::inspect_len_from_slice(field)?;
         if len > MAX_JSON_BYTES {
             return Err(norito::core::Error::Message(format!(
@@ -138,8 +184,8 @@ impl Json {
         let canonical = Self::require_canonical_text(value).map_err(|error| {
             norito::core::Error::Message(format!("invalid Json payload: {error}"))
         })?;
-        norito::core::note_payload_access(bytes, field_end);
-        Ok((canonical, field_end))
+        norito::core::note_payload_access(bytes, used);
+        Ok((canonical, used))
     }
     fn serialize_canonical_value(value: &json::Value) -> Result<String, norito::Error> {
         // `Value`'s checked Norito writer orders object keys through its
@@ -356,7 +402,7 @@ impl Default for Json {
     }
 }
 // Provide slice-based decoding for Json so it can live inside packed sequences
-// and option fields under Norito's strict-safe path.
+// and option fields on Norito's bounded decode path.
 impl<'a> norito::core::DecodeFromSlice<'a> for Json {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (value, consumed) = Self::decode_wire_text(bytes)?;
@@ -477,6 +523,35 @@ mod tests {
         assert_eq!(decoded.get(), &input);
         assert_eq!(consumed, encoded.len());
         assert_eq!(&packed_fields[consumed..], TRAILING_FIELD);
+    }
+    #[test]
+    fn slice_decode_accepts_every_packed_struct_layout() {
+        let json = Json::from_raw_json("{\"expires_at_height\":42}".to_owned())
+            .expect("canonical JSON fixture");
+        for flags in [
+            norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT,
+            norito::core::default_encode_flags()
+                | norito::core::header_flags::PACKED_STRUCT
+                | norito::core::header_flags::FIELD_BITSET,
+        ] {
+            let mut payload = {
+                let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+                let mut payload = Vec::new();
+                let mut encoder = norito::core::Encoder::for_buffer(&mut payload);
+                norito::core::NoritoSerialize::serialize(&json, &mut encoder)
+                    .expect("encode packed Json payload");
+                payload
+            };
+            let payload_len = payload.len();
+            payload.extend_from_slice(&[0xA5, 0x5A]);
+            let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+            let (decoded, used) =
+                <Json as norito::core::DecodeFromSlice>::decode_from_slice(&payload)
+                    .expect("decode packed Json prefix");
+            assert_eq!(decoded, json);
+            assert_eq!(used, payload_len);
+            assert_eq!(&payload[used..], &[0xA5, 0x5A]);
+        }
     }
     #[test]
     fn slice_decode_rejects_truncated_and_invalid_utf8_wire() {

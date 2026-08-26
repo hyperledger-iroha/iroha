@@ -866,7 +866,7 @@ impl Reducer {
             .collect()
     }
     /// Iterate over signed or certified control intents retained for retransmission.
-    pub(crate) fn outbound_messages(&self) -> impl Iterator<Item = &ConsensusMessageV2> {
+    pub fn outbound_messages(&self) -> impl Iterator<Item = &ConsensusMessageV2> {
         self.outbound_control.values()
     }
     /// Return the durable record currently fenced behind a WAL append.
@@ -983,12 +983,9 @@ impl Reducer {
             Ok(outcome) => {
                 let transition = self.transition_projection(&audit_event, &next, outcome.effects());
                 let Some(checked_refinement) = refinement::check(transition) else {
-                    let diagnostic = refinement::diagnose(transition);
-                    iroha_logger::error!(
-                        event = ?audit_event,
-                        ?diagnostic,
-                        "Sumeragi v2 reducer rejected the transition refinement predicate"
-                    );
+                    // Keep diagnostics derivable inside this dependency-free core. The adapter
+                    // that observes the returned error owns logging and telemetry.
+                    let _diagnostic = refinement::diagnose(transition);
                     return Err(ReducerError::RefinementViolation);
                 };
                 let durable_intent_trace = ProductionDurableIntentTraceProjection {
@@ -1013,11 +1010,6 @@ impl Reducer {
                 let Some(checked_transition) =
                     check_production_durable_intent_transition(durable_intent_trace)
                 else {
-                    iroha_logger::error!(
-                        event = ?audit_event,
-                        ?durable_intent_trace,
-                        "Sumeragi v2 reducer rejected the durable-intent refinement predicate"
-                    );
                     return Err(ReducerError::RefinementViolation);
                 };
                 if let Some(violation) = next.progress_witness_violation() {
@@ -1031,13 +1023,7 @@ impl Reducer {
             Err(error) => {
                 if !self.transition_refines(&audit_event, self, &[]) {
                     let transition = self.transition_projection(&audit_event, self, &[]);
-                    let diagnostic = refinement::diagnose(transition);
-                    iroha_logger::error!(
-                        event = ?audit_event,
-                        ?diagnostic,
-                        reducer_error = %error,
-                        "Sumeragi v2 reducer error path rejected its exact-stutter refinement predicate"
-                    );
+                    let _diagnostic = refinement::diagnose(transition);
                     return Err(ReducerError::RefinementViolation);
                 }
                 if let Some(violation) = self.progress_witness_violation() {

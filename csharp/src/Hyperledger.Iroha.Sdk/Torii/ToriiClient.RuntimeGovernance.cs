@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Hyperledger.Iroha.Torii;
 
 public sealed partial class ToriiClient
@@ -41,6 +43,7 @@ public sealed partial class ToriiClient
             path,
             query: null,
             content: null,
+            accept: "application/json",
             cancellationToken: cancellationToken);
         if (response.RequestMessage?.RequestUri is not Uri responseUri
             || !string.Equals(
@@ -50,6 +53,15 @@ public sealed partial class ToriiClient
         {
             throw new HttpRequestException(
                 $"Authenticated Torii route `{path}` changed the exact request target.");
+        }
+
+        if (!string.Equals(
+                response.Content.Headers.ContentType?.MediaType,
+                "application/json",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new JsonException(
+                $"Authenticated Torii route `{path}` must use the application/json media type.");
         }
 
         return await DeserializeAsync<TResponse>(response, cancellationToken);

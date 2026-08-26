@@ -1,12 +1,16 @@
 #[cfg(test)]
 mod signed_transaction_fixture_tests {
-    use std::time::Duration;
+    use super::decode_signed_transaction;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        NetworkId, account::AccountId, block::BlockHeader, transaction::TransactionBuilder,
+        Level, NetworkId,
+        account::AccountId,
+        block::BlockHeader,
+        isi::Log,
+        transaction::{SignedTransaction, TransactionBuilder},
     };
-    use iroha_version::codec::EncodeVersioned as _;
-    use super::decode_signed_transaction;
+    use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
+    use std::time::Duration;
     // Matches account::address::DEFAULT_CHAIN_DISCRIMINANT (i105 discriminant).
     const FIXTURE_CHAIN_DISCRIMINANT: u16 = 0x02F1;
     fn fixture_key_pair() -> KeyPair {
@@ -17,6 +21,83 @@ mod signed_transaction_fixture_tests {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             b"connect-norito-signed-transaction-fixture-genesis",
         )))
+    }
+    fn read_compact_length(bytes: &[u8], offset: &mut usize) -> usize {
+        let mut value = 0_u64;
+        let mut shift = 0_u32;
+        loop {
+            let byte = *bytes.get(*offset).expect("compact length byte");
+            *offset += 1;
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return usize::try_from(value).expect("compact length fits usize");
+            }
+            shift += 7;
+            assert!(shift < 64, "compact length overflow");
+        }
+    }
+    fn split_compact_fields(bytes: &[u8], count: usize) -> Vec<Vec<u8>> {
+        let mut offset = 0;
+        let mut fields = Vec::with_capacity(count);
+        for _ in 0..count {
+            let len = read_compact_length(bytes, &mut offset);
+            let end = offset.checked_add(len).expect("field end");
+            fields.push(bytes.get(offset..end).expect("complete field").to_vec());
+            offset = end;
+        }
+        assert_eq!(offset, bytes.len(), "unexpected compact field tail");
+        fields
+    }
+    fn push_compact_length(bytes: &mut Vec<u8>, mut value: usize) {
+        loop {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            bytes.push(byte);
+            if value == 0 {
+                break;
+            }
+        }
+    }
+    fn compact_fields(fields: &[Vec<u8>]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for field in fields {
+            push_compact_length(&mut bytes, field.len());
+            bytes.extend_from_slice(field);
+        }
+        bytes
+    }
+    fn signed_transaction_with_type_name_instruction_pair(
+        canonical: &[u8],
+        concrete_type_name: &str,
+    ) -> Vec<u8> {
+        assert_eq!(canonical.first(), Some(&1));
+        let mut signed = split_compact_fields(&canonical[1..], 3);
+        let mut payload = split_compact_fields(&signed[1], 10);
+
+        assert_eq!(&payload[3][..4], &0_u32.to_le_bytes());
+        let executable_fields = split_compact_fields(&payload[3][4..], 1);
+        let sequence = &executable_fields[0];
+        assert_eq!(&sequence[..8], &1_u64.to_le_bytes());
+        let sequence_fields = split_compact_fields(&sequence[8..], 1);
+        let mut instruction = split_compact_fields(&sequence_fields[0], 2);
+        let wire_id = split_compact_fields(&instruction[0], 1);
+        assert_eq!(wire_id[0], b"iroha.log");
+
+        instruction[0] = compact_fields(&[concrete_type_name.as_bytes().to_vec()]);
+        let instruction = compact_fields(&instruction);
+        let mut sequence = 1_u64.to_le_bytes().to_vec();
+        sequence.extend_from_slice(&compact_fields(&[instruction]));
+        let mut executable = 0_u32.to_le_bytes().to_vec();
+        executable.extend_from_slice(&compact_fields(&[sequence]));
+        payload[3] = executable;
+        signed[1] = compact_fields(&payload);
+
+        let mut alternate = vec![1];
+        alternate.extend_from_slice(&compact_fields(&signed));
+        alternate
     }
     #[test]
     fn fixture_key_pair_uses_checked_seed_derivation() {
@@ -62,6 +143,42 @@ mod signed_transaction_fixture_tests {
         assert_eq!(signed.encode_versioned(), bytes);
     }
     #[test]
+    fn signed_transaction_decoder_rejects_registered_type_name_alias() {
+        let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
+        let keypair = fixture_key_pair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let mut builder = TransactionBuilder::new(
+            fixture_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "noncanonical instruction alias".to_owned(),
+        )]);
+        builder.set_creation_time(Duration::from_millis(1));
+        let transaction = builder.sign(keypair.private_key());
+        let canonical = transaction
+            .encode_wire_v1()
+            .expect("encode canonical signed transaction");
+        let alternate = signed_transaction_with_type_name_instruction_pair(
+            &canonical,
+            std::any::type_name::<Log>(),
+        );
+
+        assert_ne!(alternate, canonical);
+        let error = SignedTransaction::decode_all_versioned(&alternate)
+            .expect_err("canonical V1 decoding must reject the concrete type-name alias");
+        assert!(
+            matches!(error, iroha_version::error::Error::NoritoCodec(_)),
+            "alias rejection must remain a codec failure: {error}"
+        );
+        assert!(
+            decode_signed_transaction(&alternate).is_err(),
+            "the bridge must reject every noncanonical instruction alias"
+        );
+    }
+    #[test]
     fn generated_signed_transaction_versioned_bytes_prefix_bare_payload() {
         let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
         let keypair = fixture_key_pair();
@@ -81,6 +198,7 @@ mod signed_transaction_fixture_tests {
 }
 #[cfg(test)]
 mod da_proof_summary_tests {
+    use super::*;
     use iroha_data_model::{
         da::{
             manifest::{ChunkCommitment, ChunkRole},
@@ -94,7 +212,6 @@ mod da_proof_summary_tests {
         sorafs::pin_registry::StorageClass,
     };
     use sorafs_car::ChunkStore;
-    use super::*;
     #[test]
     fn da_proof_summary_via_ffi() {
         let (manifest_bytes, payload) = sample_manifest_bytes();

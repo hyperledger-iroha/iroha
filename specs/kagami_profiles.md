@@ -17,7 +17,8 @@ genesis manifests without juggling per-network knobs.
 - Topology: the Nexus/Minamoto fixture renders `core`, `governance`, and `zk`
   lanes in the single `universal` dataspace. Namespace text remains a separate
   binding layer and is never promoted into either catalog.
-- Disposable Taira: use `python3 scripts/taira_devnet.py up`, inspect it with
+- Disposable Taira: use
+  `python3 scripts/taira_devnet.py up --inrou-canary-dir <owner-only-workspace>`, inspect it with
   `python3 scripts/taira_devnet.py check`, and remove it with
   `python3 scripts/taira_devnet.py down`. This is the only repository-owned
   disposable Taira deployment workflow.

@@ -557,6 +557,9 @@ name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
+dependencies = [
+ "zeroize",
+]
 
 [[package]]
 name = "arrow-array"
@@ -1217,6 +1220,7 @@ dependencies = [
  "cfg-if",
  "constant_time_eq",
  "cpufeatures 0.3.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -5015,6 +5019,7 @@ dependencies = [
  "base64 0.22.1",
  "blake2",
  "blake3",
+ "blst",
  "blstrs",
  "chacha20poly1305 0.11.0-rc.3",
  "criterion",
@@ -5439,7 +5444,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",
- "tokio-tungstenite 0.28.0",
  "tracing",
 ]
 
@@ -5942,6 +5946,7 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -9933,6 +9938,7 @@ checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
 dependencies = [
  "digest 0.10.7",
  "keccak",
+ "zeroize",
 ]
 
 [[package]]
@@ -10291,7 +10297,6 @@ name = "sora-vpn-helper"
 version = "0.0.0"
 dependencies = [
  "blake3",
- "clap",
  "hex",
  "iroha_crypto",
  "iroha_data_model",
@@ -10523,6 +10528,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]
@@ -10553,6 +10559,7 @@ dependencies = [
  "tokio-tungstenite 0.28.0",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]

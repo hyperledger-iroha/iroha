@@ -55,6 +55,10 @@ dev-tools = []
 # `iroha_test_network` daemon. The default/node feature graph never enables
 # these hooks.
 test-network-native-amx-fault-injection = ["json"]
+# Non-shipping Parliament integration-test provider. The isolated test daemon
+# uses this to derive proof-valid beacon and TLE shares for its exact validator seat;
+# default/node/release feature sets never include it.
+test-network-parliament-signers = []
 runtime = ["json", "bls", "proofs-halo2"]
 node = ["runtime", "proofs-stark"]
 proofs-halo2 = ["zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params"]
@@ -95,7 +99,6 @@ ids_projection = ["iroha_data_model/ids_projection"]
 kaigi_privacy_mocks = []
 # ZK verifier feature flags ship enabled by default.
 zk-halo2 = ["dep:kaigi_zk"]
-zk-groth16 = []
 zk-stark = []
 # Non-shipping native privacy release evidence. This is deliberately not a
 # default feature and is forwarded only by explicit release runners and
@@ -147,9 +150,6 @@ dev-tests = []
 # when building core tests. Production node builds must leave this disabled so
 # every user-provided executor path runs the admitted guest bytecode.
 iroha-core-tests = []
-# Permit dependent-crate finality-ledger fixtures. Requiring this in addition to
-# `iroha-core-tests` keeps raw finality mutation out of broad tooling builds.
-finality-test-fixtures = []
 
 # Allow offline balance proof verification bypass + dummy backend in dev builds.
 

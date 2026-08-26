@@ -14,9 +14,8 @@ use std::{
     io::{self, Read as _},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
     os::fd::AsRawFd as _,
-    os::unix::fs::{FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
+    os::unix::fs::{FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _},
     path::{Component, Path, PathBuf},
-    process::Stdio,
     sync::Arc,
     time::Duration,
 };
@@ -457,12 +456,11 @@ impl InrouNamespacePlan {
         identity: &PortableVmChildIdentity,
         deadline: std::time::Instant,
     ) -> eyre::Result<InrouNamespaceAttestation> {
-        let mut last_mismatch = "bubblewrap has not exec'd the nested QEMU".to_owned();
         loop {
-            match self.try_discover_qemu(launcher_pid, cgroup, identity) {
+            let last_mismatch = match self.try_discover_qemu(launcher_pid, cgroup, identity) {
                 Ok(attestation) => return Ok(attestation),
-                Err(error) => last_mismatch = error.to_string(),
-            }
+                Err(error) => error.to_string(),
+            };
             if std::time::Instant::now() >= deadline {
                 eyre::bail!(
                     "nested Inrou QEMU did not reach its exact namespace and mount posture before the fixed deadline: {last_mismatch}"
@@ -677,10 +675,6 @@ fn inrou_bubblewrap_namespace_arguments() -> Vec<OsString> {
 }
 
 impl InrouNamespaceAttestation {
-    pub(super) fn qemu_pid(&self) -> u32 {
-        self.qemu_pid
-    }
-
     pub(super) fn attest_live(&self, cgroup: &InrouCgroupAttestation) -> eyre::Result<()> {
         cgroup.attest_pid(self.launcher_pid)?;
         cgroup.attest_pid(self.qemu_pid)?;
@@ -1928,6 +1922,14 @@ fn validate_minimal_root_tree(
 mod tests {
     use super::*;
 
+    fn assert_error_contains(error: &eyre::Report, expected: &str) {
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains(expected),
+            "expected error to contain {expected:?}, got {rendered:?}"
+        );
+    }
+
     #[test]
     fn manifest_parser_accepts_only_sorted_typed_hashed_records() -> eyre::Result<()> {
         let digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -1938,14 +1940,31 @@ mod tests {
         assert_eq!(parsed.len(), 3);
         assert_eq!(parsed[2].kind, InrouRuntimeEntryKind::Regular);
         assert_eq!(parsed[2].exact_bytes, 0);
-        for rejected in [
-            manifest.replace("0444", "0666"),
-            manifest.replace(digest, "ABCDEF"),
-            manifest.replace("/inrou\nf", "/z\nf"),
-            manifest.replace("d - 0 0555 /inrou", "d - 0 0755 /inrou"),
-            manifest.replace("f ", "x "),
+        for (rejected, expected) in [
+            (
+                manifest.replace("0444", "0666"),
+                "runtime file mode must be exactly 0444 or 0555",
+            ),
+            (
+                manifest.replace(digest, "ABCDEF"),
+                "runtime SHA-256 must be 64 lowercase hexadecimal digits",
+            ),
+            (
+                manifest.replace("/inrou\nf", "/z\nf"),
+                "runtime manifest paths must be strictly sorted and unique",
+            ),
+            (
+                manifest.replace("d - 0 0555 /inrou", "d - 0 0755 /inrou"),
+                "runtime directory records must be `d - 0 0555 PATH`",
+            ),
+            (
+                manifest.replace("f ", "x "),
+                "runtime manifest kind must be `d` or `f`",
+            ),
         ] {
-            parse_runtime_manifest(&rejected).expect_err("non-canonical manifest must fail closed");
+            let error = parse_runtime_manifest(&rejected)
+                .expect_err("non-canonical manifest must fail closed");
+            assert_error_contains(&error, expected);
         }
         Ok(())
     }
@@ -1953,14 +1972,16 @@ mod tests {
     #[test]
     fn namespace_link_parser_is_exact() -> eyre::Result<()> {
         assert_eq!(parse_namespace_link("net:[4026532000]")?, 4_026_532_000);
-        for rejected in [
-            "4026532000",
-            "net:[]",
-            "net:[1]junk",
-            "net:[01x]",
-            "NET:[1]",
+        for (rejected, expected) in [
+            ("4026532000", "namespace link omitted `[`"),
+            ("net:[]", "namespace link inode is not canonical decimal"),
+            ("net:[1]junk", "namespace link omitted closing `]`"),
+            ("net:[01x]", "namespace link inode is not canonical decimal"),
+            ("NET:[1]", "namespace link has a non-canonical kind"),
         ] {
-            parse_namespace_link(rejected).expect_err("malformed namespace identity must fail");
+            let error =
+                parse_namespace_link(rejected).expect_err("malformed namespace identity must fail");
+            assert_error_contains(&error, expected);
         }
         Ok(())
     }
@@ -1970,27 +1991,43 @@ mod tests {
         let root = "29 23 0:26 / / ro,nosuid - ext4 /dev/root ro,relatime\n";
         let parsed = parse_mountinfo(root)?;
         require_bind_mount_mode(&parsed, Path::new("/"), false)?;
-        require_bind_mount_mode(&parsed, Path::new("/"), true)
+        let error = require_bind_mount_mode(&parsed, Path::new("/"), true)
             .expect_err("read-only root must not attest as writable");
-        parse_mountinfo(&format!("{root}{root}"))
+        assert_error_contains(&error, "does not retain exact rw posture");
+        let error = parse_mountinfo(&format!("{root}{root}"))
             .expect_err("duplicate mount targets must fail closed");
-        parse_mountinfo("29 23 0:26 / / ro,rw - ext4 /dev/root ro\n")
+        assert_error_contains(&error, "non-absolute or repeated mount point");
+        let error = parse_mountinfo("29 23 0:26 / / ro,rw - ext4 /dev/root ro\n")
             .expect_err("ambiguous mount mode must fail closed");
+        assert_error_contains(&error, "options must contain exactly one of `ro` and `rw`");
         assert_eq!(decode_mountinfo_field("/with\\040space")?, "/with space");
         Ok(())
     }
 
     #[test]
     fn sandbox_paths_reject_host_state_and_traversal() {
-        for rejected in [
-            "relative",
-            "/../escape",
-            "/run/socket",
-            "/sys/kernel",
-            "/proc/1",
+        for (rejected, expected) in [
+            (
+                "relative",
+                "sandbox binding target must be a non-root absolute path",
+            ),
+            ("/../escape", "sandbox binding target is not canonical"),
+            (
+                "/run/socket",
+                "sandbox file binding overlaps a reserved private filesystem",
+            ),
+            (
+                "/sys/kernel",
+                "sandbox file binding overlaps a reserved private filesystem",
+            ),
+            (
+                "/proc/1",
+                "sandbox file binding overlaps a reserved private filesystem",
+            ),
         ] {
-            validate_sandbox_binding_path(Path::new(rejected))
+            let error = validate_sandbox_binding_path(Path::new(rejected))
                 .expect_err("unsafe sandbox target must fail closed");
+            assert_error_contains(&error, expected);
         }
         validate_sandbox_binding_path(Path::new("/inrou/input/kernel"))
             .expect("canonical private target");
@@ -2106,10 +2143,16 @@ mod tests {
 
         let mut gap = build_bindings();
         gap.last_mut().expect("lease1").sandbox_path = "/inrou/disk/lease2".into();
-        require_exact_binding_layout(&gap).expect_err("lease gaps must fail closed");
+        let error = require_exact_binding_layout(&gap).expect_err("lease gaps must fail closed");
+        assert_error_contains(
+            &error,
+            "namespace lease bindings must be contiguous from lease0",
+        );
         let mut extra = build_bindings();
         extra.push(binding("/run/escape", false));
-        require_exact_binding_layout(&extra).expect_err("extra bindings must fail closed");
+        let error =
+            require_exact_binding_layout(&extra).expect_err("extra bindings must fail closed");
+        assert_error_contains(&error, "is outside the exact V1 input/disk surface");
         Ok(())
     }
 
@@ -2212,8 +2255,9 @@ mod tests {
         file.as_file().set_len(4_096)?;
         validate_live_binding_identity(file.path(), &binding)?;
         binding.writable = false;
-        validate_live_binding_identity(file.path(), &binding)
+        let error = validate_live_binding_identity(file.path(), &binding)
             .expect_err("a read-only binding must retain its exact byte length");
+        assert_error_contains(&error, "changed custody");
         Ok(())
     }
 
@@ -2225,12 +2269,14 @@ mod tests {
         );
         let loopback = format!("{header}    lo: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16\n");
         validate_loopback_only_network_devices(&loopback)?;
-        validate_loopback_only_network_devices(&format!(
+        let error = validate_loopback_only_network_devices(&format!(
             "{loopback}  eth0: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16\n"
         ))
         .expect_err("an external interface must fail closed");
-        validate_loopback_only_network_devices(header)
+        assert_error_contains(&error, "instead of only loopback");
+        let error = validate_loopback_only_network_devices(header)
             .expect_err("a missing loopback device must fail closed");
+        assert_error_contains(&error, "instead of only loopback");
         Ok(())
     }
 }

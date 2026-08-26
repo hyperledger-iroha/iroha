@@ -25,7 +25,7 @@ if [[ "${PRIVACY_CSHARP_NATIVE_ARTIFACT}" != \
     "${NATIVE_DIRECTORY}/libconnect_norito_bridge.so" || \
   "${PRIVACY_CSHARP_NATIVE_MANIFEST}" != \
     "${NATIVE_DIRECTORY}/native-sdk-abi22-csharp.json" ]]; then
-  echo "error: C# privacy native paths are not canonical Linux ABI-22 paths" >&2
+  echo "error: C# privacy native paths are not canonical Linux ABI-23 paths" >&2
   exit 1
 fi
 if [[ "${LD_LIBRARY_PATH:-}" != "${NATIVE_DIRECTORY}" ]]; then

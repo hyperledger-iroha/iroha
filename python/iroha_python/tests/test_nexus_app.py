@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from iroha_python import NetworkId
+from iroha_python.address import AccountAddress
 from iroha_python.connect import ConnectUri, build_connect_uri, generate_connect_sid
 from iroha_python.nexus_app import (
     DefaultNexusTransactionCodec,
@@ -30,6 +31,10 @@ FIXTURE_PAYLOAD = bytes.fromhex(FIXTURE["expected"]["payload_bytes_hex"])
 FIXTURE_PUBLIC_KEY = bytes.fromhex(FIXTURE["connect"]["approval_frame"]["signing_public_key_hex"])
 FIXTURE_SIGNATURE = bytes.fromhex(FIXTURE["expected"]["wallet_signature_hex"])
 FIXTURE_ACCOUNT_ID = FIXTURE["connect"]["approval_frame"]["account_id"]
+FIXTURE_DESTINATION_ACCOUNT_ID = FIXTURE["transfer_input"]["destination_account_id"]
+FIXTURE_SOURCE_ASSET_ID = FIXTURE["transfer_input"]["source_asset_id"]
+FIXTURE_CHAIN_DISCRIMINANT = FIXTURE["transfer_input"]["account_chain_discriminant"]
+FIXTURE_NETWORK_ID = NetworkId.parse(FIXTURE["transfer_input"]["network_id"])
 FEE_PAYMENT = {
     "payer": "authority",
     "value": {"charge_limits": [], "gas_limit": None},
@@ -111,8 +116,8 @@ class FakeConnect:
         signature: bytes,
         approval=None,
         *,
-        signing_public_key: bytes = bytes([1]) * 32,
-        account_id: str = "approved-account-i105",
+        signing_public_key: bytes = FIXTURE_PUBLIC_KEY,
+        account_id: str = FIXTURE_ACCOUNT_ID,
         session_network_id: NetworkId | None = None,
     ):
         self.signature = signature
@@ -148,9 +153,9 @@ class FakeCodec:
         signed: bytes,
         hash_hex: str,
         *,
-        expected_authority: str = "approved-account-i105",
+        expected_authority: str = FIXTURE_ACCOUNT_ID,
         expected_signature: bytes = bytes([7]) * 64,
-        expected_signing_public_key: bytes = bytes([1]) * 32,
+        expected_signing_public_key: bytes = FIXTURE_PUBLIC_KEY,
     ):
         self.payload = payload
         self.signed = signed
@@ -164,7 +169,7 @@ class FakeCodec:
     def build_transfer_payload(self, payload_input):
         assert payload_input["network_id"] == NETWORK_ID
         assert payload_input["authority"] == self.expected_authority
-        assert payload_input["destination_account_id"] == "destination-i105"
+        assert payload_input["destination_account_id"] == FIXTURE_DESTINATION_ACCOUNT_ID
         self.built.append(dict(payload_input))
         return self.payload
 
@@ -182,7 +187,7 @@ class FinalizedResultCodec(FakeCodec):
             FIXTURE_PAYLOAD,
             b"signed",
             "c" * 64,
-            expected_authority="account-i105",
+            expected_authority=FIXTURE_ACCOUNT_ID,
             expected_signature=FIXTURE_SIGNATURE,
             expected_signing_public_key=FIXTURE_PUBLIC_KEY,
         )
@@ -200,8 +205,8 @@ class PayloadResultCodec(FakeCodec):
 
     def build_transfer_payload(self, payload_input):
         assert payload_input["network_id"] == NETWORK_ID
-        assert payload_input["authority"] == "approved-account-i105"
-        assert payload_input["destination_account_id"] == "destination-i105"
+        assert payload_input["authority"] == FIXTURE_ACCOUNT_ID
+        assert payload_input["destination_account_id"] == FIXTURE_DESTINATION_ACCOUNT_ID
         return self.result
 
 
@@ -250,17 +255,18 @@ def test_nexus_app_builds_transfer_draft_and_computes_payload_hash():
     client = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
-            authority="approved-account-i105",
-            signing_public_key=bytes([1]) * 32,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            authority=FIXTURE_ACCOUNT_ID,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=FakeCodec(payload, b"signed", "a" * 64),
     )
 
     draft = client.build_transfer_draft(
         NexusTransferInput(
-            source_asset_id="asset#approved-account-i105",
+            source_asset_id=f"asset#{FIXTURE_ACCOUNT_ID}",
             quantity="1.25",
-            destination_account_id="destination-i105",
+            destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
             fee_payment=FEE_PAYMENT,
         )
     )
@@ -278,17 +284,18 @@ def test_nexus_app_normalizes_lossless_quantity_before_custom_codec():
     client = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
-            authority="approved-account-i105",
-            signing_public_key=bytes([1]) * 32,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            authority=FIXTURE_ACCOUNT_ID,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=codec,
     )
 
     draft = client.build_transfer_draft(
         NexusTransferInput(
-            source_asset_id="asset#approved-account-i105",
+            source_asset_id=f"asset#{FIXTURE_ACCOUNT_ID}",
             quantity=Decimal("1.2500"),
-            destination_account_id="destination-i105",
+            destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
             fee_payment=FEE_PAYMENT,
         )
     )
@@ -310,8 +317,9 @@ def test_nexus_app_rejects_lossy_or_noncanonical_quantity_before_codec(quantity)
     client = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
-            authority="approved-account-i105",
-            signing_public_key=bytes([1]) * 32,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            authority=FIXTURE_ACCOUNT_ID,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=codec,
     )
@@ -319,9 +327,9 @@ def test_nexus_app_rejects_lossy_or_noncanonical_quantity_before_codec(quantity)
     with pytest.raises(NexusAppError) as excinfo:
         client.build_transfer_draft(
             NexusTransferInput(
-                source_asset_id="asset#approved-account-i105",
+                source_asset_id=f"asset#{FIXTURE_ACCOUNT_ID}",
                 quantity=quantity,
-                destination_account_id="destination-i105",
+                destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
                 fee_payment=FEE_PAYMENT,
             )
         )
@@ -336,8 +344,9 @@ def test_nexus_app_accepts_exact_custom_payload_hash(hash_field):
     client = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
-            authority="approved-account-i105",
-            signing_public_key=bytes([1]) * 32,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            authority=FIXTURE_ACCOUNT_ID,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=PayloadResultCodec(
             {"payload_bytes": FIXTURE_PAYLOAD, hash_field: expected_hash}
@@ -346,9 +355,9 @@ def test_nexus_app_accepts_exact_custom_payload_hash(hash_field):
 
     draft = client.build_transfer_draft(
         NexusTransferInput(
-            source_asset_id="asset#approved-account-i105",
+            source_asset_id=f"asset#{FIXTURE_ACCOUNT_ID}",
             quantity=1,
-            destination_account_id="destination-i105",
+            destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
             fee_payment=FEE_PAYMENT,
         )
     )
@@ -381,8 +390,9 @@ def test_nexus_app_rejects_noncanonical_custom_payload_hash(hash_hex):
     client = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
-            authority="approved-account-i105",
-            signing_public_key=bytes([1]) * 32,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            authority=FIXTURE_ACCOUNT_ID,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=PayloadResultCodec(
             {"payload_bytes": FIXTURE_PAYLOAD, "payload_hash_hex": hash_hex}
@@ -392,9 +402,9 @@ def test_nexus_app_rejects_noncanonical_custom_payload_hash(hash_hex):
     with pytest.raises(NexusAppError) as excinfo:
         client.build_transfer_draft(
             NexusTransferInput(
-                source_asset_id="asset#approved-account-i105",
+                source_asset_id=f"asset#{FIXTURE_ACCOUNT_ID}",
                 quantity=1,
-                destination_account_id="destination-i105",
+                destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
                 fee_payment=FEE_PAYMENT,
             )
         )
@@ -406,8 +416,9 @@ def test_nexus_app_rejects_mismatched_custom_payload_hash():
     client = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
-            authority="approved-account-i105",
-            signing_public_key=bytes([1]) * 32,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            authority=FIXTURE_ACCOUNT_ID,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=PayloadResultCodec(
             {"payload_bytes": FIXTURE_PAYLOAD, "payload_hash_hex": "d" * 64}
@@ -417,9 +428,9 @@ def test_nexus_app_rejects_mismatched_custom_payload_hash():
     with pytest.raises(NexusAppError) as excinfo:
         client.build_transfer_draft(
             NexusTransferInput(
-                source_asset_id="asset#approved-account-i105",
+                source_asset_id=f"asset#{FIXTURE_ACCOUNT_ID}",
                 quantity=1,
-                destination_account_id="destination-i105",
+                destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
                 fee_payment=FEE_PAYMENT,
             )
         )
@@ -432,8 +443,9 @@ def test_nexus_app_rejects_conflicting_custom_payload_hash_aliases():
     client = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
-            authority="approved-account-i105",
-            signing_public_key=bytes([1]) * 32,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            authority=FIXTURE_ACCOUNT_ID,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=PayloadResultCodec(
             {
@@ -447,9 +459,9 @@ def test_nexus_app_rejects_conflicting_custom_payload_hash_aliases():
     with pytest.raises(NexusAppError) as excinfo:
         client.build_transfer_draft(
             NexusTransferInput(
-                source_asset_id="asset#approved-account-i105",
+                source_asset_id=f"asset#{FIXTURE_ACCOUNT_ID}",
                 quantity=1,
-                destination_account_id="destination-i105",
+                destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
                 fee_payment=FEE_PAYMENT,
             )
         )
@@ -461,9 +473,20 @@ def test_nexus_app_default_codec_matches_shared_fixture():
     transfer = FIXTURE["transfer_input"]
     expected = FIXTURE["expected"]
     approval = FIXTURE["connect"]["approval_frame"]
+    for account in (
+        transfer["authority"],
+        transfer["destination_account_id"],
+        transfer["source_asset_id"].split("#")[1],
+    ):
+        parsed = AccountAddress.from_i105(
+            account,
+            expected_discriminant=transfer["account_chain_discriminant"],
+        )
+        assert parsed.to_i105(transfer["account_chain_discriminant"]) == account
     client = NexusAppClient(
         NexusAppConfig(
-            network_id=NETWORK_ID,
+            network_id=FIXTURE_NETWORK_ID,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
             authority=transfer["authority"],
             signing_public_key=bytes.fromhex(approval["signing_public_key_hex"]),
         ),
@@ -487,6 +510,65 @@ def test_nexus_app_default_codec_matches_shared_fixture():
     assert draft.signable.payload_hash_hex == expected["payload_hash_hex"]
 
 
+def test_nexus_app_rejects_wrong_chain_transfer_and_approval_accounts():
+    transfer = FIXTURE["transfer_input"]
+    wrong_chain_destination = AccountAddress.from_i105(
+        transfer["destination_account_id"],
+        expected_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+    ).to_i105(FIXTURE_CHAIN_DISCRIMINANT + 1)
+    client = NexusAppClient(
+        NexusAppConfig(
+            network_id=FIXTURE_NETWORK_ID,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            authority=transfer["authority"],
+            signing_public_key=FIXTURE_PUBLIC_KEY,
+        ),
+        transaction_codec=DefaultNexusTransactionCodec(),
+    )
+
+    with pytest.raises(NexusAppError) as excinfo:
+        client.build_transfer_draft(
+            NexusTransferInput(
+                source_asset_id=transfer["source_asset_id"],
+                quantity=transfer["quantity"],
+                destination_account_id=wrong_chain_destination,
+                fee_payment=FEE_PAYMENT,
+            )
+        )
+
+    assert excinfo.value.code == "invalid_account_id"
+
+    with pytest.raises(NexusAppError) as scope_excinfo:
+        client.build_transfer_draft(
+            NexusTransferInput(
+                source_asset_id=f'{transfer["source_asset_id"]}#dataspace:01',
+                quantity=transfer["quantity"],
+                destination_account_id=transfer["destination_account_id"],
+                fee_payment=FEE_PAYMENT,
+            )
+        )
+    assert scope_excinfo.value.code == "invalid_account_id"
+
+    wrong_chain_authority = AccountAddress.from_i105(
+        transfer["authority"],
+        expected_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+    ).to_i105(FIXTURE_CHAIN_DISCRIMINANT + 1)
+    approval_client = NexusAppClient(
+        NexusAppConfig(
+            network_id=NETWORK_ID,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+        ),
+        connect_transport=FakeConnect(
+            FIXTURE_SIGNATURE,
+            account_id=wrong_chain_authority,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
+        ),
+    )
+    with pytest.raises(NexusAppError) as approval_excinfo:
+        approval_client.await_approval(_nexus_connect_session())
+    assert approval_excinfo.value.code == "invalid_account_id"
+
+
 def test_nexus_app_runs_wallet_transfer_flow():
     payload = FIXTURE_PAYLOAD
     signed = b"signed-transaction"
@@ -508,6 +590,7 @@ def test_nexus_app_runs_wallet_transfer_flow():
     client = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
             signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         connect_transport=connect,
@@ -525,7 +608,7 @@ def test_nexus_app_runs_wallet_transfer_flow():
         NexusTransferInput(
             source_asset_id=f"asset#{FIXTURE_ACCOUNT_ID}",
             quantity=1,
-            destination_account_id="destination-i105",
+            destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
             fee_payment=FEE_PAYMENT,
         ),
     )
@@ -538,25 +621,71 @@ def test_nexus_app_runs_wallet_transfer_flow():
 
 
 def test_nexus_app_rejects_approved_account_key_substitution():
+    error_case = next(
+        case
+        for case in FIXTURE["error_cases"]
+        if case["name"] == "approval signing key mismatch"
+    )
+    approval_frame = error_case["approval_frame"]
     client = NexusAppClient(
-        NexusAppConfig(network_id=NETWORK_ID),
+        NexusAppConfig(
+            network_id=NETWORK_ID,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+        ),
         connect_transport=FakeConnect(
             FIXTURE_SIGNATURE,
-            account_id=FIXTURE_ACCOUNT_ID,
-            signing_public_key=bytes([0xC3]) * 32,
+            account_id=approval_frame["account_id"],
+            signing_public_key=bytes.fromhex(
+                approval_frame["signing_public_key_hex"]
+            ),
         ),
     )
 
     with pytest.raises(NexusAppError) as excinfo:
         client.await_approval(_nexus_connect_session())
 
-    assert excinfo.value.code == "connect_approval_account_key_mismatch"
+    assert excinfo.value.code == error_case["expected_code"]
+
+
+def test_nexus_app_rejects_approval_session_substitution():
+    error_case = next(
+        case
+        for case in FIXTURE["error_cases"]
+        if case["name"] == "approval session substitution"
+    )
+    approval_frame = error_case["approval_frame"]
+    caller_session = _nexus_connect_session()
+    client = NexusAppClient(
+        NexusAppConfig(
+            network_id=NETWORK_ID,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+        ),
+        connect_transport=FakeConnect(
+            FIXTURE_SIGNATURE,
+            approval={
+                "account_id": approval_frame["account_id"],
+                "signing_public_key": bytes.fromhex(
+                    approval_frame["signing_public_key_hex"]
+                ),
+                "session": approval_frame["session"],
+            },
+        ),
+    )
+
+    with pytest.raises(NexusAppError) as excinfo:
+        client.await_approval(caller_session)
+
+    assert excinfo.value.code == error_case["expected_code"]
+    assert caller_session.sid == _nexus_connect_session().sid
 
 
 def test_nexus_app_rejects_transport_network_substitution():
     other_network = NetworkId.from_bytes(bytes([0xA7]) * 32)
     client = NexusAppClient(
-        NexusAppConfig(network_id=NETWORK_ID),
+        NexusAppConfig(
+            network_id=NETWORK_ID,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+        ),
         connect_transport=FakeConnect(
             FIXTURE_SIGNATURE,
             session_network_id=other_network,
@@ -591,18 +720,19 @@ def test_nexus_app_rejects_unsupported_signature_algorithm(algorithm):
     client = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
-            authority="account-i105",
-            signing_public_key=bytes([1]) * 32,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            authority=FIXTURE_ACCOUNT_ID,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=FakeCodec(
-            b"payload", b"signed", "c" * 64, expected_authority="account-i105"
+            b"payload", b"signed", "c" * 64, expected_authority=FIXTURE_ACCOUNT_ID
         ),
     )
     draft = client.build_transfer_draft(
         NexusTransferInput(
-            source_asset_id="asset#account-i105",
+            source_asset_id=f"asset#{FIXTURE_ACCOUNT_ID}",
             quantity=1,
-            destination_account_id="destination-i105",
+            destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
             fee_payment=FEE_PAYMENT,
         )
     )
@@ -625,18 +755,19 @@ def test_nexus_app_rejects_unsupported_signable_signature_algorithm(algorithm):
     client = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
-            authority="account-i105",
-            signing_public_key=bytes([1]) * 32,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            authority=FIXTURE_ACCOUNT_ID,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=FakeCodec(
-            b"payload", b"signed", "c" * 64, expected_authority="account-i105"
+            b"payload", b"signed", "c" * 64, expected_authority=FIXTURE_ACCOUNT_ID
         ),
     )
     draft = client.build_transfer_draft(
         NexusTransferInput(
-            source_asset_id="asset#account-i105",
+            source_asset_id=f"asset#{FIXTURE_ACCOUNT_ID}",
             quantity=1,
-            destination_account_id="destination-i105",
+            destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
             fee_payment=FEE_PAYMENT,
         )
     )
@@ -657,7 +788,8 @@ def _client_for_finalized_result(result, *, submit_result=None):
     client = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
-            authority="account-i105",
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            authority=FIXTURE_ACCOUNT_ID,
             signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=FinalizedResultCodec(result),
@@ -665,9 +797,9 @@ def _client_for_finalized_result(result, *, submit_result=None):
     )
     draft = client.build_transfer_draft(
         NexusTransferInput(
-            source_asset_id="asset#account-i105",
+            source_asset_id=f"asset#{FIXTURE_ACCOUNT_ID}",
             quantity=1,
-            destination_account_id="destination-i105",
+            destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
             fee_payment=FEE_PAYMENT,
         )
     )
@@ -907,6 +1039,7 @@ def test_nexus_app_rejects_missing_approval_fields():
     missing_account = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
         ),
         connect_transport=FakeConnect(bytes([7]) * 64, approval={}),
         transaction_codec=FakeCodec(b"payload", b"signed", "a" * 64),
@@ -919,6 +1052,7 @@ def test_nexus_app_rejects_missing_approval_fields():
     missing_key = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
         ),
         connect_transport=FakeConnect(bytes([7]) * 64, approval={"account_id": "not-an-i105-account"}),
         transaction_codec=FakeCodec(b"payload", b"signed", "a" * 64),
@@ -926,7 +1060,7 @@ def test_nexus_app_rejects_missing_approval_fields():
 
     with pytest.raises(NexusAppError) as key_exc:
         missing_key.await_approval(_nexus_connect_session())
-    assert key_exc.value.code == "missing_signing_public_key"
+    assert key_exc.value.code == "invalid_account_id"
 
 
 def test_nexus_app_rejects_authority_mismatch_before_wallet_signature():
@@ -934,26 +1068,27 @@ def test_nexus_app_rejects_authority_mismatch_before_wallet_signature():
     client = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
-            signing_public_key=bytes([1]) * 32,
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         connect_transport=connect,
         transaction_codec=FakeCodec(b"payload", b"signed", "a" * 64),
         torii_client=FakeTorii(),
     )
     session = _nexus_connect_session(
-        approved_account="approved-account-i105",
-        signing_public_key=bytes([1]) * 32,
+        approved_account=FIXTURE_ACCOUNT_ID,
+        signing_public_key=FIXTURE_PUBLIC_KEY,
     )
 
     with pytest.raises(NexusAppError) as excinfo:
         client.transfer_with_wallet(
             session,
             NexusTransferInput(
-                source_asset_id="asset#other-account-i105",
+                source_asset_id=f"asset#{FIXTURE_DESTINATION_ACCOUNT_ID}",
                 quantity=1,
-                destination_account_id="destination-i105",
+                destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
                 fee_payment=FEE_PAYMENT,
-                authority="other-account-i105",
+                authority=FIXTURE_DESTINATION_ACCOUNT_ID,
             ),
         )
 
@@ -965,14 +1100,15 @@ def test_nexus_app_rejects_invalid_signature_length():
     client = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
-            authority="account-i105",
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            authority=FIXTURE_ACCOUNT_ID,
             signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=FakeCodec(
             FIXTURE_PAYLOAD,
             b"signed",
             "c" * 64,
-            expected_authority="account-i105",
+            expected_authority=FIXTURE_ACCOUNT_ID,
             expected_signature=FIXTURE_SIGNATURE,
             expected_signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
@@ -980,9 +1116,9 @@ def test_nexus_app_rejects_invalid_signature_length():
     )
     draft = client.build_transfer_draft(
         NexusTransferInput(
-            source_asset_id="asset#account-i105",
+            source_asset_id=f"asset#{FIXTURE_ACCOUNT_ID}",
             quantity=1,
-            destination_account_id="destination-i105",
+            destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
             fee_payment=FEE_PAYMENT,
         )
     )
@@ -1003,14 +1139,15 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
     client = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
-            authority="account-i105",
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            authority=FIXTURE_ACCOUNT_ID,
             signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=FakeCodec(
             FIXTURE_PAYLOAD,
             b"signed",
             hash_hex,
-            expected_authority="account-i105",
+            expected_authority=FIXTURE_ACCOUNT_ID,
             expected_signature=FIXTURE_SIGNATURE,
             expected_signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
@@ -1018,9 +1155,9 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
     )
     draft = client.build_transfer_draft(
         NexusTransferInput(
-            source_asset_id="asset#account-i105",
+            source_asset_id=f"asset#{FIXTURE_ACCOUNT_ID}",
             quantity=1,
-            destination_account_id="destination-i105",
+            destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
             fee_payment=FEE_PAYMENT,
         )
     )
@@ -1032,14 +1169,15 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
     submit_failure = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
-            authority="account-i105",
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            authority=FIXTURE_ACCOUNT_ID,
             signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=FakeCodec(
             FIXTURE_PAYLOAD,
             b"signed",
             hash_hex,
-            expected_authority="account-i105",
+            expected_authority=FIXTURE_ACCOUNT_ID,
             expected_signature=FIXTURE_SIGNATURE,
             expected_signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
@@ -1047,9 +1185,9 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
     )
     draft = submit_failure.build_transfer_draft(
         NexusTransferInput(
-            source_asset_id="asset#account-i105",
+            source_asset_id=f"asset#{FIXTURE_ACCOUNT_ID}",
             quantity=1,
-            destination_account_id="destination-i105",
+            destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
             fee_payment=FEE_PAYMENT,
         )
     )
@@ -1060,14 +1198,15 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
     status_failure = NexusAppClient(
         NexusAppConfig(
             network_id=NETWORK_ID,
-            authority="account-i105",
+            account_chain_discriminant=FIXTURE_CHAIN_DISCRIMINANT,
+            authority=FIXTURE_ACCOUNT_ID,
             signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
         transaction_codec=FakeCodec(
             FIXTURE_PAYLOAD,
             b"signed",
             hash_hex,
-            expected_authority="account-i105",
+            expected_authority=FIXTURE_ACCOUNT_ID,
             expected_signature=FIXTURE_SIGNATURE,
             expected_signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
@@ -1075,9 +1214,9 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
     )
     draft = status_failure.build_transfer_draft(
         NexusTransferInput(
-            source_asset_id="asset#account-i105",
+            source_asset_id=f"asset#{FIXTURE_ACCOUNT_ID}",
             quantity=1,
-            destination_account_id="destination-i105",
+            destination_account_id=FIXTURE_DESTINATION_ACCOUNT_ID,
             fee_payment=FEE_PAYMENT,
         )
     )
@@ -1091,3 +1230,5 @@ def test_nexus_app_fixture_error_codes_are_stable():
     assert expected_codes["unsupported signature algorithm"] == "unsupported_signature_algorithm"
     assert expected_codes["approval without signing key"] == "missing_signing_public_key"
     assert expected_codes["authority mismatch"] == "approval_account_mismatch"
+    assert expected_codes["approval signing key mismatch"] == "approval_account_mismatch"
+    assert expected_codes["approval session substitution"] == "approval_session_mismatch"

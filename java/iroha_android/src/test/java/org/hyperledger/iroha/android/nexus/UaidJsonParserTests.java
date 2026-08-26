@@ -20,6 +20,7 @@ public final class UaidJsonParserTests {
     parsesPortfolioPayload();
     rejectsRetiredPortfolioPayload();
     rejectsNoncanonicalPortfolioQuantities();
+    rejectsNegativePortfolioTotalsModel();
     rejectsInvalidUaidLsb();
     rejectsNoncanonicalUaidSpellings();
     rejectsNegativeRustUnsignedFields();
@@ -75,6 +76,17 @@ public final class UaidJsonParserTests {
     for (final String quantity :
         new String[] {"1", "\"01\"", "\"1e0\"", "\"-1\"", "\"1.0\"", "\"1.2300\""}) {
       expectInvalidResponse(portfolio(quantity), UaidJsonParser::parsePortfolio);
+    }
+  }
+
+  private static void rejectsNegativePortfolioTotalsModel() {
+    for (final long[] totals : new long[][] {{-1L, 0L}, {0L, -1L}}) {
+      try {
+        new UaidPortfolioResponse.UaidPortfolioTotals(totals[0], totals[1]);
+      } catch (final IllegalArgumentException expected) {
+        continue;
+      }
+      throw new AssertionError("negative UAID portfolio totals were accepted");
     }
   }
 

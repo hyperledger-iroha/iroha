@@ -128,11 +128,28 @@ final class NoritoTests: XCTestCase {
         }
     }
 
-    func testUInt128FromDecimalStringMaxValue() {
-        let maxDecimal = "340282366920938463463374607431768211455" // 2^128 - 1
-        let value = UInt128.fromDecimalString(maxDecimal)
-        XCTAssertEqual(value.hi, UInt64.max)
-        XCTAssertEqual(value.lo, UInt64.max)
+    func testConstVecByteEncodingIsExactForEveryByteValue() {
+        let bytes = Data((0...255).map { UInt8($0) })
+        let countPrefix = Data([0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+        let canonicalFieldPrefix = Data([0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+
+        let canonical = CanonicalNorito.encodeConstVec(bytes)
+        XCTAssertEqual(canonical.count, 8 + bytes.count * 9)
+        XCTAssertEqual(canonical.prefix(8), countPrefix)
+        for (index, byte) in bytes.enumerated() {
+            let fieldStart = 8 + index * 9
+            XCTAssertEqual(canonical[fieldStart..<(fieldStart + 8)], canonicalFieldPrefix)
+            XCTAssertEqual(canonical[fieldStart + 8], byte)
+        }
+
+        let compact = CompactNorito.encodeConstVec(bytes)
+        XCTAssertEqual(compact.count, 8 + bytes.count * 2)
+        XCTAssertEqual(compact.prefix(8), countPrefix)
+        for (index, byte) in bytes.enumerated() {
+            let fieldStart = 8 + index * 2
+            XCTAssertEqual(compact[fieldStart], 1)
+            XCTAssertEqual(compact[fieldStart + 1], byte)
+        }
     }
 
     func testNoritoInstructionFixturesAreConsistent() throws {

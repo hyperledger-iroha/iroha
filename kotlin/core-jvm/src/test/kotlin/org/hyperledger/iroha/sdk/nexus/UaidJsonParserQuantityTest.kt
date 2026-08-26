@@ -59,6 +59,12 @@ class UaidJsonParserQuantityTest {
 
     @Test
     fun `uaid response parser rejects negative rust unsigned fields`() {
+        assertFailsWith<IllegalArgumentException> {
+            UaidPortfolioResponse.UaidPortfolioTotals(-1, 0)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            UaidPortfolioResponse.UaidPortfolioTotals(0, -1)
+        }
         assertFailsWith<IllegalStateException> {
             UaidJsonParser.parsePortfolio(
                 """{"uaid":"$uaid","totals":{"accounts":-1,"positions":0},"dataspaces":[]}"""

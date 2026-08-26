@@ -30,8 +30,43 @@ pub enum SoraServiceLifecycleActionV1 {
     Rollout,
     /// Reversion to an already admitted baseline revision.
     Rollback,
+    /// One exact accepted hosted-service egress checkpoint transition.
+    LeaseUsage,
     /// Atomic settlement and successor opening of a hosted-service reporting epoch.
     LeaseReportingEpochRollover,
+}
+/// Exact authoritative service revision observed by an upgrade signer.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct SoraServiceExactCurrentRevisionPreconditionV1 {
+    /// Active service version observed by the signer.
+    pub service_version: String,
+    /// Active service-manifest hash observed by the signer.
+    pub service_manifest_hash: Hash,
+    /// Active container-manifest hash observed by the signer.
+    pub container_manifest_hash: Hash,
+    /// Positive active process generation observed by the signer.
+    pub process_generation: u64,
+    /// Active config generation observed by the signer.
+    pub config_generation: u64,
+    /// Active secret generation observed by the signer.
+    pub secret_generation: u64,
+}
+/// Signed compare-and-set condition for a service deploy or upgrade.
+///
+/// The condition is evaluated against authoritative deployment state in the
+/// same ledger transaction that admits the new revision. This prevents a
+/// status preflight from becoming a time-of-check/time-of-use race.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(tag = "condition", content = "value"))]
+pub enum SoraServiceMutationPreconditionV1 {
+    /// A first deployment is valid only while no deployment state exists for
+    /// the service name carried by the signed bundle.
+    ServiceAbsent,
+    /// An upgrade is valid only while every field of the observed active
+    /// revision still matches authoritative deployment state.
+    ExactCurrentRevision(SoraServiceExactCurrentRevisionPreconditionV1),
 }
 /// Mutation mode recorded for authoritative Soracloud state updates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -67,9 +102,8 @@ pub struct SoraServiceRolloutStateV1 {
     pub schema_version: u16,
     /// Deterministic rollout identifier.
     pub rollout_handle: String,
-    /// Baseline version retained for automatic rollback.
-    #[norito(required)]
-    pub baseline_version: Option<String>,
+    /// Baseline version retained for traffic splitting and automatic rollback.
+    pub baseline_version: String,
     /// Candidate version being evaluated.
     pub candidate_version: String,
     /// Initial canary percentage requested by the deployment policy.
@@ -110,12 +144,17 @@ impl SoraServiceRolloutStateV1 {
             "candidate_version",
             &self.candidate_version,
         )?;
-        if let Some(baseline_version) = self.baseline_version.as_deref() {
-            validate_nonblank_field(
+        validate_nonblank_field(
+            "sora service rollout state",
+            "baseline_version",
+            &self.baseline_version,
+        )?;
+        if self.baseline_version == self.candidate_version {
+            return Err(invalid_field(
                 "sora service rollout state",
                 "baseline_version",
-                baseline_version,
-            )?;
+                "must differ from candidate_version",
+            ));
         }
         if self.canary_percent > 100 {
             return Err(invalid_field(
@@ -133,11 +172,18 @@ impl SoraServiceRolloutStateV1 {
         }
         match self.stage {
             SoraRolloutStageV1::Canary => {
-                if self.traffic_percent < self.canary_percent {
+                if !(1..100).contains(&self.canary_percent) {
+                    return Err(invalid_field(
+                        "sora service rollout state",
+                        "canary_percent",
+                        "canary rollouts must start with a nonzero partial traffic allocation",
+                    ));
+                }
+                if !(self.canary_percent..100).contains(&self.traffic_percent) {
                     return Err(invalid_field(
                         "sora service rollout state",
                         "traffic_percent",
-                        "canary traffic must stay at or above canary_percent",
+                        "canary traffic must stay at or above canary_percent and below 100",
                     ));
                 }
             }
@@ -166,6 +212,30 @@ impl SoraServiceRolloutStateV1 {
                 "max_health_failures",
                 "must be greater than zero",
             ));
+        }
+        match self.stage {
+            SoraRolloutStageV1::Canary if self.health_failures >= self.max_health_failures => {
+                return Err(invalid_field(
+                    "sora service rollout state",
+                    "health_failures",
+                    "canary rollouts must remain below the automatic rollback threshold",
+                ));
+            }
+            SoraRolloutStageV1::Promoted if self.health_failures != 0 => {
+                return Err(invalid_field(
+                    "sora service rollout state",
+                    "health_failures",
+                    "promoted rollouts must clear consecutive health failures",
+                ));
+            }
+            SoraRolloutStageV1::RolledBack if self.health_failures < self.max_health_failures => {
+                return Err(invalid_field(
+                    "sora service rollout state",
+                    "health_failures",
+                    "rolled-back rollouts must meet the automatic rollback threshold",
+                ));
+            }
+            _ => {}
         }
         if self.health_window_secs == 0 {
             return Err(invalid_field(
@@ -324,33 +394,51 @@ impl SoraServiceDeploymentStateV1 {
                 return Err(invalid_field(
                     "sora service deployment state",
                     "active_rollout.traffic_percent",
-                    "active canary traffic must be within 1..=99",
+                    "active canary rollout must split traffic between baseline and candidate",
+                ));
+            }
+            if !(1..100).contains(&active_rollout.canary_percent) {
+                return Err(invalid_field(
+                    "sora service deployment state",
+                    "active_rollout.canary_percent",
+                    "active canary rollout must start with a nonzero partial traffic allocation",
                 ));
             }
             if active_rollout.candidate_version != self.current_service_version {
                 return Err(invalid_field(
                     "sora service deployment state",
                     "active_rollout.candidate_version",
-                    "active rollout candidate must equal current_service_version",
-                ));
-            }
-            let Some(baseline_version) = active_rollout.baseline_version.as_ref() else {
-                return Err(invalid_field(
-                    "sora service deployment state",
-                    "active_rollout.baseline_version",
-                    "active canary rollout requires an explicit baseline version",
-                ));
-            };
-            if baseline_version == &self.current_service_version {
-                return Err(invalid_field(
-                    "sora service deployment state",
-                    "active_rollout.baseline_version",
-                    "active rollout baseline must differ from current candidate version",
+                    "must match current_service_version",
                 ));
             }
         }
         if let Some(last_rollout) = self.last_rollout.as_ref() {
             last_rollout.validate()?;
+        }
+        match (self.active_rollout.as_ref(), self.last_rollout.as_ref()) {
+            (Some(active), Some(last)) if active == last => {}
+            (Some(_), Some(_)) => {
+                return Err(invalid_field(
+                    "sora service deployment state",
+                    "active_rollout",
+                    "must exactly equal last_rollout while a canary is active",
+                ));
+            }
+            (Some(_), None) => {
+                return Err(invalid_field(
+                    "sora service deployment state",
+                    "last_rollout",
+                    "must retain the active rollout",
+                ));
+            }
+            (None, Some(last)) if last.stage == SoraRolloutStageV1::Canary => {
+                return Err(invalid_field(
+                    "sora service deployment state",
+                    "active_rollout",
+                    "must retain a canary last_rollout until it is promoted or rolled back",
+                ));
+            }
+            (None, Some(_)) | (None, None) => {}
         }
         if let Some(lease) = self.service_lease.as_ref() {
             lease.validate()?;
@@ -466,8 +554,7 @@ impl SoraServiceDeploymentStateV1 {
                     ),
                     (
                         "service_lease.storage_price_per_gib_block",
-                        lease.storage_price_per_gib_block
-                            == economics.storage_price_per_gib_block,
+                        lease.storage_price_per_gib_block == economics.storage_price_per_gib_block,
                     ),
                     (
                         "service_lease.egress_price_per_mib",
@@ -644,6 +731,30 @@ fn validate_nonempty_no_control(
             manifest,
             field,
             "must not contain control characters",
+        ));
+    }
+    Ok(())
+}
+fn validate_uploaded_model_identifier(
+    manifest: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<(), SoracloudManifestError> {
+    validate_nonblank_field(manifest, field, value)?;
+    if value.len() > SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1 {
+        return Err(invalid_field(
+            manifest,
+            field,
+            format!("must not exceed {SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1} bytes"),
+        ));
+    }
+    if !value.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'#' | b'-')
+    }) {
+        return Err(invalid_field(
+            manifest,
+            field,
+            "must use only ASCII letters, digits, or [-_.:#]",
         ));
     }
     Ok(())
@@ -1126,6 +1237,115 @@ impl SoraServiceSecretEntryV1 {
         }
         self.envelope.validate()
     }
+}
+
+/// Exact replay material for one authoritative service-config transition.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
+#[norito(deny_unknown_fields)]
+pub enum SoraServiceConfigMutationV1 {
+    /// Create or replace the complete config entry.
+    Upsert(SoraServiceConfigEntryV1),
+    /// Delete the named entry, which must already exist in the replayed projection.
+    Delete(String),
+}
+impl SoraServiceConfigMutationV1 {
+    /// Stable service-scoped entry name affected by the transition.
+    #[must_use]
+    pub fn config_name(&self) -> &str {
+        match self {
+            Self::Upsert(entry) => &entry.config_name,
+            Self::Delete(config_name) => config_name,
+        }
+    }
+
+    /// Validate canonical mutation material at its audit sequence.
+    pub fn validate_at_sequence(&self, sequence: u64) -> Result<(), SoracloudManifestError> {
+        match self {
+            Self::Upsert(entry) => {
+                entry.validate()?;
+                if entry.last_update_sequence != sequence {
+                    return Err(invalid_field(
+                        "sora service config mutation",
+                        "last_update_sequence",
+                        "upsert entry must be materialized at the containing audit sequence",
+                    ));
+                }
+            }
+            Self::Delete(config_name) => validate_service_material_name(
+                "sora service config mutation",
+                "config_name",
+                config_name,
+            )?,
+        }
+        Ok(())
+    }
+}
+
+/// Exact replay material for one authoritative encrypted-secret transition.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
+#[norito(deny_unknown_fields)]
+pub enum SoraServiceSecretMutationV1 {
+    /// Create or replace the complete encrypted-secret entry.
+    Upsert(SoraServiceSecretEntryV1),
+    /// Delete the named entry, which must already exist in the replayed projection.
+    Delete(String),
+}
+impl SoraServiceSecretMutationV1 {
+    /// Stable service-scoped entry name affected by the transition.
+    #[must_use]
+    pub fn secret_name(&self) -> &str {
+        match self {
+            Self::Upsert(entry) => &entry.secret_name,
+            Self::Delete(secret_name) => secret_name,
+        }
+    }
+
+    /// Validate canonical mutation material at its audit sequence.
+    pub fn validate_at_sequence(&self, sequence: u64) -> Result<(), SoracloudManifestError> {
+        match self {
+            Self::Upsert(entry) => {
+                entry.validate()?;
+                if entry.last_update_sequence != sequence {
+                    return Err(invalid_field(
+                        "sora service secret mutation",
+                        "last_update_sequence",
+                        "upsert entry must be materialized at the containing audit sequence",
+                    ));
+                }
+            }
+            Self::Delete(secret_name) => validate_service_material_name(
+                "sora service secret mutation",
+                "secret_name",
+                secret_name,
+            )?,
+        }
+        Ok(())
+    }
+}
+
+/// Commit to the complete canonical post-transition config projection.
+#[must_use]
+pub fn derive_soracloud_service_config_snapshot_hash_v1(
+    entries: &BTreeMap<String, SoraServiceConfigEntryV1>,
+) -> Hash {
+    Hash::new(Encode::encode(&(
+        "soracloud.service.config.snapshot.v1",
+        entries.clone(),
+    )))
+}
+/// Commit to the complete canonical post-transition encrypted-secret projection.
+#[must_use]
+pub fn derive_soracloud_service_secret_snapshot_hash_v1(
+    entries: &BTreeMap<String, SoraServiceSecretEntryV1>,
+) -> Hash {
+    Hash::new(Encode::encode(&(
+        "soracloud.service.secret.snapshot.v1",
+        entries.clone(),
+    )))
 }
 /// Authoritative service-state entry tracked for Soracloud bindings.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -1772,9 +1992,9 @@ pub enum SoraModelWeightActionV1 {
 pub enum SoraModelProvenanceKindV1 {
     /// The model was produced by a Soracloud training job.
     TrainingJob,
-    /// The model was imported from Hugging Face.
-    HfImport,
-    /// The model was uploaded through the private Soracloud model-vault path.
+    /// The model metadata and source artifacts were admitted from Hugging Face.
+    HfSourceAdmission,
+    /// The model was uploaded through the Soracloud registry path.
     UserUpload,
 }
 /// Reference to the origin of a model artifact or weight version.
@@ -1812,260 +2032,8 @@ pub enum SoraUploadedModelPackageFormatV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SoraUploadedModelPricingPolicyV1 {
-    /// Nominal XOR quantity charged for storing encrypted uploaded-model bytes.
+    /// Nominal XOR quantity charged for storing uploaded-model bytes.
     pub storage_price: Quantity,
-}
-/// Key-encapsulation suite used to wrap uploaded-model bundle keys.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kem", content = "value"))]
-#[norito(deny_unknown_fields)]
-pub enum SoraUploadedModelKeyEncapsulationV1 {
-    /// X25519 shared-secret derivation with HKDF-SHA256 expansion.
-    #[default]
-    X25519HkdfSha256,
-}
-/// AEAD suite used to wrap uploaded-model bundle keys.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "aead", content = "value"))]
-#[norito(deny_unknown_fields)]
-pub enum SoraUploadedModelKeyWrapAeadV1 {
-    /// AES-256-GCM symmetric key wrapping.
-    #[default]
-    Aes256Gcm,
-}
-fn validate_uploaded_model_x25519_public_key(
-    manifest: &'static str,
-    field: &'static str,
-    public_key: &[u8],
-) -> Result<(), SoracloudManifestError> {
-    if public_key.len() != SORA_UPLOADED_MODEL_X25519_PUBLIC_KEY_BYTES {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest,
-            field,
-            reason: format!(
-                "X25519-HKDF-SHA256 public key must be {} bytes, found {}",
-                SORA_UPLOADED_MODEL_X25519_PUBLIC_KEY_BYTES,
-                public_key.len()
-            ),
-        });
-    }
-    X25519Sha256::decode_public_key(public_key).map_err(|err| {
-        SoracloudManifestError::InvalidField {
-            manifest,
-            field,
-            reason: format!("invalid X25519-HKDF-SHA256 public key: {err}"),
-        }
-    })?;
-    Ok(())
-}
-/// Soracloud-upload recipient metadata recorded for model bundle encryption.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct SoraUploadedModelEncryptionRecipientV1 {
-    /// Schema version; must equal [`SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1`].
-    pub schema_version: u16,
-    /// Stable recipient key identifier.
-    pub key_id: String,
-    /// Recipient key version under the same `key_id`.
-    pub key_version: NonZeroU32,
-    /// Key-encapsulation suite expected by the recipient.
-    pub kem: SoraUploadedModelKeyEncapsulationV1,
-    /// AEAD suite expected for the wrapped bundle key.
-    pub aead: SoraUploadedModelKeyWrapAeadV1,
-    /// Raw recipient public key bytes for the configured KEM.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
-    pub public_key_bytes: Vec<u8>,
-    /// Commitment over the recipient public key bytes.
-    pub public_key_fingerprint: Hash,
-}
-impl SoraUploadedModelEncryptionRecipientV1 {
-    const MAX_PUBLIC_KEY_BYTES: usize = 256;
-    /// Validate recorded upload-recipient metadata.
-    ///
-    /// # Errors
-    /// Returns [`SoracloudManifestError`] when the recipient metadata is empty or malformed.
-    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_schema_version(
-            "sora uploaded model encryption recipient",
-            self.schema_version,
-            SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
-        )?;
-        validate_nonempty_no_control(
-            "sora uploaded model encryption recipient",
-            "key_id",
-            &self.key_id,
-        )?;
-        if self.public_key_bytes.is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora uploaded model encryption recipient",
-                field: "public_key_bytes",
-            });
-        }
-        if self.public_key_bytes.len() > Self::MAX_PUBLIC_KEY_BYTES {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model encryption recipient",
-                field: "public_key_bytes",
-                reason: format!(
-                    "length {} exceeds max {} bytes",
-                    self.public_key_bytes.len(),
-                    Self::MAX_PUBLIC_KEY_BYTES
-                ),
-            });
-        }
-        match self.kem {
-            SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256 => {
-                validate_uploaded_model_x25519_public_key(
-                    "sora uploaded model encryption recipient",
-                    "public_key_bytes",
-                    self.public_key_bytes.as_slice(),
-                )?;
-            }
-        }
-        validate_soracloud_digest_hash(
-            "sora uploaded model encryption recipient",
-            "public_key_fingerprint",
-            self.public_key_fingerprint,
-        )?;
-        if Hash::new(self.public_key_bytes.as_slice()) != self.public_key_fingerprint {
-            return Err(invalid_field(
-                "sora uploaded model encryption recipient",
-                "public_key_fingerprint",
-                "must match the recorded public_key_bytes",
-            ));
-        }
-        Ok(())
-    }
-}
-/// Wrapped symmetric key used to decrypt one uploaded-model bundle on Soracloud.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct SoraUploadedModelWrappedKeyV1 {
-    /// Schema version; must equal [`SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1`].
-    pub schema_version: u16,
-    /// Recipient key identifier used to unwrap the bundle key.
-    pub recipient_key_id: String,
-    /// Recipient key version used to unwrap the bundle key.
-    pub recipient_key_version: NonZeroU32,
-    /// Key-encapsulation suite used to derive the wrapping key.
-    pub kem: SoraUploadedModelKeyEncapsulationV1,
-    /// AEAD suite used to encrypt the wrapped bundle key.
-    pub aead: SoraUploadedModelKeyWrapAeadV1,
-    /// Raw ephemeral public key bytes used for the KEM exchange.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
-    pub ephemeral_public_key: Vec<u8>,
-    /// Nonce used by the AEAD wrapping operation.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
-    pub nonce: Vec<u8>,
-    /// Opaque wrapped bundle-key ciphertext bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
-    pub wrapped_key_ciphertext: Vec<u8>,
-    /// Commitment over `wrapped_key_ciphertext`.
-    pub ciphertext_hash: Hash,
-    /// Digest over the public AAD bound to the key-wrap operation.
-    pub aad_digest: Hash,
-}
-impl SoraUploadedModelWrappedKeyV1 {
-    const MAX_PUBLIC_KEY_BYTES: usize = 256;
-    const MAX_NONCE_BYTES: usize = 256;
-    const MAX_WRAPPED_KEY_BYTES: usize = 4_096;
-    /// Validate wrapped bundle-key metadata.
-    ///
-    /// # Errors
-    /// Returns [`SoracloudManifestError`] when the wrapped-key envelope is empty or malformed.
-    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_schema_version(
-            "sora uploaded model wrapped key",
-            self.schema_version,
-            SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
-        )?;
-        validate_nonempty_no_control(
-            "sora uploaded model wrapped key",
-            "recipient_key_id",
-            &self.recipient_key_id,
-        )?;
-        if self.ephemeral_public_key.is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora uploaded model wrapped key",
-                field: "ephemeral_public_key",
-            });
-        }
-        if self.ephemeral_public_key.len() > Self::MAX_PUBLIC_KEY_BYTES {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model wrapped key",
-                field: "ephemeral_public_key",
-                reason: format!(
-                    "length {} exceeds max {} bytes",
-                    self.ephemeral_public_key.len(),
-                    Self::MAX_PUBLIC_KEY_BYTES
-                ),
-            });
-        }
-        match self.kem {
-            SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256 => {
-                validate_uploaded_model_x25519_public_key(
-                    "sora uploaded model wrapped key",
-                    "ephemeral_public_key",
-                    self.ephemeral_public_key.as_slice(),
-                )?;
-            }
-        }
-        if self.nonce.is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora uploaded model wrapped key",
-                field: "nonce",
-            });
-        }
-        if self.nonce.len() > Self::MAX_NONCE_BYTES {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model wrapped key",
-                field: "nonce",
-                reason: format!(
-                    "length {} exceeds max {} bytes",
-                    self.nonce.len(),
-                    Self::MAX_NONCE_BYTES
-                ),
-            });
-        }
-        if self.wrapped_key_ciphertext.is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora uploaded model wrapped key",
-                field: "wrapped_key_ciphertext",
-            });
-        }
-        if self.wrapped_key_ciphertext.len() > Self::MAX_WRAPPED_KEY_BYTES {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model wrapped key",
-                field: "wrapped_key_ciphertext",
-                reason: format!(
-                    "length {} exceeds max {} bytes",
-                    self.wrapped_key_ciphertext.len(),
-                    Self::MAX_WRAPPED_KEY_BYTES
-                ),
-            });
-        }
-        validate_soracloud_digest_hash(
-            "sora uploaded model wrapped key",
-            "ciphertext_hash",
-            self.ciphertext_hash,
-        )?;
-        validate_soracloud_digest_hash(
-            "sora uploaded model wrapped key",
-            "aad_digest",
-            self.aad_digest,
-        )?;
-        if Hash::new(self.wrapped_key_ciphertext.as_slice()) != self.ciphertext_hash {
-            return Err(invalid_field(
-                "sora uploaded model wrapped key",
-                "ciphertext_hash",
-                "must match the wrapped_key_ciphertext bytes",
-            ));
-        }
-        Ok(())
-    }
 }
 /// Bundle storage reference and metadata for a user-uploaded Soracloud model.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -2086,64 +2054,22 @@ pub struct SoraUploadedModelBundleV1 {
     pub modalities: Vec<String>,
     /// Deterministic commitment over the normalized plaintext upload bundle.
     pub plaintext_root: Hash,
-    /// Uploaded-model package format committed by this encrypted bundle.
+    /// Uploaded-model package format committed by this bundle.
     pub package_format: SoraUploadedModelPackageFormatV1,
     /// Canonical bundle root.
     pub bundle_root: Hash,
-    /// Approved active `SoraFS` manifest digest containing the encrypted model bundle.
+    /// Approved active `SoraFS` manifest digest containing the model bundle.
     pub sorafs_manifest_digest: ManifestDigest,
     /// Total chunk count in deterministic ordinal order.
     pub chunk_count: u32,
-    /// Total plaintext bytes before encryption.
+    /// Total normalized model bytes before transport encoding.
     pub plaintext_bytes: u64,
-    /// Total ciphertext bytes stored in the referenced `SoraFS` bundle.
+    /// Total stored bytes in the referenced `SoraFS` bundle.
     pub ciphertext_bytes: u64,
     /// Merkle root over the chunk manifest.
     pub chunk_manifest_root: Hash,
-    /// Soracloud upload-recipient metadata used to wrap the bundle key.
-    pub upload_recipient: SoraUploadedModelEncryptionRecipientV1,
-    /// Wrapped symmetric key used to decrypt the uploaded chunk set.
-    pub wrapped_bundle_key: SoraUploadedModelWrappedKeyV1,
     /// Pricing policy snapshot.
     pub pricing_policy: SoraUploadedModelPricingPolicyV1,
-    /// Reference to the decryption release policy.
-    pub decryption_policy_ref: String,
-}
-fn validate_uploaded_model_wrapped_key_matches_recipient(
-    recipient: &SoraUploadedModelEncryptionRecipientV1,
-    wrapped_key: &SoraUploadedModelWrappedKeyV1,
-) -> Result<(), SoracloudManifestError> {
-    for (field, matches, reason) in [
-        (
-            "wrapped_bundle_key.recipient_key_id",
-            recipient.key_id == wrapped_key.recipient_key_id,
-            "must match upload_recipient.key_id",
-        ),
-        (
-            "wrapped_bundle_key.recipient_key_version",
-            recipient.key_version == wrapped_key.recipient_key_version,
-            "must match upload_recipient.key_version",
-        ),
-        (
-            "wrapped_bundle_key.kem",
-            recipient.kem == wrapped_key.kem,
-            "must match upload_recipient.kem",
-        ),
-        (
-            "wrapped_bundle_key.aead",
-            recipient.aead == wrapped_key.aead,
-            "must match upload_recipient.aead",
-        ),
-    ] {
-        if !matches {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model bundle",
-                field,
-                reason: reason.to_string(),
-            });
-        }
-    }
-    Ok(())
 }
 impl SoraUploadedModelBundleV1 {
     /// Validate uploaded-model bundle metadata.
@@ -2156,14 +2082,17 @@ impl SoraUploadedModelBundleV1 {
             self.schema_version,
             SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
         )?;
-        for (field, value) in [
-            ("model_id", self.model_id.as_str()),
-            ("weight_version", self.weight_version.as_str()),
-            ("family", self.family.as_str()),
-            ("decryption_policy_ref", self.decryption_policy_ref.as_str()),
-        ] {
-            validate_nonempty_no_control("sora uploaded model bundle", field, value)?;
-        }
+        validate_uploaded_model_identifier(
+            "sora uploaded model bundle",
+            "model_id",
+            &self.model_id,
+        )?;
+        validate_uploaded_model_identifier(
+            "sora uploaded model bundle",
+            "weight_version",
+            &self.weight_version,
+        )?;
+        validate_nonempty_no_control("sora uploaded model bundle", "family", &self.family)?;
         if self.modalities.is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "sora uploaded model bundle",
@@ -2196,12 +2125,6 @@ impl SoraUploadedModelBundleV1 {
                 ));
             }
         }
-        self.upload_recipient.validate()?;
-        self.wrapped_bundle_key.validate()?;
-        validate_uploaded_model_wrapped_key_matches_recipient(
-            &self.upload_recipient,
-            &self.wrapped_bundle_key,
-        )?;
         for (field, hash) in [
             ("plaintext_root", self.plaintext_root),
             ("bundle_root", self.bundle_root),

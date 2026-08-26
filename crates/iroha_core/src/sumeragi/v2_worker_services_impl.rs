@@ -1,15 +1,58 @@
-/// Read-only worker/corridor snapshot for pending-Kura Apply diagnostics.
-#[cfg(test)]
-#[derive(Debug)]
+include!("v2_worker/pending_kura_apply_io_snapshot.rs");
+
+/// Read-only ownership census emitted only when the outer lifecycle runner
+/// has stopped reaching a non-empty fair-ingress queue.
+///
+/// This deliberately reports the private command FIFO and its shared
+/// admission counter together. Neither is represented by ordinary effect or
+/// completion status, so a pre-ledger lifecycle capacity wait would otherwise
+/// be indistinguishable from a stopped scheduler.
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
-pub(in crate::sumeragi) struct PendingKuraApplyIoSnapshotV1 {
+pub(in crate::sumeragi) struct LifecycleIoSchedulerSnapshotV1 {
+    queued_admissions: usize,
+    capacity_generation: u64,
+    capacity_generation_exhausted: bool,
+    auxiliary_limit: usize,
+    consensus_limit: usize,
+    physical_capacity: usize,
     queued_commands: usize,
+    queued_certified_serves: usize,
+    queued_command_kinds: LifecycleIoQueuedCommandKindsV1,
+    tracked_work: usize,
+    tracked_lifecycle_applies: usize,
+    tracked_recovered_signs: usize,
+    tracked_recovered_fetches: usize,
+    tracked_validates: usize,
+    tracked_certified_serves: usize,
     tracked_queued: usize,
     tracked_active: usize,
     tracked_completion_pending: usize,
     completion_owners: usize,
+    completion_capacity: usize,
+    completion_oldest_age: Option<Duration>,
+    completion_max_service_debt: u64,
     local_completions: usize,
     held_completion: bool,
+    sender_open: bool,
+    receiver_open: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+#[allow(dead_code)]
+struct LifecycleIoQueuedCommandKindsV1 {
+    signs: usize,
+    stores: usize,
+    certified_fetch_persists: usize,
+    recovered_fetch_persists: usize,
+    validates: usize,
+    applies: usize,
+    decision_applies: usize,
+    recovered_signs: usize,
+    certified_serves: usize,
+    candidate_loads: usize,
+    retires: usize,
+    shutdowns: usize,
 }
 
 impl ProductionV2Services {
@@ -1946,6 +1989,8 @@ impl ProductionV2Services {
             || !index_in_range
             || chunk.bytes.is_empty()
             || chunk_len > u64::from(self.context.da_layout.chunk_size_bytes)
+            || chunk.signature.is_empty()
+            || chunk.signature.len() > wire::MAX_CONSENSUS_SIGNATURE_BYTES
         {
             return OrphanPayloadChunkBufferResult::Disposition(PayloadChunkDisposition::Rejected);
         }
@@ -2539,13 +2584,51 @@ impl ProductionV2Services {
         let outcome = self.drain_completions_inner(executor, 1)?;
         self.require_no_unowned_lifecycle_completion(executor, outcome)
     }
+    /// Prepare one ordinary Completion head while a same-address Validate successor waits.
+    ///
+    /// The waiting successor remains the logical owner. This method only
+    /// restores an ordinary I/O head into the existing held slot (or observes
+    /// the already-selected local source), so the caller can use the normal
+    /// one-item pass-through drain. Dedicated lifecycle completions are never
+    /// transferred, acknowledged, or exposed while that successor is parked.
+    pub(in crate::sumeragi) fn prepare_ordinary_completion_behind_validate_fence(
+        &mut self,
+    ) -> Result<bool, String> {
+        if self.output_guard.restart_required() {
+            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+        }
+        if self.held_io_completion.is_none()
+            && self.next_completion_source == CompletionSource::Local
+            && !self.local_completions.is_empty()
+        {
+            return Ok(true);
+        }
+        if let Some(completion) = self.held_io_completion.as_ref() {
+            return Ok(!completion.is_dedicated_lifecycle_completion());
+        }
+        let Some(io) = self.io.as_ref() else {
+            return Ok(!self.local_completions.is_empty());
+        };
+        let completion = match io.try_recv_completion_unacknowledged() {
+            Ok(completion) => completion,
+            Err(_) => return Ok(!self.local_completions.is_empty()),
+        };
+        let ordinary = !completion.is_dedicated_lifecycle_completion();
+        assert!(
+            self.held_io_completion.is_none(),
+            "fence pass-through classification retains at most one I/O head"
+        );
+        self.held_io_completion = Some(completion);
+        Ok(ordinary)
+    }
     /// Take and classify the oldest Completion-lane owner in one operation.
     ///
-    /// This is the lifecycle driver's sole physical-head classifier. It does
-    /// not probe three mutually exclusive drains. A pending local completion,
-    /// or an ordinary I/O head, returns `PassThrough` without acknowledgement
-    /// or ownership-position removal. A recovered result transfers exactly its
-    /// dedicated guarded token and advances completion-source rotation once.
+    /// This is the lifecycle driver's sole ownership-transferring physical-head
+    /// classifier. It does not probe three mutually exclusive drains. A pending
+    /// local completion, or an ordinary I/O head, returns `PassThrough` without
+    /// acknowledgement or ownership-position removal. A recovered result
+    /// transfers exactly its dedicated guarded token and advances
+    /// completion-source rotation once.
     pub(in crate::sumeragi) fn take_next_lifecycle_completion(
         &mut self,
     ) -> Result<LifecycleCompletionTakeV1, String> {
@@ -3446,6 +3529,151 @@ impl ProductionV2Services {
         };
         drop(state);
         Some(snapshot)
+    }
+    /// Snapshot the otherwise private lifecycle I/O corridor without taking a
+    /// command or completion. This is used only by the rate-limited outer
+    /// scheduler-starvation diagnostic.
+    pub(in crate::sumeragi) fn lifecycle_io_scheduler_snapshot(
+        &self,
+    ) -> Option<LifecycleIoSchedulerSnapshotV1> {
+        let io = self.io.as_ref()?;
+        let state = io.command_tx.queue.lock();
+        let mut tracked_queued = 0usize;
+        let mut tracked_active = 0usize;
+        let mut tracked_completion_pending = 0usize;
+        for tracked_state in state
+            .work
+            .values()
+            .map(|tracked| tracked.state)
+            .chain(
+                state
+                    .lifecycle_decision_applies
+                    .values()
+                    .map(|tracked| tracked.state),
+            )
+            .chain(
+                state
+                    .recovered_lifecycle_signs
+                    .values()
+                    .map(|tracked| tracked.state),
+            )
+            .chain(
+                state
+                    .recovered_decision_fetch_bodies
+                    .values()
+                    .map(|tracked| tracked.state),
+            )
+            .chain(
+                state
+                    .lifecycle_validates
+                    .values()
+                    .map(|tracked| tracked.state),
+            )
+            .chain(
+                state
+                    .lifecycle_serves
+                    .values()
+                    .map(|tracked| tracked.state),
+            )
+        {
+            match tracked_state {
+                V2IoWorkState::Queued => {
+                    tracked_queued = tracked_queued.saturating_add(1);
+                }
+                V2IoWorkState::Active => {
+                    tracked_active = tracked_active.saturating_add(1);
+                }
+                V2IoWorkState::CompletionPending => {
+                    tracked_completion_pending =
+                        tracked_completion_pending.saturating_add(1);
+                }
+            }
+        }
+        let queued_admissions = io.admission.queued();
+        let capacity_generation = io.admission.lifecycle_capacity_generation();
+        let capacity_generation_exhausted = io
+            .admission
+            .lifecycle_capacity_generation_exhausted();
+        let queued_commands = state.commands.len();
+        let mut queued_command_kinds = LifecycleIoQueuedCommandKindsV1::default();
+        for command in &state.commands {
+            let count = match command {
+                V2IoCommand::Sign { .. } => &mut queued_command_kinds.signs,
+                V2IoCommand::Store(_) => &mut queued_command_kinds.stores,
+                V2IoCommand::PersistCertifiedFetchBody(_) => {
+                    &mut queued_command_kinds.certified_fetch_persists
+                }
+                V2IoCommand::PersistRecoveredDecisionFetchBody(_) => {
+                    &mut queued_command_kinds.recovered_fetch_persists
+                }
+                V2IoCommand::LifecycleValidate(_) => &mut queued_command_kinds.validates,
+                V2IoCommand::Apply(_) => &mut queued_command_kinds.applies,
+                V2IoCommand::LifecycleDecisionApply(_) => {
+                    &mut queued_command_kinds.decision_applies
+                }
+                V2IoCommand::RecoveredLifecycleSign(_) => {
+                    &mut queued_command_kinds.recovered_signs
+                }
+                #[cfg(test)]
+                V2IoCommand::LifecycleDecisionApplyFixture(_) => {
+                    &mut queued_command_kinds.decision_applies
+                }
+                V2IoCommand::LifecycleCertifiedServe(_) => {
+                    &mut queued_command_kinds.certified_serves
+                }
+                V2IoCommand::LoadCandidate { .. } => &mut queued_command_kinds.candidate_loads,
+                V2IoCommand::Retire(_) => &mut queued_command_kinds.retires,
+                V2IoCommand::Shutdown => &mut queued_command_kinds.shutdowns,
+            };
+            *count = count.saturating_add(1);
+        }
+        let queued_certified_serves = queued_command_kinds.certified_serves;
+        let tracked_work = state.work.len();
+        let tracked_lifecycle_applies = state.lifecycle_decision_applies.len();
+        let tracked_recovered_signs = state.recovered_lifecycle_signs.len();
+        let tracked_recovered_fetches = state.recovered_decision_fetch_bodies.len();
+        let tracked_validates = state.lifecycle_validates.len();
+        let tracked_certified_serves = state.lifecycle_serves.len();
+        let sender_open = state.sender_open;
+        let receiver_open = state.receiver_open;
+        drop(state);
+        let completion = io.admission.completion_snapshot(Instant::now());
+        Some(LifecycleIoSchedulerSnapshotV1 {
+            queued_admissions,
+            capacity_generation,
+            capacity_generation_exhausted,
+            auxiliary_limit: io.admission.auxiliary_limit,
+            consensus_limit: io.admission.consensus_limit,
+            physical_capacity: io.admission.capacity,
+            queued_commands,
+            queued_certified_serves,
+            queued_command_kinds,
+            tracked_work,
+            tracked_lifecycle_applies,
+            tracked_recovered_signs,
+            tracked_recovered_fetches,
+            tracked_validates,
+            tracked_certified_serves,
+            tracked_queued,
+            tracked_active,
+            tracked_completion_pending,
+            completion_owners: completion.depth,
+            completion_capacity: completion.capacity,
+            completion_oldest_age: completion.oldest_age,
+            completion_max_service_debt: completion.max_service_debt,
+            local_completions: self.local_completions.len(),
+            held_completion: self.held_io_completion.is_some(),
+            sender_open,
+            receiver_open,
+        })
+    }
+    /// Snapshot scalar exact-output ownership without exposing payloads,
+    /// semantic targets, reply capabilities, or process-local source keys.
+    pub(in crate::sumeragi) fn exact_output_scheduler_snapshot(
+        &self,
+    ) -> Option<ExactOutputSchedulerSnapshotV1> {
+        let pending = self.lock_pending_exact_output().ok()?;
+        Some(pending.scheduler_snapshot(self.exact_output_handoff_owner.is_sealed()))
     }
     /// Count accepted service calls carrying this exact canonical consensus envelope.
     #[cfg(test)]
@@ -5000,21 +5228,5 @@ impl ProductionV2Services {
     }
 }
 include!("v2_worker/current_lane_output_rollover_claim.rs");
-impl Drop for ProductionV2Services {
-    fn drop(&mut self) {
-        let restart_required = !self.clean_teardown;
-        if restart_required {
-            self.output_guard.close_admission_for_restart();
-        }
-        self.retire_held_io_completion();
-        if let Some(io) = self.io.take()
-            && let Err(error) = io.shutdown()
-        {
-            iroha_logger::error!(%error, "failed to stop Sumeragi v2 I/O worker");
-        }
-        if restart_required && !thread::panicking() {
-            self.output_guard.activate_restart_required();
-        }
-    }
-}
+include!("v2_worker/production_services_drop_impl.rs");
 include!("v2_worker/effect_services_impl.rs");

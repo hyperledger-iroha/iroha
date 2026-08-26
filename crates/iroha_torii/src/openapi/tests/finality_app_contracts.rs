@@ -730,8 +730,15 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
 fn generated_spec_documents_exact_soracloud_priority_contracts() {
     let document = canonical_document();
     let paths = document.get("paths").and_then(Value::as_object).expect("paths");
-    assert_eq!(paths.keys().filter(|path| path.starts_with("/v1/soracloud/")).count(), 55);
-    for retired_path in ["/v1/soracloud/agent/autonomy/run", "/v1/soracloud/agent/autonomy/run/finalize"] {
+    assert_eq!(paths.keys().filter(|path| path.starts_with("/v1/soracloud/")).count(), 51);
+    for retired_path in [
+        "/v1/soracloud/agent/autonomy/run",
+        "/v1/soracloud/agent/autonomy/run/finalize",
+        "/v1/soracloud/model-host/advertise",
+        "/v1/soracloud/model-host/heartbeat",
+        "/v1/soracloud/model-host/withdraw",
+        "/v1/soracloud/model-host/status",
+    ] {
         assert!(!paths.contains_key(retired_path), "retired generated-HF inference ingress `{retired_path}` must not be published");
     }
     for path in ["/v1/soracloud/deploy", "/v1/soracloud/upgrade"] {
@@ -750,18 +757,16 @@ fn generated_spec_documents_exact_soracloud_priority_contracts() {
     for phrase in ["configured_lane_count", "declared_lane_count", "active lane ids/count", "autoscale-capacity lane ids/count"] {
         assert!(status.contains(phrase));
     }
-    let deploy = openapi_operation(&document, "/v1/soracloud/hf/deploy", "post");
-    assert_eq!(operation_request_schema_ref(deploy, "/v1/soracloud/hf/deploy"), "#/components/schemas/SignedHfDeployRequest");
-    assert_eq!(operation_response_schema_ref(deploy, "200", "/v1/soracloud/hf/deploy"), "#/components/schemas/SoracloudMutationDraftResponse");
-    let headers = operation_parameters(deploy, "HF deploy");
+    let join = openapi_operation(&document, "/v1/soracloud/hf/lease/join", "post");
+    assert_eq!(operation_request_schema_ref(join, "/v1/soracloud/hf/lease/join"), "#/components/schemas/SignedHfSharedLeaseJoinRequest");
+    assert_eq!(operation_response_schema_ref(join, "200", "/v1/soracloud/hf/lease/join"), "#/components/schemas/SoracloudMutationDraftResponse");
+    let headers = operation_parameters(join, "HF shared-lease join");
     for name in contract_strings("hf.headers") {
-        assert!(headers.iter().any(|parameter| parameter.get("name").and_then(Value::as_str) == Some(name)), "HF deploy missing {name}");
+        assert!(headers.iter().any(|parameter| parameter.get("name").and_then(Value::as_str) == Some(name)), "HF shared-lease join missing {name}");
     }
-    assert_strict_object_schema(schemas, "SignedHfDeployRequest", &["payload", "provenance", "generated_service_provenance", "generated_apartment_provenance"], &[]);
-    assert_strict_object_schema(schemas, "HfDeployPayload", &["repo_id", "revision", "model_name", "service_name", "apartment_name", "storage_class", "lease_term_ms", "lease_asset_definition_id", "base_fee"], &[]);
-    assert_eq!(nullable_property_ref(schemas, "SignedHfDeployRequest", "generated_service_provenance"), "#/components/schemas/ManifestProvenance");
-    assert_eq!(nullable_property_ref(schemas, "SignedHfDeployRequest", "generated_apartment_provenance"), "#/components/schemas/ManifestProvenance");
-    let apartment_name = contract_property(schemas, "HfDeployPayload", "apartment_name").get("anyOf").and_then(Value::as_array).expect("HF apartment_name nullable union");
+    assert_strict_object_schema(schemas, "SignedHfSharedLeaseJoinRequest", &["payload", "provenance"], &[]);
+    assert_strict_object_schema(schemas, "HfSharedLeaseJoinPayload", &["repo_id", "revision", "service_name", "apartment_name", "storage_class", "lease_term_ms", "lease_asset_definition_id", "base_fee"], &[]);
+    let apartment_name = contract_property(schemas, "HfSharedLeaseJoinPayload", "apartment_name").get("anyOf").and_then(Value::as_array).expect("HF apartment_name nullable union");
     assert_eq!(apartment_name.len(), 2);
     assert_eq!(apartment_name[0].get("type").and_then(Value::as_str), Some("string"));
     assert_eq!(apartment_name[1].get("type").and_then(Value::as_str), Some("null"));
@@ -817,8 +822,8 @@ fn generated_spec_documents_exact_soracloud_priority_contracts() {
             "apartment_name",
             "sequence",
             "status",
-            "lease_expires_sequence",
-            "lease_remaining_ticks",
+            "lease_expires_height",
+            "lease_remaining_blocks",
             "manifest_hash",
             "revoked_policy_capability_count",
             "budget_ceiling_units",

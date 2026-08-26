@@ -20,9 +20,26 @@ from iroha_torii_client import (  # noqa: E402
     inspect_i105_network_prefix,
     verify_identifier_resolution_receipt,
 )
-from iroha_torii_client.client import _decode_i105_string  # noqa: E402
+from iroha_torii_client.client import (  # noqa: E402
+    _decode_canonical_i105_string,
+    _decode_i105_string,
+)
+from iroha_torii_client.identifier_receipts import _identifier_byte_vec  # noqa: E402
 
-CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+CANONICAL_OWNER = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
+CHECKSUM_VALID_ZERO_KEY_OWNER = (
+    "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+)
+
+
+def test_identifier_byte_vector_encoding_is_exact_for_every_byte_value() -> None:
+    payload = bytes(range(256))
+
+    encoded = _identifier_byte_vec(payload)
+
+    assert encoded[:8] == len(payload).to_bytes(8, "little")
+    assert encoded[8::2] == b"\x01" * len(payload)
+    assert encoded[9::2] == payload
 
 
 def test_offline_proof_backend_type_is_the_exact_closed_registry_v1() -> None:
@@ -84,6 +101,11 @@ def test_i105_decoder_rejects_out_of_range_numeric_discriminants() -> None:
     for literal in (f"n65536{payload}", f"n70000{payload}"):
         with pytest.raises(ValueError, match="unsigned 16-bit"):
             _decode_i105_string(literal)
+
+
+def test_canonical_i105_decoder_rejects_checksum_valid_malformed_controller() -> None:
+    with pytest.raises(ValueError, match="invalid public-key material"):
+        _decode_canonical_i105_string(CHECKSUM_VALID_ZERO_KEY_OWNER)
 
 
 @pytest.mark.parametrize(

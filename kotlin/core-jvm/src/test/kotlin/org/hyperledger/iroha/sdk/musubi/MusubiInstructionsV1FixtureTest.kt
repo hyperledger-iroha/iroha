@@ -417,11 +417,18 @@ class MusubiInstructionsV1FixtureTest {
         val encoded = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
             .encodeTransaction(transaction)
         val transactionDecoder = canonicalDecoder(encoded)
-        readField(transactionDecoder, "domain")
+        readField(transactionDecoder, "network_id")
         readField(transactionDecoder, "authority")
         readField(transactionDecoder, "creation_time_ms")
         val executablePayload = readField(transactionDecoder, "executable")
-        repeat(5) { index -> readField(transactionDecoder, "tail[$index]") }
+        listOf(
+            "time_to_live_ms",
+            "nonce",
+            "fee_payment",
+            "admission_intent",
+            "metadata",
+            "attachments",
+        ).forEach { field -> readField(transactionDecoder, field) }
         assertEquals(0, transactionDecoder.remaining())
 
         val executableDecoder = canonicalDecoder(executablePayload)
@@ -1739,7 +1746,7 @@ class MusubiInstructionsV1FixtureTest {
     }
 
     private fun canonicalDecoder(payload: ByteArray): NoritoDecoder =
-        NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS)
 
     private fun readField(decoder: NoritoDecoder, field: String): ByteArray {
         val length = decoder.readLength(decoder.compactLenActive())

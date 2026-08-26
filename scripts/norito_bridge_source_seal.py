@@ -547,7 +547,23 @@ def listed_files(
         if source.is_file():
             listed.add(relative)
 
-    return sorted(listed)
+    present = []
+    for relative in listed:
+        source = lockfile if relative == "Cargo.lock" else root / relative
+        try:
+            source.lstat()
+        except FileNotFoundError:
+            # `git ls-files --cached` includes intentionally deleted tracked
+            # files. Their absence is authenticated by the source status and
+            # by their removal from this byte inventory.
+            continue
+        except OSError as error:
+            raise RuntimeError(
+                f"failed to inspect source-seal input: {relative}"
+            ) from error
+        present.append(relative)
+
+    return sorted(present)
 
 
 def _swift_native_bridge_hash_block(

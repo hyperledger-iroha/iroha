@@ -3484,7 +3484,7 @@ def test_call_contract_and_wait_rejects_retired_chain_id_before_dispatch() -> No
     assert session.calls == []
 
 
-def test_mint_assets_and_wait_batches_records_in_one_transaction() -> None:
+def test_mint_assets_quantity_and_wait_batches_records_in_one_transaction() -> None:
     client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
     captured: dict[str, object] = {}
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
@@ -3498,7 +3498,7 @@ def test_mint_assets_and_wait_batches_records_in_one_transaction() -> None:
 
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
-    result = client.mint_assets_and_wait(
+    result = client.mint_assets_quantity_and_wait(
         authority="authority@is",
         fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
@@ -3541,7 +3541,7 @@ def test_transaction_draft_rejects_retired_chain_and_padded_authority_before_sig
         )
 
 
-def test_transfer_assets_and_wait_batches_records_in_one_transaction() -> None:
+def test_transfer_assets_quantity_and_wait_batches_records_in_one_transaction() -> None:
     client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
     captured: dict[str, object] = {}
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
@@ -3556,7 +3556,7 @@ def test_transfer_assets_and_wait_batches_records_in_one_transaction() -> None:
 
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
-    result = client.transfer_assets_and_wait(
+    result = client.transfer_assets_quantity_and_wait(
         authority="source@is",
         fee_payment=FEE_PAYMENT,
         private_key_hex="22" * 32,
@@ -3683,7 +3683,7 @@ def test_transfer_helper_normalizes_configured_chain_discriminant_for_transactio
 
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
-    assert client.transfer_asset_and_wait(
+    assert client.transfer_asset_quantity_and_wait(
         authority=source,
         fee_payment=FEE_PAYMENT,
         private_key_hex="22" * 32,
@@ -3721,7 +3721,7 @@ def test_transfer_helper_normalizes_scoped_asset_id_account_segment() -> None:
 
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
-    assert client.transfer_asset_and_wait(
+    assert client.transfer_asset_quantity_and_wait(
         authority=source,
         fee_payment=FEE_PAYMENT,
         private_key_hex="23" * 32,
@@ -4005,55 +4005,55 @@ def test_verify_proof_client_helper_rejects_non_mapping_before_submission() -> N
     ("method_name", "kwargs", "error_type", "match"),
     [
         (
-            "mint_assets_and_wait",
+            "mint_assets_quantity_and_wait",
             {"mints": []},
             ValueError,
             "at least one mint record",
         ),
         (
-            "mint_assets_and_wait",
+            "mint_assets_quantity_and_wait",
             {"mints": [object()]},
             TypeError,
             r"mints\[0\] must be a mapping",
         ),
         (
-            "mint_assets_and_wait",
+            "mint_assets_quantity_and_wait",
             {"mints": [{"quantity": "1"}]},
             TypeError,
             r"mints\[0\]\.asset_id",
         ),
         (
-            "mint_assets_and_wait",
+            "mint_assets_quantity_and_wait",
             {"mints": [{"asset_id": "asset#account"}]},
             TypeError,
             r"mints\[0\]\.quantity is required",
         ),
         (
-            "transfer_assets_and_wait",
+            "transfer_assets_quantity_and_wait",
             {"transfers": []},
             ValueError,
             "at least one transfer record",
         ),
         (
-            "transfer_assets_and_wait",
+            "transfer_assets_quantity_and_wait",
             {"transfers": [object()]},
             TypeError,
             r"transfers\[0\] must be a mapping",
         ),
         (
-            "transfer_assets_and_wait",
+            "transfer_assets_quantity_and_wait",
             {"transfers": [{"quantity": "1", "destination": account_address(0x45)}]},
             TypeError,
             r"transfers\[0\]\.asset_id",
         ),
         (
-            "transfer_assets_and_wait",
+            "transfer_assets_quantity_and_wait",
             {"transfers": [{"asset_id": f'asset#{account_address(0x46)}', "quantity": "1"}]},
             TypeError,
             r"transfers\[0\]\.destination",
         ),
         (
-            "transfer_assets_and_wait",
+            "transfer_assets_quantity_and_wait",
             {
                 "transfers": [
                     {

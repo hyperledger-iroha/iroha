@@ -133,7 +133,9 @@ is reused by Rust, Python, JavaScript, and Swift; CI enforces parity via
 ## Pipeline Submission & Polling
 
 - `submitAndWait` performs `POST /v1/pipeline/transactions` and polls
-  `/v1/pipeline/transactions/status` until the transaction reaches a terminal state.
+  `/v1/pipeline/transactions/status` until the transaction reaches authoritative finality.
+- The primary binary submitter validates one canonical V1 versioned signed transaction before
+  network access and accepts only HTTP `202` as admission success.
 - A `404` from `/v1/pipeline/transactions/status` means Torii has no cached status yet
   (for example after a restart); the Swift SDK treats this as "pending" and keeps polling.
 - `pollPipelineStatus` monitors a hash that may have been submitted by another SDK or CLI.
@@ -660,12 +662,12 @@ For higher-level walkthroughs, see:
   "-created_at"])` to render standard `sort` clauses—the helpers take care of encoding and
   offset bookkeeping.
 - **Contracts:** register/deploy/fetch manifest/code bytes.
-- **Pipeline:** `submitTransaction` (Norito envelopes, returns the submission receipt payload, and
+- **Pipeline:** `submitTransaction` (exact V1 Norito envelopes, HTTP `202` only, returns the submission receipt payload, and
   enforces `data_model_version` from `/v1/node/capabilities` with
-  `ToriiClientError.incompatibleDataModel` on mismatch), `getTransactionStatus`, and recovery
+  `ToriiClientError.dataModelMismatch` on mismatch), `getTransactionStatus`, and recovery
   snapshots via `getPipelineRecovery(height:)`.
 - **Network time:** `getTimeNow` for `/v1/time/now` snapshots.
-- **Zero-knowledge:** prover reports/attachments list/count/delete operations and verifying key registry read/event helpers (`getVerifyingKey`, `listVerifyingKeys`, `streamVerifyingKeyEvents`).
+- **Zero-knowledge:** attachment operations and verifying key registry read/event helpers (`getVerifyingKey`, `listVerifyingKeys`, `streamVerifyingKeyEvents`).
 - **Confidential assets:** derive the wallet key hierarchy locally through `deriveConfidentialKeyset`, build memo envelopes with
   `ConfidentialEncryptedPayload`, use the proof-bound Kagemusha public-to-confidential
   top-up flow through `prepareKagemushaTopUpShield` and `submitKagemushaTopUp`,
@@ -682,15 +684,19 @@ For higher-level walkthroughs, see:
   `getRuntimeAbiHash`, `listRuntimeUpgrades`, and the helper trio
   (`proposeRuntimeUpgrade`, `activateRuntimeUpgrade`, `cancelRuntimeUpgrade`) mirroring the
   `/v1/node/capabilities` and `/v1/runtime/*` surfaces with typed instruction bundles.
-- **Governance:** draft deployment proposals (`submitGovernanceDeployContractProposal`),
-  submit plain/ZK ballots, finalize or enact referenda, and fetch proposal/lock/tally/lock-stat
-  snapshots via the typed helpers. Responses that include `tx_instructions` can be fed
-  directly into `TxBuilder` to produce signed transactions.
+- **Governance:** draft typed V1 deployment proposals
+  (`submitGovernanceDeployContractProposal`), submit standalone plain/ZK
+  ballots, fetch proposal/lock/tally snapshots, and inspect certificate-driven
+  Parliament attempts. Deployment drafts bind typed 32-byte code/ABI hashes,
+  numeric ABI version `1`, and optional manifest provenance; there are no
+  proposal window/mode controls. V1 exposes no client finalize or enact path:
+  Core creates the final certificate and executes its effect at the exact
+  derived enactment height.
 
 > **Roadmap ADDR-5a:** Account-aware helpers (`getAssets`, `getTransactions`, and the matching `IrohaSDK` wrappers) accept canonical I105 account literals and percent-encode `/v1/accounts/{account_id}/…` paths automatically.
 
-Upcoming work (tracked under IOS3) includes governance endpoints, additional query
-builders, and WebSocket/SSE subscribers shared with Android/JS.
+Upcoming work (tracked under IOS3) includes additional query builders and
+WebSocket/SSE subscribers shared with Android/JS.
 
 ### Rendering account addresses
 

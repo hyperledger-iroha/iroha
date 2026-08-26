@@ -25,7 +25,7 @@ integration:
   - Kotlin/Android SDK modules are included and publishable; when Android
     outputs are required, raw cargo-ndk and generated stripped libraries match
     embedded provenance, and generated/AAR bytes are identical while binding
-    the exact ABI-22 feature state.
+    the exact ABI-23 feature state.
 
 By default Android build outputs are not required. Pass --require-built-android
 or set MOBILE_SDK_REQUIRE_ANDROID_OUTPUTS=1 to require jar/aar outputs too.
@@ -43,6 +43,8 @@ Source authentication requires Python 3.12, exact Rust 1.93.1 RUSTC/RUSTDOC,
 and an explicit canonical writable CARGO_TARGET_DIR outside the Iroha source
 tree. The reviewed envelope uses CARGO_BUILD_JOBS=1, CARGO_INCREMENTAL=0,
 CARGO_NET_OFFLINE=true, and RUSTC_BOOTSTRAP=1.
+MOBILE_SDK_RUSTUP_BINARY may select an absolute canonical, non-symbolic rustup
+executable when the canonical home-local proxy is unavailable.
 The builder alone may set MOBILE_SDK_STAGED_BUILD_VALIDATION=1 together with a
 private prospective-loader path. Final certification always checks the tracked
 Swift loader.
@@ -274,13 +276,32 @@ SOURCE_SEAL_RUSTUP_BINARY=""
 SOURCE_SEAL_CARGO_HOME="$CHECK_USER_HOME_DIR/.cargo"
 SOURCE_SEAL_RUSTUP_HOME="$CHECK_USER_HOME_DIR/.rustup"
 SOURCE_SEAL_CARGO_TARGET_DIR=""
+CHECK_RUSTUP_OVERRIDE=""
+
+if [[ -n "${MOBILE_SDK_RUSTUP_BINARY+x}" ]]; then
+  CHECK_RUSTUP_OVERRIDE="$MOBILE_SDK_RUSTUP_BINARY"
+  if [[ -z "$CHECK_RUSTUP_OVERRIDE" || "$CHECK_RUSTUP_OVERRIDE" != /* ]] \
+    || ! canonical_rustup_binary="$(run_isolated_checker_python -c \
+      'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+      "$CHECK_RUSTUP_OVERRIDE")" \
+    || [[ "$canonical_rustup_binary" != "$CHECK_RUSTUP_OVERRIDE" ]] \
+    || [[ ! -f "$CHECK_RUSTUP_OVERRIDE" || -L "$CHECK_RUSTUP_OVERRIDE" \
+      || ! -x "$CHECK_RUSTUP_OVERRIDE" ]]; then
+    echo "[mobile-sdk-artifacts] ERROR: MOBILE_SDK_RUSTUP_BINARY must be an absolute canonical non-symbolic executable" >&2
+    exit 69
+  fi
+fi
 
 initialize_source_seal_tools() {
   local actual_toolchain
   if [[ "$SOURCE_SEAL_TOOLS_INITIALIZED" == "1" ]]; then
     return
   fi
-  SOURCE_SEAL_RUSTUP_BINARY="$CHECK_USER_HOME_DIR/.cargo/bin/rustup"
+  if [[ -n "${MOBILE_SDK_RUSTUP_BINARY+x}" ]]; then
+    SOURCE_SEAL_RUSTUP_BINARY="$CHECK_RUSTUP_OVERRIDE"
+  else
+    SOURCE_SEAL_RUSTUP_BINARY="$CHECK_USER_HOME_DIR/.cargo/bin/rustup"
+  fi
   if [[ ! -f "$SOURCE_SEAL_RUSTUP_BINARY" || -L "$SOURCE_SEAL_RUSTUP_BINARY" \
     || ! -x "$SOURCE_SEAL_RUSTUP_BINARY" || ! -x /usr/bin/git ]]; then
     echo "[mobile-sdk-artifacts] ERROR: pinned rustup and Git are required for source authentication" >&2
@@ -470,7 +491,7 @@ KAGEMUSHA_CANDIDATE_LAB_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeRedeemV4
 )
 
-# The first mobile release is one exact ABI-22/V4 contract. Keep the complete
+# The first mobile release is one exact ABI-23/V4 contract. Keep the complete
 # Kagemusha C export allow-list here so Apple archives, Android shared objects,
 # checked-out Rust, and the checked-in header are all compared against the same
 # surface. V2 suffixes below are unchanged note, authorization, membership, and
@@ -538,6 +559,12 @@ PRIVACY_COMPILED_PROFILE_C_SYMBOLS=(
   iroha_privacy_free_buffer
 )
 
+PARLIAMENT_TIMED_OVN_C_SYMBOLS=(
+  connect_norito_parliament_timed_ovn_verify_casting_proof_v1
+  connect_norito_parliament_timed_ovn_registration_from_proof_v1
+  connect_norito_parliament_timed_ovn_ballot_from_proof_v1
+)
+
 REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_bridge_abi_version
   connect_norito_free
@@ -550,6 +577,7 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_canonical_json_blake3_v1
   connect_norito_encode_account_onboarding_plan_body_v1
   connect_norito_alias_instruction_round_trip_v1
+  "${PARLIAMENT_TIMED_OVN_C_SYMBOLS[@]}"
   "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}"
   connect_norito_sorafs_reference_validate_bundle_json
   connect_norito_sorafs_reference_validate_governance_json
@@ -640,6 +668,13 @@ VALIDATION_FEE_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeBridgeAbiVersion
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeEncodeCurrentPolicyProofRequestV1
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeVerifyCurrentPolicyProofV1
+)
+
+PARLIAMENT_TIMED_OVN_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofV1
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeRegistrationFromProofV1
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBallotFromProofV1
 )
 
 SORAFS_APPEAL_FINANCE_JNI_SYMBOLS=(
@@ -1598,11 +1633,11 @@ non_single_shipping = sorted(
 if (
     len(abi_aliases) != 1
     or abi_aliases[0].group(1).strip() != "PRIVACY_BRIDGE_ABI_VERSION_V1"
-    or header_abis != ["22"]
+    or header_abis != ["23"]
     or protocol_abis != header_abis
 ):
     errors.append(
-        "bridge ABI must be exact public-header 22 with the canonical Rust alias "
+        "bridge ABI must be exact public-header 23 with the canonical Rust alias "
         "and privacy protocol constant"
     )
 missing = sorted(expected - actual)
@@ -1881,7 +1916,7 @@ for label, actual, expected in inventories:
     retired_or_extra = sorted(actual - expected)
     if missing or retired_or_extra:
         errors.append(
-            f"Swift Kagemusha {label} inventory is not exact ABI-22/V4 "
+            f"Swift Kagemusha {label} inventory is not exact ABI-23/V4 "
             f"(missing={missing}, retired_or_unexpected={retired_or_extra})"
         )
 if re.search(r"\bpublic\s+(?:struct|enum|class|typealias|protocol)\s+[A-Za-z0-9_]*V3\b", text):
@@ -2003,7 +2038,7 @@ for path in paths:
         retired_or_extra = sorted(actual - expected)
         if missing or retired_or_extra:
             errors.append(
-                f"{path}: {label} inventory is not exact ABI-22/V4 "
+                f"{path}: {label} inventory is not exact ABI-23/V4 "
                 f"(missing={missing}, retired_or_unexpected={retired_or_extra})"
             )
     if re.search(r"\b(?:data\s+class|class|interface|record|enum)\s+[A-Za-z0-9_]*V3\b", text):
@@ -2509,7 +2544,7 @@ PY
       fi
     done
 
-    require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*22([[:space:]]*[,}])' "exact first-release NoritoBridge ABI 22"
+    require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*23([[:space:]]*[,}])' "exact first-release NoritoBridge ABI 23"
     require_regex "$manifest" '"source_commit"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{40}"' "NoritoBridge source commit"
     require_regex "$manifest" '"source_tree_dirty"[[:space:]]*:[[:space:]]*(true|false)' "NoritoBridge source dirty state"
     require_regex "$manifest" '"source_fingerprint_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge source fingerprint"
@@ -2632,7 +2667,7 @@ protocol_abis = re.findall(
     re.MULTILINE,
 )
 if (
-    header_abis != ["22"]
+    header_abis != ["23"]
     or bridge_aliases != ["PRIVACY_BRIDGE_ABI_VERSION_V1"]
     or protocol_abis != header_abis
 ):
@@ -2641,8 +2676,8 @@ print(header_abis[0])
 PY
 )" || source_abi=""
       manifest_abi="$(manifest_json_value "$manifest" native_bridge_abi_version 2>/dev/null || true)"
-      if [[ "$source_abi" != "22" || "$manifest_abi" != "22" ]]; then
-        fail "NoritoBridge artifact ABI must match exact public-header 22, canonical Rust alias, and privacy protocol constant"
+      if [[ "$source_abi" != "23" || "$manifest_abi" != "23" ]]; then
+        fail "NoritoBridge artifact ABI must match exact public-header 23, canonical Rust alias, and privacy protocol constant"
       fi
       manifest_commit="$(manifest_json_value "$manifest" source_commit 2>/dev/null || true)"
       source_relationship="$(
@@ -2804,6 +2839,7 @@ check_android_native_symbols() {
   local namespace
   local expected_jni=(
     "${VALIDATION_FEE_JNI_SYMBOLS[@]}"
+    "${PARLIAMENT_TIMED_OVN_JNI_SYMBOLS[@]}"
     "${SORAFS_APPEAL_FINANCE_JNI_SYMBOLS[@]}"
     "${PRIVACY_COMPILED_PROFILE_JNI_SYMBOLS[@]}"
     "${NATIVE_SIGNER_JNI_CONTRACT_SYMBOLS[@]}"
@@ -2837,6 +2873,7 @@ check_android_native_symbols() {
   done
   if ! run_isolated_checker_python - "$abi" \
     "${KAGEMUSHA_C_SYMBOLS[@]}" \
+    "${PARLIAMENT_TIMED_OVN_C_SYMBOLS[@]}" \
     "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}" \
     "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}" \
     -- "${expected_jni[@]}" 3<<<"$symbols" <<'PY'
@@ -2873,7 +2910,7 @@ retired_or_extra = sorted(actual - expected)
 if missing:
     print(
         f"[mobile-sdk-artifacts] ERROR: client-android {abi} bridge is missing "
-        "ABI22/V4 symbols: " + ", ".join(missing),
+        "ABI23/V4 symbols: " + ", ".join(missing),
         file=sys.stderr,
     )
 if retired_or_extra:
@@ -3139,8 +3176,8 @@ with archive:
         )
     if manifest["schema"] != "iroha.android-native-build-provenance.v1":
         fail("client-android native provenance schema is not v1")
-    if type(manifest["native_bridge_abi_version"]) is not int or manifest["native_bridge_abi_version"] != 22:
-        fail("client-android native provenance does not bind exact ABI 22")
+    if type(manifest["native_bridge_abi_version"]) is not int or manifest["native_bridge_abi_version"] != 23:
+        fail("client-android native provenance does not bind exact ABI 23")
     if manifest["build_profile"] != "release" or manifest["cargo_locked"] is not True:
         fail("client-android native provenance must bind a locked Cargo release build")
     production = manifest["privacy_production_enabled"]

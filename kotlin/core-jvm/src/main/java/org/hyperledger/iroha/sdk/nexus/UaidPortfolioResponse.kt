@@ -20,8 +20,8 @@ class UaidPortfolioResponse(
         @JvmField val positions: Long,
     ) {
         init {
-            require(accounts >= 0) { "accounts must be non-negative" }
-            require(positions >= 0) { "positions must be non-negative" }
+            require(accounts >= 0L) { "accounts must be non-negative" }
+            require(positions >= 0L) { "positions must be non-negative" }
         }
     }
 

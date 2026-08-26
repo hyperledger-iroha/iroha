@@ -3076,7 +3076,9 @@ pub(crate) struct V2LaneWorkAdapter {
     queue_plan_admission_handoff_cursor: usize,
     merge_entries: BTreeMap<MergeKey, PendingMerge>,
     merge_claims: BTreeMap<(u64, u64, wire::ValidatorIndex), Hash>,
-    merge_signing_guard: MergeSigningGuard,
+    /// Durable local merge-signing authority. Non-voting adapters never open
+    /// or mutate this namespace.
+    merge_signing_guard: Option<MergeSigningGuard>,
     merge_sidecars: MergeSidecarTransport,
     /// Lazily verified requester identities from the exact durable
     /// predecessor context. Historical serving may authenticate an older
@@ -3654,17 +3656,23 @@ impl V2LaneWorkAdapter {
         {
             return Err(V2LaneWorkError::ExecutionPolicyMismatch);
         }
-        let committed_merge_epoch = state
-            .merge_ledger()
-            .latest()
-            .map_or(0, |entry| entry.epoch_id);
-        let merge_signing_guard = MergeSigningGuard::open_with_committed_frontier(
-            &kura.store_root(),
-            committed_merge_epoch,
-            state_height,
-            limits.merge_signing_guard_limits,
-        )
-        .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
+        let merge_signing_guard = if voting_enabled {
+            let committed_merge_epoch = state
+                .merge_ledger()
+                .latest()
+                .map_or(0, |entry| entry.epoch_id);
+            Some(
+                MergeSigningGuard::open_with_committed_frontier(
+                    &kura.store_root(),
+                    committed_merge_epoch,
+                    state_height,
+                    limits.merge_signing_guard_limits,
+                )
+                .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?,
+            )
+        } else {
+            None
+        };
         let native_signing_guard = if voting_enabled
             && local_peer.public_key().try_algorithm().ok() == Some(Algorithm::BlsNormal)
         {
@@ -3830,11 +3838,17 @@ impl V2LaneWorkAdapter {
         } else {
             adapter.context.height.saturating_sub(1)
         };
-        adapter
-            .kura
-            .prune_finalized_pending_certified_merge_entries(finalized_cleanup_height)
-            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
-        adapter.ensure_globally_applied_lane_receipts_durable()?;
+        if adapter.kura.emergency_fast_startup_enabled() {
+            iroha_logger::warn!(
+                "emergency Fast startup deferred pending-merge cleanup and lane receipt repair checks until a Strict restart"
+            );
+        } else {
+            adapter
+                .kura
+                .prune_finalized_pending_certified_merge_entries(finalized_cleanup_height)
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+            adapter.ensure_globally_applied_lane_receipts_durable()?;
+        }
         construction.complete();
         Ok(adapter)
     }
@@ -7465,12 +7479,9 @@ impl V2LaneWorkAdapter {
         let autonomous_payload = session.prepare_qc.payload_availability_qc.is_some();
         let (recovered_payload, autonomous_epoch) = if autonomous_payload {
             let proposal_height = session.proposal.descriptor.proposal_height;
-            let expected_epoch = if proposal_height == self.context.height {
-                self.context.epoch
-            } else {
-                let world = self.state.world_view();
-                crate::sumeragi::epoch_for_height_from_world(&world, proposal_height)
-            };
+            let expected_epoch = self
+                .epoch_for_proposal_height(proposal_height)
+                .map_err(V2LaneWorkError::InvalidContext)?;
             let recovered = match self.kura.recover_autonomous_lane_block_payload(
                 &session.proposal,
                 self.native_network_id(),
@@ -7914,9 +7925,15 @@ impl V2LaneWorkAdapter {
                 proposal_from_ownership(ownership, block.hash()).as_ref() == Some(proposal)
             })
             .count();
-        let expected_epoch = {
+        let Ok(expected_epoch) = ({
             let world = self.state.world_view();
-            crate::sumeragi::epoch_for_height_from_world(&world, hint.proposal_height)
+            crate::sumeragi::epoch_for_height_from_world(
+                &world,
+                hint.proposal_height,
+                self.context.mode,
+            )
+        }) else {
+            return false;
         };
         for envelope in &bundle.autonomous_lane_payloads {
             let Ok(payload) = decode_autonomous_lane_payload_envelope(
@@ -8613,7 +8630,7 @@ impl V2LaneWorkAdapter {
         prepare_qc: &LaneBlockQcV1,
     ) -> Result<(), String> {
         let network_id = self.native_network_id();
-        let epoch = self.epoch_for_proposal_height(proposal.descriptor.proposal_height);
+        let epoch = self.epoch_for_proposal_height(proposal.descriptor.proposal_height)?;
         let existing = self
             .kura
             .read_autonomous_lane_block_artifact(
@@ -8680,7 +8697,9 @@ impl V2LaneWorkAdapter {
         active_view: wire::View,
     ) -> V2LaneIngressOutcome {
         let proposal_height = payload.origin_proposal.descriptor.proposal_height;
-        let expected_epoch = self.epoch_for_proposal_height(proposal_height);
+        let Ok(expected_epoch) = self.epoch_for_proposal_height(proposal_height) else {
+            return V2LaneIngressOutcome::Rejected;
+        };
         if sender != Some(&payload.producer)
             || payload
                 .validate(self.native_network_id(), expected_epoch)
@@ -9537,9 +9556,15 @@ impl V2LaneWorkAdapter {
                     return V2LaneIngressOutcome::Rejected;
                 }
                 let descriptor = &session.proposal.descriptor;
-                let expected_epoch = {
+                let Ok(expected_epoch) = ({
                     let world = self.state.world_view();
-                    crate::sumeragi::epoch_for_height_from_world(&world, descriptor.proposal_height)
+                    crate::sumeragi::epoch_for_height_from_world(
+                        &world,
+                        descriptor.proposal_height,
+                        self.context.mode,
+                    )
+                }) else {
+                    return V2LaneIngressOutcome::Rejected;
                 };
                 let certified = match self.kura.read_certified_lane_block_artifact(
                     descriptor.lane_id,
@@ -9793,9 +9818,15 @@ impl V2LaneWorkAdapter {
                 let Some(availability) = prepare_qc.payload_availability_qc.as_ref() else {
                     return V2LaneIngressOutcome::Rejected;
                 };
-                let expected_epoch = {
+                let Ok(expected_epoch) = ({
                     let world = self.state.world_view();
-                    crate::sumeragi::epoch_for_height_from_world(&world, descriptor.proposal_height)
+                    crate::sumeragi::epoch_for_height_from_world(
+                        &world,
+                        descriptor.proposal_height,
+                        self.context.mode,
+                    )
+                }) else {
+                    return V2LaneIngressOutcome::Rejected;
                 };
                 if prepare_qc != certificate.prepare_qc
                     || commit_qc != certificate.commit_qc
@@ -10065,7 +10096,7 @@ impl V2LaneWorkAdapter {
                 }
                 if let Err(error) = self
                     .state
-                    .validate_certified_merge_entry_for_global_order(&entry)
+                    .validate_certified_merge_entry_for_global_order(&entry, self.context.mode)
                 {
                     return Ok(MergeSidecarDeferralDisposition::Rejected(error.to_string()));
                 }
@@ -11925,7 +11956,7 @@ impl V2LaneWorkAdapter {
         }
         if let Err(error) = self
             .state
-            .validate_certified_merge_entry_for_global_order(&entry)
+            .validate_certified_merge_entry_for_global_order(&entry, self.context.mode)
         {
             let active_requests = self.merge_sidecars.active_request_hashes();
             let affected = self
@@ -12337,18 +12368,40 @@ impl V2LaneWorkAdapter {
             {
                 continue;
             }
-            let Some(vote) = self.sign_lane_vote(&proposal, CertPhase::Prepare) else {
-                continue;
+            let vote = match self.sign_lane_vote(&proposal, CertPhase::Prepare) {
+                Ok(Some(vote)) => vote,
+                Ok(None) => continue,
+                Err(error) => {
+                    iroha_logger::error!(
+                        %error,
+                        height = self.context.height,
+                        lane = %proposal.descriptor.lane_id.as_u32(),
+                        lane_block_height = proposal.descriptor.lane_block_height,
+                        "durably authorized local lane Prepare vote failed closed"
+                    );
+                    self.output_guard.close_admission_for_restart();
+                    return;
+                }
             };
-            if self
+            match self
                 .lane_sessions
                 .insert_vote(vote.clone(), Some(&self.local_peer))
-                .is_ok()
             {
-                self.fanout_lane_message(
+                Ok(_) => self.fanout_lane_message(
                     BlockMessage::LaneBlockVote(vote),
                     &proposal.descriptor.validator_set,
-                );
+                ),
+                Err(error) => {
+                    iroha_logger::error!(
+                        %error,
+                        height = self.context.height,
+                        lane = %proposal.descriptor.lane_id.as_u32(),
+                        lane_block_height = proposal.descriptor.lane_block_height,
+                        "locally constructed lane Prepare vote was rejected"
+                    );
+                    self.output_guard.close_admission_for_restart();
+                    return;
+                }
             }
         }
         let commit_requests = self
@@ -12379,18 +12432,40 @@ impl V2LaneWorkAdapter {
                 self.output_guard.close_admission_for_restart();
                 return;
             }
-            let Some(vote) = self.sign_lane_vote(&request.proposal, CertPhase::Commit) else {
-                continue;
+            let vote = match self.sign_lane_vote(&request.proposal, CertPhase::Commit) {
+                Ok(Some(vote)) => vote,
+                Ok(None) => continue,
+                Err(error) => {
+                    iroha_logger::error!(
+                        %error,
+                        height = self.context.height,
+                        lane = %request.proposal.descriptor.lane_id.as_u32(),
+                        lane_block_height = request.proposal.descriptor.lane_block_height,
+                        "durably authorized local lane Commit vote failed closed"
+                    );
+                    self.output_guard.close_admission_for_restart();
+                    return;
+                }
             };
-            if self
+            match self
                 .lane_sessions
                 .insert_vote(vote.clone(), Some(&self.local_peer))
-                .is_ok()
             {
-                self.fanout_lane_message(
+                Ok(_) => self.fanout_lane_message(
                     BlockMessage::LaneBlockVote(vote),
                     &request.proposal.descriptor.validator_set,
-                );
+                ),
+                Err(error) => {
+                    iroha_logger::error!(
+                        %error,
+                        height = self.context.height,
+                        lane = %request.proposal.descriptor.lane_id.as_u32(),
+                        lane_block_height = request.proposal.descriptor.lane_block_height,
+                        "locally constructed lane Commit vote was rejected"
+                    );
+                    self.output_guard.close_admission_for_restart();
+                    return;
+                }
             }
         }
         let admissible_qcs = self
@@ -12428,12 +12503,12 @@ impl V2LaneWorkAdapter {
         &mut self,
         proposal: &LaneBlockProposalV1,
         phase: CertPhase,
-    ) -> Option<LaneBlockVoteV1> {
+    ) -> Result<Option<LaneBlockVoteV1>, V2LaneWorkError> {
         if !self.proposal_predecessor_is_ready_for_progress(proposal)
             || !self.voting_enabled
             || self.local_peer.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal)
         {
-            return None;
+            return Ok(None);
         }
         let body = proposal.vote_body(phase);
         let payload_availability_vote = if phase == CertPhase::Prepare {
@@ -12452,7 +12527,7 @@ impl V2LaneWorkAdapter {
                             proposal.descriptor.proposal_height,
                         )
                     {
-                        return None;
+                        return Ok(None);
                     }
                     let height_context_id = historical
                         .map_or_else(|| self.context.id(), |record| record.historical_context_id);
@@ -12471,11 +12546,32 @@ impl V2LaneWorkAdapter {
                                     proposal.descriptor.proposal_height,
                                 )
                             })
-                            .collect::<Option<Vec<_>>>()?
+                            .collect::<Option<Vec<_>>>()
+                            .ok_or_else(|| {
+                                V2LaneWorkError::SigningGuard(
+                                    "autonomous READY committee is missing an active BLS proof of possession"
+                                        .to_owned(),
+                                )
+                            })?
                     };
-                    let authorization = self
+                    let authorization = match self
                         .lane_ready_authorizations
-                        .remove(&Self::lane_ready_session_key(proposal))?;
+                        .remove(&Self::lane_ready_session_key(proposal))
+                    {
+                        Some(authorization) => authorization,
+                        None if !self
+                            .lane_sessions
+                            .local_prepare_vote_needed_for(proposal, &self.local_peer) =>
+                        {
+                            return Ok(None);
+                        }
+                        None => {
+                            return Err(V2LaneWorkError::SigningGuard(
+                                "autonomous READY session lost its durable one-shot authorization"
+                                    .to_owned(),
+                            ));
+                        }
+                    };
                     Some(
                         LanePayloadAvailabilityVoteV1::new_signed_with_authorization(
                             authorization,
@@ -12486,10 +12582,14 @@ impl V2LaneWorkAdapter {
                             self.key_pair.private_key(),
                             height_context_id,
                         )
-                        .ok()?,
+                        .map_err(|error| {
+                            V2LaneWorkError::SigningGuard(format!(
+                                "failed to construct durably authorized autonomous READY vote: {error}"
+                            ))
+                        })?,
                     )
                 }
-                None if self.autonomous_payload_is_expected_for(proposal) => return None,
+                None if self.autonomous_payload_is_expected_for(proposal) => return Ok(None),
                 None => None,
             }
         } else {
@@ -12497,7 +12597,9 @@ impl V2LaneWorkAdapter {
         };
         let output_guard = Arc::clone(&self.output_guard);
         let commit_signing_operation = if phase == CertPhase::Commit {
-            let operation = output_guard.begin_fail_stop_operation()?;
+            let Some(operation) = output_guard.begin_fail_stop_operation() else {
+                return Ok(None);
+            };
             let Some(signing_guard) = self.lane_drain_signing_guard.as_ref() else {
                 iroha_logger::error!(
                     height = self.context.height,
@@ -12505,7 +12607,7 @@ impl V2LaneWorkAdapter {
                     lane_block_height = body.lane_block_height,
                     "lane Commit validator has no durable drain/commit signing guard"
                 );
-                return None;
+                return Ok(None);
             };
             if let Err(error) = signing_guard.authorize_commit_vote(&body) {
                 iroha_logger::error!(
@@ -12515,26 +12617,18 @@ impl V2LaneWorkAdapter {
                     %error,
                     "durable lane drain/commit signing guard rejected a Commit vote"
                 );
-                return None;
+                return Ok(None);
             }
             Some(operation)
         } else {
             None
         };
-        let signature =
-            match Signature::try_new(self.key_pair.private_key(), &body.signature_preimage()) {
-                Ok(signature) => signature,
-                Err(error) => {
-                    iroha_logger::error!(
-                        height = self.context.height,
-                        lane = %body.lane_id.as_u32(),
-                        lane_block_height = body.lane_block_height,
-                        %error,
-                        "failed to create a lane vote signature"
-                    );
-                    return None;
-                }
-            };
+        let signature = Signature::try_new(self.key_pair.private_key(), &body.signature_preimage())
+            .map_err(|error| {
+                V2LaneWorkError::SigningGuard(format!(
+                    "failed to create a lane vote signature: {error}"
+                ))
+            })?;
         let vote = LaneBlockVoteV1 {
             body,
             payload_availability_vote,
@@ -12544,7 +12638,7 @@ impl V2LaneWorkAdapter {
         if let Some(operation) = commit_signing_operation {
             operation.complete();
         }
-        Some(vote)
+        Ok(Some(vote))
     }
     fn outbound_lane_message_predecessor_is_ready(&self, message: &BlockMessage) -> bool {
         let proposal = match message {
@@ -13213,6 +13307,12 @@ impl V2LaneWorkAdapter {
         LaneRelayEnvelope::lane_qc_mode_tag_for(lane_id, dataspace_id, &context_tag)
     }
     fn hydrate_canonical_lane_artifacts(&mut self) -> Result<(), V2LaneWorkError> {
+        if self.kura.emergency_fast_startup_enabled() {
+            // Fast mode deliberately keeps Queue reservation quarantine closed, so no local lane
+            // session can consume the history omitted here. A Strict restart rebuilds and
+            // reconciles the complete durable inventory before reopening that gate.
+            return Ok(());
+        }
         let active_routes = self
             .state
             .consensus_lane_routes_at_height(self.context.height);
@@ -13330,6 +13430,7 @@ impl V2LaneWorkAdapter {
         }
         let current_height = self.context.height;
         let current_epoch = self.context.epoch;
+        let frozen_mode = self.context.mode;
         let state = Arc::clone(&self.state);
         let recovered_autonomous = self
             .kura
@@ -13337,12 +13438,19 @@ impl V2LaneWorkAdapter {
                 network_id,
                 hydration_capacity.saturating_add(1),
                 move |proposal_height| {
-                    if proposal_height == current_height {
-                        current_epoch
-                    } else {
-                        let world = state.world_view();
-                        crate::sumeragi::epoch_for_height_from_world(&world, proposal_height)
+                    let world = state.world_view();
+                    let epoch = crate::sumeragi::epoch_for_height_from_world(
+                        &world,
+                        proposal_height,
+                        frozen_mode,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    if proposal_height == current_height && epoch != current_epoch {
+                        return Err(format!(
+                            "committed epoch schedule derives epoch {epoch} for frozen context epoch {current_epoch} at height {proposal_height}"
+                        ));
                     }
+                    Ok(epoch)
                 },
             )
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
@@ -13690,11 +13798,8 @@ impl V2LaneWorkAdapter {
         {
             return false;
         }
-        let expected_epoch = if hint.proposal_height == self.context.height {
-            self.context.epoch
-        } else {
-            let world = self.state.world_view();
-            crate::sumeragi::epoch_for_height_from_world(&world, hint.proposal_height)
+        let Ok(expected_epoch) = self.epoch_for_proposal_height(hint.proposal_height) else {
+            return false;
         };
         let Some(durable_payload) = self
             .kura
@@ -14043,13 +14148,21 @@ impl V2LaneWorkAdapter {
     fn native_network_id(&self) -> iroha_data_model::NetworkId {
         self.context.network_id
     }
-    fn epoch_for_proposal_height(&self, proposal_height: u64) -> u64 {
-        if proposal_height == self.context.height {
-            self.context.epoch
-        } else {
-            let world = self.state.world_view();
-            crate::sumeragi::epoch_for_height_from_world(&world, proposal_height)
+    fn epoch_for_proposal_height(&self, proposal_height: u64) -> Result<u64, String> {
+        let world = self.state.world_view();
+        let epoch = crate::sumeragi::epoch_for_height_from_world(
+            &world,
+            proposal_height,
+            self.context.mode,
+        )
+        .map_err(|error| error.to_string())?;
+        if proposal_height == self.context.height && epoch != self.context.epoch {
+            return Err(format!(
+                "committed epoch schedule derives epoch {epoch} for frozen context epoch {} at height {proposal_height}",
+                self.context.epoch
+            ));
         }
+        Ok(epoch)
     }
     fn native_coordinator_height_is_current(&self, body: &NativeAmxAttestationBodyV2) -> bool {
         let expected = self
@@ -15234,7 +15347,12 @@ impl V2LaneWorkAdapter {
             return Ok(None);
         }
         self.state
-            .merge_drain_candidate_for_next_carrier(parent_header, active_view, certificate)
+            .merge_drain_candidate_for_next_carrier(
+                parent_header,
+                active_view,
+                certificate,
+                self.context.mode,
+            )
             .map(Some)
             .map_err(|error| {
                 V2LaneWorkError::InvalidContext(format!(
@@ -15415,7 +15533,12 @@ impl V2LaneWorkAdapter {
             }
         }
         self.state
-            .validate_merge_candidate_for_global_round(candidate, parent_header, active_view)
+            .validate_merge_candidate_for_global_round(
+                candidate,
+                parent_header,
+                active_view,
+                self.context.mode,
+            )
             .map_err(|error| error.to_string())
     }
     fn local_merge_share(
@@ -15425,6 +15548,16 @@ impl V2LaneWorkAdapter {
         signer: wire::ValidatorIndex,
         bls_sig: Vec<u8>,
     ) -> Result<MergeCommitteeSignature, V2LaneWorkError> {
+        if !self.voting_enabled {
+            return Err(V2LaneWorkError::SigningGuard(
+                "non-voting lane work has no merge-signing authority".to_owned(),
+            ));
+        }
+        let signing_guard = self.merge_signing_guard.as_ref().ok_or_else(|| {
+            V2LaneWorkError::SigningGuard(
+                "voting lane work lacks its merge-signing authority".to_owned(),
+            )
+        })?;
         let leader = self.context.leader(key.view);
         let leader_candidate_body = if signer == leader {
             let signing_context = MergeSigningContextV1 {
@@ -15434,8 +15567,7 @@ impl V2LaneWorkAdapter {
                 parent_hash: candidate.carrier_parent_hash,
                 validator_set_hash: self.frozen_validator_set_hash(),
             };
-            let Some((durable_digest, durable_candidate, durable_bytes)) = self
-                .merge_signing_guard
+            let Some((durable_digest, durable_candidate, durable_bytes)) = signing_guard
                 .authorized_candidate(&signing_context)
                 .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?
             else {
@@ -15476,6 +15608,16 @@ impl V2LaneWorkAdapter {
         signer: wire::ValidatorIndex,
         message_digest: Hash,
     ) -> Result<(), MergeSidecarError> {
+        if !self.voting_enabled {
+            return Err(MergeSidecarError::SigningGuard(
+                "non-voting lane work has no merge-signing authority".to_owned(),
+            ));
+        }
+        let signing_guard = self.merge_signing_guard.as_ref().ok_or_else(|| {
+            MergeSidecarError::SigningGuard(
+                "voting lane work lacks its merge-signing authority".to_owned(),
+            )
+        })?;
         let Some(expected_parent) = self
             .context
             .parent_commit_qc
@@ -15517,9 +15659,8 @@ impl V2LaneWorkAdapter {
             validator_set_hash: self.frozen_validator_set_hash(),
         };
         if signer != leader {
-            let Some((durable_digest, durable_candidate, durable_bytes)) = self
-                .merge_signing_guard
-                .authorized_candidate(&durable_context)?
+            let Some((durable_digest, durable_candidate, durable_bytes)) =
+                signing_guard.authorized_candidate(&durable_context)?
             else {
                 return Err(MergeSidecarError::LocalSigningEquivocation);
             };
@@ -15549,8 +15690,7 @@ impl V2LaneWorkAdapter {
         {
             return Err(MergeSidecarError::LocalSigningEquivocation);
         }
-        if self
-            .merge_signing_guard
+        if signing_guard
             .authorized_digest(&durable_context)?
             .is_some_and(|authorized| authorized != message_digest)
         {
@@ -15596,13 +15736,17 @@ impl V2LaneWorkAdapter {
         }
         self.validate_merge_candidate_for_active_round(candidate, &parent_header, active_view)
             .map_err(MergeSidecarError::SigningGuard)?;
-        self.merge_signing_guard
-            .authorize(durable_context, message_digest, candidate)?;
+        signing_guard.authorize(durable_context, message_digest, candidate)?;
         self.merge_claims.entry(claim_key).or_insert(message_digest);
         Ok(())
     }
     fn refresh_merge_candidates(&mut self, active_view: wire::View) -> Result<(), V2LaneWorkError> {
         self.queue_plan_admission_handoff_retry_required = false;
+        if !self.voting_enabled {
+            self.merge_entries.clear();
+            self.merge_claims.clear();
+            return Ok(());
+        }
         let carrier_protected = self
             .retained_merge_carrier_state
             .is_some_and(|(_, locked, decided)| locked.is_some() || decided.is_some());
@@ -15657,8 +15801,12 @@ impl V2LaneWorkAdapter {
             parent_hash: expected_parent,
             validator_set_hash,
         };
-        let authorized_candidate = self
-            .merge_signing_guard
+        let signing_guard = self.merge_signing_guard.as_ref().ok_or_else(|| {
+            V2LaneWorkError::SigningGuard(
+                "voting lane work lacks its merge-signing authority".to_owned(),
+            )
+        })?;
+        let authorized_candidate = signing_guard
             .authorized_candidate(&signing_context)
             .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
         let authorized_digest = authorized_candidate.as_ref().map(|(digest, _, _)| *digest);
@@ -15718,10 +15866,13 @@ impl V2LaneWorkAdapter {
             } else {
                 let execution_candidate = self
                     .state
-                    .has_pending_merge_execution_sources()
+                    .has_pending_merge_execution_sources(self.context.mode)
                     .then(|| self.merge_carrier_context_header(active_view))
                     .transpose()?
-                    .and_then(|header| self.state.build_merge_execution_candidate(header));
+                    .and_then(|header| {
+                        self.state
+                            .build_merge_execution_candidate(header, self.context.mode)
+                    });
                 execution_candidate.or_else(|| {
                     self.state
                         .merge_entry_candidates_from_lane_relays_for_view(active_view)
@@ -15820,6 +15971,9 @@ impl V2LaneWorkAdapter {
         signature: MergeCommitteeSignature,
         active_view: wire::View,
     ) -> Result<V2LaneIngressOutcome, V2LaneWorkError> {
+        if !self.voting_enabled {
+            return Ok(V2LaneIngressOutcome::Rejected);
+        }
         if signature.view != active_view
             || self.pre_apply_unlocked_merge_view() != Some(active_view)
             || !self.merge_parent_frontier_is_exact()
@@ -15874,8 +16028,12 @@ impl V2LaneWorkAdapter {
                 parent_hash: candidate.carrier_parent_hash,
                 validator_set_hash: self.frozen_validator_set_hash(),
             };
-            if let Some((durable_digest, durable_candidate, durable_bytes)) = self
-                .merge_signing_guard
+            let signing_guard = self.merge_signing_guard.as_ref().ok_or_else(|| {
+                V2LaneWorkError::SigningGuard(
+                    "voting lane work lacks its merge-signing authority".to_owned(),
+                )
+            })?;
+            if let Some((durable_digest, durable_candidate, durable_bytes)) = signing_guard
                 .authorized_candidate(&signing_context)
                 .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?
                 && (durable_digest != signature.message_digest
@@ -15901,7 +16059,7 @@ impl V2LaneWorkAdapter {
                     "authenticated merge leader equivocated after volatile admission".to_owned(),
                 ));
             }
-            self.merge_signing_guard
+            signing_guard
                 .authorize(signing_context, signature.message_digest, &candidate)
                 .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
             let key = MergeKey {
@@ -16081,7 +16239,7 @@ impl V2LaneWorkAdapter {
         }
         if let Err(error) = self
             .state
-            .validate_certified_merge_entry_for_global_order(&entry)
+            .validate_certified_merge_entry_for_global_order(&entry, self.context.mode)
         {
             iroha_logger::warn!(
                 ?error,
@@ -17660,10 +17818,9 @@ pub(super) mod tests {
                 },
             )]),
         )));
-        let powers = match mode {
-            wire::ConsensusMode::Permissioned => [1, 1, 1, 1],
-            wire::ConsensusMode::Npos => [4, 3, 2, 1],
-        };
+        // NPoS stake selects the epoch committee; consensus remains one vote
+        // per finalized committee member, just like permissioned mode.
+        let powers = [1, 1, 1, 1];
         let roster = keys
             .iter()
             .zip(powers)
@@ -18113,6 +18270,7 @@ pub(super) mod tests {
         );
         commit_first
             .sign_lane_vote(&proposal, CertPhase::Commit)
+            .expect("first Commit signing should not fail")
             .expect("first Commit crosses the durable signing fence");
         let drain_body = drain_body_for(&commit_first, &proposal);
         let committee = proposal.descriptor.validator_set.clone();
@@ -18150,6 +18308,7 @@ pub(super) mod tests {
         assert!(
             drain_first
                 .sign_lane_vote(&proposal, CertPhase::Commit)
+                .expect("drain-conflicting Commit check should not fail")
                 .is_none(),
             "a later Commit must not coexist with a durable drain decision"
         );

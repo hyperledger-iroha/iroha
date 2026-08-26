@@ -221,7 +221,7 @@ Hosted HTTP responses forwarded over the Torii P2P proxy path are capped by
 64 MiB; over-limit responses fail closed with `502 Bad Gateway`.
 
 The same `--container` plus `--service` manifest pair also works for other
-service-bound Soracloud commands such as `hf-deploy`, `hf-status`, `hf-lease-renew`,
+service-bound Soracloud commands such as `hf-join`, `hf-status`, `hf-lease-renew`,
 `hf-lease-leave`, `training-job-*`, `model-artifact-*`, `model-weight-*`,
 `model-upload-register`, and `model-upload-status`. For `status`, the
 manifest-pair form also keeps the same local route and workspace-script

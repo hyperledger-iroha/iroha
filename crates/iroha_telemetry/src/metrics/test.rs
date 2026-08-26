@@ -2075,9 +2075,10 @@ fn sample_status() -> Status {
         governance: GovernanceStatus {
             proposals: GovernanceProposalCounters {
                 proposed: 2,
-                approved: 1,
                 rejected: 0,
                 enacted: 1,
+                superseded: 1,
+                execution_failed: 1,
             },
             protected_namespace: GovernanceProtectedNamespaceCounters {
                 total_checks: 5,
@@ -2297,9 +2298,10 @@ fn serialize_status_json() {
         "governance": {
             "proposals": {
                 "proposed": 2,
-                "approved": 1,
                 "rejected": 0,
-                "enacted": 1
+                "enacted": 1,
+                "superseded": 1,
+                "execution_failed": 1
             },
             "protected_namespace": {
                 "total_checks": 5,

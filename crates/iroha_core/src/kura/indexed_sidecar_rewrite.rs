@@ -70,28 +70,6 @@ impl Kura {
             kind,
         )
     }
-    fn truncate_indexed_sidecars_to_height(
-        data_path: &Path,
-        index_path: &Path,
-        height: u64,
-        kind: &str,
-    ) -> bool {
-        if !data_path.exists() && !index_path.exists() {
-            return true;
-        }
-        if !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
-            return false;
-        }
-        Self::rewrite_indexed_sidecars(
-            data_path,
-            index_path,
-            IndexedSidecarRewrite::TruncateToHeight {
-                height,
-                strict_retained: false,
-            },
-            kind,
-        )
-    }
     #[allow(clippy::too_many_lines)] // Rewriting covers many edge cases in one pass; keep consolidated.
     fn rewrite_indexed_sidecars(
         data_path: &Path,
@@ -130,10 +108,6 @@ impl Kura {
         let strict_retained_rewrite = matches!(
             rewrite,
             IndexedSidecarRewrite::RetainAfterTerminalFrontier { .. }
-                | IndexedSidecarRewrite::TruncateToHeight {
-                    strict_retained: true,
-                    ..
-                }
         );
         if index_len != layout.aligned_len {
             iroha_logger::warn!(
@@ -151,10 +125,6 @@ impl Kura {
         let compacted_prefix_rewrite = matches!(
             rewrite,
             IndexedSidecarRewrite::RetainAfterTerminalFrontier { .. }
-                | IndexedSidecarRewrite::TruncateToHeight {
-                    strict_retained: true,
-                    ..
-                }
         );
         let (
             mut keep_from,
@@ -237,32 +207,6 @@ impl Kura {
                     output_base_height,
                     None,
                     "terminal-frontier prune",
-                    None,
-                )
-            }
-            IndexedSidecarRewrite::TruncateToHeight {
-                height,
-                strict_retained,
-            } => {
-                let output_entries = height
-                    .checked_sub(layout.base_height)
-                    .and_then(|relative| relative.checked_add(1))
-                    .unwrap_or(0)
-                    .min(total_entries);
-                if output_entries == total_entries {
-                    return true;
-                }
-                (
-                    0,
-                    0,
-                    output_entries,
-                    layout.base_height,
-                    None,
-                    if strict_retained {
-                        "strict rollback truncation"
-                    } else {
-                        "rollback truncation"
-                    },
                     None,
                 )
             }

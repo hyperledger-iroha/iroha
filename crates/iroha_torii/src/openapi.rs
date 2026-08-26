@@ -5,6 +5,7 @@
 //! by the compiled route catalog, and drops schemas for hard-retired surfaces.
 //! This keeps every feature profile aligned with the mounted router without
 //! compiling a second schema builder.
+
 use iroha_torii_shared::route_catalog::{
     CATALOGED_ROUTES, CatalogProjection, EnabledFeatures, HttpMethod as CatalogHttpMethod,
     RouteCatalog,
@@ -13,7 +14,7 @@ use norito::json::{Map, Value};
 use std::{collections::BTreeSet, sync::LazyLock};
 /// OpenAPI operation extension consumed by the MCP policy bridge.
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
-/// Package-local, release-provenance-bound mirror of `artifacts/openapi/torii.json`.
+/// Package-local source authority for Torii's OpenAPI contract.
 const CANONICAL_OPENAPI_JSON: &str = include_str!("../assets/openapi/torii.json");
 static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
     let mut document: Value = norito::json::from_str(CANONICAL_OPENAPI_JSON)
@@ -26,7 +27,7 @@ static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
             .expect("package-local Torii OpenAPI authority must contain a paths object");
         retain_catalog_openapi_operations(paths, crate::router::builder::compiled_route_features());
     }
-    remove_retired_uploaded_private_model_schemas(&mut document);
+    remove_retired_soracloud_runtime_schemas(&mut document);
     document
 });
 static COMPILED_OPENAPI_JSON: LazyLock<String> = LazyLock::new(|| {
@@ -68,7 +69,7 @@ fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledF
         })
     });
 }
-fn remove_retired_uploaded_private_model_schemas(document: &mut Value) {
+fn remove_retired_soracloud_runtime_schemas(document: &mut Value) {
     let schemas = document
         .as_object_mut()
         .and_then(|document| document.get_mut("components"))
@@ -84,6 +85,26 @@ fn remove_retired_uploaded_private_model_schemas(document: &mut Value) {
         "PrivateUploadedModelReceiptListResponse",
         "SoraPrivateModelArtifactRefV1",
         "SoraPrivateUploadedModelExecutionReceiptV1",
+        "SoraUploadedModelKeyEncapsulationV1",
+        "SoraUploadedModelKeyWrapAeadV1",
+        "SoraUploadedModelEncryptionRecipientV1",
+        "SoraUploadedModelWrappedKeyV1",
+        "SoraUploadedModelRuntimeFormatV1",
+        "ModelHostAdvertisePayload",
+        "SignedModelHostAdvertiseRequest",
+        "ModelHostHeartbeatPayload",
+        "SignedModelHostHeartbeatRequest",
+        "ModelHostWithdrawPayload",
+        "SignedModelHostWithdrawRequest",
+        "ModelHostStatusResponse",
+        "SoraModelHostCapabilityRecordV1",
+        "SoraHfPlacementStatusV1",
+        "SoraHfPlacementHostRoleV1",
+        "SoraHfPlacementHostStatusV1",
+        "SoraHfPlacementHostAssignmentV1",
+        "SoraHfPlacementRecordV1",
+        "SoraModelHostViolationKindV1",
+        "SoraModelHostViolationEvidenceRecordV1",
         "OfflineReadiness",
         "OfflineReadinessBlocker",
         "OfflineActiveTransferVerifier",
@@ -852,15 +873,19 @@ mod tests {
         }
     }
     #[test]
-    fn generated_openapi_has_only_resolvable_component_schema_refs() {
-        let document = generate_spec();
-        let schemas = component_schemas(&document);
-        let mut reference_count = 0;
-        assert_component_schema_refs_resolve(&document, schemas, "$", &mut reference_count);
-        assert!(
-            reference_count > 0,
-            "generated OpenAPI document unexpectedly contains no schema references"
-        );
+    fn openapi_authorities_have_only_resolvable_component_schema_refs() {
+        for (label, document) in [
+            ("package-local", canonical_document()),
+            ("compiled", generate_spec()),
+        ] {
+            let schemas = component_schemas(&document);
+            let mut reference_count = 0;
+            assert_component_schema_refs_resolve(&document, schemas, "$", &mut reference_count);
+            assert!(
+                reference_count > 0,
+                "{label} OpenAPI document unexpectedly contains no schema references"
+            );
+        }
     }
     #[test]
     fn package_openapi_authority_is_canonical_norito_json() {
@@ -882,6 +907,7 @@ mod tests {
         let document = canonical_document();
         let schemas = component_schemas(&document);
         assert_strict_object_schema(schemas, REQUEST, &["version", "account_id", "alias"], &[]);
+
         assert_strict_object_schema(
             schemas,
             RESPONSE,
@@ -1221,23 +1247,99 @@ mod tests {
             "PrivateUploadedModelReceiptListResponse",
             "SoraPrivateModelArtifactRefV1",
             "SoraPrivateUploadedModelExecutionReceiptV1",
+            "SoraUploadedModelKeyEncapsulationV1",
+            "SoraUploadedModelKeyWrapAeadV1",
+            "SoraUploadedModelEncryptionRecipientV1",
+            "SoraUploadedModelWrappedKeyV1",
+            "SoraUploadedModelRuntimeFormatV1",
         ] {
             assert!(
                 !schemas.contains_key(retired_schema),
                 "retired uploaded private-model schema `{retired_schema}` must not be registered"
             );
         }
-        for retained_schema in [
-            "SoraUploadedModelBundleV1",
-            "SoraUploadedModelEncryptionRecipientV1",
-            "SoraUploadedModelWrappedKeyV1",
-            "UploadedModelStatusResponse",
-        ] {
+        for retained_schema in ["SoraUploadedModelBundleV1", "UploadedModelStatusResponse"] {
             assert!(
                 schemas.contains_key(retained_schema),
                 "registry-only uploaded-model schema `{retained_schema}` must remain registered"
             );
         }
+
+        assert_strict_object_schema(
+            schemas,
+            "SoraHfSourceRecordV1",
+            &[
+                "schema_version",
+                "source_id",
+                "repo_id",
+                "resolved_revision",
+                "created_at_ms",
+                "updated_at_ms",
+            ],
+            &[],
+        );
+        let hf_source_properties = schemas["SoraHfSourceRecordV1"]["properties"]
+            .as_object()
+            .expect("SoraHfSourceRecordV1 properties");
+        for retired_field in [
+            "model_name",
+            "adapter_id",
+            "normalized_runtime_hash",
+            "resource_profile",
+            "source_artifact_hash",
+            "source_profile",
+            "status",
+            "last_error",
+        ] {
+            assert!(
+                !hf_source_properties.contains_key(retired_field),
+                "registry metadata must not revive retired field `{retired_field}`"
+            );
+        }
+        for retired_schema in [
+            "SoraHfBackendFamilyV1",
+            "SoraHfModelFormatV1",
+            "SoraHfModelSizeBucketV1",
+            "SoraHfResourceProfileV1",
+            "SoraHfSourceProfileV1",
+            "SoraHfSourceStatusV1",
+        ] {
+            assert!(
+                !schemas.contains_key(retired_schema),
+                "derived runtime/tariff classification `{retired_schema}` must stay retired"
+            );
+        }
+        let runtime_snapshot = schemas
+            .get("SoracloudRuntimeSnapshot")
+            .and_then(Value::as_object)
+            .expect("SoracloudRuntimeSnapshot schema");
+        assert!(
+            !runtime_snapshot
+                .get("properties")
+                .and_then(Value::as_object)
+                .is_some_and(|properties| properties.contains_key("hf_sources")),
+            "generated Hugging Face imports are storage records, not runtime plans"
+        );
+        assert!(
+            runtime_snapshot
+                .get("required")
+                .and_then(Value::as_array)
+                .is_some_and(|required| required
+                    .iter()
+                    .all(|field| field.as_str() != Some("hf_sources"))),
+            "SoracloudRuntimeSnapshot must not require a retired HF runtime field"
+        );
+
+        let soracloud_tag = document["tags"]
+            .as_array()
+            .expect("OpenAPI tags")
+            .iter()
+            .find(|tag| tag["name"].as_str() == Some("Soracloud"))
+            .expect("Soracloud OpenAPI tag");
+        assert_eq!(
+            soracloud_tag["description"].as_str(),
+            Some("Soracloud service, model registry, and Inrou runtime endpoints.")
+        );
     }
     #[test]
     #[expect(
@@ -1578,13 +1680,13 @@ mod tests {
                 "UploadedModelStatusResponse",
             ),
             (
-                "/v1/soracloud/hf/deploy",
+                "/v1/soracloud/hf/lease/join",
                 "post",
-                Some("SignedHfDeployRequest"),
+                Some("SignedHfSharedLeaseJoinRequest"),
                 "SoracloudMutationDraftResponse",
             ),
             (
-                "/v1/soracloud/hf/status",
+                "/v1/soracloud/hf/lease/status",
                 "get",
                 None,
                 "HfSharedLeaseStatusResponse",
@@ -1600,30 +1702,6 @@ mod tests {
                 "post",
                 Some("SignedHfLeaseRenewRequest"),
                 "SoracloudMutationDraftResponse",
-            ),
-            (
-                "/v1/soracloud/model-host/advertise",
-                "post",
-                Some("SignedModelHostAdvertiseRequest"),
-                "SoracloudMutationDraftResponse",
-            ),
-            (
-                "/v1/soracloud/model-host/heartbeat",
-                "post",
-                Some("SignedModelHostHeartbeatRequest"),
-                "SoracloudMutationDraftResponse",
-            ),
-            (
-                "/v1/soracloud/model-host/withdraw",
-                "post",
-                Some("SignedModelHostWithdrawRequest"),
-                "SoracloudMutationDraftResponse",
-            ),
-            (
-                "/v1/soracloud/model-host/status",
-                "get",
-                None,
-                "ModelHostStatusResponse",
             ),
             (
                 "/v1/soracloud/agent/deploy",
@@ -1809,6 +1887,7 @@ mod tests {
                 "ServiceConfigSetRequest".to_owned(),
                 "ServiceConfigStatusEntry".to_owned(),
                 "SignedBundleRequest".to_owned(),
+                "SoraServiceConfigEntryV1".to_owned(),
             ]),
             "only explicitly dynamic configuration JSON fields may use JsonValue"
         );
@@ -1828,7 +1907,7 @@ mod tests {
         let serialized = norito::json::to_string(&document).expect("serialize Soracloud authority");
         for retired in [
             "cap-bound-local-signing",
-            "SoracloudHfDeployDraftV1",
+            "SoracloudHfSharedLeaseJoinDraftV1",
             "PrivateUploadedModelArtifactRef\"",
             "PrivateUploadedModelQuantizedCpuModel\"",
             "PrivateUploadedModelReceipt\"",
@@ -2531,7 +2610,7 @@ mod tests {
     #[test]
     fn sccp_schema_serialization_excludes_retired_and_secret_fields() {
         assert_eq!(
-            iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX,
+            iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64,
             9_007_199_254_740_991
         );
         let schemas = sccp_schemas();
@@ -3841,7 +3920,7 @@ mod tests {
         );
         assert_eq!(
             capability_properties["required_bridge_abi_version"]["const"].as_u64(),
-            Some(22)
+            Some(23)
         );
         assert_eq!(capability_properties["max_hops"]["const"].as_u64(), Some(8));
         assert_eq!(
@@ -4788,12 +4867,25 @@ mod tests {
         }
     }
     #[test]
-    fn retired_sumeragi_mutation_surfaces_are_absent() {
-        let doc = generate_spec();
-        let paths = doc
+    fn retired_sumeragi_vrf_surfaces_are_absent() {
+        for (surface, source) in [
+            ("Torii runtime handlers", include_str!("routing.rs")),
+            ("Torii router mounts", include_str!("lib.rs")),
+        ] {
+            assert!(
+                !source.contains("handle_v1_sumeragi_vrf_"),
+                "retired Sumeragi VRF handler reappeared in {surface}"
+            );
+            assert!(
+                !source.contains("/v1/sumeragi/vrf/"),
+                "retired Sumeragi VRF route reappeared in {surface}"
+            );
+        }
+        let canonical = canonical_document();
+        let paths = canonical
             .get("paths")
             .and_then(Value::as_object)
-            .expect("paths section");
+            .expect("canonical paths section");
         let evidence = paths
             .get("/v1/sumeragi/evidence")
             .and_then(Value::as_object)
@@ -4803,22 +4895,184 @@ mod tests {
             !evidence.contains_key("post"),
             "retired evidence submission operation remains documented"
         );
-        for retired_path in ["/v1/sumeragi/vrf/commit", "/v1/sumeragi/vrf/reveal"] {
+        for retired_path in [
+            "/v1/sumeragi/vrf/commit",
+            "/v1/sumeragi/vrf/epoch/{epoch}",
+            "/v1/sumeragi/vrf/penalties/{epoch}",
+            "/v1/sumeragi/vrf/reveal",
+        ] {
             assert!(
                 !paths.contains_key(retired_path),
-                "retired Sumeragi mutation path remains documented: {retired_path}"
+                "retired Sumeragi VRF path remains in the canonical full-profile document: {retired_path}"
             );
         }
-        let schemas = doc
+        let compiled_paths = generate_spec()
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("compiled paths section")
+            .clone();
+        assert!(
+            compiled_paths
+                .keys()
+                .all(|path| !path.starts_with("/v1/sumeragi/vrf/")),
+            "compiled OpenAPI profile must not expose retired Sumeragi VRF paths"
+        );
+        let schemas = canonical
             .get("components")
             .and_then(Value::as_object)
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
-            .expect("schemas section");
+            .expect("canonical schemas section");
         for retired_schema in ["SumeragiVrfCommitRequest", "SumeragiVrfRevealRequest"] {
             assert!(
                 !schemas.contains_key(retired_schema),
-                "retired Sumeragi mutation schema remains documented: {retired_schema}"
+                "retired Sumeragi VRF request schema remains documented: {retired_schema}"
+            );
+        }
+    }
+    #[test]
+    fn validation_fee_plaintext_contracts_stay_retired_and_parliament_capabilities_are_exact() {
+        const RETIRED_PATH: &str = "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft";
+        for (surface, source) in [
+            (
+                "Torii validation-fee implementation",
+                include_str!("validation_fee_api.rs"),
+            ),
+            ("Torii router mounts", include_str!("lib.rs")),
+            (
+                "canonical route catalog",
+                include_str!("../../iroha_torii_shared/src/route_catalog.rs"),
+            ),
+        ] {
+            assert!(
+                !source.contains(RETIRED_PATH),
+                "retired validation-fee PLAIN ballot draft reappeared in {surface}"
+            );
+            assert!(
+                !source.contains("ValidationFeePlain"),
+                "retired validation-fee plaintext type reappeared in {surface}"
+            );
+        }
+        for (label, document) in [
+            ("canonical", canonical_document()),
+            ("compiled", generate_spec()),
+        ] {
+            let paths = document
+                .get("paths")
+                .and_then(Value::as_object)
+                .expect("OpenAPI paths section");
+            assert!(
+                !paths.contains_key(RETIRED_PATH),
+                "retired validation-fee PLAIN ballot draft remains in {label} OpenAPI"
+            );
+            assert!(
+                paths.keys().all(|path| {
+                    !path.starts_with("/v1/validation-fee/") || !path.contains("plain")
+                }),
+                "retired validation-fee plaintext route remains in {label} OpenAPI"
+            );
+            let schemas = document
+                .get("components")
+                .and_then(Value::as_object)
+                .and_then(|components| components.get("schemas"))
+                .and_then(Value::as_object)
+                .expect("OpenAPI schemas section");
+            for retired_schema in [
+                "ValidationFeePlainBallotDraftRequestV1",
+                "ValidationFeePlainBallotDraftResponseV1",
+                "ValidationFeePlainElectorateMemberV1",
+                "ValidationFeePlainElectorateRulesV1",
+                "ValidationFeePlainElectorateSnapshotV1",
+            ] {
+                assert!(
+                    !schemas.contains_key(retired_schema),
+                    "retired schema {retired_schema} remains in {label} OpenAPI"
+                );
+            }
+            assert!(
+                schemas
+                    .keys()
+                    .all(|name| !name.starts_with("ValidationFeePlain")),
+                "retired validation-fee plaintext schema remains in {label} OpenAPI"
+            );
+
+            assert_strict_object_schema(
+                schemas,
+                "GovernanceCapabilitiesV1",
+                &[
+                    "schema",
+                    "version",
+                    "network_id",
+                    "current_height",
+                    "network_prefix",
+                    "abi_version",
+                    "data_model_version",
+                    "approval_mode",
+                    "private_ballot_protocol",
+                    "mandatory_private_ballots",
+                    "proposal_backed_referendum_ballots_supported",
+                    "standalone_plain_ballots_supported",
+                    "standalone_zk_ballots_supported",
+                    "citizenship_asset_id",
+                    "citizenship_bond_amount",
+                    "citizenship_escrow_account",
+                    "voting_asset_id",
+                    "min_bond_amount",
+                    "bond_escrow_account",
+                    "min_enactment_delay",
+                    "invitation_phase_blocks",
+                    "registration_phase_blocks",
+                    "survivor_freeze_phase_blocks",
+                    "commitment_phase_blocks",
+                    "release_delay_blocks",
+                    "opening_phase_blocks",
+                    "max_ballot_retries",
+                    "max_corpus_entries",
+                    "target_body_sizes",
+                    "supported_proposal_kinds",
+                    "supported_routes",
+                ],
+                &[],
+            );
+            let capabilities = component_properties(schemas, "GovernanceCapabilitiesV1");
+            for retired_field in [
+                "approval_threshold_denominator",
+                "approval_threshold_numerator",
+                "auto_finalize_plain",
+                "auto_finalize_plain_scope",
+                "conviction_step_blocks",
+                "max_conviction",
+                "min_turnout",
+                "parliament_quorum_bps",
+                "plain_voting_enabled",
+                "validation_fee_plain_electorate_rules",
+                "validation_fee_plain_requires_explicit_finalization",
+                "window_span",
+            ] {
+                assert!(
+                    !capabilities.contains_key(retired_field),
+                    "retired GovernanceCapabilitiesV1 field {retired_field} remains in {label} OpenAPI"
+                );
+            }
+            assert_eq!(
+                capabilities["approval_mode"]["const"].as_str(),
+                Some("PARLIAMENT_ATTEMPT_TIMED_OVN_V1")
+            );
+            assert_eq!(
+                capabilities["private_ballot_protocol"]["const"].as_str(),
+                Some("TIMED_OVN_TLE_THRESHOLD_BLS_V1")
+            );
+            assert_eq!(
+                capabilities["mandatory_private_ballots"]["const"].as_bool(),
+                Some(true)
+            );
+            assert_eq!(
+                capabilities["proposal_backed_referendum_ballots_supported"]["const"].as_bool(),
+                Some(false)
+            );
+            assert_eq!(
+                capabilities["standalone_zk_ballots_supported"]["const"].as_bool(),
+                Some(true)
             );
         }
     }
@@ -5030,5 +5284,7 @@ mod tests {
     include!("openapi/tests/diagnostics_schemas.rs");
     include!("openapi/tests/finality_app_contracts.rs");
     include!("openapi/tests/iso20022_auth.rs");
+    include!("openapi/tests/json_value_contract.rs");
+    include!("openapi/tests/soracloud_lease_contracts.rs");
     include!("openapi/tests/vpn_da.rs");
 }

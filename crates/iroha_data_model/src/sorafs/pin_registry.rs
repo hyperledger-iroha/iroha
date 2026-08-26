@@ -553,6 +553,12 @@ pub struct PinManifestRecord {
     pub submitted_by: AccountId,
     /// Epoch when the request was recorded (inclusive).
     pub submitted_epoch: u64,
+    /// Immutable approval epoch, retained after retirement when approval occurred.
+    ///
+    /// `None` distinguishes a pending manifest retired before approval from one
+    /// that entered the required replication set before retirement.
+    #[norito(required)]
+    pub approved_epoch: Option<u64>,
     /// Optional alias binding approved with the manifest.
     pub alias: Option<ManifestAliasBinding>,
     /// Optional predecessor manifest digest forming a succession chain.
@@ -615,6 +621,9 @@ pub struct PinManifestSummaryV1 {
     pub submitted_by: AccountId,
     /// Consensus-time submission epoch.
     pub submitted_epoch: u64,
+    /// Immutable approval epoch, including after retirement, or explicit `None` when never approved.
+    #[norito(required)]
+    pub approved_epoch: Option<u64>,
     /// Declared content length charged to resource accounting.
     pub content_length: u64,
     /// Consensus-time retention expiry.
@@ -630,6 +639,7 @@ impl From<&PinManifestRecord> for PinManifestSummaryV1 {
             digest: record.digest,
             submitted_by: record.submitted_by.clone(),
             submitted_epoch: record.submitted_epoch,
+            approved_epoch: record.approved_epoch,
             content_length: record.content_length,
             retention_epoch: record.policy.retention_epoch,
             status: record.status,
@@ -680,6 +690,7 @@ impl PinManifestRecord {
             policy,
             submitted_by,
             submitted_epoch,
+            approved_epoch: None,
             alias,
             successor_of,
             metadata,
@@ -695,6 +706,7 @@ impl PinManifestRecord {
     }
     /// Transition the record into an approved state with the provided epoch and envelope digest.
     pub fn approve(&mut self, approved_epoch: u64, envelope_digest: Option<[u8; 32]>) {
+        self.approved_epoch = Some(approved_epoch);
         self.status = PinStatus::Approved(approved_epoch);
         self.retirement_reason = None;
         if let Some(digest) = envelope_digest {
@@ -790,6 +802,9 @@ impl ManifestAliasRecord {
 pub struct ReplicationOrderId(
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
 );
+const SORAFS_AUTO_REPLICATION_ORDER_ID_NAMESPACE_BIT_V1: u8 = 1 << 7;
+/// Maximum ingestion window carried by every automatically issued first-release replication order.
+pub const SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1: u32 = 24 * 60 * 60;
 impl ReplicationOrderId {
     /// Construct a new replication order identifier.
     #[must_use]
@@ -801,6 +816,31 @@ impl ReplicationOrderId {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+    /// Return whether this identifier belongs to the reserved automatic-order namespace.
+    ///
+    /// First-release automatic identifiers always set the high bit of byte zero. Generic and
+    /// Musubi-purpose order issuance must leave that bit clear.
+    #[must_use]
+    pub const fn is_auto(&self) -> bool {
+        self.0[0] & SORAFS_AUTO_REPLICATION_ORDER_ID_NAMESPACE_BIT_V1 != 0
+    }
+}
+
+/// Derive the unique automatic replication-order identifier for a manifest.
+///
+/// Manifest digests are unique registry keys, so binding the automatic order solely to the
+/// digest makes its identity available before pin registration while preserving one canonical
+/// automatic order per manifest.
+#[must_use]
+pub fn derive_sorafs_auto_replication_order_id_v1(
+    manifest_digest: &ManifestDigest,
+) -> ReplicationOrderId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"sorafs:auto-replication-order:v1");
+    hasher.update(manifest_digest.as_bytes());
+    let mut bytes = *hasher.finalize().as_bytes();
+    bytes[0] |= SORAFS_AUTO_REPLICATION_ORDER_ID_NAMESPACE_BIT_V1;
+    ReplicationOrderId::new(bytes)
 }
 /// Governance identity of the exact provider-ingest completion signer policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
@@ -924,9 +964,14 @@ pub enum ReplicationOrderStatus {
         /// Epoch (inclusive) when replication completed.
         u64,
     ),
-    /// Order expired without satisfying redundancy or past the deadline.
+    /// Order expired after its deadline without satisfying redundancy.
     Expired(
         /// Epoch (inclusive) when the order expired.
+        u64,
+    ),
+    /// Order was cancelled because its target pin was retired.
+    Cancelled(
+        /// Epoch (inclusive) when pin retirement cancelled the order.
         u64,
     ),
 }
@@ -945,7 +990,7 @@ pub struct ReplicationOrderCompletionRecord {
     pub provider_id: ProviderId,
     /// Registered provider owner that authorized the completion transaction.
     pub completed_by: AccountId,
-    /// Epoch (inclusive) when this provider completed ingestion.
+    /// Unix second (inclusive) when this provider completed ingestion.
     pub completion_epoch: u64,
     /// Exact order-scoped assignment revision accepted at commit.
     pub assignment_revision: u64,
@@ -968,9 +1013,9 @@ pub struct ReplicationOrderRecord {
     pub musubi_archive: Option<ArchiveId>,
     /// Account that issued the order.
     pub issued_by: AccountId,
-    /// Epoch (inclusive) when the order was issued.
+    /// Unix second (inclusive) when the order was issued.
     pub issued_epoch: u64,
-    /// Deadline epoch for completing ingestion.
+    /// Unix-second deadline for completing ingestion.
     pub deadline_epoch: u64,
     /// Canonical Norito payload describing the replication order.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -1008,6 +1053,25 @@ mod tests {
                 .parse()
                 .expect("public key"),
         )
+    }
+    #[test]
+    fn automatic_replication_order_ids_use_the_reserved_high_bit_namespace() {
+        let digest = ManifestDigest::new([0x31; 32]);
+        let derived = derive_sorafs_auto_replication_order_id_v1(&digest);
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"sorafs:auto-replication-order:v1");
+        hasher.update(digest.as_bytes());
+        let mut expected = *hasher.finalize().as_bytes();
+        expected[0] |= SORAFS_AUTO_REPLICATION_ORDER_ID_NAMESPACE_BIT_V1;
+
+        assert_eq!(derived, ReplicationOrderId::new(expected));
+        assert!(derived.is_auto());
+        assert!(!ReplicationOrderId::new([0x7F; 32]).is_auto());
+        assert!(ReplicationOrderId::new([0x80; 32]).is_auto());
+        assert_ne!(
+            derived,
+            derive_sorafs_auto_replication_order_id_v1(&ManifestDigest::new([0x32; 32]))
+        );
     }
     #[derive(Encode)]
     struct ForgedPinFeePayment {
@@ -1230,8 +1294,10 @@ mod tests {
         assert_eq!(record.content_length, 1_048_576);
         record.approve(64, Some([2; 32]));
         assert!(record.status.is_active());
+        assert_eq!(record.approved_epoch, Some(64));
         record.retire(128, Some("superseded".into()));
         assert!(matches!(record.status, PinStatus::Retired(128)));
+        assert_eq!(record.approved_epoch, Some(64));
         assert_eq!(record.retirement_reason.as_deref(), Some("superseded"));
     }
     #[test]

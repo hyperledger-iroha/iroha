@@ -31,15 +31,15 @@ public sealed partial class ToriiClient : IDisposable
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
     private readonly bool ownsHttpClient;
+    private readonly bool injectedTransactionSubmissionTransportIsOneShot;
     private readonly JsonSerializerOptions serializerOptions;
 
     /// <summary>Creates a client for one Torii endpoint.</summary>
     /// <param name="baseUri">The exact Torii base URI.</param>
     /// <param name="httpClient">
-    /// An optional caller-owned HTTP client. Its complete handler chain must disable
-    /// automatic redirects and automatic retries for signed, nonce-bearing, or
-    /// credential-bearing requests. <see cref="ToriiClient"/> cannot inspect or
-    /// reconfigure an injected handler chain after construction.
+    /// An optional caller-owned HTTP client. Transaction submission and other routes whose
+    /// contracts require a transport guarantee reject an injected client because
+    /// <see cref="ToriiClient"/> cannot inspect its complete handler chain.
     /// </param>
     /// <param name="options">Optional client behavior and validation settings.</param>
     public ToriiClient(Uri baseUri, HttpClient? httpClient = null, ToriiClientOptions? options = null)
@@ -55,6 +55,21 @@ public sealed partial class ToriiClient : IDisposable
         ownsHttpClient = httpClient is null;
         Options = options?.Snapshot() ?? new ToriiClientOptions();
         serializerOptions = CreateSerializerOptions(Options.JsonSerializerOptions);
+    }
+
+    internal ToriiClient(
+        Uri baseUri,
+        HttpClient httpClient,
+        ToriiClientOptions? options,
+        TransactionSubmissionTransportAssurance transportAssurance)
+        : this(baseUri, httpClient, options)
+    {
+        if (transportAssurance
+            != TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries)
+        {
+            throw new ArgumentOutOfRangeException(nameof(transportAssurance));
+        }
+        injectedTransactionSubmissionTransportIsOneShot = true;
     }
 
     public Uri BaseUri { get; }
@@ -1577,7 +1592,9 @@ public sealed partial class ToriiClient : IDisposable
     {
         ArgumentNullException.ThrowIfNull(transaction);
         using var content = CreateBinaryContent(
-            NormalizeNonEmptyBinaryPayload(transaction.NoritoBytes, nameof(transaction)),
+            NormalizeVersionedSignedTransactionPayload(
+                transaction.VersionedNoritoBytes,
+                nameof(transaction)),
             "application/x-norito");
         using var response = await SendAsync(
             HttpMethod.Post,
@@ -1921,8 +1938,9 @@ public sealed partial class ToriiClient : IDisposable
 
     /// <summary>Submits one managed canonical signed transaction.</summary>
     /// <remarks>
-    /// After the compatibility preflight, the signed body is dispatched once. An
-    /// injected <see cref="HttpClient"/> must disable automatic redirects and retries.
+    /// After the exact V1 contract preflight, the signed body is dispatched once and only
+    /// HTTP 202 acknowledges admission. Public callers must use this client's internally managed
+    /// transport because an injected handler chain cannot prove one-shot behavior.
     /// Reconcile an ambiguous outcome by transaction hash instead of replaying it.
     /// </remarks>
     public async Task SubmitTransactionAsync(
@@ -1930,23 +1948,43 @@ public sealed partial class ToriiClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(transaction);
-        await SubmitTransactionAsync(transaction.NoritoBytes, cancellationToken);
+        await SubmitTransactionAsync(transaction.VersionedNoritoBytes, cancellationToken);
     }
 
-    /// <summary>Submits one canonical signed-transaction body.</summary>
+    /// <summary>Submits one canonical V1 versioned signed-transaction body.</summary>
     /// <remarks>
-    /// After the compatibility preflight, the signed body is dispatched once. Redirect
-    /// responses, non-success responses, and transport failures are surfaced without
-    /// replay. An injected <see cref="HttpClient"/> must preserve that behavior.
+    /// After the exact V1 contract preflight, the signed body is dispatched once. Only HTTP
+    /// 202 acknowledges admission; every other response and transport failure is surfaced without
+    /// replay. Public callers must use this client's internally managed transport.
     /// </remarks>
     public async Task SubmitTransactionAsync(
-        ReadOnlyMemory<byte> noritoBytes,
+        ReadOnlyMemory<byte> versionedNoritoBytes,
         CancellationToken cancellationToken = default)
     {
-        var normalizedBytes = NormalizeNonEmptyBinaryPayload(noritoBytes, nameof(noritoBytes));
-        await EnsureTransactionSubmissionCompatibilityAsync(cancellationToken);
+        var normalizedBytes = NormalizeVersionedSignedTransactionPayload(
+            versionedNoritoBytes,
+            nameof(versionedNoritoBytes));
+        RequireCanonicalRequestCredentials("/v1/node/capabilities");
+        EnsureTransactionSubmissionTransportIsOneShot();
+        await EnsureCanonicalTransactionContractAsync(cancellationToken);
         using var content = CreateBinaryContent(normalizedBytes, "application/x-norito");
-        using var response = await SendAsync(HttpMethod.Post, "/transaction", content: content, cancellationToken: cancellationToken);
+        using var response = await SendExpectingStatusAsync(
+            HttpMethod.Post,
+            "/v1/pipeline/transactions",
+            query: null,
+            content: content,
+            expectedStatusCode: HttpStatusCode.Accepted,
+            allowedStatusCode: null,
+            cancellationToken: cancellationToken);
+    }
+
+    private void EnsureTransactionSubmissionTransportIsOneShot()
+    {
+        if (!ownsHttpClient && !injectedTransactionSubmissionTransportIsOneShot)
+        {
+            throw new InvalidOperationException(
+                "Transaction submission requires ToriiClient's internally managed one-shot, no-redirect transport.");
+        }
     }
 
     public async Task<PipelineTransactionStatus?> GetPipelineTransactionStatusAsync(
@@ -1969,11 +2007,21 @@ public sealed partial class ToriiClient : IDisposable
             content: null,
             HttpStatusCode.OK,
             HttpStatusCode.NotFound,
-            cancellationToken);
+            cancellationToken,
+            accept: "application/json");
 
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
+        }
+
+        if (!string.Equals(
+                response.Content.Headers.ContentType?.MediaType,
+                "application/json",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new JsonException(
+                "pipeline transaction status response must use the application/json media type.");
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -2088,14 +2136,15 @@ public sealed partial class ToriiClient : IDisposable
         HttpContent? content,
         HttpStatusCode expectedStatusCode,
         HttpStatusCode? allowedStatusCode,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? accept = null)
     {
         var request = await CreateRequestAsync(
             method,
             path,
             query,
             content,
-            accept: null,
+            accept,
             configureRequest: null,
             cancellationToken);
         var expectedRequestUri = request.RequestUri;
@@ -7832,6 +7881,21 @@ public sealed partial class ToriiClient : IDisposable
         return bytes;
     }
 
+    private static ReadOnlyMemory<byte> NormalizeVersionedSignedTransactionPayload(
+        ReadOnlyMemory<byte> bytes,
+        string paramName)
+    {
+        var normalized = NormalizeNonEmptyBinaryPayload(bytes, paramName);
+        if (normalized.Length < 2 || normalized.Span[0] != 1)
+        {
+            throw new ArgumentException(
+                "Signed transaction payload must use the canonical V1 versioned wire.",
+                paramName);
+        }
+
+        return normalized;
+    }
+
     private static string NormalizeIdentifierPolicyId(string? value, string paramName)
     {
         var exact = NormalizeExactIdentifierValue(value, paramName);
@@ -8122,4 +8186,9 @@ public sealed partial class ToriiClient : IDisposable
             ? baseUri
             : new Uri($"{baseUri.AbsoluteUri}/", UriKind.Absolute);
     }
+}
+
+internal enum TransactionSubmissionTransportAssurance
+{
+    OneShotWithoutRedirectsOrRetries,
 }

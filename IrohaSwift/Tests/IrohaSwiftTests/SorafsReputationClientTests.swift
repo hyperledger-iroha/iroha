@@ -119,9 +119,9 @@ final class SorafsReputationClientTests: XCTestCase {
             try SorafsReputationClient(
                 baseURL: baseURL,
                 session: URLSession(configuration: configuration),
+                networkId: TestNetworkIds.canonical,
                 accountId: account,
-                privateKey: wrongPrivateKey,
-                networkId: TestNetworkIds.canonical
+                privateKey: wrongPrivateKey
             )
         ) { error in
             guard case let SorafsReputationClientError.invalidConfiguration(message) = error else {
@@ -462,9 +462,9 @@ final class SorafsReputationClientTests: XCTestCase {
         return try SorafsReputationClient(
             baseURL: URL(string: "https://reputation.example")!,
             session: URLSession(configuration: configuration),
+            networkId: TestNetworkIds.canonical,
             accountId: account,
             privateKey: seed,
-            networkId: TestNetworkIds.canonical,
             maximumResponseBytes: maximumResponseBytes,
             currentTimeMilliseconds: { 4_102_444_800_000 },
             nonceSeed: { "swift-reputation-test" }

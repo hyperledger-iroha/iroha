@@ -4,26 +4,29 @@ namespace Hyperledger.Iroha.Transactions;
 
 public sealed class SignedTransactionEnvelope
 {
+    private const byte SupportedSignedTransactionVersion = 1;
     private const int Ed25519SignatureLength = 64;
     private const string SignedTransactionBytesParameterName = "signedTransactionBytes";
 
-    private readonly byte[] noritoBytes;
+    private readonly byte[] versionedNoritoBytes;
     private readonly byte[] signedTransactionBytes;
     private readonly byte[] payloadBytes;
     private readonly byte[] transactionHash;
 
     public SignedTransactionEnvelope(
-        byte[] noritoBytes,
+        byte[] versionedNoritoBytes,
         byte[] signedTransactionBytes,
         byte[] payloadBytes,
         byte[] transactionHash)
     {
-        ArgumentNullException.ThrowIfNull(noritoBytes);
+        ArgumentNullException.ThrowIfNull(versionedNoritoBytes);
         ArgumentNullException.ThrowIfNull(signedTransactionBytes);
         ArgumentNullException.ThrowIfNull(payloadBytes);
         ArgumentNullException.ThrowIfNull(transactionHash);
 
-        this.noritoBytes = CopyNonEmpty(noritoBytes, nameof(noritoBytes));
+        this.versionedNoritoBytes = CopyNonEmpty(
+            versionedNoritoBytes,
+            nameof(versionedNoritoBytes));
         this.signedTransactionBytes = CopyNonEmpty(signedTransactionBytes, nameof(signedTransactionBytes));
         this.payloadBytes = CopyNonEmpty(payloadBytes, nameof(payloadBytes));
         this.transactionHash = transactionHash.ToArray();
@@ -33,11 +36,19 @@ public sealed class SignedTransactionEnvelope
             throw new ArgumentException($"Transaction hash must be {IrohaHash.Length} bytes.", nameof(transactionHash));
         }
 
-        if (!this.noritoBytes.AsSpan().SequenceEqual(this.signedTransactionBytes))
+        if (this.versionedNoritoBytes[0] != SupportedSignedTransactionVersion)
         {
             throw new ArgumentException(
-                "Norito bytes must match the signed transaction bytes for the current transaction wire format.",
-                nameof(noritoBytes));
+                $"Signed transaction version must be {SupportedSignedTransactionVersion}.",
+                nameof(versionedNoritoBytes));
+        }
+
+        if (this.versionedNoritoBytes.Length != this.signedTransactionBytes.Length + 1
+            || !this.versionedNoritoBytes.AsSpan(1).SequenceEqual(this.signedTransactionBytes))
+        {
+            throw new ArgumentException(
+                "Versioned Norito bytes must contain the signed transaction bytes after the version byte.",
+                nameof(versionedNoritoBytes));
         }
 
         ValidateSignedTransactionFields(this.signedTransactionBytes, this.payloadBytes);
@@ -51,7 +62,7 @@ public sealed class SignedTransactionEnvelope
         }
     }
 
-    public byte[] NoritoBytes => noritoBytes.ToArray();
+    public byte[] VersionedNoritoBytes => versionedNoritoBytes.ToArray();
 
     public byte[] SignedTransactionBytes => signedTransactionBytes.ToArray();
 

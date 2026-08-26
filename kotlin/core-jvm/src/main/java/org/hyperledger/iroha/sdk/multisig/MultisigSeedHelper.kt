@@ -105,7 +105,7 @@ object MultisigSeedHelper {
         val length = decoder.readLength((decoder.flags and NoritoHeader.COMPACT_LEN) != 0)
         require(length <= Int.MAX_VALUE) { "Sized field payload too large" }
         val payload = decoder.readBytes(length.toInt())
-        val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+        val child = NoritoDecoder(payload, decoder.flags)
         val value = adapter.decode(child)
         require(child.remaining() == 0) { "Trailing bytes after sized field payload" }
         return value

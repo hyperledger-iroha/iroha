@@ -3138,25 +3138,24 @@ def test_governance_proposal_ids_reject_before_transport(proposal_id: str) -> No
     session = RecordingSession()
     client = ToriiClient("http://node.test", session=session)
 
-    for operation in [
-        lambda: client.get_governance_proposal(
+    with pytest.raises(RuntimeError, match="lowercase 32-byte hex"):
+        client.get_governance_proposal(
             proposal_id, canonical_auth=_governance_auth()
-        ),
-        lambda: client.enact_proposal(
-            proposal_id=proposal_id, canonical_auth=_governance_auth()
-        ),
-        lambda: client.finalize_referendum(
-            referendum_id="a" * 64,
-            proposal_id=proposal_id,
-        ),
-        lambda: client.finalize_referendum(
-            referendum_id=proposal_id,
-            proposal_id="a" * 64,
-        ),
-    ]:
-        with pytest.raises(RuntimeError, match="lowercase 32-byte hex"):
-            operation()
+        )
     assert session.calls == []
+
+
+def test_proposal_backed_legacy_governance_methods_are_retired() -> None:
+    assert not hasattr(ToriiClient, "finalize_referendum")
+    assert not hasattr(ToriiClient, "enact_proposal")
+
+
+def test_first_release_exports_exclude_retired_type_aliases() -> None:
+    import iroha_torii_client.client as client_module
+
+    for name in ("GovernanceProposalStatus", "OfflineLanePrivacyWitnessJson"):
+        assert name not in client_module.__all__
+        assert not hasattr(client_module, name)
 
 
 def _governance_locks_payload(amount: Any) -> Dict[str, Any]:
@@ -3295,25 +3294,121 @@ def test_get_governance_locks_rejects_noncanonical_slashed_quantity(
         client.get_governance_locks("ref-1", canonical_auth=_governance_auth())
 
 
-@pytest.mark.parametrize(
-    "alias",
-    ["", "zk", "plain", "ZK", "PLAIN", " Zk", "Plain ", "quadratic"],
-)
-def test_propose_contract_deploy_rejects_noncanonical_voting_mode(alias: str) -> None:
+def test_propose_contract_deploy_uses_canonical_first_release_contract() -> None:
     session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "proposal_id": "11" * 32,
+                "tx_instructions": [
+                    {
+                        "wire_id": "iroha_data_model::isi::governance::ProposeDeployContract",
+                        "payload_hex": "00ff",
+                    }
+                ],
+            }
+        )
+    )
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(ValueError, match="exactly 'Zk' or 'Plain'"):
+    result = client.propose_contract_deploy(
+        canonical_auth=_governance_auth(),
+        contract_alias="router::universal",
+        abi_version=1,
+        code_hash="22" * 32,
+        abi_hash="33" * 32,
+        manifest_provenance={"signer": "ed25519:public", "signature": "signature"},
+    )
+
+    assert result.proposal_id == "11" * 32
+    assert len(result.tx_instructions) == 1
+    assert not hasattr(result, "ok")
+    request = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert request == {
+        "contract_alias": "router::universal",
+        "abi_version": 1,
+        "code_hash": "22" * 32,
+        "abi_hash": "33" * 32,
+        "manifest_provenance": {
+            "signer": "ed25519:public",
+            "signature": "signature",
+        },
+    }
+
+
+def test_propose_contract_deploy_has_no_retired_lifecycle_parameters() -> None:
+    client = ToriiClient("http://node.test", session=RecordingSession())
+    base = {
+        "canonical_auth": _governance_auth(),
+        "contract_alias": "router::universal",
+        "abi_version": 1,
+        "code_hash": "22" * 32,
+        "abi_hash": "33" * 32,
+    }
+
+    for field, value in (("window", (1, 2)), ("mode", "Zk"), ("limits", {})):
+        with pytest.raises(TypeError, match="unexpected keyword"):
+            client.propose_contract_deploy(**base, **{field: value})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("abi_version", "1"),
+        ("abi_version", 2),
+        ("code_hash", "AA" * 32),
+        ("code_hash", "0x" + "22" * 32),
+        ("abi_hash", "33" * 31),
+    ],
+)
+def test_propose_contract_deploy_rejects_noncanonical_typed_fields(
+    field: str, value: Any
+) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    request = {
+        "canonical_auth": _governance_auth(),
+        "contract_alias": "router::universal",
+        "abi_version": 1,
+        "code_hash": "22" * 32,
+        "abi_hash": "33" * 32,
+    }
+    request[field] = value
+
+    with pytest.raises(ValueError):
+        client.propose_contract_deploy(**request)
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("payload_hex", ["", "0", "0x00", "AA", "0A", "gg"])
+def test_propose_contract_deploy_rejects_noncanonical_instruction_payload(
+    payload_hex: str,
+) -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "proposal_id": "11" * 32,
+                "tx_instructions": [
+                    {
+                        "wire_id": "iroha_data_model::isi::governance::ProposeDeployContract",
+                        "payload_hex": payload_hex,
+                    }
+                ],
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="lowercase even-length hex"):
         client.propose_contract_deploy(
             canonical_auth=_governance_auth(),
             contract_alias="router::universal",
-            abi_version="1",
+            abi_version=1,
             code_hash="22" * 32,
             abi_hash="33" * 32,
-            mode=alias,
         )
-
-    assert session.calls == []
 
 
 def test_list_telemetry_peers_info_parses_payload() -> None:
@@ -3547,8 +3642,8 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     session.queue(
         StubResponse(
             payload={
-                "canonical_id": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-                "literal": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+                "canonical_id": CANONICAL_OWNER,
+                "literal": CANONICAL_OWNER,
                 "network_prefix": 26,
                 "error_correction": "quartile",
                 "modules": 33,
@@ -3559,11 +3654,11 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    qr = client.get_explorer_account_qr("sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6")
+    qr = client.get_explorer_account_qr(CANONICAL_OWNER)
 
     assert qr == ExplorerAccountQr(
-        canonical_id="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        literal="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+        canonical_id=CANONICAL_OWNER,
+        literal=CANONICAL_OWNER,
         network_prefix=26,
         error_correction="quartile",
         modules=33,
@@ -3582,7 +3677,7 @@ def test_get_explorer_account_qr_accepts_account_alias_path_literal() -> None:
     session.queue(
         StubResponse(
             payload={
-                "canonical_id": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+                "canonical_id": CANONICAL_OWNER,
                 "literal": "operator@banka.universal",
                 "network_prefix": 26,
                 "error_correction": "quartile",
@@ -3767,8 +3862,8 @@ def test_mock_server_allows_sumeragi_fixture_override() -> None:
         base_url = server.base_url.rstrip("/")
         fixtures = {
             "status": {"protocol_version": 4, "height": 42},
+            "diagnostics": {"tx_queue_depth": 3},
             "leader": {"leader_index": 2},
-            "telemetry": {"availability": {"total_votes_ingested": 7}},
         }
         response = requests.post(
             f"{base_url}/__mock__/sumeragi/config",
@@ -3781,6 +3876,15 @@ def test_mock_server_allows_sumeragi_fixture_override() -> None:
             response = requests.get(f"{base_url}/v1/sumeragi/{endpoint}", timeout=5.0)
             response.raise_for_status()
             assert response.json() == expected
+
+        response = requests.post(
+            f"{base_url}/__mock__/sumeragi/config",
+            json={"telemetry": {"availability": {"total_votes_ingested": 7}}},
+            timeout=5.0,
+        )
+        assert response.status_code == 400
+        response = requests.get(f"{base_url}/v1/sumeragi/telemetry", timeout=5.0)
+        assert response.status_code == 404
 
         response = requests.post(
             f"{base_url}/__mock__/sumeragi/config",
@@ -4257,7 +4361,11 @@ def test_sumeragi_endpoint_methods_reject_swapped_payload_contracts() -> None:
     for endpoint, response, error_type, message in sumeragi_exact_json_response_cases():
         session = RecordingSession()
         session.queue(response)
-        client = ToriiClient("http://node.test", session=session)
+        client = ToriiClient(
+            "http://node.test",
+            session=session,
+            operator_signing_context=_operator_context(),
+        )
         with pytest.raises(error_type, match=message):
             getattr(client, f"get_sumeragi_{endpoint}")()
         assert response.was_closed is True, endpoint
@@ -5413,7 +5521,7 @@ def test_list_runtime_upgrades_parses_records() -> None:
                                 "end_height": 20,
                             },
                             "status": {"ActivatedAt": 12},
-                            "proposer": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+                            "proposer": CANONICAL_OWNER,
                             "created_height": 8,
                         },
                     },
@@ -5532,7 +5640,7 @@ def test_get_uaid_portfolio_parses_payload() -> None:
                         "dataspace_alias": "treasury",
                         "accounts": [
                             {
-                                "account_id": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+                                "account_id": CANONICAL_OWNER,
                                 "label": "primary",
                                 "assets": [
                                     {
@@ -5988,6 +6096,11 @@ def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
     assert lane_gov.runtime_upgrade is not None
     assert lane_gov.runtime_upgrade.allowed_ids == ["alpha"]
     activation = second.status.governance.recent_manifest_activations[0]
+    assert second.status.governance.proposals.proposed == 1
+    assert second.status.governance.proposals.rejected == 3
+    assert second.status.governance.proposals.enacted == 4
+    assert second.status.governance.proposals.superseded == 2
+    assert second.status.governance.proposals.execution_failed == 1
     assert (
         activation.contract_address
         == "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s"
@@ -6188,9 +6301,10 @@ def _status_payload(
     governance = {
         "proposals": {
             "proposed": 1,
-            "approved": 2,
             "rejected": 3,
             "enacted": 4,
+            "superseded": 2,
+            "execution_failed": 1,
         },
         "protected_namespace": {
             "total_checks": 4,
@@ -6676,67 +6790,6 @@ def test_get_time_status_parses_diagnostics() -> None:
     assert status.note == "NTS running"
 
 
-def test_finalize_referendum_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "ok": True,
-                "tx_instructions": [
-                    {"wire_id": "FinalizeReferendum", "payload_hex": "AA"}
-                ],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    proposal_id = "a" * 64
-    draft = client.finalize_referendum(
-        referendum_id=proposal_id,
-        proposal_id=proposal_id,
-    )
-
-    assert draft.ok is True
-    assert len(draft.tx_instructions) == 1
-    call = session.calls[0]
-    assert call["method"] == "POST"
-    assert call["url"].endswith("/v1/gov/finalize")
-    assert json.loads(call["data"]) == {
-        "referendum_id": proposal_id,
-        "proposal_id": proposal_id,
-    }
-
-
-def test_enact_proposal_supports_preimage_and_window() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "ok": True,
-                "tx_instructions": [{"wire_id": "EnactReferendum", "payload_hex": "BB"}],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    draft = client.enact_proposal(
-        canonical_auth=_governance_auth(),
-        proposal_id="b" * 64,
-        preimage_hash="c" * 64,
-        window=(10, 20),
-    )
-
-    assert draft.ok is True
-    assert draft.tx_instructions[0].wire_id == "EnactReferendum"
-    call = session.calls[0]
-    assert call["url"].endswith("/v1/gov/enact")
-    assert json.loads(call["data"]) == {
-        "proposal_id": "b" * 64,
-        "preimage_hash": "c" * 64,
-        "window": {"lower": 10, "upper": 20},
-    }
-
-
 def test_connect_app_registry_and_policy_helpers() -> None:
     session = RecordingSession()
     session.queue(
@@ -7180,7 +7233,7 @@ def test_get_offline_capability_is_asset_neutral_and_exact() -> None:
 
     assert isinstance(capability, OfflineStatus)
     assert capability.cash_handoff_capability == "cash_handoff_v1"
-    assert capability.required_bridge_abi_version == 22
+    assert capability.required_bridge_abi_version == 23
     assert capability.max_hops == 8
     assert capability.ready is True
     call = session.calls[0]

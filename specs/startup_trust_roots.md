@@ -11,10 +11,14 @@ Normal startup is bound to both:
 - the configured `genesis.public_key`; and
 - one exact signed-genesis consensus-header hash.
 
-Exactly one of inline `genesis.expected_hash` or canonical one-line
+Exactly one of inline `genesis.expected_hash` or canonical
 `genesis.expected_hash_file` is mandatory and supplies the exact hash independently
-of any block body. Production templates use `/run/iroha/genesis.expected_hash`,
-the same public file selected by client `network_id_file`. A locally provisioned signed `genesis.file`, when present,
+of any block body. The file contains one canonical checked
+`hash:<64 uppercase hex>#<CRC16>` NetworkId literal followed by exactly one LF;
+CRLF and unterminated aliases are rejected. The validator extracts its
+genesis hash only after parsing the marker and checksum. Production templates use
+`/run/iroha/genesis.expected_hash`, the same public file selected by client
+`network_id_file`. A locally provisioned signed `genesis.file`, when present,
 must agree with it. Configuration normalization rejects a missing or malformed
 hash before startup reads a genesis body from the artifact or Kura. This
 ordering means an on-disk or operator-provisioned block can satisfy a trust root
@@ -80,11 +84,12 @@ hash, validator identity, trusted roster, and PoP map to agree exactly with the
 signed `RegisterPeerWithPop` roster. Compose reuses those validator identities
 and embeds relative read-only paths for all three public genesis artifacts, so
 generation cannot silently substitute a new roster. The public verifier key and
-exact hash are separate Compose secrets; the signed body is a read-only bind.
+checked network identity are separate Compose secrets; the signed body is a read-only bind.
 The launcher exports `GENESIS`, `GENESIS_PUBLIC_KEY`, and
-`GENESIS_EXPECTED_HASH` before configuration normalization. It validates
-non-empty inputs and the canonical one-line marked-hash shape; Iroha repeats the
-body, signature, verifier-key, and exact-hash checks.
+`GENESIS_EXPECTED_HASH_FILE` before configuration normalization. It validates
+non-empty inputs and the canonical LF-terminated checked-literal shape; Iroha parses
+the NetworkId and repeats the checksum, marker-bit, body, signature,
+verifier-key, and exact-hash checks.
 
 An explicit non-empty `kagami docker --seed` selects deterministic development
 mode for relocatable sample manifests. Only that mode generates validator
@@ -118,12 +123,11 @@ artifact and replay invariants.
    every node before first start.
 2. Record its exact consensus-header hash through exactly one of
    `genesis.expected_hash` or `genesis.expected_hash_file` on every node. Kagami prints this value after signing.
-   `--expected-hash-out <name>.expected_hash` writes the canonical one-line value
-   and atomically publishes `<name>.identity.toml`, which binds the same exact
-   hash as client `network_id` and validator `genesis.expected_hash` in one
-   artifact. Production validators and clients consume that same one-line file
-   through `expected_hash_file` and `network_id_file`; deployment renderers consume the paired artifact instead of
-   assembling the two security domains independently. Generated localnets also
+   `--expected-hash-out <name>.expected_hash` writes the canonical checked
+   `hash:<64 uppercase hex>#<CRC16>` NetworkId value followed by one LF.
+   Production validators and clients consume that same byte-exact file through
+   `expected_hash_file` and `network_id_file`; deployment renderers must not
+   assemble independent inline copies for the two security domains. Generated localnets also
    decode the signed body back and check the same value in every peer config.
    Use normal seedless
    `kagami docker` generation so the same prepared validator bundle and all

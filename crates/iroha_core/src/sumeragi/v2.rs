@@ -76,11 +76,12 @@ use super::{
         ReadyValidateSignPredecessorAuthority, ReadyValidatedAdapterAuthority,
         RecoveredDecisionApplyCandidateLineageV1, RecoveredDecisionApplyPendingLineageV1,
         RecoveredDecisionApplyRegistryProjectionPermit, RecoveredDecisionFetchStoreProjectionV1,
-        RecoveredLifecycleNextWalVoteSealV1, RecoveredWalControlReplayEvidenceV1,
-        RecoveredWalDecisionFetchReplayEvidenceV1, RecoveredWalParentFactoryError,
-        RecoveredWalProductionOwnerOpenV1, RecoveredWalVoteReplayEvidenceV1,
-        SealedInvalidBodyReportProjectionPermit, SealedLiveWalPersistedEffectV1,
-        SealedValidateApplyProjectionPermit, SealedValidateSignProjectionPermit,
+        RecoveredDecisionValidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
+        RecoveredWalControlReplayEvidenceV1, RecoveredWalDecisionFetchReplayEvidenceV1,
+        RecoveredWalParentFactoryError, RecoveredWalProductionOwnerOpenV1,
+        RecoveredWalVoteReplayEvidenceV1, SealedInvalidBodyReportProjectionPermit,
+        SealedLiveWalPersistedEffectV1, SealedValidateApplyProjectionPermit,
+        SealedValidateSignProjectionPermit,
     },
     v2_runtime::{
         PendingRuntimeEffectBinding, RecoveredWalCandidateProjectionPermit,
@@ -107,7 +108,7 @@ use crate::kura::{
 };
 const AGGREGATE_TOKEN_PREFIX: &[u8] = b"sumeragi-v2:verified-aggregate\0";
 const MAX_DEFERRED_INPUTS: usize = 1024;
-const MAX_DEFERRED_PROGRESS_INPUTS: usize = wire::MAX_VALIDATORS_PER_HEIGHT * 2 + 3;
+const MAX_DEFERRED_PROGRESS_INPUTS: usize = wire::MAX_VALIDATORS_PER_HEIGHT * 3 + 3;
 const MAX_INGRESS_SEMANTIC_KEYS: usize = 1024;
 // Scheduler priority is physical ownership evidence, not part of the logical
 // reducer occurrence. One canonical key makes Normal/Progress rerouting
@@ -124,11 +125,12 @@ const ROUTE_NEUTRAL_SERVICED_CANDIDATE_CLASS: u8 = u8::MAX;
 const MAX_ADAPTER_EFFECTS_PER_MACRO_STEP: usize = reducer::MAX_EFFECTS_PER_STEP;
 /// Maximum validation-marker identities which can be authoritative at restart.
 ///
-/// The replayed adapter contributes at most one durable lock and one durable
-/// decision in addition to its already-bounded startup effect batch. Historical
-/// view-local markers outside this frontier remain body-availability evidence,
-/// but cannot force synchronous execution or restore vote authority.
-const MAX_RECOVERED_VALIDATION_AUTHORITIES: usize = MAX_ADAPTER_EFFECTS_PER_MACRO_STEP + 2;
+/// The replayed adapter contributes at most one durable highest Prepare, one
+/// durable lock, and one durable decision in addition to its already-bounded
+/// startup effect batch. Historical view-local markers outside this frontier
+/// remain body-availability evidence, but cannot force synchronous execution or
+/// restore vote authority.
+const MAX_RECOVERED_VALIDATION_AUTHORITIES: usize = MAX_ADAPTER_EFFECTS_PER_MACRO_STEP + 3;
 /// Largest record-specific `Persist -> Persisted` flattened batch.
 ///
 /// The witness is locally formed `InstallTimeout`: its individual TimeoutVote
@@ -142,284 +144,7 @@ const MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP: usize = 4;
 // relation fails at compile time as well as at the runtime checks below.
 const _: () =
     assert!(MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP <= MAX_ADAPTER_EFFECTS_PER_MACRO_STEP);
-/// WAL-record class used to select the exact adapter macro-step budget.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PersistenceMacroStepClass {
-    /// Locally validated proposal intent.
-    ProposalIntent,
-    /// Local Prepare-vote intent.
-    PrepareIntent,
-    /// Newly observed highest Prepare certificate.
-    ObservePrepare,
-    /// Atomic lock and local Commit-vote intent.
-    LockAndCommit,
-    /// Local timeout-vote intent.
-    TimeoutIntent,
-    /// Installed timeout certificate.
-    InstallTimeout,
-    /// Durable Commit certificate decision.
-    Decision,
-}
-impl PersistenceMacroStepClass {
-    /// Classify every safety-WAL record; a new record cannot silently inherit a
-    /// budget because the exhaustive match must be deliberately extended.
-    fn from_record(record: &reducer::WalRecord) -> Self {
-        match record {
-            reducer::WalRecord::ProposalIntent(_) => Self::ProposalIntent,
-            reducer::WalRecord::PrepareIntent(_) => Self::PrepareIntent,
-            reducer::WalRecord::ObservePrepare(_) => Self::ObservePrepare,
-            reducer::WalRecord::LockAndCommit { .. } => Self::LockAndCommit,
-            reducer::WalRecord::TimeoutIntent(_) => Self::TimeoutIntent,
-            reducer::WalRecord::InstallTimeout(_) => Self::InstallTimeout,
-            reducer::WalRecord::Decision(_) => Self::Decision,
-        }
-    }
-    /// Return the exact reviewed upper bounds for the source transition and
-    /// its persistence acknowledgement continuation.
-    fn budget(self) -> PersistenceMacroStepBudget {
-        match self {
-            // LocalProposalReady emits only Persist; Persisted emits Sign.
-            Self::ProposalIntent => PersistenceMacroStepBudget::new(1, 1),
-            // Signed Proposal may prefix the PrepareIntent Persist with its
-            // Proposal broadcast; Persisted emits one Prepare Sign.
-            Self::PrepareIntent => PersistenceMacroStepBudget::new(2, 1),
-            // Signed Prepare can prefix ObservePrepare with the vote and QC
-            // broadcasts plus one fetch. Its None continuation can emit at
-            // most one already queued, still-authorized signature.
-            Self::ObservePrepare => PersistenceMacroStepBudget::new(4, 1),
-            // Signed Prepare can prefix LockAndCommit with vote and QC
-            // broadcasts; Persisted emits one Commit Sign.
-            Self::LockAndCommit => PersistenceMacroStepBudget::new(3, 1),
-            // TimeoutElapsed emits only Persist; Persisted emits Sign.
-            Self::TimeoutIntent => PersistenceMacroStepBudget::new(1, 1),
-            // A quorum-forming signed TimeoutVote is subsumed by its TC and
-            // emits only Persist; Persisted can emit EnterView, fetch, the TC
-            // broadcast, and Sign.
-            Self::InstallTimeout => PersistenceMacroStepBudget::new(1, 4),
-            // Signed CommitVote can prefix Persist with its vote broadcast;
-            // Persisted can emit the CommitQC broadcast and one body/apply
-            // stage. Decision invalidates every queued pre-decision signer.
-            Self::Decision => PersistenceMacroStepBudget::new(2, 2),
-        }
-    }
-    /// Canonical class inventory for exhaustive bound tests.
-    #[cfg(test)]
-    const ALL: [Self; 7] = [
-        Self::ProposalIntent,
-        Self::PrepareIntent,
-        Self::ObservePrepare,
-        Self::LockAndCommit,
-        Self::TimeoutIntent,
-        Self::InstallTimeout,
-        Self::Decision,
-    ];
-}
-/// Reviewed source/continuation lengths for one WAL-record class.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PersistenceMacroStepBudget {
-    /// Maximum effects in the reducer transition containing `Persist`.
-    initial_effects: usize,
-    /// Maximum effects emitted by the matching `Persisted` transition.
-    continuation_effects: usize,
-}
-impl PersistenceMacroStepBudget {
-    /// Construct one compile-time record-specific budget.
-    const fn new(initial_effects: usize, continuation_effects: usize) -> Self {
-        Self {
-            initial_effects,
-            continuation_effects,
-        }
-    }
-    /// Maximum returned effects after replacing the sole `Persist` effect with
-    /// the acknowledgement continuation.
-    const fn flattened_effects(self) -> usize {
-        self.initial_effects - 1 + self.continuation_effects
-    }
-}
-/// Node-local fingerprints exported through the compact v2 status record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct AdapterFingerprints {
-    /// Hash of the node's consensus identity.
-    pub node: Hash,
-    /// Hash identifying the running build.
-    pub build: Hash,
-    /// Hash of all consensus-relevant configuration.
-    pub config: Hash,
-}
-/// Read-only reducer facts needed by the bounded local proposal assembler.
-///
-/// The reducer remains the sole owner of lock and view state. Candidate code
-/// receives only this snapshot and cannot mutate safety state or manufacture a
-/// proposal justification.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct LocalProposalDirective {
-    tag: reducer::EventTag,
-    leader: wire::ValidatorIndex,
-    locked_round: Option<wire::ConsensusRound>,
-    locked_subject: Option<wire::BlockSubject>,
-    decided_subject: Option<wire::BlockSubject>,
-}
-impl LocalProposalDirective {
-    /// Build an exact directive fixture without exposing reducer-owned fields
-    /// in production builds.
-    #[cfg(test)]
-    pub(crate) const fn for_test(
-        tag: reducer::EventTag,
-        leader: wire::ValidatorIndex,
-        locked_round: Option<wire::ConsensusRound>,
-        locked_subject: Option<wire::BlockSubject>,
-        decided_subject: Option<wire::BlockSubject>,
-    ) -> Self {
-        Self {
-            tag,
-            leader,
-            locked_round,
-            locked_subject,
-            decided_subject,
-        }
-    }
-    /// Exact height/view/generation which owns candidate work.
-    pub(crate) const fn tag(self) -> reducer::EventTag {
-        self.tag
-    }
-    /// Frozen-roster validator expected to propose in this view.
-    pub(crate) const fn leader(self) -> wire::ValidatorIndex {
-        self.leader
-    }
-    /// Subject whose exact immutable body must remain recoverable while locked.
-    pub(crate) const fn locked_subject(self) -> Option<wire::BlockSubject> {
-        self.locked_subject
-    }
-    /// Exact round/subject pair protected by the active durable lock.
-    pub(crate) fn locked_body(self) -> Option<(wire::ConsensusRound, wire::BlockSubject)> {
-        self.locked_round.zip(self.locked_subject)
-    }
-    /// Subject already decided at this height, if application is pending.
-    pub(crate) const fn decided_subject(self) -> Option<wire::BlockSubject> {
-        self.decided_subject
-    }
-}
-/// Opaque authenticated frontier for restoring validation-marker authority.
-///
-/// Construction is restricted to a fully replayed adapter, so a checksummed
-/// body-store marker cannot select itself for recovery. The bounded key set is
-/// derived only from the durable lock/decision and the adapter's first replay
-/// batch.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RecoveredValidationAuthority {
-    context_id: wire::HeightContextId,
-    height: wire::Height,
-    keys: BTreeSet<(wire::ConsensusRound, wire::BlockSubject)>,
-}
-impl RecoveredValidationAuthority {
-    /// Whether this capability belongs to the exact immutable height context.
-    pub(crate) fn authorizes_context(&self, context: &wire::HeightContext) -> bool {
-        self.context_id == context.id() && self.height == context.height
-    }
-    /// Whether one exact proposal origin belongs to the authenticated frontier.
-    pub(crate) fn authorizes(
-        &self,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-    ) -> bool {
-        self.keys.contains(&(round, subject))
-    }
-    /// Number of exact identities in the bounded replay frontier.
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.keys.len()
-    }
-    /// Construct a bounded exact frontier for body-store seam tests.
-    #[cfg(test)]
-    pub(crate) fn for_test(
-        context: &wire::HeightContext,
-        keys: impl IntoIterator<Item = (wire::ConsensusRound, wire::BlockSubject)>,
-    ) -> Self {
-        let keys = keys.into_iter().collect::<BTreeSet<_>>();
-        assert!(keys.len() <= MAX_RECOVERED_VALIDATION_AUTHORITIES);
-        assert!(keys.iter().all(|(round, _)| {
-            round.context_id == context.id() && round.height == context.height
-        }));
-        Self {
-            context_id: context.id(),
-            height: context.height,
-            keys,
-        }
-    }
-}
-// RECOVERED_WAL_VOTE_SIGN_SEAL_BEGIN
-/// Opaque identity of one exact verified and fsynced safety-WAL frame.
-///
-/// The scalar parts never leave this module as an authority-bearing tuple.
-/// Sibling recovery stages may only retain the complete value and ask whether
-/// it is internally exact or equal to another sealed identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RecoveredWalFrameIdentity {
-    frame_sequence: u64,
-    persistence_id: u64,
-    frame_hash: [u8; 32],
-}
-/// Opaque identity minted only from one successful live WAL append.
-///
-/// Unlike recovered startup authority, this move-only seal requires the exact
-/// fsync receipt and the retained in-memory frame produced by that append. It
-/// exposes no sequence, persistence identifier, frame hash, or recovered-vote
-/// conversion.
-#[derive(PartialEq, Eq)]
-pub(super) struct LiveWalFrameIdentity {
-    frame_sequence: u64,
-    persistence_id: u64,
-    frame_hash: [u8; 32],
-    _linearity: LiveWalFrameLinearity,
-}
-#[derive(PartialEq, Eq)]
-struct LiveWalFrameLinearity;
-impl Drop for LiveWalFrameLinearity {
-    fn drop(&mut self) {}
-}
-impl LiveWalFrameIdentity {
-    fn from_append_receipt(
-        record: &RecoveredRecord,
-        receipt: SafetyWalAppendReceipt,
-        persistence_id: u64,
-    ) -> Option<Self> {
-        if !record.exactly_matches_receipt(receipt) {
-            return None;
-        }
-        let identity = Self {
-            frame_sequence: record.sequence(),
-            persistence_id,
-            frame_hash: record.frame_hash(),
-            _linearity: LiveWalFrameLinearity,
-        };
-        identity.is_exact().then_some(identity)
-    }
-    /// Return whether the live append has the canonical reducer relation.
-    pub(super) const fn is_exact(&self) -> bool {
-        match self.frame_sequence.checked_add(1) {
-            Some(next) => next == self.persistence_id,
-            None => false,
-        }
-    }
-    /// Project inert codec evidence without exposing locator scalar parts.
-    pub(super) const fn persisted_locator(&self) -> PersistedWalFrameLocatorV1 {
-        PersistedWalFrameLocatorV1 {
-            frame_sequence: self.frame_sequence,
-            persistence_id: self.persistence_id,
-            frame_hash: self.frame_hash,
-        }
-    }
-    /// Construct a move-only live identity for focused authority tests.
-    #[cfg(test)]
-    pub(super) fn for_test(frame_sequence: u64, persistence_id: u64, frame_hash: [u8; 32]) -> Self {
-        Self {
-            frame_sequence,
-            persistence_id,
-            frame_hash,
-            _linearity: LiveWalFrameLinearity,
-        }
-    }
-}
+include!("v2_adapter_persistence_and_wal_types.rs");
 impl RecoveredWalFrameIdentity {
     fn from_recovered_record(record: &RecoveredRecord, persistence_id: u64) -> Option<Self> {
         let identity = Self {
@@ -1673,6 +1398,9 @@ impl ProductionLifecycleAdapterStartupV1 {
         preview.commit_after_durable_settlement();
         Ok((Self::recovered(adapter, effects), store))
     }
+}
+include!("v2_recovered_decision_validate_adapter_startup.rs");
+impl ProductionLifecycleAdapterStartupV1 {
     /// Rebuild one already-fsynced Vote/Timeout `Signed` transition.
     ///
     /// The cold authority has already joined the WAL Sign, its exact
@@ -4690,7 +4418,8 @@ impl RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1 {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => false,
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => false,
         };
         relation_is_exact.then_some(Self {
             broadcast,
@@ -7629,25 +7358,42 @@ impl DeferredServiceEvidence {
     /// Return whether every redundant field and rank transition still matches
     /// the exact selected occurrence.
     pub(crate) fn validate_exact(&self) -> bool {
+        let admission_is_protected = |admission: Option<IngressAdmission>| {
+            admission.is_some_and(|admission| {
+                admission.locked_commit_progress || admission.locked_reproposal_prepare_progress
+            })
+        };
+        let protected_admission_matches_event =
+            |admission: Option<IngressAdmission>, event: &reducer::Event| {
+                let Some(admission) = admission else {
+                    return false;
+                };
+                match event {
+                    reducer::Event::VoteReceived { vote, .. } => match vote.vote().phase() {
+                        reducer::Phase::Prepare => {
+                            !admission.locked_commit_progress
+                                && admission.locked_reproposal_prepare_progress
+                        }
+                        reducer::Phase::Commit => {
+                            admission.locked_commit_progress
+                                && !admission.locked_reproposal_prepare_progress
+                        }
+                    },
+                    _ => false,
+                }
+            };
         let protected_progress_is_exact = self.protected_progress
-            == self
-                .original_admission
-                .is_some_and(|admission| admission.locked_commit_progress)
-            && self.protected_progress
-                == self
-                    .effective_admission
-                    .is_some_and(|admission| admission.locked_commit_progress)
+            == admission_is_protected(self.original_admission)
+            && self.protected_progress == admission_is_protected(self.effective_admission)
             && (!self.protected_progress
                 || (self.priority == DeferredPriority::Progress
-                    && matches!(
+                    && protected_admission_matches_event(
+                        self.original_admission,
                         &self.original_event,
-                        reducer::Event::VoteReceived { vote, .. }
-                            if vote.vote().phase() == reducer::Phase::Commit
                     )
-                    && matches!(
+                    && protected_admission_matches_event(
+                        self.effective_admission,
                         &self.effective_event,
-                        reducer::Event::VoteReceived { vote, .. }
-                            if vote.vote().phase() == reducer::Phase::Commit
                     )));
         if self.admission_capability.ordinal != self.admission_ordinal
             || self.admission_capability.origin.is_authenticated()
@@ -8649,6 +8395,7 @@ fn append_deferred_projection_admission(
     append_deferred_projection_u64(projection, admission.generation.get());
     projection.push(u8::from(admission.inserted_equivocation));
     projection.push(u8::from(admission.locked_commit_progress));
+    projection.push(u8::from(admission.locked_reproposal_prepare_progress));
 }
 fn deferred_service_projection_hash(evidence: &DeferredServiceEvidence) -> Hash {
     let mut projection = Vec::new();
@@ -8709,6 +8456,7 @@ fn deferred_service_projection_hash(evidence: &DeferredServiceEvidence) -> Hash 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DeferredProgressClass {
     LockedCommitVote,
+    LockedReproposalPrepareVote,
     TimeoutVote,
     PrepareCertificate,
     CommitCertificate,
@@ -8717,6 +8465,7 @@ enum DeferredProgressClass {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DeferredProgressOwner {
     LockedCommitVote(reducer::ValidatorId),
+    LockedReproposalPrepareVote(reducer::ValidatorId),
     TimeoutVote(reducer::ValidatorId),
     PrepareCertificate,
     CommitCertificate,
@@ -8726,6 +8475,9 @@ impl DeferredProgressOwner {
     const fn class(self) -> DeferredProgressClass {
         match self {
             Self::LockedCommitVote(_) => DeferredProgressClass::LockedCommitVote,
+            Self::LockedReproposalPrepareVote(_) => {
+                DeferredProgressClass::LockedReproposalPrepareVote
+            }
             Self::TimeoutVote(_) => DeferredProgressClass::TimeoutVote,
             Self::PrepareCertificate => DeferredProgressClass::PrepareCertificate,
             Self::CommitCertificate => DeferredProgressClass::CommitCertificate,
@@ -8740,6 +8492,13 @@ fn deferred_progress_owner(input: &DeferredInput) -> Option<DeferredProgressOwne
                 if vote.vote().phase() == reducer::Phase::Commit =>
             {
                 Some(DeferredProgressOwner::LockedCommitVote(
+                    vote.vote().signer(),
+                ))
+            }
+            reducer::Event::VoteReceived { vote, .. }
+                if vote.vote().phase() == reducer::Phase::Prepare =>
+            {
+                Some(DeferredProgressOwner::LockedReproposalPrepareVote(
                     vote.vote().signer(),
                 ))
             }
@@ -8766,7 +8525,7 @@ fn deferred_progress_class(input: &DeferredInput) -> Option<DeferredProgressClas
     deferred_progress_owner(input).map(DeferredProgressOwner::class)
 }
 const fn deferred_progress_capacity(roster_len: usize) -> usize {
-    let required = roster_len.saturating_mul(2).saturating_add(3);
+    let required = roster_len.saturating_mul(3).saturating_add(3);
     if required < MAX_DEFERRED_PROGRESS_INPUTS {
         required
     } else {
@@ -8774,9 +8533,9 @@ const fn deferred_progress_capacity(roster_len: usize) -> usize {
     }
 }
 const fn semantic_ingress_capacity(roster_len: usize) -> usize {
-    // One exact locked Commit set plus current and adjacent-future TimeoutVote
-    // sets bypass the ordinary semantic table.
-    MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(3))
+    // Exact locked Commit and current-view locked-reproposal Prepare sets plus
+    // current and adjacent-future TimeoutVote sets bypass the ordinary table.
+    MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(4))
 }
 /// Maximum distinct service stages which one immutable lifecycle can cross.
 ///
@@ -9052,7 +8811,8 @@ fn ingress_equivocation_identity(
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
         | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
+        | wire::ConsensusMessageV2Payload::VrfReveal(_)
+        | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => None,
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -9080,7 +8840,8 @@ impl IngressEquivocationArtifact {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => None,
         }
     }
     fn conflict_with(
@@ -9114,6 +8875,7 @@ struct IngressDeliveryRecord {
     fingerprint: IngressFingerprint,
     generation: reducer::Generation,
     locked_commit_progress: bool,
+    locked_reproposal_prepare_progress: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct IngressAdmission {
@@ -9122,6 +8884,7 @@ struct IngressAdmission {
     generation: reducer::Generation,
     inserted_equivocation: bool,
     locked_commit_progress: bool,
+    locked_reproposal_prepare_progress: bool,
 }
 impl AdapterOutcome {
     /// Return whether the reducer applied or deliberately ignored the input.
@@ -9243,6 +9006,16 @@ pub(crate) enum AdapterError {
     /// A signer index was outside the frozen roster.
     #[error("Sumeragi v2 validator index {0} is outside the frozen roster")]
     ValidatorIndexOutOfRange(u32),
+    /// A valid TimeoutVote was relayed under a different semantic origin.
+    #[error(
+        "authenticated Sumeragi v2 TimeoutVote signer index {signer} does not match semantic origin {semantic_origin}"
+    )]
+    AuthenticatedTimeoutVoteOriginMismatch {
+        /// Frozen-roster signer index carried by the authenticated vote.
+        signer: u32,
+        /// End-to-end authenticated protocol origin retained by fair ingress.
+        semantic_origin: PeerId,
+    },
     /// A reducer validator token was not present in the adapter mapping.
     #[error("unknown executable Sumeragi v2 validator token {0}")]
     UnknownValidator(reducer::ValidatorId),
@@ -9506,6 +9279,8 @@ pub(crate) struct SumeragiV2Adapter {
     /// Whether reducer transitions may publish current-height global status;
     /// recovered startup keeps this closed until lifecycle activation.
     status_publication_enabled: bool,
+    #[cfg(test)]
+    status_publication_attempts: usize,
     fail_closed: bool,
 }
 enum SafetyWalOpenTarget<'kura> {
@@ -9924,6 +9699,8 @@ impl SumeragiV2Adapter {
             reducer_fence_generation: 0,
             replay_complete: false,
             status_publication_enabled: publish_initial_status,
+            #[cfg(test)]
+            status_publication_attempts: 0,
             fail_closed: false,
         };
         adapter.reconcile_restored_reserved_producer_frontier()?;
@@ -10367,9 +10144,9 @@ impl SumeragiV2Adapter {
     /// Mint the bounded validation-marker frontier authorized by WAL replay.
     ///
     /// Marker files from superseded views remain checksummed local data, not
-    /// restart authority. Only the active durable lock/decision and exact body
-    /// identities referenced by the first replay batch can be rebound before
-    /// live ingress opens.
+    /// restart authority. Only the durable highest Prepare, active durable
+    /// lock/decision, and exact body identities referenced by the first replay
+    /// batch can be rebound before live ingress opens.
     pub(crate) fn recovered_validation_authority(
         &self,
         startup_effects: &[AdapterEffect],
@@ -10390,6 +10167,9 @@ impl SumeragiV2Adapter {
             keys.insert((round, subject));
             Ok(())
         };
+        if let Some(certificate) = self.replayed_highest_prepare_certificate_ref()? {
+            retain(certificate.proposal_round, certificate.subject)?;
+        }
         if let Some(certificate) = self.reducer.durable_state().locked() {
             retain(
                 self.registry.round_to_wire(certificate.proposal_round()),
@@ -10999,6 +10779,31 @@ impl SumeragiV2Adapter {
             })
             .transpose()
     }
+    /// Return the exact highest Prepare certificate retained by safety-WAL replay.
+    ///
+    /// This frontier is distinct from the voting lock: a node may durably
+    /// observe a PrepareQC before a TimeoutCertificate promotes any PrepareQC
+    /// into the active lock.
+    pub(crate) fn replayed_highest_prepare_certificate_ref(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificateRef>, AdapterError> {
+        self.reducer
+            .durable_state()
+            .highest_prepare()
+            .map(|certificate| {
+                Ok(wire::QuorumCertificateRef {
+                    round: self.registry.round_to_wire(certificate.round()),
+                    proposal_round: self.registry.round_to_wire(certificate.proposal_round()),
+                    phase: WireRegistry::phase_to_wire(certificate.phase()),
+                    subject: self.registry.subject(certificate.subject())?,
+                    execution_commitment: self.registry.execution_commitment(
+                        certificate.proposal_round(),
+                        certificate.subject(),
+                    )?,
+                })
+            })
+            .transpose()
+    }
     /// Return the strongest complete body certificate retained by durable reducer state.
     ///
     /// A body stage may be physically retained from an authenticated Proposal
@@ -11074,8 +10879,8 @@ impl SumeragiV2Adapter {
     ///
     /// QCs and TCs have their own progress classification at the runtime
     /// boundary. This predicate is deliberately narrower: only an exact
-    /// Commit vote for an undecided durable lock may bypass normal ingress
-    /// capacity.
+    /// historical Commit vote or an exact current-view Prepare witness for an
+    /// unchanged older lock may bypass normal ingress capacity.
     pub(crate) fn authenticated_ingress_is_progress(
         &self,
         message: &AuthenticatedConsensusMessage,
@@ -11263,7 +11068,9 @@ impl SumeragiV2Adapter {
     }
     /// Return whether a wire payload may use the active lock's progress lane.
     ///
-    /// This is only a pre-authentication capacity hint. Callers must still
+    /// This is only a pre-authentication capacity hint. A current Prepare must
+    /// already match the locally bound current-round execution commitment;
+    /// the incoming vote cannot create that binding. Callers must still
     /// authenticate the envelope and use [`Self::authenticated_ingress_is_progress`]
     /// as the security gate before enqueueing it as progress traffic.
     pub(crate) fn wire_ingress_may_use_progress(
@@ -11274,6 +11081,7 @@ impl SumeragiV2Adapter {
             payload,
             wire::ConsensusMessageV2Payload::Vote(vote)
                 if self.is_exact_locked_commit_vote(vote)
+                    || self.is_exact_locked_reproposal_prepare_vote(vote)
         )
     }
     /// Return the body identity whose direct vote lacks a locally validated
@@ -11373,7 +11181,8 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => {}
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {}
         }
         Ok(())
     }
@@ -11503,6 +11312,142 @@ impl SumeragiV2Adapter {
                 .execution_commitment(locked.round(), locked.subject())
                 .is_ok_and(|commitment| commitment == vote.execution_commitment)
     }
+    /// Return whether `vote` is the exact current-view Prepare witness which
+    /// can replace an older durable lock with an unchanged-body lock.
+    ///
+    /// This is a scheduling predicate only. Authentication and reducer
+    /// admission remain mandatory. Requiring both the historical and current
+    /// round registry bindings prevents an unknown or conflicting body from
+    /// borrowing the protected Progress lane while allowing a durably
+    /// validated reproposal to complete before rapid timeout churn clears its
+    /// partial Prepare pool.
+    fn is_exact_locked_reproposal_prepare_vote(&self, vote: &wire::Vote) -> bool {
+        if vote.phase != wire::GlobalPhase::Prepare || vote.round != vote.proposal_round {
+            return false;
+        }
+        let current = self.reducer.current_tag();
+        if vote.round.context_id != self.wire_context.id()
+            || vote.round.height != current.height()
+            || vote.round.view != current.view()
+        {
+            return false;
+        }
+        let durable = self.reducer.durable_state();
+        if durable.decision().is_some() {
+            return false;
+        }
+        let Some(locked) = durable.locked() else {
+            return false;
+        };
+        if locked.round().height() != current.height() || locked.round().view() >= current.view() {
+            return false;
+        }
+        let current_round = reducer::Round::new(current.height(), current.view());
+        self.registry
+            .subject(locked.subject())
+            .is_ok_and(|subject| subject == vote.subject)
+            && self
+                .registry
+                .execution_commitment(locked.round(), locked.subject())
+                .is_ok_and(|commitment| commitment == vote.execution_commitment)
+            && self
+                .registry
+                .execution_commitment(current_round, locked.subject())
+                .is_ok_and(|commitment| commitment == vote.execution_commitment)
+    }
+    /// Return the one current-view unchanged-lock body statement which may
+    /// cross an already-due timeout boundary by immediately staging
+    /// `LockAndCommit`.
+    ///
+    /// This is only a target projection. The arriving PrepareQC must still be
+    /// converted through the ordinary wire registry and applied to a cloned
+    /// reducer by [`Self::pre_timeout_locked_prepare_qc_stages_lock_and_commit`]
+    /// before it can acquire the bounded scheduler exception.
+    pub(crate) fn pre_timeout_locked_prepare_qc_target(
+        &self,
+    ) -> Option<super::v2_runtime::PreTimeoutLockedPrepareQcTargetV1> {
+        let current_tag = self.reducer.current_tag();
+        let current_round = reducer::Round::new(current_tag.height(), current_tag.view());
+        let durable = self.reducer.durable_state();
+        let locked = durable.locked()?;
+        if self.fail_closed
+            || !self.replay_complete
+            || durable.decision().is_some()
+            || locked.round().height() != current_round.height()
+            || locked.round().view() >= current_round.view()
+            || durable.timeout_intent(current_round).is_some()
+            || durable.commit_intent(current_round).is_some()
+            || self.reducer.local_validator().is_none()
+            || self.reducer.pending_persistence_record().is_some()
+            || self.reducer.awaiting_signature().is_some()
+            || self.reducer.body_state(current_round, locked.subject())
+                != reducer::BodyState::Validated
+        {
+            return None;
+        }
+        let subject = self.registry.subject(locked.subject()).ok()?;
+        let locked_commitment = self
+            .registry
+            .execution_commitment(locked.round(), locked.subject())
+            .ok()?;
+        let current_commitment = self
+            .registry
+            .execution_commitment(current_round, locked.subject())
+            .ok()?;
+        (locked_commitment == current_commitment).then_some(
+            super::v2_runtime::PreTimeoutLockedPrepareQcTargetV1 {
+                round: self.registry.round_to_wire(current_round),
+                subject,
+                execution_commitment: current_commitment,
+            },
+        )
+    }
+    /// Deep-preview one wire PrepareQC against the exact pre-timeout target.
+    ///
+    /// The live reducer and registry remain untouched. Acceptance requires the
+    /// same staged conversion as normal authenticated ingress and exactly one
+    /// immediate `Persist(LockAndCommit)` effect for the arriving certificate;
+    /// a duplicate, observer, signature/WAL fence, wrong body, or any fetch or
+    /// ObservePrepare path therefore cannot delay the timeout.
+    pub(crate) fn pre_timeout_locked_prepare_qc_stages_lock_and_commit(
+        &self,
+        certificate: &wire::QuorumCertificate,
+        target: super::v2_runtime::PreTimeoutLockedPrepareQcTargetV1,
+    ) -> bool {
+        if certificate.phase != wire::GlobalPhase::Prepare
+            || certificate.round != target.round
+            || certificate.proposal_round != target.round
+            || certificate.subject != target.subject
+            || certificate.execution_commitment != target.execution_commitment
+            || self.pre_timeout_locked_prepare_qc_target() != Some(target)
+        {
+            return false;
+        }
+        let mut registry = self.registry.clone();
+        let Ok(core_certificate) = registry.qc_to_core(certificate, &self.wire_context) else {
+            return false;
+        };
+        let mut reducer = self.reducer.clone();
+        let Ok(outcome) = reducer.step(reducer::Event::QuorumCertificateReceived {
+            tag: reducer.current_tag(),
+            certificate: core_certificate.clone(),
+        }) else {
+            return false;
+        };
+        let [reducer::Effect::Persist { entry, .. }] = outcome.effects() else {
+            return false;
+        };
+        matches!(
+            entry.record(),
+            reducer::WalRecord::LockAndCommit { prepare, vote }
+                if prepare == &core_certificate
+                    && vote.context_id() == core_certificate.reference().context_id()
+                    && vote.round() == core_certificate.round()
+                    && vote.proposal_round() == core_certificate.proposal_round()
+                    && vote.phase() == reducer::Phase::Commit
+                    && vote.subject() == core_certificate.subject()
+        )
+    }
     fn deferred_owns_ingress(
         &self,
         key: IngressSemanticKey,
@@ -11542,6 +11487,12 @@ impl SumeragiV2Adapter {
         // cannot exhaust this table.
         let locked_commit_progress = match payload {
             wire::ConsensusMessageV2Payload::Vote(vote) => self.is_exact_locked_commit_vote(vote),
+            _ => false,
+        };
+        let locked_reproposal_prepare_progress = match payload {
+            wire::ConsensusMessageV2Payload::Vote(vote) => {
+                self.is_exact_locked_reproposal_prepare_vote(vote)
+            }
             _ => false,
         };
         let unsafe_proposal = if let wire::ConsensusMessageV2Payload::Proposal(proposal) = payload
@@ -11602,7 +11553,8 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => {
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
                 return Ok((None, None));
             }
         }
@@ -11616,9 +11568,21 @@ impl SumeragiV2Adapter {
                 if deferred_owner
                     || self.ingress_deliveries.get(&key).is_some_and(|delivered| {
                         debug_assert_eq!(delivered.fingerprint, fingerprint);
-                        !locked_commit_progress
-                            || (delivered.locked_commit_progress
-                                && delivered.generation == generation)
+                        let exact_protected_epoch = if locked_commit_progress {
+                            delivered.locked_commit_progress
+                                && !delivered.locked_reproposal_prepare_progress
+                        } else if locked_reproposal_prepare_progress {
+                            !delivered.locked_commit_progress
+                                && delivered.locked_reproposal_prepare_progress
+                        } else if matches!(key, IngressSemanticKey::Proposal { .. }) {
+                            // A strict same-round TC upgrade can change the
+                            // lock without changing the view, so re-evaluate
+                            // one exact proposal in the new consumer epoch.
+                            true
+                        } else {
+                            return true;
+                        };
+                        exact_protected_epoch && delivered.generation == generation
                     })
                 {
                     return Ok((
@@ -11632,6 +11596,7 @@ impl SumeragiV2Adapter {
                     generation,
                     inserted_equivocation: false,
                     locked_commit_progress,
+                    locked_reproposal_prepare_progress,
                 };
                 if unsafe_proposal {
                     self.record_ingress_delivery(admission);
@@ -11661,13 +11626,15 @@ impl SumeragiV2Adapter {
             ));
         }
         let capacity_bypass = self.ingress_equivocations.len() >= MAX_INGRESS_SEMANTIC_KEYS;
-        let protected_capacity_bypass =
-            locked_commit_progress || matches!(key, IngressSemanticKey::TimeoutVote { .. });
+        let protected_capacity_bypass = locked_commit_progress
+            || locked_reproposal_prepare_progress
+            || matches!(key, IngressSemanticKey::TimeoutVote { .. });
         if capacity_bypass && !protected_capacity_bypass {
             // This is bounded backpressure for ordinary semantic traffic. QCs
             // and TCs do not consume this table. The at-most-roster-sized exact
-            // locked Commit and bounded current/future TimeoutVote sets bypass ordinary
-            // capacity and use their independent reserved progress partitions.
+            // locked Commit, exact current-view locked-reproposal Prepare, and
+            // bounded current/future TimeoutVote sets bypass ordinary capacity
+            // and use their independent reserved progress partitions.
             return Ok((
                 Some(Self::ignored_outcome(reducer::IgnoreReason::Busy)),
                 None,
@@ -11689,6 +11656,7 @@ impl SumeragiV2Adapter {
             generation,
             inserted_equivocation: true,
             locked_commit_progress,
+            locked_reproposal_prepare_progress,
         };
         if unsafe_proposal {
             self.record_ingress_delivery(admission);
@@ -11713,6 +11681,26 @@ impl SumeragiV2Adapter {
                     .ok()?,
             ))
         });
+        let current_locked_reproposal = self.reducer.durable_state().locked().and_then(|locked| {
+            let current_round = reducer::Round::new(current_height, current_view);
+            if locked.round().height() != current_height || locked.round().view() >= current_view {
+                return None;
+            }
+            let subject = self.registry.subject(locked.subject()).ok()?;
+            let locked_commitment = self
+                .registry
+                .execution_commitment(locked.round(), locked.subject())
+                .ok()?;
+            let current_commitment = self
+                .registry
+                .execution_commitment(current_round, locked.subject())
+                .ok()?;
+            (locked_commitment == current_commitment).then_some((
+                self.registry.round_to_wire(current_round),
+                subject,
+                current_commitment,
+            ))
+        });
         let matches_current_lock = |key: IngressSemanticKey, fingerprint: IngressFingerprint| {
             matches!(
                 (key, fingerprint, durable_lock),
@@ -11734,6 +11722,28 @@ impl SumeragiV2Adapter {
                     && execution_commitment == locked_execution_commitment
             )
         };
+        let matches_current_locked_reproposal =
+            |key: IngressSemanticKey, fingerprint: IngressFingerprint| {
+                matches!(
+                    (key, fingerprint, current_locked_reproposal),
+                    (
+                        IngressSemanticKey::Vote {
+                            round,
+                            phase: wire::GlobalPhase::Prepare,
+                            ..
+                        },
+                        IngressFingerprint::Vote(
+                            proposal_round,
+                            subject,
+                            execution_commitment,
+                        ),
+                        Some((current_round, locked_subject, current_execution_commitment))
+                    ) if round == current_round
+                        && proposal_round == current_round
+                        && subject == locked_subject
+                        && execution_commitment == current_execution_commitment
+                )
+            };
         let matches_retained_timeout = |key: IngressSemanticKey| {
             matches!(
                 key,
@@ -11744,7 +11754,9 @@ impl SumeragiV2Adapter {
         };
         self.ingress_equivocations.retain(|key, record| {
             if record.capacity_bypass {
-                matches_current_lock(*key, record.fingerprint) || matches_retained_timeout(*key)
+                matches_current_lock(*key, record.fingerprint)
+                    || matches_current_locked_reproposal(*key, record.fingerprint)
+                    || matches_retained_timeout(*key)
             } else {
                 key.round().view >= oldest_retained_view
                     || matches_current_lock(*key, record.fingerprint)
@@ -11865,7 +11877,8 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => {
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
                 return Err(AdapterError::TransportPayload);
             }
         }
@@ -11975,14 +11988,33 @@ impl SumeragiV2Adapter {
             validated_receipt.execution_commitment(),
         )?;
         self.registry = staged_registry;
+        let previous_active_subject = self.active_subject;
         self.active_subject = Some((round, subject));
-        self.step_with_completion_evidence(
+        let result = self.step_with_completion_evidence_and_status(
             reducer::Event::LocalProposalReady {
                 tag,
                 manifest: core_manifest,
             },
             Some(completion_evidence),
-        )
+            false,
+        );
+        match &result {
+            Ok(outcome) => {
+                let retain = outcome.disposition() == reducer::StepDisposition::Applied
+                    || (outcome.disposition()
+                        == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+                        && outcome.deferred_admission_ordinal().is_some());
+                if !retain {
+                    self.active_subject = previous_active_subject;
+                }
+                // Publish after deciding whether this completion owns the active
+                // subject. In particular, the no-effect stale path must not expose a
+                // provisional subject to the monotone external progress clock.
+                self.publish_status()?;
+            }
+            Err(_) => self.active_subject = previous_active_subject,
+        }
+        result
     }
     /// Bind an exact body-store validation marker into the wire registry.
     ///
@@ -12614,6 +12646,35 @@ impl SumeragiV2Adapter {
         }
         Ok((next_registry, core_round, core_subject))
     }
+    /// Rebind an exact durable-body validation completion to the reducer's
+    /// current view after its asynchronous worker outlives an ordinary view
+    /// advance.
+    ///
+    /// Receipt, manifest, round, and subject authentication has already
+    /// completed in [`Self::stage_direct_validation_registry`]. The rebinding
+    /// is deliberately narrower than the reducer's generic event-tag rules:
+    /// only a lower-view tag from the same height may acknowledge the exact
+    /// body work which is still `Durable`. Generation is local to one view and
+    /// resets on an ordinary view advance, so it cannot be compared across the
+    /// strict lower-view boundary. Every other tag remains unchanged and
+    /// therefore reaches the normal fail-closed `WrongHeight`,
+    /// `StaleGeneration`, or `WrongView` classification.
+    fn validation_completion_tag(
+        &self,
+        tag: reducer::EventTag,
+        round: reducer::Round,
+        subject: reducer::Subject,
+    ) -> reducer::EventTag {
+        let current = self.reducer.current_tag();
+        if tag.height() == current.height()
+            && tag.view() < current.view()
+            && self.reducer.body_state(round, subject) == reducer::BodyState::Durable
+        {
+            current
+        } else {
+            tag
+        }
+    }
     /// Preview one exact successful deterministic validation directly against
     /// cloned reducer and wire-registry state.
     ///
@@ -12666,6 +12727,7 @@ impl SumeragiV2Adapter {
             core_subject,
             validated_receipt.execution_commitment(),
         )?;
+        let tag = self.validation_completion_tag(tag, core_round, core_subject);
         let reducer_fence_generation = self.reducer_fence_generation;
         if reducer_fence_generation == u64::MAX {
             return Err(AdapterError::ReducerFenceGenerationExhausted);
@@ -12864,6 +12926,7 @@ impl SumeragiV2Adapter {
             durable_receipt,
             local_origin_manifest,
         )?;
+        let tag = self.validation_completion_tag(tag, core_round, core_subject);
         let reducer_fence_generation = self.reducer_fence_generation;
         if reducer_fence_generation == u64::MAX {
             return Err(AdapterError::ReducerFenceGenerationExhausted);
@@ -13714,6 +13777,7 @@ impl SumeragiV2Adapter {
                         fingerprint,
                         generation: tag.generation(),
                         locked_commit_progress: false,
+                        locked_reproposal_prepare_progress: false,
                     },
                 )
                 .is_none(),
@@ -15962,13 +16026,26 @@ impl SumeragiV2Adapter {
     ) -> Result<LeaderWireRecoveryAuthority, AdapterError> {
         self.ensure_ingress()?;
         let owner: [u8; 32] = self.fingerprints.node.into();
-        Ok(LeaderWireRecoveryAuthority::from_replayed_adapter(
+        let protected_lock = self
+            .reducer
+            .durable_state()
+            .locked()
+            .map(|certificate| -> Result<_, AdapterError> {
+                Ok((
+                    self.registry.round_to_wire(certificate.proposal_round()),
+                    self.registry.subject(certificate.subject())?,
+                ))
+            })
+            .transpose()?;
+        LeaderWireRecoveryAuthority::from_replayed_adapter(
             self.wire_context.id(),
             self.wire_context.height,
             owner,
             self.reducer.current_tag().view(),
             self.reducer.durable_state().decision().is_some(),
-        ))
+        )
+        .with_protected_lock(protected_lock)
+        .map_err(AdapterError::ServicedCandidateStore)
     }
     /// Mint the sole fixed leader-wire sibling owner from this exact open WAL.
     pub(crate) fn mint_leader_wire_store_authority(
@@ -16273,6 +16350,14 @@ impl SumeragiV2Adapter {
         event: reducer::Event,
         completion_evidence: Option<BodyPipelineCompletionEvidence>,
     ) -> Result<AdapterOutcome, AdapterError> {
+        self.step_with_completion_evidence_and_status(event, completion_evidence, true)
+    }
+    fn step_with_completion_evidence_and_status(
+        &mut self,
+        event: reducer::Event,
+        completion_evidence: Option<BodyPipelineCompletionEvidence>,
+        publish_status: bool,
+    ) -> Result<AdapterOutcome, AdapterError> {
         let priority = match &event {
             reducer::Event::ResumeAfterReplay { .. }
             | reducer::Event::LocalProposalReady { .. }
@@ -16291,8 +16376,16 @@ impl SumeragiV2Adapter {
             | reducer::Event::QuorumCertificateReceived { .. }
             | reducer::Event::TimeoutCertificateReceived { .. } => DeferredPriority::Normal,
         };
-        self.step_with_defer_policy(event, false, priority, None, completion_evidence, None)
-            .map(|result| result.outcome)
+        self.step_with_defer_policy(
+            event,
+            false,
+            priority,
+            None,
+            completion_evidence,
+            None,
+            publish_status,
+        )
+        .map(|result| result.outcome)
     }
     #[cfg(test)]
     fn step_authenticated_ingress(
@@ -16315,6 +16408,7 @@ impl SumeragiV2Adapter {
                 | reducer::Event::TimeoutVoteReceived { .. }
                 | reducer::Event::TimeoutCertificateReceived { .. }
         ) || admission.is_some_and(|admission| admission.locked_commit_progress)
+            || admission.is_some_and(|admission| admission.locked_reproposal_prepare_progress)
         {
             DeferredPriority::Progress
         } else {
@@ -16327,6 +16421,7 @@ impl SumeragiV2Adapter {
             admission,
             None,
             authenticated_wire_identity,
+            true,
         )
     }
     fn step_with_defer_policy(
@@ -16337,6 +16432,7 @@ impl SumeragiV2Adapter {
         admission: Option<IngressAdmission>,
         completion_evidence: Option<BodyPipelineCompletionEvidence>,
         authenticated_wire_identity: Option<Arc<[u8]>>,
+        publish_status: bool,
     ) -> Result<DeferPolicyOutcome, AdapterError> {
         self.ensure_ingress()?;
         let queued = event.clone();
@@ -16355,7 +16451,9 @@ impl SumeragiV2Adapter {
             }
             let disposition = reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate);
             self.record_disposition(disposition);
-            self.publish_status()?;
+            if publish_status {
+                self.publish_status()?;
+            }
             self.log_body_progress(&queued, disposition, 0);
             return Ok(DeferPolicyOutcome {
                 outcome: AdapterOutcome {
@@ -16404,7 +16502,9 @@ impl SumeragiV2Adapter {
             }
             let disposition = reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate);
             self.record_disposition(disposition);
-            self.publish_status()?;
+            if publish_status {
+                self.publish_status()?;
+            }
             self.log_body_progress(&queued, disposition, 0);
             return Ok(DeferPolicyOutcome {
                 outcome: AdapterOutcome {
@@ -16472,7 +16572,9 @@ impl SumeragiV2Adapter {
             {
                 self.record_ingress_delivery(admission);
             }
-            self.publish_status()?;
+            if publish_status {
+                self.publish_status()?;
+            }
             return Ok(DeferPolicyOutcome {
                 outcome: AdapterOutcome {
                     disposition,
@@ -16522,7 +16624,9 @@ impl SumeragiV2Adapter {
         if let Some(admission) = admission {
             self.record_ingress_delivery(admission);
         }
-        self.publish_status()?;
+        if publish_status {
+            self.publish_status()?;
+        }
         self.log_body_progress(&queued, disposition, effects.len());
         Ok(DeferPolicyOutcome {
             outcome: AdapterOutcome {
@@ -16540,6 +16644,7 @@ impl SumeragiV2Adapter {
                 fingerprint: admission.fingerprint,
                 generation: admission.generation,
                 locked_commit_progress: admission.locked_commit_progress,
+                locked_reproposal_prepare_progress: admission.locked_reproposal_prepare_progress,
             },
         );
     }
@@ -16754,8 +16859,9 @@ impl SumeragiV2Adapter {
         if retag_authenticated_ingress && authenticated_wire_identity.is_none() {
             return Err(AdapterError::RuntimeIngressOwnershipViolation);
         }
-        let protected_progress =
-            admission.is_some_and(|admission| admission.locked_commit_progress);
+        let protected_progress = admission.is_some_and(|admission| {
+            admission.locked_commit_progress || admission.locked_reproposal_prepare_progress
+        });
         let mut input = DeferredInput {
             admission_ordinal: 0,
             admission_capability: DeferredAdmissionCapability::pending(),
@@ -16801,8 +16907,9 @@ impl SumeragiV2Adapter {
             DeferredPriority::Progress => {
                 // The progress lane is partitioned before admission: one slot
                 // per frozen validator is reserved independently for exact
-                // locked-round Commit reconstruction and TimeoutVote messages,
-                // plus one slot for each PrepareQC, CommitQC, and TC class.
+                // locked-round Commit reconstruction, current locked-body
+                // Prepare reproposal, and TimeoutVote messages, plus one slot
+                // for each PrepareQC, CommitQC, and TC class.
                 // Exact duplicates coalesce above; a distinct item for an
                 // already-owned signer/class retries after fair service rather
                 // than displacing admitted progress.
@@ -16812,6 +16919,7 @@ impl SumeragiV2Adapter {
                 let class = owner.class();
                 let class_capacity = match class {
                     DeferredProgressClass::LockedCommitVote
+                    | DeferredProgressClass::LockedReproposalPrepareVote
                     | DeferredProgressClass::TimeoutVote => self.wire_context.roster.len(),
                     DeferredProgressClass::PrepareCertificate
                     | DeferredProgressClass::CommitCertificate
@@ -17011,6 +17119,12 @@ impl SumeragiV2Adapter {
             wire::ConsensusMessageV2Payload::Vote(vote) => self.is_exact_locked_commit_vote(vote),
             _ => false,
         };
+        let locked_reproposal_prepare_progress = match payload {
+            wire::ConsensusMessageV2Payload::Vote(vote) => {
+                self.is_exact_locked_reproposal_prepare_vote(vote)
+            }
+            _ => false,
+        };
         let unsafe_proposal = if let wire::ConsensusMessageV2Payload::Proposal(proposal) = payload
             && let Some(locked) = self.reducer.durable_state().locked()
         {
@@ -17068,7 +17182,8 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => return false,
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return false,
         };
         if let Some(key) = semantic_key {
             // Any existing semantic record can terminate as a duplicate or an
@@ -17078,8 +17193,9 @@ impl SumeragiV2Adapter {
                 return false;
             }
             let capacity_bypass = self.ingress_equivocations.len() >= MAX_INGRESS_SEMANTIC_KEYS;
-            let protected_capacity_bypass =
-                locked_commit_progress || matches!(key, IngressSemanticKey::TimeoutVote { .. });
+            let protected_capacity_bypass = locked_commit_progress
+                || locked_reproposal_prepare_progress
+                || matches!(key, IngressSemanticKey::TimeoutVote { .. });
             if capacity_bypass && !protected_capacity_bypass {
                 return false;
             }
@@ -17125,7 +17241,8 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => false,
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => false,
         }
     }
     /// Service at most one adapter-owned Busy-deferred reducer transition.
@@ -17521,6 +17638,10 @@ impl SumeragiV2Adapter {
         Ok(None)
     }
     fn publish_status(&mut self) -> Result<(), AdapterError> {
+        #[cfg(test)]
+        {
+            self.status_publication_attempts = self.status_publication_attempts.saturating_add(1);
+        }
         let status = self.status()?;
         if self.status_publication_enabled {
             super::status::set_v2_status(status);
@@ -17682,39 +17803,33 @@ impl SumeragiV2Adapter {
                             }
                         }
                     }
-                    if let reducer::WalRecord::Decision(certificate) = entry.record() {
-                        if self.pending_live_decision_apply.is_some() {
-                            self.fail_closed = true;
-                            return Err(AdapterError::LiveWalReplayCauseMismatch);
-                        }
-                        let Some(frame) = self.wal.recovered_records().last() else {
-                            self.fail_closed = true;
-                            return Err(AdapterError::LiveWalReplayCauseMismatch);
+                    let pending_decision_apply =
+                        if let reducer::WalRecord::Decision(certificate) = entry.record() {
+                            if self.pending_live_decision_apply.is_some() {
+                                self.fail_closed = true;
+                                return Err(AdapterError::LiveWalReplayCauseMismatch);
+                            }
+                            let Some(frame) = self.wal.recovered_records().last() else {
+                                self.fail_closed = true;
+                                return Err(AdapterError::LiveWalReplayCauseMismatch);
+                            };
+                            let Some(wal_identity) =
+                                LiveWalFrameIdentity::from_append_receipt(frame, receipt, id.get())
+                            else {
+                                self.fail_closed = true;
+                                return Err(AdapterError::LiveWalReplayCauseMismatch);
+                            };
+                            let apply = AdapterEffect::Apply {
+                                tag,
+                                subject: self.registry.subject(certificate.subject())?,
+                                certificate: self
+                                    .registry
+                                    .qc_to_wire(certificate, self.aggregator.as_ref())?,
+                            };
+                            Some((wal_identity, apply, certificate.clone()))
+                        } else {
+                            None
                         };
-                        let Some(wal_identity) =
-                            LiveWalFrameIdentity::from_append_receipt(frame, receipt, id.get())
-                        else {
-                            self.fail_closed = true;
-                            return Err(AdapterError::LiveWalReplayCauseMismatch);
-                        };
-                        let apply = AdapterEffect::Apply {
-                            tag,
-                            subject: self.registry.subject(certificate.subject())?,
-                            certificate: self
-                                .registry
-                                .qc_to_wire(certificate, self.aggregator.as_ref())?,
-                        };
-                        let Some(sealed) = SealedLiveWalPersistedEffectV1::from_exact_live_append(
-                            ExactLiveWalPersistedContinuationCause::Apply {
-                                wal_identity,
-                                effect: apply,
-                            },
-                        ) else {
-                            self.fail_closed = true;
-                            return Err(AdapterError::LiveWalReplayCauseMismatch);
-                        };
-                        self.pending_live_decision_apply = Some(sealed);
-                    }
                     self.pending_persistence_id = None;
                     let persisted = reducer::Event::Persisted { tag, id };
                     let continuation = match self.step_reducer(persisted.clone()) {
@@ -17756,6 +17871,51 @@ impl SumeragiV2Adapter {
                             continuation_contains_persist,
                         };
                         return Err(self.fail_macro_step(error));
+                    }
+                    if let Some((wal_identity, apply, decision)) = pending_decision_apply {
+                        let mut direct_apply_count = 0usize;
+                        let mut direct_apply_is_exact = true;
+                        for effect in &continuation {
+                            if let reducer::Effect::Apply {
+                                tag: apply_tag,
+                                subject,
+                                certificate,
+                            } = effect
+                            {
+                                direct_apply_count = direct_apply_count.saturating_add(1);
+                                direct_apply_is_exact &= *apply_tag == tag
+                                    && *subject == decision.subject()
+                                    && certificate == &decision;
+                            }
+                        }
+                        if direct_apply_count > 1
+                            || (direct_apply_count == 1 && !direct_apply_is_exact)
+                        {
+                            self.fail_closed = true;
+                            return Err(AdapterError::LiveWalReplayCauseMismatch);
+                        }
+                        if direct_apply_count == 0 {
+                            // The body is not yet validated, so its source-only
+                            // Decision-WAL seal must wait for the exact Ready
+                            // Validate completion to bind the durable frame and
+                            // predecessor-derived Apply owner. When this same
+                            // persisted continuation emits the exact Apply,
+                            // its authenticated Decision owner is already the
+                            // complete direct handoff and no deferred seal may
+                            // remain stranded in the adapter.
+                            let Some(sealed) =
+                                SealedLiveWalPersistedEffectV1::from_exact_live_append(
+                                    ExactLiveWalPersistedContinuationCause::Apply {
+                                        wal_identity,
+                                        effect: apply,
+                                    },
+                                )
+                            else {
+                                self.fail_closed = true;
+                                return Err(AdapterError::LiveWalReplayCauseMismatch);
+                            };
+                            self.pending_live_decision_apply = Some(sealed);
+                        }
                     }
                     reducer::prepend_causal_continuation(&mut pending, continuation);
                 }

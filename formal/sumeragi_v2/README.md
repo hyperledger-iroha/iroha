@@ -355,12 +355,19 @@ height-context state are not migrated in place.
   that exact vote once. The acknowledgement prunes the superseded historical
   pool before releasing the current Commit signature. Retained outbound control
   remains peer-delivery evidence, not a sufficient local witness because
-  broadcast excludes the sender. The protected deferred lane has one slot per
-  locked-Commit signer, one slot per TimeoutVote signer, and one class-wide
-  PrepareQC, CommitQC, and TC slot each: exactly
-  `2 * |ValidatorIds| + 3` owners. Exact duplicates coalesce, while a distinct
-  same-owner item retries without displacing another protected slot. Immutable
-  authenticated history remains separate from this consumer state. Fair
+  broadcast excludes the sender. A TC-promoted lock without that local Commit
+  intent instead advances only through an unchanged-body reproposal and a new
+  current-view PrepareQC. Once local validation has independently bound the
+  exact current-round subject and execution commitment, authenticated Prepare
+  shares for that witness use the protected Progress lane; an incoming share
+  cannot manufacture its own binding, and stale, future, or conflicting
+  Prepare traffic remains ordinary. The protected deferred lane has one slot
+  per locked-Commit signer, one slot per current locked-reproposal Prepare
+  signer, one slot per TimeoutVote signer, and one class-wide PrepareQC,
+  CommitQC, and TC slot each: exactly `3 * |ValidatorIds| + 3` owners. Exact
+  duplicates coalesce, while a distinct same-owner item retries without
+  displacing another protected slot. Immutable authenticated history remains
+  separate from this consumer state. Fair
   adapter-candidate admission is stricter: a 1-to-1 retry must present the
   exact incumbent lifecycle owner, and a different owner for the same semantic
   lifecycle is rejected before any refinement projection is produced. The
@@ -977,8 +984,11 @@ post-TC `AssembleBody`, causal `BeginPrepare`, and the frozen Normal delivery
 shape for Proposal, PrepareVote, and CommitVote items. Reachable delivery
 ownership originates at authenticated ingress, but the admitted class remains
 protected after view movement even if dynamic classification would now call the
-same CommitVote historical Progress. Authenticated TimeoutVote/DeliverTimeout
-uses its own signer-keyed protected Progress slot. Each accepted certified-body
+same CommitVote historical Progress. The exact current-view Prepare witness for
+an unchanged older lock is likewise protected only after a pre-existing local
+current-round execution binding; generic Prepare traffic remains Normal.
+Authenticated TimeoutVote/DeliverTimeout uses its own signer-keyed protected
+Progress slot. Each accepted certified-body
 or Commit-certificate recovery request receives a fresh live Serve nonce whose
 FIFO position is its occurrence-level rank, so equal request values remain
 distinct. This intentionally over-approximates reachable constructor families
@@ -1712,7 +1722,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`a7364ee89cfab31a3a48d13e7f74b6e353bc34871619da907200b84cdf482a07`.
+`331123d12b08027a9ac0ed0157ed84007eac5a8659b1995bf4c77c3eedb231c2`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1762,7 +1772,7 @@ inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
 recovery, post-decision timeout/TC quiescence, and the exact
-`5N+3H`/`2N+3` admission boundaries in addition to exact-lock,
+`5N+3H`/`3N+3` admission boundaries in addition to exact-lock,
 completion-ownership, future-acquisition rejection, rebound durable retry, and
 executor-batch boundaries. Those adapter boundaries pin a maximum flattened
 persistence macro-step of four effects within the reducer's eight-effect bound,

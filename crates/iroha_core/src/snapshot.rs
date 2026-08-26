@@ -7,9 +7,9 @@ use crate::{
     state::{
         LaneIncarnationLineage, SnapshotNexusRuntime, SnapshotNoritoBlob,
         SnapshotPublicLaneRewardClaim, SnapshotSpaceDirectoryManifestSet, State, StateBlock,
-        WorldReadOnly, ZkConfigInstallError, deserialize::KuraSeed, lane_incarnation_lineage_root,
-        public_lane_reward_record_matches_key, public_lane_stake_share_matches_key,
-        public_lane_validator_record_matches_key,
+        ValidatedSccpRegistryV1, WorldReadOnly, ZkConfigInstallError, deserialize::KuraSeed,
+        lane_incarnation_lineage_root, public_lane_reward_record_matches_key,
+        public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
     },
 };
 use blake2::{Blake2b, digest::consts::U32};
@@ -26,17 +26,21 @@ use iroha_crypto::{
     PublicKey, Signature,
 };
 use iroha_data_model::{
-    NetworkId,
+    ChainId, NetworkId,
     account::AccountId,
     asset::AssetId,
     block::{BlockHeader, consensus_v2::SnapshotV2BootstrapRecord},
+    bridge::SccpRegistryV1,
     nexus::{LaneCatalog, LaneId},
     state_path::StatePath,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
-use mv::storage::{Storage, StorageReadOnly};
-use norito::codec::Encode as NoritoEncode;
+use mv::{
+    cell::Cell,
+    storage::{Storage, StorageReadOnly},
+};
+use norito::codec::{DecodeAll, Encode as NoritoEncode};
 use norito::json::{self, JsonSerialize, JsonSerialize as JsonSerializeTrait};
 use sha2::{Digest, Sha256};
 use std::{
@@ -310,6 +314,8 @@ const SNAPSHOT_FILE_NAME: &str = "snapshot.data";
 const SNAPSHOT_DIGEST_FILE_NAME: &str = "snapshot.sha256";
 /// Name of the signature accompanying the digest.
 const SNAPSHOT_SIGNATURE_FILE_NAME: &str = "snapshot.sig";
+/// Name of the bounded recovery manifest authenticated with the payload digest.
+const SNAPSHOT_FAST_MANIFEST_FILE_NAME: &str = "snapshot.fast.norito";
 /// Name of the Merkle metadata accompanying the snapshot file.
 const SNAPSHOT_MERKLE_FILE_NAME: &str = "snapshot.merkle.json";
 /// Directory containing immutable, digest-named complete generations.
@@ -319,14 +325,65 @@ const SNAPSHOT_CURRENT_FILE_NAME: &str = "current";
 const SNAPSHOT_DIGEST_MAX_BYTES: u64 = 65;
 const SNAPSHOT_CURRENT_MAX_BYTES: u64 = SNAPSHOT_DIGEST_MAX_BYTES;
 const SNAPSHOT_SIGNATURE_MAX_BYTES: u64 = 16 * 1024;
+const SNAPSHOT_FAST_MANIFEST_MAX_BYTES: u64 = 512;
+const SNAPSHOT_FAST_MANIFEST_VERSION: u8 = 1;
+const SNAPSHOT_BUNDLE_SIGNATURE_DOMAIN: &[u8] = b"iroha:snapshot-bundle:v1\0";
 const SNAPSHOT_MERKLE_FIXED_OVERHEAD_BYTES: u64 = 1024;
 const SNAPSHOT_MERKLE_BYTES_PER_LEAF: u64 = 80;
 const SNAPSHOT_GENERATION_GC_MAX_ENTRIES: usize = 4096;
 static SNAPSHOT_PUBLICATION_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+/// Constant-size authority needed by emergency Fast startup.
+#[derive(Clone, Debug, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
+struct EmergencyFastSnapshotManifestV1 {
+    version: u8,
+    payload_len: u64,
+    chain_id: ChainId,
+    network_id: NetworkId,
+    committed_height: u64,
+    tip_hash: Option<HashOf<BlockHeader>>,
+    sccp_policy_hash: [u8; 32],
+    has_snapshot_bootstrap_lineage: bool,
+}
+
+impl EmergencyFastSnapshotManifestV1 {
+    fn validate(&self) -> Result<(), String> {
+        if self.version != SNAPSHOT_FAST_MANIFEST_VERSION {
+            return Err(format!(
+                "unsupported emergency Fast manifest version {}; expected {}",
+                self.version, SNAPSHOT_FAST_MANIFEST_VERSION
+            ));
+        }
+        if (self.committed_height == 0) != self.tip_hash.is_none() {
+            return Err(
+                "emergency Fast manifest height and terminal hash presence disagree".to_owned(),
+            );
+        }
+        usize::try_from(self.committed_height).map_err(|_| {
+            "emergency Fast manifest height exceeds this host's index width".to_owned()
+        })?;
+        Ok(())
+    }
+}
+
+fn snapshot_bundle_auth_digest(payload_sha256: &[u8; 32], manifest_bytes: &[u8]) -> [u8; 32] {
+    let manifest_sha256: [u8; 32] = Sha256::digest(manifest_bytes).into();
+    let mut hasher = Sha256::new();
+    Digest::update(&mut hasher, SNAPSHOT_BUNDLE_SIGNATURE_DOMAIN);
+    Digest::update(&mut hasher, payload_sha256);
+    Digest::update(&mut hasher, manifest_sha256);
+    hasher.finalize().into()
+}
 #[cfg(test)]
 std::thread_local! {
     static SNAPSHOT_GC_FAILURE_STAGE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     static SNAPSHOT_HASH_RECONCILIATION_PASSES: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+    static SNAPSHOT_PAYLOAD_DIGEST_PASSES: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+    static SNAPSHOT_DEEP_VALIDATION_PASSES: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+    static SNAPSHOT_BLOCK_HASH_VECTOR_CLONES: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
 /// Default chunk size used to derive snapshot Merkle metadata.
@@ -900,6 +957,19 @@ fn bind_snapshot_file_handle(
     path: &Path,
     max_bytes: u64,
 ) -> std::io::Result<Option<BoundSnapshotFile>> {
+    bind_snapshot_file_handle_with_digest(path, max_bytes, true)
+}
+fn bind_snapshot_file_handle_without_digest(
+    path: &Path,
+    max_bytes: u64,
+) -> std::io::Result<Option<BoundSnapshotFile>> {
+    bind_snapshot_file_handle_with_digest(path, max_bytes, false)
+}
+fn bind_snapshot_file_handle_with_digest(
+    path: &Path,
+    max_bytes: u64,
+    hash_contents: bool,
+) -> std::io::Result<Option<BoundSnapshotFile>> {
     let path_before = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -938,7 +1008,22 @@ fn bind_snapshot_file_handle(
             "snapshot artifact identity changed while opening",
         ));
     }
-    let bytes_sha256 = stream_snapshot_file_digest(&file, opened_before.len(), max_bytes)?;
+    let bytes_sha256 = if hash_contents {
+        #[cfg(test)]
+        if path
+            .file_name()
+            .is_some_and(|name| name == SNAPSHOT_FILE_NAME)
+        {
+            SNAPSHOT_PAYLOAD_DIGEST_PASSES.with(|passes| passes.set(passes.get() + 1));
+        }
+        Some(stream_snapshot_file_digest(
+            &file,
+            opened_before.len(),
+            max_bytes,
+        )?)
+    } else {
+        None
+    };
     let opened_after = file.metadata()?;
     let path_after = std::fs::symlink_metadata(path)?;
     if path_after.file_type().is_symlink()
@@ -965,7 +1050,11 @@ fn bind_snapshot_file_handle(
         max_bytes,
     }))
 }
-fn read_bound_snapshot_payload(binding: &BoundSnapshotFile) -> Result<Vec<u8>, TryReadError> {
+fn read_bound_snapshot_payload(
+    binding: &BoundSnapshotFile,
+) -> Result<(Vec<u8>, [u8; 32]), TryReadError> {
+    #[cfg(test)]
+    SNAPSHOT_PAYLOAD_DIGEST_PASSES.with(|passes| passes.set(passes.get() + 1));
     let capacity = bounded_snapshot_read_capacity(binding.len, binding.max_bytes)
         .map_err(|error| TryReadError::IO(error, binding.path.clone()))?;
     let mut bytes = Vec::new();
@@ -1000,10 +1089,14 @@ fn read_bound_snapshot_payload(binding: &BoundSnapshotFile) -> Result<Vec<u8>, T
         .seek(std::io::SeekFrom::Start(0))
         .map_err(|error| TryReadError::IO(error, binding.path.clone()))?;
     let actual_sha256: [u8; 32] = digest.finalize().into();
-    if actual_sha256 != binding.bytes_sha256 {
+    if binding
+        .bytes_sha256
+        .is_some_and(|expected_sha256| actual_sha256 != expected_sha256)
+    {
         return Err(TryReadError::SnapshotBindingChanged(binding.path.clone()));
     }
-    Ok(bytes)
+    verify_bound_snapshot_file_metadata_at(&binding.path, binding)?;
+    Ok((bytes, actual_sha256))
 }
 #[derive(Clone, Debug)]
 struct BoundSnapshotFile {
@@ -1011,7 +1104,7 @@ struct BoundSnapshotFile {
     handle: Arc<std::fs::File>,
     identity: StableSnapshotFileIdentity,
     len: u64,
-    bytes_sha256: [u8; 32],
+    bytes_sha256: Option<[u8; 32]>,
     max_bytes: u64,
 }
 #[derive(Clone, Debug)]
@@ -1053,7 +1146,7 @@ fn bind_snapshot_file(
         .map_err(|error| TryReadError::IO(error, path.to_path_buf()))?;
     let actual_sha256: [u8; 32] = Sha256::digest(&bytes).into();
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) != binding.len
-        || actual_sha256 != binding.bytes_sha256
+        || binding.bytes_sha256 != Some(actual_sha256)
     {
         return Err(TryReadError::SnapshotBindingChanged(path.to_path_buf()));
     }
@@ -1084,13 +1177,42 @@ fn verify_bound_snapshot_file_at(
     path: &Path,
     binding: &BoundSnapshotFile,
 ) -> Result<(), TryReadError> {
+    verify_bound_snapshot_file_metadata_at(path, binding)?;
+    let expected_sha256 = binding
+        .bytes_sha256
+        .ok_or_else(|| TryReadError::SnapshotBindingChanged(path.to_path_buf()))?;
+    #[cfg(test)]
+    if binding
+        .path
+        .file_name()
+        .is_some_and(|name| name == SNAPSHOT_FILE_NAME)
+    {
+        SNAPSHOT_PAYLOAD_DIGEST_PASSES.with(|passes| passes.set(passes.get() + 1));
+    }
+    let digest = stream_snapshot_file_digest(&binding.handle, binding.len, binding.max_bytes)
+        .map_err(|error| TryReadError::IO(error, binding.path.clone()))?;
+    if digest != expected_sha256 {
+        return Err(TryReadError::SnapshotBindingChanged(path.to_path_buf()));
+    }
+    Ok(())
+}
+fn verify_bound_snapshot_file_metadata_at(
+    path: &Path,
+    binding: &BoundSnapshotFile,
+) -> Result<(), TryReadError> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|error| TryReadError::IO(error, path.to_path_buf()))?;
     let opened = binding
         .handle
         .metadata()
         .map_err(|error| TryReadError::IO(error, binding.path.clone()))?;
-    if !opened.is_file()
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || !opened.is_file()
+        || !regular_file_has_single_link(&metadata)
+        || !regular_file_has_single_link(&opened)
+        || !stable_file_identity_available(stable_file_identity(&metadata))
+        || !stable_file_identity_available(stable_file_identity(&opened))
         || stable_file_identity(&opened) != binding.identity
         || opened.len() != binding.len
         || stable_file_identity(&metadata) != binding.identity
@@ -1098,11 +1220,6 @@ fn verify_bound_snapshot_file_at(
         || !snapshot_metadata_has_trusted_owner_and_mode(&metadata)
         || !snapshot_metadata_has_trusted_owner_and_mode(&opened)
     {
-        return Err(TryReadError::SnapshotBindingChanged(path.to_path_buf()));
-    }
-    let digest = stream_snapshot_file_digest(&binding.handle, binding.len, binding.max_bytes)
-        .map_err(|error| TryReadError::IO(error, binding.path.clone()))?;
-    if digest != binding.bytes_sha256 {
         return Err(TryReadError::SnapshotBindingChanged(path.to_path_buf()));
     }
     Ok(())
@@ -1214,6 +1331,7 @@ fn direct_snapshot_directory_identity(
 struct SnapshotGenerationBytes {
     digest: Vec<u8>,
     signature: Vec<u8>,
+    fast_manifest: Vec<u8>,
     merkle: Vec<u8>,
 }
 struct BoundSnapshotGeneration {
@@ -1260,10 +1378,71 @@ fn parse_snapshot_current_pointer(bytes: &[u8], path: &Path) -> Result<String, T
     }
     Ok(digest_hex.to_owned())
 }
+
+fn parse_snapshot_digest_bytes(bytes: &[u8], path: &Path) -> Result<[u8; 32], TryReadError> {
+    let digest_hex = parse_snapshot_current_pointer(bytes, path)?;
+    let decoded = hex::decode(digest_hex).map_err(|_| TryReadError::SnapshotGenerationInvalid {
+        path: path.to_path_buf(),
+        reason: "snapshot digest is not canonical SHA-256".to_owned(),
+    })?;
+    decoded
+        .try_into()
+        .map_err(|_| TryReadError::SnapshotGenerationInvalid {
+            path: path.to_path_buf(),
+            reason: "snapshot digest has the wrong length".to_owned(),
+        })
+}
+
+fn decode_emergency_fast_manifest(
+    bytes: &[u8],
+    path: &Path,
+) -> Result<EmergencyFastSnapshotManifestV1, TryReadError> {
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > SNAPSHOT_FAST_MANIFEST_MAX_BYTES {
+        return Err(TryReadError::SnapshotGenerationInvalid {
+            path: path.to_path_buf(),
+            reason: "emergency Fast manifest exceeds its fixed size bound".to_owned(),
+        });
+    }
+    let mut cursor: &[u8] = bytes;
+    let manifest = EmergencyFastSnapshotManifestV1::decode_all(&mut cursor).map_err(|error| {
+        TryReadError::SnapshotGenerationInvalid {
+            path: path.to_path_buf(),
+            reason: format!("invalid emergency Fast manifest: {error}"),
+        }
+    })?;
+    manifest
+        .validate()
+        .map_err(|reason| TryReadError::SnapshotGenerationInvalid {
+            path: path.to_path_buf(),
+            reason,
+        })?;
+    if manifest.encode() != bytes {
+        return Err(TryReadError::SnapshotGenerationInvalid {
+            path: path.to_path_buf(),
+            reason: "emergency Fast manifest is not canonical Norito".to_owned(),
+        });
+    }
+    Ok(manifest)
+}
 fn bind_current_snapshot_generation(
     store_dir: &Path,
     payload_limit: u64,
     merkle_chunk_size: NonZeroUsize,
+) -> Result<BoundSnapshotGeneration, TryReadError> {
+    bind_current_snapshot_generation_with_mode(store_dir, payload_limit, merkle_chunk_size, false)
+}
+fn bind_current_snapshot_generation_emergency_fast(
+    store_dir: &Path,
+    payload_limit: u64,
+    merkle_chunk_size: NonZeroUsize,
+) -> Result<BoundSnapshotGeneration, TryReadError> {
+    bind_current_snapshot_generation_with_mode(store_dir, payload_limit, merkle_chunk_size, true)
+}
+fn bind_current_snapshot_generation_with_mode(
+    store_dir: &Path,
+    payload_limit: u64,
+    merkle_chunk_size: NonZeroUsize,
+    emergency_fast: bool,
 ) -> Result<BoundSnapshotGeneration, TryReadError> {
     let store_dir_identity = direct_snapshot_directory_identity(store_dir)?;
     let generations_dir = store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME);
@@ -1280,11 +1459,16 @@ fn bind_current_snapshot_generation(
     if !snapshot_generation_has_exact_artifact_inventory(&generation_dir)? {
         return Err(TryReadError::SnapshotGenerationInvalid {
             path: generation_dir,
-            reason: "generation does not contain exactly the four canonical artifacts".to_owned(),
+            reason: "generation does not contain exactly the five canonical artifacts".to_owned(),
         });
     }
     let payload_path = generation_dir.join(SNAPSHOT_FILE_NAME);
-    let payload = bind_snapshot_file_handle(&payload_path, payload_limit)
+    let payload_binding = if emergency_fast {
+        bind_snapshot_file_handle_without_digest(&payload_path, payload_limit)
+    } else {
+        bind_snapshot_file_handle(&payload_path, payload_limit)
+    };
+    let payload = payload_binding
         .map_err(|error| TryReadError::IO(error, payload_path.clone()))?
         .ok_or_else(|| TryReadError::SnapshotGenerationInvalid {
             path: payload_path,
@@ -1304,11 +1488,27 @@ fn bind_current_snapshot_generation(
         &generation_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
         SNAPSHOT_SIGNATURE_MAX_BYTES,
     )?;
-    let merkle_limit = snapshot_merkle_max_bytes(payload.len, merkle_chunk_size);
-    let (merkle, merkle_bytes) = bind_required_snapshot_file(
-        &generation_dir.join(SNAPSHOT_MERKLE_FILE_NAME),
-        merkle_limit,
+    let (fast_manifest, fast_manifest_bytes) = bind_required_snapshot_file(
+        &generation_dir.join(SNAPSHOT_FAST_MANIFEST_FILE_NAME),
+        SNAPSHOT_FAST_MANIFEST_MAX_BYTES,
     )?;
+    let mut artifacts = vec![payload.clone(), digest, signature, fast_manifest];
+    let merkle_limit = snapshot_merkle_max_bytes(payload.len, merkle_chunk_size);
+    let merkle_path = generation_dir.join(SNAPSHOT_MERKLE_FILE_NAME);
+    let merkle_bytes = if emergency_fast {
+        let merkle = bind_snapshot_file_handle_without_digest(&merkle_path, merkle_limit)
+            .map_err(|error| TryReadError::IO(error, merkle_path.clone()))?
+            .ok_or_else(|| TryReadError::SnapshotGenerationInvalid {
+                path: merkle_path,
+                reason: "required generation artifact is missing".to_owned(),
+            })?;
+        artifacts.push(merkle);
+        Vec::new()
+    } else {
+        let (merkle, bytes) = bind_required_snapshot_file(&merkle_path, merkle_limit)?;
+        artifacts.push(merkle);
+        bytes
+    };
     Ok(BoundSnapshotGeneration {
         store_dir: store_dir.to_path_buf(),
         store_dir_identity,
@@ -1318,10 +1518,11 @@ fn bind_current_snapshot_generation(
         generation_dir,
         generation_dir_identity,
         payload: payload.clone(),
-        artifacts: vec![payload, digest, signature, merkle],
+        artifacts,
         bytes: SnapshotGenerationBytes {
             digest: digest_bytes,
             signature: signature_bytes,
+            fast_manifest: fast_manifest_bytes,
             merkle: merkle_bytes,
         },
     })
@@ -1346,6 +1547,32 @@ impl BoundSnapshotGeneration {
         }
         for artifact in &self.artifacts {
             verify_bound_snapshot_file(artifact)?;
+        }
+        Ok(())
+    }
+
+    fn verify_emergency_fast_selection_unchanged(&self) -> Result<(), TryReadError> {
+        verify_bound_snapshot_file(&self.pointer)?;
+        if direct_snapshot_directory_identity(&self.store_dir)? != self.store_dir_identity
+            || direct_snapshot_directory_identity(&self.generations_dir)?
+                != self.generations_dir_identity
+            || direct_snapshot_directory_identity(&self.generation_dir)?
+                != self.generation_dir_identity
+            || !snapshot_generation_has_exact_artifact_inventory(&self.generation_dir)?
+        {
+            return Err(TryReadError::SnapshotGenerationInvalid {
+                path: self.store_dir.clone(),
+                reason: "snapshot generation selection changed during emergency Fast restore"
+                    .to_owned(),
+            });
+        }
+        verify_bound_snapshot_file_metadata_at(&self.payload.path, &self.payload)?;
+        for artifact in self.artifacts.iter().skip(1) {
+            if artifact.bytes_sha256.is_some() {
+                verify_bound_snapshot_file(artifact)?;
+            } else {
+                verify_bound_snapshot_file_metadata_at(&artifact.path, artifact)?;
+            }
         }
         Ok(())
     }
@@ -2123,6 +2350,20 @@ fn validate_snapshot_sccp_registry_raw(input: &str) -> Result<(), TryReadError> 
     crate::state::validate_sccp_registry_cell_json_str(registry)
         .map_err(TryReadError::InvalidSccpRegistry)
 }
+
+fn snapshot_sccp_policy_hash_raw(input: &str) -> Result<[u8; 32], TryReadError> {
+    validate_snapshot_sccp_registry_raw(input)?;
+    let world = snapshot_object_field_raw(input, "world")?
+        .ok_or_else(|| TryReadError::Serialization(json::Error::missing_field("world")))?;
+    let registry = snapshot_object_field_raw(world, "sccp_registry")?.ok_or_else(|| {
+        TryReadError::Serialization(json::Error::missing_field("world.sccp_registry"))
+    })?;
+    let cell: Cell<SccpRegistryV1> =
+        json::from_str(registry).map_err(TryReadError::Serialization)?;
+    let validated = ValidatedSccpRegistryV1::try_from_wire(cell.view().get().clone())
+        .map_err(TryReadError::InvalidSccpRegistry)?;
+    Ok(validated.policy_hash())
+}
 #[cfg(test)]
 fn snapshot_has_space_directory_manifest_section(value: &json::Value) -> bool {
     matches!(
@@ -2138,6 +2379,48 @@ fn snapshot_world_has_field(value: &json::Value, field: &str) -> bool {
             if matches!(map.get("world"), Some(json::Value::Object(world)) if world.contains_key(field))
     )
 }
+fn reconcile_emergency_fast_snapshot_boundary(
+    snapshot_height: usize,
+    snapshot_tip: Option<HashOf<BlockHeader>>,
+    block_count: usize,
+    kura: &Kura,
+    hard_fork_snapshot_bootstrap: bool,
+) -> Result<(), TryReadError> {
+    if hard_fork_snapshot_bootstrap {
+        return Err(TryReadError::InvalidSnapshotBootstrap(
+            "emergency Fast mode cannot import or extend an audited snapshot; restart in Strict mode"
+                .to_owned(),
+        ));
+    }
+    let (durable_height, durable_boundary_hash) = kura
+        .emergency_fast_snapshot_boundary(snapshot_height)
+        .map_err(TryReadError::Kura)?;
+    if durable_height != block_count || snapshot_height != durable_height {
+        return Err(TryReadError::MismatchedHeight {
+            snapshot_height,
+            kura_height: durable_height,
+        });
+    }
+    match (snapshot_height, snapshot_tip, durable_boundary_hash) {
+        (0, None, None) => {}
+        (height @ 1.., Some(snapshot_block_hash), Some(kura_block_hash)) => {
+            if snapshot_block_hash != kura_block_hash {
+                return Err(TryReadError::MismatchedHash {
+                    height,
+                    snapshot_block_hash,
+                    kura_block_hash,
+                });
+            }
+        }
+        (height, _, _) => return Err(TryReadError::MissingBlock { height }),
+    }
+    iroha_logger::warn!(
+        snapshot_height,
+        durable_height,
+        "emergency Fast snapshot restore validated only the exact height boundary; Strict restart must audit the historical hash prefix"
+    );
+    Ok(())
+}
 fn reconcile_snapshot_hash_height_with_kura(
     snapshot_hashes: &[HashOf<BlockHeader>],
     block_count: usize,
@@ -2145,6 +2428,15 @@ fn reconcile_snapshot_hash_height_with_kura(
     hard_fork_snapshot_bootstrap: bool,
     authenticated_payload: Option<&AuthenticatedSnapshotBootstrapPayload>,
 ) -> Result<(), TryReadError> {
+    if kura.emergency_fast_startup_enabled() {
+        return reconcile_emergency_fast_snapshot_boundary(
+            snapshot_hashes.len(),
+            snapshot_hashes.last().copied(),
+            block_count,
+            kura,
+            hard_fork_snapshot_bootstrap,
+        );
+    }
     // Verify every retained Kura hash before extending its journal.  Keeping
     // the preflight inside this mutating helper makes it impossible for a
     // caller to persist an attacker-controlled suffix and only then discover
@@ -2269,20 +2561,103 @@ where
     bootstrap_policy
         .validate()
         .map_err(TryReadError::InvalidSnapshotBootstrap)?;
-    let digest_vec = generation.payload.bytes_sha256.to_vec();
-    let actual_digest = hex::encode(&digest_vec);
-    let expected_digest = format!("{actual_digest}\n");
-    if generation.bytes.digest != expected_digest.as_bytes() {
+    let emergency_fast = kura.emergency_fast_startup_enabled();
+    let manifest_path = generation
+        .generation_dir
+        .join(SNAPSHOT_FAST_MANIFEST_FILE_NAME);
+    let fast_manifest =
+        decode_emergency_fast_manifest(&generation.bytes.fast_manifest, &manifest_path)?;
+    if fast_manifest.payload_len != generation.payload.len {
+        return Err(TryReadError::SnapshotGenerationInvalid {
+            path: manifest_path,
+            reason: "emergency Fast manifest payload length differs from snapshot.data".to_owned(),
+        });
+    }
+    let digest_path = generation.generation_dir.join(SNAPSHOT_DIGEST_FILE_NAME);
+    let signed_payload_digest =
+        parse_snapshot_digest_bytes(&generation.bytes.digest, &digest_path)?;
+    let actual_digest = hex::encode(signed_payload_digest);
+    if !emergency_fast
+        && generation
+            .payload
+            .bytes_sha256
+            .expect("Strict snapshot generation binding hashes its payload")
+            != signed_payload_digest
+    {
         return Err(TryReadError::ChecksumMismatch {
             expected: String::from_utf8_lossy(&generation.bytes.digest).into_owned(),
-            actual: actual_digest,
+            actual: hex::encode(
+                generation
+                    .payload
+                    .bytes_sha256
+                    .expect("Strict snapshot generation binding hashes its payload"),
+            ),
         });
     }
     let signature_hex = std::str::from_utf8(&generation.bytes.signature).map_err(|_| {
         TryReadError::SignatureMalformed("snapshot signature is not UTF-8".to_owned())
     })?;
-    let payload_authority = match verify_signature_hex(signature_hex, &digest_vec, verification_key)
-    {
+    let bundle_digest =
+        snapshot_bundle_auth_digest(&signed_payload_digest, &generation.bytes.fast_manifest);
+    if emergency_fast {
+        verify_signature_hex(signature_hex, &bundle_digest, verification_key)?;
+        if fast_manifest.has_snapshot_bootstrap_lineage
+            || kura.provisional_snapshot_bootstrap_pending()
+        {
+            return Err(TryReadError::InvalidSnapshotBootstrap(
+                "emergency Fast mode cannot authorize or continue hash-only snapshot bootstrap lineage; restart in Strict mode"
+                    .to_owned(),
+            ));
+        }
+        if &fast_manifest.network_id != expected_network_id {
+            return Err(TryReadError::NetworkIdMismatch {
+                expected: *expected_network_id,
+                actual: fast_manifest.network_id,
+            });
+        }
+        let snapshot_height = usize::try_from(fast_manifest.committed_height).map_err(|_| {
+            TryReadError::InvalidSnapshotBootstrap(
+                "emergency Fast manifest height exceeds this host's index width".to_owned(),
+            )
+        })?;
+        let reconcile_started_at = Instant::now();
+        reconcile_emergency_fast_snapshot_boundary(
+            snapshot_height,
+            fast_manifest.tip_hash,
+            block_count,
+            kura,
+            false,
+        )?;
+        let seed = KuraSeed {
+            kura: Arc::clone(kura),
+            query_handle: live_query_store.clone(),
+            #[cfg(feature = "telemetry")]
+            telemetry,
+        };
+        let mut state = seed
+            .into_state_from_emergency_fast_manifest(
+                fast_manifest.chain_id.clone(),
+                fast_manifest.network_id,
+                snapshot_height,
+                fast_manifest.tip_hash,
+                fast_manifest.sccp_policy_hash,
+            )
+            .map_err(TryReadError::Serialization)?;
+        initialize_state(&mut state)?;
+        generation.verify_emergency_fast_selection_unchanged()?;
+        iroha_logger::warn!(
+            snapshot_height,
+            kura_height = block_count,
+            validation_ms = reconcile_started_at.elapsed().as_millis(),
+            "emergency Fast restore verified only the bounded signed manifest and exact durable tip; snapshot.data and full World semantics remain deferred until Strict restart"
+        );
+        return Ok(SnapshotReadOutcome { state });
+    }
+    let payload_authority = match verify_signature_hex(
+        signature_hex,
+        &bundle_digest,
+        verification_key,
+    ) {
         Ok(()) => SnapshotPayloadAuthority::NormallySigned,
         Err(error) if bootstrap_policy.authorizes_digest(&actual_digest) => {
             warn!(
@@ -2294,10 +2669,12 @@ where
         }
         Err(error) => return Err(error),
     };
-    let payload = read_bound_snapshot_payload(&generation.payload)?;
+    let payload = read_bound_snapshot_payload(&generation.payload)?.0;
     let bytes = payload.as_slice();
     let bytes_len = bytes.len();
     let payload_preview = snapshot_payload_preview(bytes);
+    #[cfg(test)]
+    SNAPSHOT_DEEP_VALIDATION_PASSES.with(|passes| passes.set(passes.get() + 1));
     let merkle_path = generation.generation_dir.join(SNAPSHOT_MERKLE_FILE_NAME);
     let merkle_value = json::from_slice::<json::Value>(&generation.bytes.merkle)
         .map_err(TryReadError::MerkleMetadata)?;
@@ -2343,7 +2720,8 @@ where
         #[cfg(feature = "telemetry")]
         telemetry,
     };
-    let mut state = seed.into_state_from_json_str(input).map_err(|err| {
+    let decoded_state = seed.into_state_from_json_str(input);
+    let mut state = decoded_state.map_err(|err| {
         iroha_logger::warn!(
             ?err,
             bytes_len,
@@ -2359,6 +2737,8 @@ where
             actual: state.network_id,
         });
     }
+    #[cfg(test)]
+    SNAPSHOT_BLOCK_HASH_VECTOR_CLONES.with(|clones| clones.set(clones.get() + 1));
     let snapshot_hashes = state.committed_block_hashes_snapshot();
     let snapshot_height = snapshot_hashes.len();
     let snapshot_height_u64 = u64::try_from(snapshot_height).map_err(|_| {
@@ -2368,6 +2748,21 @@ where
     })?;
     let exact_policy_boundary = bootstrap_policy.authorizes(&actual_digest, snapshot_height_u64);
     let has_bootstrap_lineage = state.has_snapshot_v2_bootstrap_candidate();
+    if fast_manifest.chain_id != *state.chain_id_ref()
+        || fast_manifest.network_id != *state.network_id_ref()
+        || fast_manifest.committed_height != snapshot_height_u64
+        || fast_manifest.tip_hash != snapshot_hashes.last().copied()
+        || fast_manifest.sccp_policy_hash != state.sccp_policy_hash_snapshot()
+        || fast_manifest.has_snapshot_bootstrap_lineage != has_bootstrap_lineage
+    {
+        return Err(TryReadError::SnapshotGenerationInvalid {
+            path: generation
+                .generation_dir
+                .join(SNAPSHOT_FAST_MANIFEST_FILE_NAME),
+            reason: "signed emergency Fast manifest differs from the fully decoded snapshot"
+                .to_owned(),
+        });
+    }
     if payload_authority == SnapshotPayloadAuthority::ExactAuditedDigestBypass
         && !exact_policy_boundary
     {
@@ -2563,7 +2958,16 @@ where
             .min(resource_policy.max_transient_bytes.get()),
     )
     .unwrap_or(u64::MAX);
-    let generation = bind_current_snapshot_generation(store_dir, payload_limit, merkle_chunk_size)?;
+    let emergency_fast = kura.emergency_fast_startup_enabled();
+    let generation = if emergency_fast {
+        bind_current_snapshot_generation_emergency_fast(
+            store_dir,
+            payload_limit,
+            merkle_chunk_size,
+        )?
+    } else {
+        bind_current_snapshot_generation(store_dir, payload_limit, merkle_chunk_size)?
+    };
     let live_query_store = live_query_store_lazy();
     let outcome = try_read_snapshot_bundle(
         &generation,
@@ -2579,7 +2983,9 @@ where
         #[cfg(feature = "telemetry")]
         telemetry,
     )?;
-    generation.verify_generation_unchanged()?;
+    if !emergency_fast {
+        generation.verify_generation_unchanged()?;
+    }
     Ok(outcome.state)
 }
 fn snapshot_publication_error(context: &str, error: impl std::fmt::Display) -> TryWriteError {
@@ -2684,6 +3090,7 @@ fn snapshot_generation_has_exact_artifact_inventory(path: &Path) -> Result<bool,
         SNAPSHOT_FILE_NAME.to_owned(),
         SNAPSHOT_DIGEST_FILE_NAME.to_owned(),
         SNAPSHOT_SIGNATURE_FILE_NAME.to_owned(),
+        SNAPSHOT_FAST_MANIFEST_FILE_NAME.to_owned(),
         SNAPSHOT_MERKLE_FILE_NAME.to_owned(),
     ]);
     let mut actual = BTreeSet::new();
@@ -2715,7 +3122,7 @@ fn snapshot_generation_is_canonical_for_gc(
         if !snapshot_generation_has_exact_artifact_inventory(path)? {
             return Err(TryReadError::SnapshotGenerationInvalid {
                 path: path.to_path_buf(),
-                reason: "generation does not contain exactly the four canonical artifacts"
+                reason: "generation does not contain exactly the five canonical artifacts"
                     .to_owned(),
             });
         }
@@ -2737,10 +3144,23 @@ fn snapshot_generation_is_canonical_for_gc(
             &path.join(SNAPSHOT_SIGNATURE_FILE_NAME),
             SNAPSHOT_SIGNATURE_MAX_BYTES,
         )?;
+        let manifest_path = path.join(SNAPSHOT_FAST_MANIFEST_FILE_NAME);
+        let (fast_manifest_file, fast_manifest_bytes) =
+            bind_required_snapshot_file(&manifest_path, SNAPSHOT_FAST_MANIFEST_MAX_BYTES)?;
+        let fast_manifest = decode_emergency_fast_manifest(&fast_manifest_bytes, &manifest_path)?;
+        if fast_manifest.payload_len != payload.len {
+            return Err(TryReadError::SnapshotGenerationInvalid {
+                path: manifest_path,
+                reason: "emergency Fast manifest payload length differs from snapshot.data"
+                    .to_owned(),
+            });
+        }
         let merkle_limit = snapshot_merkle_max_bytes(payload.len, merkle_chunk_size);
         let (merkle_file, merkle_bytes) =
             bind_required_snapshot_file(&path.join(SNAPSHOT_MERKLE_FILE_NAME), merkle_limit)?;
-        let payload_digest = payload.bytes_sha256.to_vec();
+        let payload_digest = payload
+            .bytes_sha256
+            .expect("ordinary snapshot generation binding hashes its payload");
         if hex::encode(&payload_digest) != generation_name
             || digest_bytes != format!("{generation_name}\n").as_bytes()
         {
@@ -2752,7 +3172,8 @@ fn snapshot_generation_is_canonical_for_gc(
         let signature_hex = std::str::from_utf8(&signature_bytes).map_err(|_| {
             TryReadError::SignatureMalformed("snapshot signature is not UTF-8".to_owned())
         })?;
-        verify_signature_hex(signature_hex, &payload_digest, verification_key)?;
+        let bundle_digest = snapshot_bundle_auth_digest(&payload_digest, &fast_manifest_bytes);
+        verify_signature_hex(signature_hex, &bundle_digest, verification_key)?;
         let merkle_value =
             json::from_slice::<json::Value>(&merkle_bytes).map_err(TryReadError::MerkleMetadata)?;
         let metadata = SnapshotMerkleMetadata::from_json_value(merkle_value)
@@ -2764,7 +3185,7 @@ fn snapshot_generation_is_canonical_for_gc(
                 reason: "Merkle metadata is not canonical JSON".to_owned(),
             });
         }
-        let payload_bytes = read_bound_snapshot_payload(&payload)?;
+        let payload_bytes = read_bound_snapshot_payload(&payload)?.0;
         metadata
             .verify_against_bytes(&payload_bytes, merkle_chunk_size)
             .map_err(|error| merkle_err_to_try_read(error, merkle_file.path.clone()))?;
@@ -2776,7 +3197,13 @@ fn snapshot_generation_is_canonical_for_gc(
                 reason: "generation directory identity changed during GC validation".to_owned(),
             });
         }
-        for artifact in [&payload, &digest, &signature, &merkle_file] {
+        for artifact in [
+            &payload,
+            &digest,
+            &signature,
+            &fast_manifest_file,
+            &merkle_file,
+        ] {
             verify_bound_snapshot_file(artifact)?;
         }
         Ok(())
@@ -2804,6 +3231,7 @@ fn bind_snapshot_generation_gc_removal(
         SNAPSHOT_FILE_NAME,
         SNAPSHOT_DIGEST_FILE_NAME,
         SNAPSHOT_SIGNATURE_FILE_NAME,
+        SNAPSHOT_FAST_MANIFEST_FILE_NAME,
         SNAPSHOT_MERKLE_FILE_NAME,
     ];
     let mut files = Vec::new();
@@ -3181,7 +3609,7 @@ fn create_generation_artifact(
     };
     let expected_sha256: [u8; 32] = Sha256::digest(bytes).into();
     if binding.len != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
-        || binding.bytes_sha256 != expected_sha256
+        || binding.bytes_sha256 != Some(expected_sha256)
         || written_sha256 != expected_sha256
         || direct_snapshot_directory_identity(generation_dir)
             .map_err(|error| snapshot_publication_error("reverify generation directory", error))?
@@ -3254,6 +3682,7 @@ fn bind_existing_snapshot_generation_for_write(
     payload: &[u8],
     digest: &[u8],
     signature: &[u8],
+    fast_manifest: &[u8],
     merkle: &[u8],
     merkle_limit: u64,
     verification_key: &PublicKey,
@@ -3266,9 +3695,25 @@ fn bind_existing_snapshot_generation_for_write(
     {
         return Err(snapshot_publication_error(
             "bind published generation",
-            "immutable generation does not contain exactly the four canonical artifacts",
+            "immutable generation does not contain exactly the five canonical artifacts",
         ));
     }
+    let manifest_path = generation_dir.join(SNAPSHOT_FAST_MANIFEST_FILE_NAME);
+    let decoded_manifest = decode_emergency_fast_manifest(fast_manifest, &manifest_path)
+        .map_err(|error| snapshot_publication_error("validate Fast manifest", error))?;
+    if decoded_manifest.payload_len != u64::try_from(payload.len()).unwrap_or(u64::MAX) {
+        return Err(snapshot_publication_error(
+            "validate Fast manifest",
+            "manifest payload length differs from snapshot.data",
+        ));
+    }
+    let payload_digest: [u8; 32] = hex::decode(digest_hex)
+        .map_err(|error| snapshot_publication_error("decode generation digest", error))?
+        .try_into()
+        .map_err(|_| {
+            snapshot_publication_error("decode generation digest", "wrong SHA-256 length")
+        })?;
+    let bundle_digest = snapshot_bundle_auth_digest(&payload_digest, fast_manifest);
     let expected = [
         (
             SNAPSHOT_FILE_NAME,
@@ -3280,6 +3725,11 @@ fn bind_existing_snapshot_generation_for_write(
             SNAPSHOT_SIGNATURE_FILE_NAME,
             signature,
             SNAPSHOT_SIGNATURE_MAX_BYTES,
+        ),
+        (
+            SNAPSHOT_FAST_MANIFEST_FILE_NAME,
+            fast_manifest,
+            SNAPSHOT_FAST_MANIFEST_MAX_BYTES,
         ),
         (SNAPSHOT_MERKLE_FILE_NAME, merkle, merkle_limit),
     ];
@@ -3297,7 +3747,7 @@ fn bind_existing_snapshot_generation_for_write(
             };
             let expected_sha256: [u8; 32] = Sha256::digest(expected_bytes).into();
             if binding.len != u64::try_from(expected_bytes.len()).unwrap_or(u64::MAX)
-                || binding.bytes_sha256 != expected_sha256
+                || binding.bytes_sha256 != Some(expected_sha256)
             {
                 return Err(snapshot_publication_error(
                     "verify published generation",
@@ -3321,16 +3771,9 @@ fn bind_existing_snapshot_generation_for_write(
                         "signature is not UTF-8",
                     )
                 })?;
-                verify_signature_hex(
-                    signature_hex,
-                    &hex::decode(digest_hex).map_err(|error| {
-                        snapshot_publication_error("decode generation digest", error)
-                    })?,
-                    verification_key,
-                )
-                .map_err(|error| {
-                    snapshot_publication_error("verify generation signature", error)
-                })?;
+                verify_signature_hex(signature_hex, &bundle_digest, verification_key).map_err(
+                    |error| snapshot_publication_error("verify generation signature", error),
+                )?;
             } else if bytes != expected_bytes {
                 return Err(snapshot_publication_error(
                     "verify published generation",
@@ -3359,6 +3802,7 @@ fn publish_immutable_snapshot_generation(
     payload: &[u8],
     digest: &[u8],
     signature: &[u8],
+    fast_manifest: &[u8],
     merkle: &[u8],
     merkle_limit: u64,
     verification_key: &PublicKey,
@@ -3401,6 +3845,7 @@ fn publish_immutable_snapshot_generation(
             payload,
             digest,
             signature,
+            fast_manifest,
             merkle,
             merkle_limit,
             verification_key,
@@ -3439,6 +3884,13 @@ fn publish_immutable_snapshot_generation(
         create_generation_artifact(
             &staging_dir,
             generation_dir_identity,
+            SNAPSHOT_FAST_MANIFEST_FILE_NAME,
+            fast_manifest,
+            SNAPSHOT_FAST_MANIFEST_MAX_BYTES,
+        )?,
+        create_generation_artifact(
+            &staging_dir,
+            generation_dir_identity,
             SNAPSHOT_MERKLE_FILE_NAME,
             merkle,
             merkle_limit,
@@ -3456,6 +3908,7 @@ fn publish_immutable_snapshot_generation(
                 payload,
                 digest,
                 signature,
+                fast_manifest,
                 merkle,
                 merkle_limit,
                 verification_key,
@@ -3470,6 +3923,7 @@ fn publish_immutable_snapshot_generation(
         SNAPSHOT_FILE_NAME,
         SNAPSHOT_DIGEST_FILE_NAME,
         SNAPSHOT_SIGNATURE_FILE_NAME,
+        SNAPSHOT_FAST_MANIFEST_FILE_NAME,
         SNAPSHOT_MERKLE_FILE_NAME,
     ]) {
         verify_bound_snapshot_file_at(&generation_dir.join(name), binding)
@@ -3482,6 +3936,7 @@ fn publish_immutable_snapshot_generation(
         payload,
         digest,
         signature,
+        fast_manifest,
         merkle,
         merkle_limit,
         verification_key,
@@ -3782,6 +4237,23 @@ fn try_write_snapshot_payload_with_limit_locked(
         ));
     }
     let geometry_checkpoint = geometry_checkpoint_from_snapshot(&snapshot_bytes)?;
+    let state_height = u64::try_from(state.committed_height()).map_err(|_| {
+        TryWriteError::PublicationIntegrity(
+            "State height exceeds the u64 manifest domain".to_owned(),
+        )
+    })?;
+    if geometry_checkpoint.chain_id != *state.chain_id_ref()
+        || geometry_checkpoint.network_id != *state.network_id_ref()
+        || geometry_checkpoint.height != state_height
+        || geometry_checkpoint.block_hash != state.latest_block_hash_fast()
+        || geometry_checkpoint.sccp_policy_hash != state.sccp_policy_hash_snapshot()
+        || geometry_checkpoint.snapshot_v2_bootstrap.is_some()
+            != state.authenticated_snapshot_v2_bootstrap().is_some()
+    {
+        return Err(TryWriteError::PublicationIntegrity(
+            "serialized snapshot identity differs from the State being published".to_owned(),
+        ));
+    }
     ensure_snapshot_commit_evidence(state, &geometry_checkpoint)?;
     let mut store_builder = std::fs::DirBuilder::new();
     store_builder.recursive(true);
@@ -3796,12 +4268,34 @@ fn try_write_snapshot_payload_with_limit_locked(
     let store_dir = store_dir.as_ref();
     let directory_identity = direct_snapshot_directory_identity(store_dir)
         .map_err(|error| snapshot_publication_error("bind snapshot directory", error))?;
-    let digest_bytes = Sha256::digest(&snapshot_bytes);
+    let digest_bytes: [u8; 32] = Sha256::digest(&snapshot_bytes).into();
     let digest_vec = digest_bytes.to_vec();
     let digest_hex = hex::encode(&digest_vec);
     let merkle = SnapshotMerkleMetadata::from_bytes(&snapshot_bytes, merkle_chunk_size);
     let digest_line = format!("{digest_hex}\n").into_bytes();
-    let signature = Signature::try_new(signing_key.private_key(), &digest_vec)
+    let fast_manifest = EmergencyFastSnapshotManifestV1 {
+        version: SNAPSHOT_FAST_MANIFEST_VERSION,
+        payload_len: u64::try_from(snapshot_bytes.len()).unwrap_or(u64::MAX),
+        chain_id: geometry_checkpoint.chain_id.clone(),
+        network_id: geometry_checkpoint.network_id,
+        committed_height: geometry_checkpoint.height,
+        tip_hash: geometry_checkpoint.block_hash,
+        sccp_policy_hash: geometry_checkpoint.sccp_policy_hash,
+        has_snapshot_bootstrap_lineage: geometry_checkpoint.snapshot_v2_bootstrap.is_some(),
+    };
+    fast_manifest
+        .validate()
+        .map_err(TryWriteError::PublicationIntegrity)?;
+    let fast_manifest_bytes = fast_manifest.encode();
+    if u64::try_from(fast_manifest_bytes.len()).unwrap_or(u64::MAX)
+        > SNAPSHOT_FAST_MANIFEST_MAX_BYTES
+    {
+        return Err(TryWriteError::PublicationIntegrity(
+            "canonical emergency Fast manifest exceeds its fixed size bound".to_owned(),
+        ));
+    }
+    let bundle_digest = snapshot_bundle_auth_digest(&digest_bytes, &fast_manifest_bytes);
+    let signature = Signature::try_new(signing_key.private_key(), &bundle_digest)
         .map_err(TryWriteError::Signing)?;
     let signature_hex = hex::encode(signature.payload()).into_bytes();
     let merkle_bytes = json::to_json(&merkle)
@@ -3821,6 +4315,7 @@ fn try_write_snapshot_payload_with_limit_locked(
         &snapshot_bytes,
         &digest_line,
         &signature_hex,
+        &fast_manifest_bytes,
         &merkle_bytes,
         merkle_limit,
         signing_key.public_key(),
@@ -3879,6 +4374,8 @@ fn try_write_snapshot(
     )
 }
 struct DurableSnapshotGeometryCheckpoint {
+    chain_id: ChainId,
+    network_id: NetworkId,
     lane_config: iroha_config::parameters::actual::LaneConfig,
     incarnations: BTreeMap<LaneId, Hash>,
     activation_heights: BTreeMap<LaneId, u64>,
@@ -3887,6 +4384,7 @@ struct DurableSnapshotGeometryCheckpoint {
     block_hash: Option<HashOf<BlockHeader>>,
     state_hash: Hash,
     snapshot_v2_bootstrap: Option<SnapshotV2BootstrapRecord>,
+    sccp_policy_hash: [u8; 32],
     smart_contract_state: BTreeMap<StatePath, Vec<u8>>,
 }
 fn ensure_snapshot_commit_evidence(
@@ -4065,6 +4563,8 @@ fn geometry_checkpoint_from_snapshot(
     let network_id: NetworkId =
         json::from_str(required_snapshot_object_field(input, "network_id")?)
             .map_err(TryWriteError::Serialization)?;
+    let chain_id: ChainId = json::from_str(required_snapshot_object_field(input, "chain_id")?)
+        .map_err(TryWriteError::Serialization)?;
     let snapshot_v2_bootstrap = snapshot_object_field_raw(input, "sumeragi_v2_bootstrap")
         .map_err(TryWriteError::RestartValidation)?
         .map(json::from_str)
@@ -4127,7 +4627,11 @@ fn geometry_checkpoint_from_snapshot(
         .collect();
     let state_hash =
         canonical_snapshot_wsv_hash(bytes).map_err(TryWriteError::RestartValidation)?;
+    let sccp_policy_hash =
+        snapshot_sccp_policy_hash_raw(input).map_err(TryWriteError::RestartValidation)?;
     Ok(DurableSnapshotGeometryCheckpoint {
+        chain_id,
+        network_id,
         lane_config,
         incarnations,
         activation_heights,
@@ -4136,6 +4640,7 @@ fn geometry_checkpoint_from_snapshot(
         block_hash: block_hashes.last().copied(),
         state_hash,
         snapshot_v2_bootstrap,
+        sccp_policy_hash,
         smart_contract_state,
     })
 }

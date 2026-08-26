@@ -536,6 +536,8 @@ fn validate_finalized_replication_order(
         || order.order_id != *record.order_id.as_bytes()
         || order.manifest_digest != *record.manifest_digest.as_bytes()
         || order.manifest_cid.as_slice() != record.manifest_root_cid.as_bytes()
+        || order.issued_at != record.issued_epoch
+        || order.deadline_at != record.deadline_epoch
     {
         return Err(CapacityError::FinalizedSnapshotInvalid(format!(
             "replication order {:?} is non-canonical or substituted from its ledger summary",
@@ -1943,6 +1945,39 @@ mod tests {
                     &[substituted],
                 )
                 .expect_err("substituted order summary must fail closed"),
+            CapacityError::FinalizedSnapshotInvalid(_)
+        ));
+        assert_eq!(manager.finalized_cursor().expect("cursor"), None);
+        assert!(manager.usage_snapshot().provider_id.is_none());
+
+        let mut substituted_issued_epoch =
+            make_order_record(&order, ReplicationOrderStatus::Pending);
+        substituted_issued_epoch.issued_epoch += 1;
+        assert!(matches!(
+            manager
+                .reconcile_finalized(
+                    finalized_cursor(11, 0x4B),
+                    CapacityReconcileModeV1::FullRebuild,
+                    record.provider_id,
+                    Some(&record),
+                    &[substituted_issued_epoch],
+                )
+                .expect_err("substituted issued timestamp must fail closed"),
+            CapacityError::FinalizedSnapshotInvalid(_)
+        ));
+        let mut substituted_deadline_epoch =
+            make_order_record(&order, ReplicationOrderStatus::Pending);
+        substituted_deadline_epoch.deadline_epoch += 1;
+        assert!(matches!(
+            manager
+                .reconcile_finalized(
+                    finalized_cursor(11, 0x4B),
+                    CapacityReconcileModeV1::FullRebuild,
+                    record.provider_id,
+                    Some(&record),
+                    &[substituted_deadline_epoch],
+                )
+                .expect_err("substituted deadline timestamp must fail closed"),
             CapacityError::FinalizedSnapshotInvalid(_)
         ));
         assert_eq!(manager.finalized_cursor().expect("cursor"), None);

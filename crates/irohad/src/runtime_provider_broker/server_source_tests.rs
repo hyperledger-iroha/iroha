@@ -1875,7 +1875,7 @@ fn source_fetch_v1_accepts_generic_and_rejects_musubi_substitution() {
         .expect("Musubi wire")
         .binding
         .replication_order =
-        iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0xE1; 32]);
+        iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0x61; 32]);
     rejects(&wrong_order);
     let mut wrong_archive = exact.clone();
     wrong_archive

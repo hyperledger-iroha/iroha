@@ -341,6 +341,7 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
     assert!(
         adapter
             .sign_lane_vote(&proposal, CertPhase::Prepare)
+            .expect("READY replay check should not fail")
             .is_none(),
         "an authorized in-memory READY body cannot replay without a fresh durable capability"
     );
@@ -786,6 +787,70 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         "terminal autonomous ingress must not stop consensus output"
     );
 }
+
+#[test]
+fn authorized_ready_session_without_one_shot_token_fails_stop() {
+    let (mut adapter, keys) = fixture(wire::ConsensusMode::Npos);
+    let (block, proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+    let entrypoint = block
+        .external_entrypoints_cloned()
+        .next()
+        .expect("planned autonomous entrypoint");
+    let (payload, _) = signed_autonomous_payload_for_entrypoint(
+        &adapter,
+        &keys,
+        &proposal,
+        entrypoint,
+        b"missing-ready-token-queue-plan-admission-binding",
+        b"missing-ready-token-reservation-owner",
+        "deterministic autonomous producer",
+        "producer key",
+        "signed autonomous payload",
+    );
+    let availability = lane_payload_availability_body(
+        &payload,
+        &proposal,
+        adapter.native_network_id(),
+        adapter.context.epoch,
+    )
+    .expect("derive exact READY body");
+    assert_eq!(
+        adapter
+            .lane_sessions
+            .insert_recovered_proposal_replacing_uncommitted_conflict(proposal.clone()),
+        Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted)
+    );
+    adapter
+        .lane_sessions
+        .authorize_payload_availability(&proposal, availability)
+        .expect("install the body which normally follows durable authorization");
+    adapter.locally_bound_lane_proposals.insert(
+        proposal.proposal_hash,
+        proposal
+            .payload_block_hint
+            .expect("planned proposal carries its global-body hint"),
+    );
+    assert!(
+        adapter
+            .lane_sessions
+            .local_prepare_vote_needed_for(&proposal, &adapter.local_peer),
+        "the regression fixture must still require the local READY vote"
+    );
+    assert!(
+        !adapter
+            .lane_ready_authorizations
+            .contains_key(&V2LaneWorkAdapter::lane_ready_session_key(&proposal)),
+        "the regression fixture deliberately models the consumed-token failure window"
+    );
+
+    adapter.drive_lane_sessions();
+
+    assert!(
+        adapter.output_guard.restart_required(),
+        "an authorized READY body without its one-shot signer token must fail-stop instead of hanging"
+    );
+}
+
 #[test]
 fn single_custom_lane_still_produces_autonomous_payload() {
     let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
@@ -1529,8 +1594,17 @@ pub(in crate::sumeragi) fn historical_autonomous_lane_certificate_fixture()
         validators: keys,
     }
 }
-fn exercise_canonical_autonomous_carrier_after_direct_decision(local_signer_quorum: bool) {
-    let (mut adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
+fn exercise_canonical_autonomous_carrier_after_direct_decision(
+    mode: wire::ConsensusMode,
+    local_signer_quorum: bool,
+) {
+    let (mut adapter, keys) = fixture_at_height_inner_with_kura_and_local_index(
+        mode,
+        2,
+        true,
+        locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
+        Some(0),
+    );
     let quorum_keys = if local_signer_quorum {
         &keys[..3]
     } else {
@@ -1663,6 +1737,21 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(local_signer_quor
             .is_some(),
         "receipt-bound recovery must persist execution input before READY"
     );
+    let emitted_local_ready = adapter.drain_effects(usize::MAX).into_iter().any(|effect| {
+        matches!(
+            effect,
+            V2LaneWorkEffect::PostLaneBlock {
+                message: BlockMessage::LaneBlockVote(vote),
+                ..
+            } if vote.body.phase == CertPhase::Prepare
+                && vote.signer == adapter.local_peer
+                && vote.payload_availability_vote.is_some()
+        )
+    });
+    assert!(
+        emitted_local_ready,
+        "receipt-bound recovery must emit the local READY vote after durable input"
+    );
     let prepare_votes = quorum_keys
         .iter()
         .map(|key| signed_autonomous_prepare_vote(&proposal, &payload, key, &keys))
@@ -1718,11 +1807,14 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(local_signer_quor
 }
 #[test]
 fn canonical_autonomous_carrier_binds_after_direct_single_validator_decision() {
-    exercise_canonical_autonomous_carrier_after_direct_decision(true);
+    exercise_canonical_autonomous_carrier_after_direct_decision(
+        wire::ConsensusMode::Permissioned,
+        true,
+    );
 }
 #[test]
 fn canonical_autonomous_carrier_binds_after_direct_four_validator_decision() {
-    exercise_canonical_autonomous_carrier_after_direct_decision(false);
+    exercise_canonical_autonomous_carrier_after_direct_decision(wire::ConsensusMode::Npos, false);
 }
 #[test]
 fn recovered_autonomous_certificate_repairs_ready_before_certified_publication() {
@@ -1850,7 +1942,12 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
     let mut sidecar_only_successor = successor_context_for_parent(&adapter, &block);
     sidecar_only_successor.epoch = {
         let world = adapter.state.world_view();
-        crate::sumeragi::epoch_for_height_from_world(&world, sidecar_only_successor.height)
+        crate::sumeragi::epoch_for_height_from_world(
+            &world,
+            sidecar_only_successor.height,
+            sidecar_only_successor.mode,
+        )
+        .expect("fixture has a valid committed epoch schedule")
     };
     adapter.context = sidecar_only_successor;
     let conflicting_session = CommittedLaneBlockSession {
@@ -1973,7 +2070,12 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
     let mut successor_context = successor_context_for_parent(&adapter, &block);
     successor_context.epoch = {
         let world = adapter.state.world_view();
-        crate::sumeragi::epoch_for_height_from_world(&world, successor_context.height)
+        crate::sumeragi::epoch_for_height_from_world(
+            &world,
+            successor_context.height,
+            successor_context.mode,
+        )
+        .expect("fixture has a valid committed epoch schedule")
     };
     adapter.context = successor_context;
     assert!(proposal.descriptor.proposal_height < adapter.context.height);

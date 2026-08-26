@@ -782,182 +782,7 @@ fn model_artifact_record_validation_rejects_zero_prehash_digest_sentinels() {
         }
     );
 }
-#[test]
-fn uploaded_model_bundle_validation_rejects_wrapped_key_recipient_mismatch() {
-    let mut bundle = sample_uploaded_model_bundle();
-    bundle.wrapped_bundle_key.recipient_key_id = "other-recipient".to_string();
-    let error = bundle
-        .validate()
-        .expect_err("wrapped key must target the recorded upload recipient");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            manifest: "sora uploaded model bundle",
-            field: "wrapped_bundle_key.recipient_key_id",
-            ..
-        }
-    ));
-}
-#[test]
-fn uploaded_model_v1_rejects_noncanonical_identifier_text() {
-    let mut recipient = sample_uploaded_model_encryption_recipient();
-    recipient.key_id.push(' ');
-    let error = recipient
-        .validate()
-        .expect_err("recipient key identifiers must not be normalized");
-    assert_soracloud_invalid_field(error, "key_id");
 
-    let mut wrapped_key = sample_uploaded_model_wrapped_key();
-    wrapped_key.recipient_key_id.insert(0, ' ');
-    let error = wrapped_key
-        .validate()
-        .expect_err("wrapped-key recipient identifiers must not be normalized");
-    assert_soracloud_invalid_field(error, "recipient_key_id");
-
-    for mutate in [
-        |bundle: &mut SoraUploadedModelBundleV1| bundle.model_id.push(' '),
-        |bundle: &mut SoraUploadedModelBundleV1| bundle.weight_version.insert(0, ' '),
-        |bundle: &mut SoraUploadedModelBundleV1| bundle.family.push('\n'),
-        |bundle: &mut SoraUploadedModelBundleV1| bundle.decryption_policy_ref.push(' '),
-    ] {
-        let mut bundle = sample_uploaded_model_bundle();
-        mutate(&mut bundle);
-        bundle
-            .validate()
-            .expect_err("uploaded-model identifiers must use exact V1 text");
-    }
-}
-#[test]
-fn uploaded_model_recipient_validation_rejects_x25519_length_drift() {
-    let mut recipient = sample_uploaded_model_encryption_recipient();
-    recipient.public_key_bytes = vec![7u8; 31];
-    recipient.public_key_fingerprint = Hash::new(recipient.public_key_bytes.as_slice());
-    let error = recipient
-        .validate()
-        .expect_err("X25519 upload recipient keys must be exactly 32 bytes");
-    match error {
-        SoracloudManifestError::InvalidField {
-            manifest,
-            field,
-            reason,
-        } => {
-            assert_eq!(manifest, "sora uploaded model encryption recipient");
-            assert_eq!(field, "public_key_bytes");
-            assert!(reason.contains("32 bytes"), "unexpected reason: {reason}");
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-#[test]
-fn uploaded_model_recipient_validation_rejects_low_order_x25519_public_key() {
-    let mut recipient = sample_uploaded_model_encryption_recipient();
-    recipient.public_key_bytes = vec![0u8; 32];
-    recipient.public_key_fingerprint = Hash::new(recipient.public_key_bytes.as_slice());
-    let error = recipient
-        .validate()
-        .expect_err("low-order X25519 upload recipient keys must fail closed");
-    match error {
-        SoracloudManifestError::InvalidField {
-            manifest,
-            field,
-            reason,
-        } => {
-            assert_eq!(manifest, "sora uploaded model encryption recipient");
-            assert_eq!(field, "public_key_bytes");
-            assert!(reason.contains("low-order"), "unexpected reason: {reason}");
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-#[test]
-fn uploaded_model_recipient_validation_rejects_zero_prehash_fingerprint_sentinel() {
-    let mut recipient = sample_uploaded_model_encryption_recipient();
-    recipient.public_key_fingerprint = zero_prehash_statement_hash();
-    let error = recipient
-        .validate()
-        .expect_err("recipient fingerprint placeholder must fail admission");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            manifest: "sora uploaded model encryption recipient",
-            field: "public_key_fingerprint",
-            ..
-        }
-    ));
-    assert!(error.to_string().contains("zero prehash sentinel"));
-}
-#[test]
-fn uploaded_model_wrapped_key_validation_rejects_x25519_length_drift() {
-    let mut wrapped_key = sample_uploaded_model_wrapped_key();
-    wrapped_key.ephemeral_public_key = vec![8u8; 33];
-    let error = wrapped_key
-        .validate()
-        .expect_err("X25519 ephemeral upload keys must be exactly 32 bytes");
-    match error {
-        SoracloudManifestError::InvalidField {
-            manifest,
-            field,
-            reason,
-        } => {
-            assert_eq!(manifest, "sora uploaded model wrapped key");
-            assert_eq!(field, "ephemeral_public_key");
-            assert!(reason.contains("32 bytes"), "unexpected reason: {reason}");
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-#[test]
-fn uploaded_model_wrapped_key_validation_rejects_low_order_x25519_ephemeral() {
-    let mut wrapped_key = sample_uploaded_model_wrapped_key();
-    wrapped_key.ephemeral_public_key = vec![0u8; 32];
-    let error = wrapped_key
-        .validate()
-        .expect_err("low-order X25519 ephemeral upload keys must fail closed");
-    match error {
-        SoracloudManifestError::InvalidField {
-            manifest,
-            field,
-            reason,
-        } => {
-            assert_eq!(manifest, "sora uploaded model wrapped key");
-            assert_eq!(field, "ephemeral_public_key");
-            assert!(reason.contains("low-order"), "unexpected reason: {reason}");
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-#[test]
-fn uploaded_model_wrapped_key_validation_rejects_zero_prehash_digest_sentinels() {
-    let zero_digest = zero_prehash_statement_hash();
-    let mut ciphertext_hash = sample_uploaded_model_wrapped_key();
-    ciphertext_hash.ciphertext_hash = zero_digest;
-    let error = ciphertext_hash
-        .validate()
-        .expect_err("wrapped-key ciphertext hash placeholder must fail admission");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            manifest: "sora uploaded model wrapped key",
-            field: "ciphertext_hash",
-            ..
-        }
-    ));
-    assert!(error.to_string().contains("zero prehash sentinel"));
-    let mut aad_digest = sample_uploaded_model_wrapped_key();
-    aad_digest.aad_digest = zero_digest;
-    let error = aad_digest
-        .validate()
-        .expect_err("wrapped-key AAD digest placeholder must fail admission");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            manifest: "sora uploaded model wrapped key",
-            field: "aad_digest",
-            ..
-        }
-    ));
-    assert!(error.to_string().contains("zero prehash sentinel"));
-}
 #[test]
 fn uploaded_model_bundle_validation_rejects_zero_storage_metadata() {
     let mut bundle = sample_uploaded_model_bundle();
@@ -1046,6 +871,48 @@ fn uploaded_model_bundle_validation_rejects_adversarial_modalities() {
     }
 }
 #[test]
+fn uploaded_model_bundle_validation_enforces_canonical_identifiers() {
+    let mut maximum = sample_uploaded_model_bundle();
+    maximum.model_id = "M".repeat(SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1);
+    maximum.weight_version = "v".repeat(SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1);
+    maximum
+        .validate()
+        .expect("maximum-length portable identifiers must validate");
+
+    for (field, invalid) in [
+        (
+            "model_id",
+            "M".repeat(SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1 + 1),
+        ),
+        ("model_id", "upload/model".to_owned()),
+        ("model_id", "upload‑model".to_owned()),
+        (
+            "weight_version",
+            "v".repeat(SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1 + 1),
+        ),
+        ("weight_version", "weights v1".to_owned()),
+        ("weight_version", "重み".to_owned()),
+    ] {
+        let mut bundle = sample_uploaded_model_bundle();
+        match field {
+            "model_id" => bundle.model_id = invalid,
+            "weight_version" => bundle.weight_version = invalid,
+            _ => unreachable!("fixture only covers uploaded-model identifiers"),
+        }
+        let error = bundle
+            .validate()
+            .expect_err("non-canonical uploaded-model identifier must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                manifest: "sora uploaded model bundle",
+                field: error_field,
+                ..
+            } if error_field == field
+        ));
+    }
+}
+#[test]
 fn hf_source_record_validation_accepts_consistent_state() {
     sample_hf_source_record().validate().expect("valid source");
 }
@@ -1081,12 +948,6 @@ fn hf_source_record_validation_rejects_zero_prehash_digest_sentinels() {
         .validate()
         .expect_err("source placeholder id must fail admission");
     assert_zero_prehash_digest_error(&error, "source_id");
-    let mut source = sample_hf_source_record();
-    source.normalized_runtime_hash = zero_digest;
-    let error = source
-        .validate()
-        .expect_err("normalized runtime placeholder hash must fail admission");
-    assert_zero_prehash_digest_error(&error, "normalized_runtime_hash");
 }
 #[test]
 fn hf_shared_lease_pool_validation_accepts_consistent_state() {
@@ -1111,17 +972,55 @@ fn hf_shared_lease_pool_validation_rejects_zero_prehash_digest_sentinels() {
     assert_zero_prehash_digest_error(&error, "source_id");
 }
 #[test]
-fn hf_shared_lease_pool_validation_rejects_misaligned_queued_window() {
+fn hf_shared_lease_pool_binds_queued_settlement_asset() {
     let mut pool = sample_hf_shared_lease_pool();
-    let mut planned_placement = sample_hf_placement_record();
-    planned_placement.total_reservation_fee = xor_quantity_from_nanos(3_000);
     pool.queued_next_window = Some(SoraHfSharedLeaseQueuedWindowV1 {
         sponsor_account_id: sample_account_id(0xC3),
-        model_name: "demo_model".to_string(),
+        lease_asset_definition_id: pool.lease_asset_definition_id.clone(),
+        base_fee: xor_quantity_from_nanos(15_000),
+        sponsored_at_ms: 20_000,
+        window_started_at_ms: pool.window_expires_at_ms,
+        window_expires_at_ms: pool.window_expires_at_ms.saturating_add(pool.lease_term_ms),
+        service_name: sample_name("demo_service"),
+        apartment_name: Some(sample_name("demo_apartment")),
+    });
+    pool.validate()
+        .expect("canonical queued-window asset is valid");
+
+    let mut pool = sample_hf_shared_lease_pool();
+    pool.queued_next_window = Some(SoraHfSharedLeaseQueuedWindowV1 {
+        sponsor_account_id: sample_account_id(0xC3),
+        lease_asset_definition_id: AssetDefinitionId::from_uuid_bytes([
+            0x66, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4, 0xa7, 0x16, 0x44, 0x66, 0x55, 0x44,
+            0x00, 0x0b,
+        ])
+        .expect("alternate asset definition"),
+        base_fee: xor_quantity_from_nanos(15_000),
+        sponsored_at_ms: 20_000,
+        window_started_at_ms: pool.window_expires_at_ms,
+        window_expires_at_ms: pool.window_expires_at_ms.saturating_add(pool.lease_term_ms),
+        service_name: sample_name("demo_service"),
+        apartment_name: Some(sample_name("demo_apartment")),
+    });
+    let error = pool
+        .validate()
+        .expect_err("a queued settlement asset mismatch must fail");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora hf shared lease pool",
+            field: "queued_next_window.lease_asset_definition_id",
+            ..
+        }
+    ));
+}
+#[test]
+fn hf_shared_lease_pool_validation_rejects_misaligned_queued_window() {
+    let mut pool = sample_hf_shared_lease_pool();
+    pool.queued_next_window = Some(SoraHfSharedLeaseQueuedWindowV1 {
+        sponsor_account_id: sample_account_id(0xC3),
         lease_asset_definition_id: sample_asset_definition_id("4cuvDVPuLBKJyN6dPbRQhmLh68sU"),
         base_fee: xor_quantity_from_nanos(15_000),
-        compute_reservation_fee: xor_quantity_from_nanos(3_000),
-        planned_placement,
         sponsored_at_ms: 20_000,
         window_started_at_ms: pool.window_expires_at_ms.saturating_add(1),
         window_expires_at_ms: pool
@@ -1172,6 +1071,37 @@ fn hf_shared_lease_audit_event_validation_accepts_consistent_state() {
         .expect("valid shared lease audit event");
 }
 #[test]
+fn hf_shared_lease_audit_event_binds_activation_failure_reason() {
+    let mut event = sample_hf_shared_lease_audit_event();
+    event.action = SoraHfSharedLeaseActionV1::ActivationFailed;
+    let error = event
+        .validate()
+        .expect_err("activation failures require an explicit reason");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "failure_reason",
+            ..
+        }
+    ));
+    event.failure_reason = Some("queued sponsor could not fund compute".to_owned());
+    event
+        .validate()
+        .expect("an activation failure with a reason is valid");
+
+    event.action = SoraHfSharedLeaseActionV1::Activate;
+    let error = event
+        .validate()
+        .expect_err("successful activation must not carry a failure reason");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "failure_reason",
+            ..
+        }
+    ));
+}
+#[test]
 fn hf_shared_lease_audit_event_validation_rejects_zero_prehash_digest_sentinels() {
     let zero_digest = zero_prehash_statement_hash();
     let mut event = sample_hf_shared_lease_audit_event();
@@ -1186,72 +1116,6 @@ fn hf_shared_lease_audit_event_validation_rejects_zero_prehash_digest_sentinels(
         .validate()
         .expect_err("source placeholder id must fail audit admission");
     assert_zero_prehash_digest_error(&error, "source_id");
-}
-#[test]
-fn model_host_violation_evidence_validation_accepts_consistent_state() {
-    sample_model_host_violation_evidence_record()
-        .validate()
-        .expect("valid model host violation evidence");
-}
-#[test]
-fn model_host_violation_evidence_validation_rejects_zero_prehash_digest_sentinels() {
-    let zero_digest = zero_prehash_statement_hash();
-    macro_rules! assert_violation_digest_rejects {
-        ($field:literal, $assign:expr) => {{
-            let mut record = sample_model_host_violation_evidence_record();
-            $assign(&mut record, zero_digest);
-            let error = record
-                .validate()
-                .expect_err("violation evidence placeholder digest must fail admission");
-            assert_zero_prehash_digest_error(&error, $field);
-        }};
-    }
-    assert_violation_digest_rejects!(
-        "evidence_id",
-        |record: &mut SoraModelHostViolationEvidenceRecordV1, value| {
-            record.evidence_id = value;
-        }
-    );
-    assert_violation_digest_rejects!(
-        "placement_id",
-        |record: &mut SoraModelHostViolationEvidenceRecordV1, value| {
-            record.placement_id = Some(value);
-        }
-    );
-    assert_violation_digest_rejects!(
-        "pool_id",
-        |record: &mut SoraModelHostViolationEvidenceRecordV1, value| {
-            record.pool_id = Some(value);
-        }
-    );
-    assert_violation_digest_rejects!(
-        "source_id",
-        |record: &mut SoraModelHostViolationEvidenceRecordV1, value| {
-            record.source_id = Some(value);
-        }
-    );
-    assert_violation_digest_rejects!(
-        "slash_id",
-        |record: &mut SoraModelHostViolationEvidenceRecordV1, value| {
-            record.slash_id = Some(value);
-        }
-    );
-}
-#[test]
-fn model_host_violation_evidence_validation_rejects_missing_slash_id_when_penalized() {
-    let mut record = sample_model_host_violation_evidence_record();
-    record.slash_id = None;
-    let error = record
-        .validate()
-        .expect_err("must reject missing slash id for applied penalty");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            manifest: "sora model host violation evidence record",
-            field: "slash_id",
-            ..
-        }
-    ));
 }
 #[test]
 fn model_artifact_audit_event_validation_rejects_empty_consumed_version() {

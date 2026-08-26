@@ -33,7 +33,7 @@ environment variables before invoking it:
 - `TORII_URL` — Torii endpoint.
 - `AUTHORITY` and `PRIVATE_KEY_HEX` — signer account and key (hex). Store keys in
   a secure secret manager; never commit them to git.
-- `CHAIN_ID` — optional network id (defaults to the zero UUID).
+- `NETWORK_ID` — genesis-derived network id accepted by `NetworkId.parse`.
 - `GOV_SUBMIT=1` — submit the signed bytes to Torii.
 - `GOV_FETCH=1` — fetch proposal/lock snapshots after submission.
 - `GOV_PROPOSAL_ID`, `GOV_REFERENDUM_ID`, `GOV_LOCKS_ID` — optional lookups for
@@ -50,9 +50,9 @@ TORII_URL=https://torii.testnet.sora node javascript/iroha_js/recipes/governance
 TORII_URL=https://torii.testnet.sora \
 AUTHORITY=<i105-account-id> \
 PRIVATE_KEY_HEX="$(cat ~/.iroha/keys/alice.key)" \
-CHAIN_ID=7f2c...-prod \
+NETWORK_ID=hash:32C9...1149#A2F0 \
 GOV_SUBMIT=1 GOV_FETCH=1 \
-GOV_PROPOSAL_ID=calc.v1 \
+GOV_PROPOSAL_ID=abababababababababababababababababababababababababababababababab \
 node javascript/iroha_js/recipes/governance.mjs
 ```
 
@@ -171,9 +171,12 @@ lockstep with Torii’s runtime policy.
 ### Inspect contract instances and proposals
 
 ```javascript
-import { ToriiClient } from "@iroha/iroha-js";
+import { NetworkId, ToriiClient } from "@iroha/iroha-js";
 
 const torii = new ToriiClient(process.env.TORII_URL ?? "https://torii.nexus.example");
+const authority = "<i105-account-id>";
+const privateKey = Buffer.alloc(32, 0xaa);
+const canonicalAuth = { accountId: authority, privateKey };
 
 const instances = await torii.listGovernanceInstances("apps", {
   contains: "ledger",
@@ -187,42 +190,43 @@ for (const entry of instances.instances) {
 
 // Abort long-running reads with AbortController.
 const controller = new AbortController();
-const proposal = await torii.getGovernanceProposal("proposal-001", {
+const proposal = await torii.getGovernanceProposal("ab".repeat(32), {
   signal: controller.signal,
+  canonicalAuth,
 });
-console.log(proposal?.kind, proposal?.status);
+console.log(proposal?.proposal?.kind, proposal?.proposal?.status);
 ```
 
 ### Submit proposals and ballots
 
-All governance mutation helpers accept an optional `{ signal }` object so UI layers can cancel
-long-running submissions or tie them to component lifecycles.
+Governance draft and ballot helpers require canonical request authentication;
+their options also accept an optional `signal` so UI layers can cancel
+long-running requests or tie them to component lifecycles.
 
 ```javascript
 const authority = "<i105-account-id>";
 const privateKey = Buffer.alloc(32, 0xaa);
 
 const writeController = new AbortController();
+const canonicalAuth = { accountId: authority, privateKey };
 const deployDraft = await torii.governanceProposeDeployContract({
-  namespace: "apps",
-  contractId: "calc.v1",
-  codeHash: "hash:7B38...#ABCD",
+  contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+  codeHash: Buffer.alloc(32, 0xaa),
   abiHash: Buffer.alloc(32, 0xbb),
-  abiVersion: "1",
-  window: { lower: 12_345, upper: 12_500 },
-  mode: "Plain",
-}, { signal: writeController.signal });
+  abiVersion: 1,
+  manifestProvenance: null,
+}, { signal: writeController.signal, canonicalAuth });
 console.log("draft instructions", deployDraft.tx_instructions.length);
 
 const ballot = await torii.governanceSubmitPlainBallot({
   authority,
-  chainId: "00000000-0000-0000-0000-000000000000",
+  networkId: NetworkId.parse(process.env.NETWORK_ID),
   referendumId: "ref-plain",
   owner: authority,
   amount: "5000",
   durationBlocks: 7_200,
   direction: "Aye",
-}, { signal: writeController.signal });
+}, { signal: writeController.signal, canonicalAuth });
 if (!ballot.accepted) {
   console.warn("ballot rejected", ballot.reason);
 }
@@ -230,7 +234,7 @@ if (!ballot.accepted) {
 const zkOwner = "<i105-account-id>"; // canonical I105 account id for ZK public inputs
 await torii.governanceSubmitZkBallotV1({
   authority,
-  chainId: "00000000-0000-0000-0000-000000000000",
+  networkId: NetworkId.parse(process.env.NETWORK_ID),
   electionId: "ref-zk",
   backend: "halo2/ipa",
   envelope: Buffer.alloc(96, 0xcd),
@@ -238,53 +242,33 @@ await torii.governanceSubmitZkBallotV1({
   amount: "5000",
   durationBlocks: 7_200,
   direction: "Aye",
-}, { signal: writeController.signal });
+}, { signal: writeController.signal, canonicalAuth });
 ```
 
-### Council VRF and enactment
+`governanceSubmitPlainBallot` and `governanceSubmitZkBallotV1` target the
+standalone referendum subsystem. Parliament proposals use the attempt lifecycle
+and mandatory private timed-OVN ballots instead; the two paths are not
+interchangeable.
+
+### Parliament lifecycle and automatic execution
 
 ```javascript
-const validatorPk = Buffer.alloc(48, 0xdd);
-const validatorProof = Buffer.alloc(96, 0xee);
-
-const current = await torii.getGovernanceCouncilCurrent();
+const current = await torii.getGovernanceCouncilCurrent({ canonicalAuth });
 console.log(`epoch=${current.epoch} members=${current.members.length}`);
 
-const derived = await torii.governanceDeriveCouncilVrf({
-  committeeSize: 2,
-  candidates: [
-    {
-      accountId: "<i105-account-id>",
-      variant: "Normal",
-      pk: validatorPk,
-      proof: validatorProof,
-    },
-  ],
-}, { signal: writeController.signal });
-await torii.governancePersistCouncil({
-  committeeSize: derived.members.length,
-  candidates: derived.members.map((member) => ({
-    accountId: member.account_id,
-    variant: "Normal",
-    pk: validatorPk,
-    proof: validatorProof,
-  })),
-  authority,
-  privateKey,
-}, { signal: writeController.signal });
-
-const finalizeDraft = await torii.governanceFinalizeReferendumTyped({
-  referendumId: "01".repeat(32),
-  proposalId: "01".repeat(32),
-}, { signal: writeController.signal });
-console.log("finalize tx count", finalizeDraft.tx_instructions.length);
-
-const enactDraft = await torii.governanceEnactProposalTyped({
-  proposalId: "abcd0123...cafe",
-  window: { lower: 10, upper: 25 },
-}, { signal: writeController.signal });
-console.log("enact tx count", enactDraft.tx_instructions.length);
+const attempt = await torii.getParliamentAttemptV1(
+  process.env.GOVERNANCE_ATTEMPT_ID,
+  { signal: writeController.signal, canonicalAuth },
+);
+console.log(attempt.attempt.id, attempt.certificate);
 ```
+
+There is no client-submitted finalize, certificate-construction, or enact
+instruction in V1. Once every required body has produced its final result,
+Core creates the certificate and executes the certified effect at the exact
+derived enactment height. A stale proposal head is superseded and a failed
+effect is recorded as an execution failure; clients only submit public
+lifecycle transitions and observe the resulting attempt state.
 
 ## ISO&nbsp;20022 bridge recipes
 

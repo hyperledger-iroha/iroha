@@ -1290,7 +1290,7 @@ _SERVICED_CANDIDATE_V4_STORE_ITEM_SHA256 = {
         "3e025a26fdd14c00e5664a2d34355169bc7b650de2534939586f3a7b50ebb9d4"
     ),
     "leader_wire_load_and_reconcile": (
-        "56b48215d914a764d9eadf2c4f7d49ba7c380289d9c4c89f9fc2238da7d98f17"
+        "dfdd5e26961ac56d3cdb189d65ddc634a31f0163d125511325cc8a850749e710"
     ),
     "store_open": (
         "a87131cdea8fcf204ab3a04992f93e05fc32400f475abcda450f2636d08b97de"
@@ -1458,7 +1458,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "1696486255d16af1779a46c10dee8e213104aa4c900d089f3ab0f962b11607eb"
     ),
     "freeze_due_clock_owners": (
-        "86b2abb4734419e69faafa8bd5fd0473626fb2441b94469a81a448e5f661c76e"
+        "d1c028eb58483adffe8eb1415b431d3f031714167535af7382d3ee39b5cf4027"
     ),
     "minimum_active_lifecycle_ordinal": (
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
@@ -1481,9 +1481,6 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
     "dispatch_one_pacemaker_progress": (
         "fc7d5f12b41f703242826e8926dd91f4267b78d775b1d8c2453d85006a3ac965"
-    ),
-    "step_recovery": (
-        "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
     ),
     "dispatch_one_fence_dependency": (
         "539239fa96fca8ea08dc56ac89041b7be0bb6f5f3d33f65259ad8e7833173b69"
@@ -1826,18 +1823,67 @@ if ordinary_candidate.is_some() && (deferred_owner_blocks_fifo || older_signer_b
 }
 _TIMEOUT_VOTE_SEMANTIC_CAPACITY_ITEM_SHA256 = {
     "semantic_ingress_capacity": (
-        "329002c5d70440e4b06c7d6b7953abefffad11e097f8a6f2be43df02a07d5701"
+        "30e1e0f718530767610746544385b9ff5a86c4d10ab2988deb6841bc67ac3d0e"
     ),
     "admit_authenticated_payload": (
-        "dff3664ce598bb0123c85ddf22a760eed5a2c0f9e8cb98665ab60664cfebde07"
+        "390d2b42206ed4055e4b3907561fa8aa94f49c54018950a6c47074e9661efe2f"
     ),
     "prune_ingress_records": (
-        "380a67be7fc040a1424c45ebbdd08fac6087450df43acb1521fa756df5ca1db8"
+        "7aabe892539e8914e9fe3486e439efe6e04e8b625183897f8c9d5d128bc0e73b"
+    ),
+}
+_LOCKED_REPROPOSAL_PREPARE_PROGRESS_ITEM_SHA256 = {
+    "deferred_progress_capacity": (
+        "91e89a872e4d612b933f7852d4829ee9003c5d0e9390e0627915cd3057f40ed6"
+    ),
+    "deferred_progress_owner": (
+        "52034d48d09afae8a6dc842c0986b41ad42794cb0d8f9bea6623daa5c55993c6"
+    ),
+    "DeferredProgressOwner::class": (
+        "20671a4c6258e8ee23db86701ef84c8f0fd10c196d4c8c1c8e971c29a5e72243"
+    ),
+    "append_deferred_projection_admission": (
+        "40f8ec33c6ae190899cb965946100cf9f94a3a9b5f17f616f3d4bfadfac16bd7"
+    ),
+    "deferred_service_projection_hash": (
+        "9315322199c53abe3b1ac6b9b81a9a1c12025aac1b283fc75375cf7c0c28ccf2"
+    ),
+    "DeferredServiceEvidence::validate_exact": (
+        "09f86a10667e6cafd2ab628798b199e72fde0df4aa73f7650ff549b6404d4e93"
+    ),
+    "authenticated_ingress_is_progress": (
+        "3a958aed971bd3666f7d9d0187ae6f57c67613736f949426a19f4b851c48915f"
+    ),
+    "is_exact_locked_reproposal_prepare_vote": (
+        "8070823c16ab326640700867865cc707948db5cfa9e45ff0dcbf8fa18dbe5fe8"
+    ),
+    "step_authenticated_ingress_with_ownership": (
+        "fd2a239e9a2bb08e81a7ef8d07ec10eee80ef75f6cb8a06415778808ca6b6b55"
+    ),
+    "record_ingress_delivery": (
+        "118156a73c589bcf758e527ca285330007b76f18d1a16482ad5b9270074ac86d"
+    ),
+    "enqueue_deferred": (
+        "f22c283acd092ce9f4646caa7081f51c8295a669c951609af5dde2cc91b6c979"
+    ),
+    "wire_ingress_may_use_progress": (
+        "95fa01a0cb82428feb19a8f4a632b8d87b86b7b16c82077c1350c06a10c2da64"
+    ),
+}
+_LOCKED_REPROPOSAL_PREPARE_PROGRESS_REGRESSION_TEST_SHA256 = {
+    "current_locked_reproposal_prepare_uses_progress_only_after_local_binding": (
+        "3d615bc5bdd11430409291cf03d50a873916b592620bbdb88159fcab70b174bf"
+    ),
+    "deferred_progress_capacity_matches_partition_geometry": (
+        "e6a2c477fb64d4bd6fea8bd377ae8bde4f1a2c07def2b53f27a2d1e82dc62bdc"
+    ),
+    "deferred_progress_partition_owns_every_vote_and_certificate_class": (
+        "2f3a00157a704f7cc78705daf13f56abe52a865c58f215e6ffba558388957322"
     ),
 }
 _TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256 = {
     "capacity_bypass_records_follow_current_lock_and_timeout_view": (
-        "5132c93697d0b4ed29e1b10cd1ca0fb3e2022ac5735afa7c26efb949b6065b65"
+        "428b3ade733368fb5f3b0538791055d4c0df9402476902a360bfceab633f5dc5"
     ),
     "certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote": (
         "b4daaad31d1dff26abf5581a80142973caa2f2ce108475debfda12f62ee3947e"
@@ -1914,6 +1960,32 @@ def _timeout_capacity_regression_source_fidelity_errors(
             errors,
         )
 
+    for name, expected_sha256 in (
+        _LOCKED_REPROPOSAL_PREPARE_PROGRESS_REGRESSION_TEST_SHA256.items()
+    ):
+        item = _require_rust_item(path, source, name, errors)
+        items[name] = item
+        _require_rust_item_context(
+            path,
+            item,
+            test_context,
+            f"locked-reproposal Prepare Progress regression {name}",
+            errors,
+            expected_attributes=(
+                ("#[test]", "#[allow(clippy::too_many_lines)]")
+                if name
+                == "deferred_progress_partition_owns_every_vote_and_certificate_class"
+                else ("#[test]",)
+            ),
+        )
+        _require_rust_item_token_sha256(
+            path,
+            item,
+            expected_sha256,
+            f"locked-reproposal Prepare Progress regression {name}",
+            errors,
+        )
+
     _require_rust_token_sequence(
         path,
         items.get("capacity_bypass_records_follow_current_lock_and_timeout_view"),
@@ -1924,10 +1996,33 @@ assert_eq!(
         .values()
         .filter(|record| record.capacity_bypass)
         .count(),
-    roster_len * 3
+    roster_len * 4
 );
 """,
-        "capacity-bypass regression must realize exactly one lock plus current and adjacent TimeoutVote rosters",
+        "capacity-bypass regression must realize exactly one locked Commit, one current locked-reproposal Prepare, and current and adjacent TimeoutVote rosters",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        items.get(
+            "current_locked_reproposal_prepare_uses_progress_only_after_local_binding"
+        ),
+        """
+assert!(
+    !adapter.is_exact_locked_reproposal_prepare_vote(&exact_prepare),
+    "remote wire data cannot bootstrap its own local execution binding"
+);
+adapter
+    .registry
+    .register_execution_commitment(
+        reducer::Round::new(current_tag.height(), current_tag.view()),
+        core_subject,
+        locked_execution_commitment,
+    )
+    .expect("bind the locally validated current-round reproposal");
+assert!(adapter.is_exact_locked_reproposal_prepare_vote(&exact_prepare));
+""",
+        "locked-reproposal Prepare regression must deny remote bootstrap and admit only after the pre-existing local current-round binding",
         errors,
     )
     _require_rust_token_sequence(

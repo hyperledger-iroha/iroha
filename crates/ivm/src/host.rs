@@ -2697,6 +2697,7 @@ impl DefaultHost {
         dsid: DataSpaceId,
         proof: &ProofBlob,
     ) -> Result<(), VMError> {
+        axt::validate_proof_blob(proof)?;
         if handle.manifest_view_root.len() != 32 {
             return Err(VMError::NoritoInvalid);
         }

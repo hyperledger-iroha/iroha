@@ -4,8 +4,8 @@ PROVIDER="ci/check_kagemusha_lifecycle_source_contract.py"
 MODEL="crates/iroha_data_model/src/offline/mod.rs"
 MODEL_KAGEMUSHA_MODEL="crates/iroha_data_model/src/offline/kagemusha_model.rs"
 MODEL_KAGEMUSHA_MODEL_INCLUDE='include!("kagemusha_model.rs");'
-MODEL_RELEASE_V5="crates/iroha_data_model/src/offline/kagemusha_release_v5.rs"
-MODEL_RELEASE_V5_INCLUDE='include!("kagemusha_release_v5.rs");'
+MODEL_RELEASE_V4="crates/iroha_data_model/src/offline/kagemusha_release_v4.rs"
+MODEL_RELEASE_V4_INCLUDE='include!("kagemusha_release_v4.rs");'
 MODEL_LIFECYCLE="crates/iroha_data_model/src/offline/kagemusha_release_lifecycle.rs"
 MODEL_LIFECYCLE_MODULE="mod kagemusha_release_lifecycle;"
 MODEL_TAIL_TESTS="crates/iroha_data_model/src/offline/kagemusha_v4_release_tail_inline_tests.rs"
@@ -102,7 +102,7 @@ IROHAD_VALIDATOR_SEAL_READER=(
 )
 LIFECYCLE_SOURCE_PATHS=(
  MODEL_KAGEMUSHA_MODEL,
- MODEL_RELEASE_V5,
+ MODEL_RELEASE_V4,
  MODEL_LIFECYCLE,
  MODEL_TAIL_TESTS,
  MODEL_PROMOTION_RECEIPT_TESTS,
@@ -210,7 +210,7 @@ q,f,n,s,o=_require,_forbid,_count,_section,_ordered
 def _topology(texts,errors):
  for parent, relative, marker, component in (
   (texts[MODEL], MODEL, MODEL_KAGEMUSHA_MODEL_INCLUDE, MODEL_KAGEMUSHA_MODEL),
-  (texts[MODEL], MODEL, MODEL_RELEASE_V5_INCLUDE, MODEL_RELEASE_V5),
+  (texts[MODEL], MODEL, MODEL_RELEASE_V4_INCLUDE, MODEL_RELEASE_V4),
   (texts[MODEL], MODEL, MODEL_LIFECYCLE_MODULE, MODEL_LIFECYCLE),
   (texts[MODEL], MODEL, MODEL_TAIL_TESTS_INCLUDE, MODEL_TAIL_TESTS),
   (
@@ -371,17 +371,17 @@ def _internal_validation_trust_contracts(texts,errors):
   "pub internal_validation_runner_identity_sha256: [u8; 32]",
   "Domain-separated identity of the only internal-validation runner authorized by policy",
  )
- release = texts[MODEL_RELEASE_V5]
+ release = texts[MODEL_RELEASE_V4]
  policy_validation = s(
   release,
-  MODEL_RELEASE_V5,
+  MODEL_RELEASE_V4,
   errors,
   "impl KagemushaRecursiveSpendReleasePolicyV1 {",
   "impl KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {",
  )
  q(
   policy_validation,
-  MODEL_RELEASE_V5,
+  MODEL_RELEASE_V4,
   errors,
   "nonzero internal-validation runner trust root",
   "self.internal_validation_runner_identity_sha256 == [0; 32]",
@@ -389,14 +389,14 @@ def _internal_validation_trust_contracts(texts,errors):
  )
  receipt_validation = s(
   release,
-  MODEL_RELEASE_V5,
+  MODEL_RELEASE_V4,
   errors,
   "fn validate_internal_validation_receipt_v4(",
   "impl KagemushaAuthenticatedReleaseV4 {",
  )
  o(
   receipt_validation,
-  MODEL_RELEASE_V5,
+  MODEL_RELEASE_V4,
   errors,
   "receipt runner identity against the policy trust root",
   "expected_runner_identity_sha256: Option<[u8; 32]>",
@@ -407,14 +407,14 @@ def _internal_validation_trust_contracts(texts,errors):
  )
  authenticated_v4 = s(
   release,
-  MODEL_RELEASE_V5,
+  MODEL_RELEASE_V4,
   errors,
   "impl KagemushaAuthenticatedReleaseV4 {",
-  "impl KagemushaAuthenticatedReleaseV5 {",
+  "impl KagemushaRecursiveSpendPromotedReleaseV4 {",
  )
  o(
   authenticated_v4,
-  MODEL_RELEASE_V5,
+  MODEL_RELEASE_V4,
   errors,
   "authenticated V4 internal-validation trust-root forwarding",
   "validate_internal_validation_receipt_v4(",
@@ -497,19 +497,18 @@ def _native_namespace_contracts(texts,errors):
  )
 def _native_verifier_hydration_contracts(texts,errors):
  core = texts[CORE]
- identity = s(core, CORE, errors, "fn kagemusha_release_verifier_id_has_exact_digest(",
+ identity = s(core, CORE, errors, "fn kagemusha_v4_release_verifier_id_has_exact_digest(",
   "fn ensure_release_qualified_kagemusha_v4_verifier_id(")
  q(identity, CORE, errors, "VK digest",
   "if id.backend.as_str()\n        != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4",
-  "id.name.strip_prefix(version_prefix)", "name.strip_prefix(circuit)",
+  "id.name", ".strip_prefix(circuit)",
   "suffix.strip_prefix('-')", "digest.len() == 64", "byte.is_ascii_digit()",
   "matches!(byte, b'a'..=b'f')")
- o(identity, CORE, errors, "narrow V4 candidate and V5 rejection",
+ o(identity, CORE, errors, "narrow V4 candidate",
   "fn kagemusha_v4_release_verifier_candidate(",
-  'kagemusha_release_verifier_id_has_exact_digest(id, "")\n        || kagemusha_v4_parity_for_circuit(circuit_id).is_some()',
+  'kagemusha_v4_release_verifier_id_has_exact_digest(id)\n        || kagemusha_v4_parity_for_circuit(circuit_id).is_some()',
   "fn exact_kagemusha_v4_release_verifier_identity(",
-  'if kagemusha_release_verifier_id_has_exact_digest(id, "v5-")',
-  "return Err(", "if !kagemusha_v4_release_verifier_candidate(id, &record.circuit_id)",
+  "if !kagemusha_v4_release_verifier_candidate(id, &record.circuit_id)",
   "return Ok(None)")
  o(identity, CORE, errors, "native VK identity",
   "kagemusha_v4_parity_for_circuit(&record.circuit_id).ok_or_else",
@@ -545,7 +544,6 @@ def _native_verifier_hydration_contracts(texts,errors):
   "step_eq.withdraw_height != step_ep.withdraw_height",
   "ids.insert((*step_eq_id).clone())", "ids.insert((*step_ep_id).clone())",
   "for ((circuit_id, version), id) in world.verifying_keys_by_circuit().iter()",
-  'if kagemusha_release_verifier_id_has_exact_digest(id, "v5-")', "return Err(",
   "if !kagemusha_v4_release_verifier_candidate(id, circuit_id)", "continue;",
   "world.verifying_keys().get(id).ok_or_else",
   "if !ids.contains(id) || record.circuit_id != *circuit_id || record.version != *version",
@@ -569,10 +567,7 @@ def _native_verifier_hydration_contracts(texts,errors):
   'for corruption in ["metadata", "missing_ep", "misindexed"]',
   "assert!(!host.verifying_keys.contains_key(&generic_id))",
   "fn zk_snapshot_hydration_does_not_exempt_allowed_same_backend_lookalike()",
-  "assert!(excluded.is_empty())", "allowed WSV lookalike must reach",
-  "fn zk_snapshot_hydration_rejects_v5_release_records_before_generic_hydration()",
-  'error.contains("Kagemusha V5 release verifier")',
-  "exact V5 records must fail before generic OpenVerify hydration")
+  "assert!(excluded.is_empty())", "allowed WSV lookalike must reach")
  q(texts[CORE_IVM_HOST],CORE_IVM_HOST,errors,"a","fn zk_snapshot_hydration_rejects_invalid_election_selector_without_partial_replacement(")
 def _ordinary_lifecycle_transport_contracts(t,e):
  P,R,X,T,V,C,U=CORE_PROXY,TORII_ROUTING,TORII,TORII_TESTS,TORII_PENDING_TESTS,TORII_CATALOG,TORII_CATALOG_TESTS;L="proxy"
@@ -1219,7 +1214,7 @@ def _runtime_projection_contracts(texts,errors):
   IROHAD_VALIDATOR_SEAL_READER,
   errors,
   "root-owned exact verified local validator seal",
-  "pub(super) fn read_configured_kagemusha_validator_qualification_seal(",
+  "pub fn read_configured_kagemusha_validator_qualification_seal(",
   ".kagemusha_validator_qualification_seal_path",
   "RootOwnedNoReplaceArtifactPublicationTarget::read_root_owned_bounded(",
   "KAGEMUSHA_VALIDATOR_QUALIFICATION_SEAL_MAX_BYTES_V1",
@@ -1280,7 +1275,7 @@ def _runtime_projection_contracts(texts,errors):
   IROHAD_STARTUP,
   errors,
   "injectable exact validator-seal reader seam",
-  "pub(super) fn install_runtime_effective_config_with_validator_seal_reader(",
+  "pub fn install_runtime_effective_config_with_validator_seal_reader(",
   "read_configured_kagemusha_validator_qualification_seal: impl FnOnce(",
   "kagemusha_validator_qualification_command::read_configured_kagemusha_validator_qualification_seal,",
   "let seal = read_configured_kagemusha_validator_qualification_seal(config)?;",

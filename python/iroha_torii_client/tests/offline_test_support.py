@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from iroha_torii_client import KagemushaRedeemRequestV4, KagemushaTopUpRequestV4
 
-CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+CANONICAL_OWNER = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
 _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
     "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
@@ -35,7 +35,7 @@ def offline_capability_payload(**overrides: Any) -> Dict[str, Any]:
 
     payload = {
         "cash_handoff_capability": "cash_handoff_v1",
-        "required_bridge_abi_version": 22,
+        "required_bridge_abi_version": 23,
         "max_hops": 8,
         "ready": True,
     }

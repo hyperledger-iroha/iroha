@@ -1,3 +1,10 @@
+use crate::runtime_provider_broker::api::{
+    ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1,
+    GlobalBeaconPartialSignerBrokerBackendV1,
+    ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
+    ParliamentTlePartialReleaseSignerBrokerBackendV1,
+};
+
 #[test]
 fn fenced_privacy_head_reader_binding_is_exact_and_drift_checked() {
     let binding = privacy_reader_binding();
@@ -2135,4 +2142,167 @@ fn evidence_transparency_ambiguity_reconnects_for_readback_without_replay() {
         .join()
         .expect("join transparency-publisher broker")
         .expect("transparency-publisher broker exits cleanly");
+}
+struct TestGlobalBeaconBrokerBackendV1 {
+    handle: &'static str,
+    qualification: ConsensusSignerProviderQualificationV1,
+}
+
+impl GlobalBeaconPartialSignerBrokerBackendV1 for TestGlobalBeaconBrokerBackendV1 {
+    fn handle(&self) -> &str {
+        self.handle
+    }
+
+    fn qualification(
+        &self,
+    ) -> Result<ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1>
+    {
+        Ok(self.qualification)
+    }
+
+    fn sign_partial(
+        &self,
+        _session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+        _payload: &[u8],
+    ) -> Result<
+        iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1,
+        GlobalBeaconPartialSignerBrokerBackendErrorV1,
+    > {
+        Err(GlobalBeaconPartialSignerBrokerBackendErrorV1)
+    }
+}
+
+struct TestParliamentTleBrokerBackendV1 {
+    handle: &'static str,
+    qualification: ConsensusSignerProviderQualificationV1,
+}
+
+impl ParliamentTlePartialReleaseSignerBrokerBackendV1 for TestParliamentTleBrokerBackendV1 {
+    fn handle(&self) -> &str {
+        self.handle
+    }
+
+    fn qualification(
+        &self,
+    ) -> Result<
+        ConsensusSignerProviderQualificationV1,
+        ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
+    > {
+        Ok(self.qualification)
+    }
+
+    fn sign_projected_partial_release(
+        &self,
+        _projection: &iroha_core::tle_release::ValidatedTleReleaseProjectionV1,
+    ) -> Result<
+        iroha_core::tle_release::TlePartialReleaseShareV1,
+        ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
+    > {
+        Err(ParliamentTlePartialReleaseSignerBrokerBackendErrorV1)
+    }
+}
+
+#[test]
+fn consensus_signer_broker_startup_is_exact_and_fail_closed() {
+    let handle = "hsm://iroha/consensus-signers/primary";
+    let revision = 7;
+    let digest = [0xA7; 32];
+    let qualification = ConsensusSignerProviderQualificationV1::new(revision, digest, false);
+
+    let beacon_catalog = IrohaRuntimeProviderBindingsV1::qualified_for_test(
+        "broker-consensus-test",
+        IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
+        handle,
+        revision,
+        digest,
+    );
+    assert!(matches!(
+        prepare_server_state(&beacon_catalog, RuntimeProviderBrokerBackendsV1::new()),
+        Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
+    ));
+    prepare_server_state(
+        &beacon_catalog,
+        RuntimeProviderBrokerBackendsV1::new().with_global_beacon_partial_signer(Arc::new(
+            TestGlobalBeaconBrokerBackendV1 {
+                handle,
+                qualification,
+            },
+        )),
+    )
+    .expect("exact beacon signer backend qualifies");
+    for backend in [
+        TestGlobalBeaconBrokerBackendV1 {
+            handle: "hsm://iroha/consensus-signers/substituted",
+            qualification,
+        },
+        TestGlobalBeaconBrokerBackendV1 {
+            handle,
+            qualification: ConsensusSignerProviderQualificationV1::new(revision + 1, digest, false),
+        },
+        TestGlobalBeaconBrokerBackendV1 {
+            handle,
+            qualification: ConsensusSignerProviderQualificationV1::new(revision, [0xA8; 32], false),
+        },
+        TestGlobalBeaconBrokerBackendV1 {
+            handle,
+            qualification: ConsensusSignerProviderQualificationV1::new(revision, digest, true),
+        },
+    ] {
+        assert!(matches!(
+            prepare_server_state(
+                &beacon_catalog,
+                RuntimeProviderBrokerBackendsV1::new()
+                    .with_global_beacon_partial_signer(Arc::new(backend)),
+            ),
+            Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
+        ));
+    }
+
+    let tle_catalog = IrohaRuntimeProviderBindingsV1::qualified_for_test(
+        "broker-consensus-test",
+        IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
+        handle,
+        revision,
+        digest,
+    );
+    assert!(matches!(
+        prepare_server_state(
+            &tle_catalog,
+            RuntimeProviderBrokerBackendsV1::new().with_global_beacon_partial_signer(Arc::new(
+                TestGlobalBeaconBrokerBackendV1 {
+                    handle,
+                    qualification,
+                },
+            )),
+        ),
+        Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
+    ));
+    prepare_server_state(
+        &tle_catalog,
+        RuntimeProviderBrokerBackendsV1::new().with_parliament_tle_partial_release_signer(
+            Arc::new(TestParliamentTleBrokerBackendV1 {
+                handle,
+                qualification,
+            }),
+        ),
+    )
+    .expect("exact Parliament TLE signer backend qualifies");
+    for qualification in [
+        ConsensusSignerProviderQualificationV1::new(revision + 1, digest, false),
+        ConsensusSignerProviderQualificationV1::new(revision, [0xA8; 32], false),
+        ConsensusSignerProviderQualificationV1::new(revision, digest, true),
+    ] {
+        assert!(matches!(
+            prepare_server_state(
+                &tle_catalog,
+                RuntimeProviderBrokerBackendsV1::new().with_parliament_tle_partial_release_signer(
+                    Arc::new(TestParliamentTleBrokerBackendV1 {
+                        handle,
+                        qualification,
+                    },)
+                ),
+            ),
+            Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
+        ));
+    }
 }

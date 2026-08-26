@@ -2799,8 +2799,7 @@ mod tests {
     fn x25519_dh_rejects_an_all_zero_output() {
         let local_secret = StaticSecret::from([0x55; NOISE_SECRET_LEN]);
         let error = checked_x25519_dh("ee", &local_secret, &[0; NOISE_SECRET_LEN])
-            .err()
-            .expect("low-order peer must produce a rejected all-zero DH output");
+            .expect_err("low-order peer must produce a rejected all-zero DH output");
         assert!(
             matches!(error, HarnessError::Validation(ref message) if message.contains("Noise XX ee X25519 DH output must not be all zero")),
             "unexpected error: {error:?}"

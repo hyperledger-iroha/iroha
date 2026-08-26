@@ -1,7 +1,19 @@
 # Taira
 
-Taira's disposable testnet path is one command with an explicit prepared Inrou
-guest workspace:
+Taira is SORA's persistent public testnet. The public Torii MCP endpoint is
+`https://taira.sora.org/v1/mcp`; public validators and observers join that
+shared network rather than creating a replacement cohort. The public-node join
+contract must consume one published, signed Taira bootstrap bundle (network
+identity, genesis anchor, seed peers, permissionless observer policy, on-chain
+validator activation policy, and upgrade policy) plus locally generated node
+keys. Runtime credentials and signing inputs stay outside the repository.
+Until that bundle and the single supported node-init command are shipped, do
+not present the local harness below as a public-network join procedure.
+
+The repository's disposable four-validator harness is a local qualification
+network. It is not the public Taira network and is not part of ordinary public
+node onboarding. Its path is one command with an explicit prepared Inrou guest
+workspace:
 
 ```bash
 python3 scripts/taira_devnet.py up \
@@ -91,14 +103,22 @@ canonical absolute `--qemu`, `--setpriv`, and `--ldd` paths; this Taira AArch64
 posture uses the defaults.
 
 The daemon startup boundary additionally requires direct root-custodied
-`/usr/bin/qemu-img`, one root-custodied `iptables` executable at
-`/usr/sbin/iptables`, `/sbin/iptables`, `/usr/bin/iptables`, or
-`/bin/iptables`, `/dev/kvm` with API version 12, and unified cgroup v2 with the
-`cpu`, `io`, `memory`, and `pids` controllers available. Kernel namespace,
-QEMU user-network listener/private-connector, QMP, firewall owner-match, and
-cgroup controls are exercised by the bounded startup probe; `up` fails closed
-if any is unavailable. This artifact-free probe does not boot a guest or verify
-the workload loopback bridge.
+`/usr/bin/qemu-img`, root-custodied `mke2fs` at `/usr/sbin/mke2fs` or
+`/sbin/mke2fs`, one root-custodied `iptables` executable at
+`/usr/sbin/iptables`, `/sbin/iptables`, `/usr/bin/iptables`, or `/bin/iptables`,
+`/dev/kvm` with API version 12, and unified cgroup v2 with the `cpu`, `io`,
+`memory`, and `pids` controllers available. Kernel namespace, QEMU user-network
+listener/private-connector, QMP, firewall owner-match, and cgroup controls are
+exercised by the bounded startup probe; `up` fails closed if any is unavailable.
+This artifact-free probe does not boot a guest or verify the workload loopback
+bridge.
+
+New non-root Inrou lease volumes use the first-release canonical ext4 profile:
+their byte budgets must be positive multiples of 128 MiB. The daemon ignores
+host `mke2fs.conf` policy, supplies the complete format geometry and feature
+set explicitly, derives a stable UUID from the service revision, volume kind,
+storage class, and authoritative generation, and validates that exact
+superblock contract before publishing or reusing a disk.
 
 Every successful run must prove a real guest launch, four placements, and the
 public route. Prepare verified AArch64 assets, generate the exact deploy
@@ -239,10 +259,24 @@ generated local endpoint after the mandatory real Inrou canary. It adds the
 broad public-product route diagnostic; it does not replace any guest workload
 qualification step.
 
+The optional local diagnostic is not public-ingress qualification and is never
+a default devnet gate. Run the same-revision `iroha taira doctor` directly
+against a public ingress when qualifying that deployment.
+
 The dedicated daemon's config validation, help, and version commands are
 offline introspection surfaces: they never open or consume the inherited
 runtime-signer descriptor. Every node-starting invocation still requires the
 exact descriptor and compiled Taira profile.
+
+Use already-built binaries when iterating on orchestration:
+
+```bash
+python3 scripts/taira_devnet.py up \
+  --no-build \
+  --bin-dir "$PWD/target/local-release"
+```
+
+The directory needs the three default binaries above.
 
 The output directory is owner-only and contains private keys and runtime
 tokens. Never commit, print, upload, or archive it. On failure the command
@@ -302,6 +336,52 @@ cargo build --locked --profile release -p iroha_cli --bin iroha
 target/release/iroha \
   taira doctor --public-root https://taira.sora.org --json
 ```
+
+The public doctor remains non-mutating and does not impersonate an operator.
+It requires the exact two-field operator-signature `401` from
+`/v1/sumeragi/status` and the exact two-field canonical-account `401` from
+`/v1/soracloud/status`; arbitrary gateway challenges fail closed. Exact runtime
+topology and four-replica Inrou convergence belong to the signed Inrou canary,
+not the public route-posture probe.
+
+The offline `taira inrou-stage` command assigns the canary an immutable
+`artifact-<digest>` service version derived from the complete canonical bundle
+with only the version field cleared. Final guest publication references are
+therefore part of the revision identity. A staged directory and receipt bind
+the service manifest, container manifest, materialized bundle, and both SoraFS
+manifests; changing any input produces a different revision.
+
+The signed `taira inrou-canary` mutation path checks authoritative SoraCloud
+state before publishing either staged SoraFS manifest. `deploy` requires the
+service to be absent. `upgrade` requires it to exist at a different immutable
+revision; replaying the current staged revision fails before upload. That
+preflight produces a mandatory signed compare-and-set condition: deploy binds
+service absence, while upgrade binds the exact current version, service and
+container manifest hashes, positive process generation, and the current config
+and secret generations. The ledger checks the condition atomically in the same
+transaction that admits the new revision, so revision or material drift after
+preflight cannot become a lost update. Process, config, and secret generations
+use checked monotonic increments; an exhausted counter fails closed and never
+wraps or saturates into a replayable token.
+
+An upgrade cannot supersede an active rollout or change the service execution
+plane, container runtime, or route identity. The admitted candidate becomes the
+current revision while the required, distinct baseline remains active for the
+complement of the canary traffic split; promotion or rollback must finish that
+rollout before another upgrade begins.
+
+After the explicit mutation, convergence requires the exact current/latest
+version, both staged manifest hashes, four placements, and a positive process
+generation on every status poll. A failed or changed status generation discards
+all collected route evidence. Each accepted health response must also carry Torii-owned
+served-service, served-version, replica-slot, process-generation, and
+materialized-bundle headers. Torii only stamps those headers for an
+authoritatively healthy placement whose host capability is valid, unexpired,
+and matches the validator, peer, backend, and guest ISA, and whose exact bundle,
+generation, and snapshot peer identity match the node-local process. Local-only
+health or an expired host advert never substitutes for authoritative state.
+Both local and remote ingress overwrite upstream values, so guest self-reporting
+or a stale process cannot satisfy the proof.
 
 An explicitly authorized public write canary is an ordered durable protocol,
 not a one-shot command. `iroha taira public-reset apply` prepares, privately

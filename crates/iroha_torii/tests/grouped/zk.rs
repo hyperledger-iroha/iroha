@@ -16,8 +16,6 @@ mod zk_proof_tags_debug_integration;
 mod zk_proofs_list_integration;
 #[path = "../zk_proofs_query_integration.rs"]
 mod zk_proofs_query_integration;
-#[path = "../zk_prover_integration.rs"]
-mod zk_prover_integration;
 #[path = "../zk_roots_handler_integration.rs"]
 mod zk_roots_handler_integration;
 #[path = "../zk_subrouter_smoke.rs"]

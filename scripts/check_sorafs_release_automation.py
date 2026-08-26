@@ -404,6 +404,11 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
     "crates/irohad/src/runtime_provider_broker/platform_server_transport.rs": (
         "endpoint_recovery::prepare_endpoint",
     ),
+    "crates/irohad/src/runtime_provider_broker/platform_operation_dispatch.rs": (
+        "OPERATION_POP_RUNTIME_OPEN_V1",
+        "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1",
+        "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1",
+    ),
     "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs": (
         "OPERATION_POP_RUNTIME_OPEN_V1: u16 = 60",
         "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1: u16 = 117",
@@ -1007,17 +1012,17 @@ NATIVE_GOVERNANCE_SDK_CONTRACTS: dict[str, tuple[str, ...]] = {
         *JAVA_GOVERNANCE_WORKFLOW_STEP_MARKERS,
     ),
     SWIFT_GOVERNANCE_VALIDATOR_TEST: (
-        "ABI-22 connect_norito_bridge with Governance DAG symbols is required.",
+        "ABI-23 connect_norito_bridge with Governance DAG symbols is required.",
         "guard try requireGovernanceDagNativeBridge() else",
         "XCTFail(\"\\(Self.nativeValidationRequiredMessage) \\(unavailableMessage)\")",
     ),
     KOTLIN_GOVERNANCE_VALIDATOR_TEST: (
-        "ABI-22 connect_norito_bridge with Governance DAG symbols is required.",
+        "ABI-23 connect_norito_bridge with Governance DAG symbols is required.",
         "        requireGovernanceDagNativeBridge()\n",
         "throw AssertionError(requiredMessage)",
     ),
     JAVA_GOVERNANCE_VALIDATOR_TEST: (
-        "ABI-22 connect_norito_bridge with all SoraFS reference symbols is required.",
+        "ABI-23 connect_norito_bridge with all SoraFS reference symbols is required.",
         "  private static void requireNativeBridge() {\n",
         (
             "  private static void "
@@ -1865,7 +1870,7 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 "cargo fetch --locked",
                 'NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"',
                 'NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"',
-                "Require fresh ABI-22 JNI bridge in complete Kotlin and Java suites",
+                "Require fresh ABI-23 JNI bridge in complete Kotlin and Java suites",
                 "bash ci/check_kagemusha_jvm_native_bridge.sh",
                 "if-no-files-found: error",
             ),
@@ -1873,14 +1878,14 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 "runs-on: ubuntu-24.04",
                 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"',
                 "actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9",
-                "Build and authenticate the exact ABI-22 C# bridge",
+                "Build and authenticate the exact ABI-23 C# bridge",
                 "cargo build --locked --release -p connect_norito_bridge",
                 "native-sdk-abi22.json",
                 "check_native_sdk_abi22_artifact.py record",
                 "check_native_sdk_abi22_artifact.py verify",
                 "dotnet restore Hyperledger.Iroha.Sdk.sln",
                 "dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror",
-                "Run complete C# ABI-22 parity suite",
+                "Run complete C# ABI-23 parity suite",
                 "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build",
             ),
         }

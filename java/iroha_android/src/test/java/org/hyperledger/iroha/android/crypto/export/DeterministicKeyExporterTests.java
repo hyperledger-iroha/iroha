@@ -3,14 +3,13 @@ package org.hyperledger.iroha.android.crypto.export;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
-import java.security.NoSuchAlgorithmException;
-import java.security.NoSuchProviderException;
-import java.security.Provider;
-import java.security.Security;
+import java.security.Signature;
 import java.util.Arrays;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.hyperledger.iroha.android.crypto.NativeSignerBridge;
 import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
+import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider.ProviderPolicy;
 
 public final class DeterministicKeyExporterTests {
 
@@ -75,19 +74,25 @@ public final class DeterministicKeyExporterTests {
   }
 
   private static void exportSupportsBouncyCastleKeys() throws Exception {
-    requireBouncyCastleProvider();
-    final KeyPairGenerator generator = bouncyCastleEd25519Generator();
-    final KeyPair keyPair = generator.generateKeyPair();
+    final KeyPair keyPair =
+        new SoftwareKeyProvider(ProviderPolicy.BOUNCY_CASTLE_REQUIRED).generateEphemeral();
     final char[] passphrase = "bouncy-castle-passphrase".toCharArray();
     final KeyExportBundle bundle =
         DeterministicKeyExporter.exportKeyPair(
             keyPair.getPrivate(), keyPair.getPublic(), "alias", passphrase);
     final DeterministicKeyExporter.KeyPairData imported =
         DeterministicKeyExporter.importKeyPair(bundle, passphrase);
-    assert Arrays.equals(keyPair.getPrivate().getEncoded(), imported.privateKey().getEncoded())
-        : "BouncyCastle private key should round-trip";
     assert Arrays.equals(keyPair.getPublic().getEncoded(), imported.publicKey().getEncoded())
         : "BouncyCastle public key should round-trip";
+    final byte[] message = "bouncy-castle-round-trip".getBytes(StandardCharsets.UTF_8);
+    final BouncyCastleProvider signatureProvider = new BouncyCastleProvider();
+    final Signature signer = Signature.getInstance("Ed25519", signatureProvider);
+    signer.initSign(imported.privateKey());
+    signer.update(message);
+    final Signature verifier = Signature.getInstance("Ed25519", signatureProvider);
+    verifier.initVerify(keyPair.getPublic());
+    verifier.update(message);
+    assert verifier.verify(signer.sign()) : "Imported BouncyCastle key should remain usable";
     Arrays.fill(passphrase, '\0');
   }
 
@@ -201,7 +206,7 @@ public final class DeterministicKeyExporterTests {
 
   private static void mlDsaExportRoundTrips() throws Exception {
     if (!NativeSignerBridge.isNativeAvailable()) {
-      throw new AssertionError("connect_norito_bridge ABI 22 is required for ML-DSA export");
+      throw new AssertionError("connect_norito_bridge ABI 23 is required for ML-DSA export");
     }
     final SoftwareKeyProvider provider = new SoftwareKeyProvider(SigningAlgorithm.ML_DSA);
     final KeyPair original = provider.generate("ml-dsa-alias");
@@ -222,7 +227,7 @@ public final class DeterministicKeyExporterTests {
   private static void mixedAlgorithmRestoreRejected() throws Exception {
     if (!NativeSignerBridge.isNativeAvailable()) {
       throw new AssertionError(
-          "connect_norito_bridge ABI 22 is required for mixed-algorithm export");
+          "connect_norito_bridge ABI 23 is required for mixed-algorithm export");
     }
     final SoftwareKeyProvider mlDsaProvider = new SoftwareKeyProvider(SigningAlgorithm.ML_DSA);
     mlDsaProvider.generate("ml-dsa-cross-alias");
@@ -312,28 +317,6 @@ public final class DeterministicKeyExporterTests {
   private static int readU16(final byte[] raw, final int offset) {
     return ((raw[offset] & 0xFF) << 8) | (raw[offset + 1] & 0xFF);
   }
-  private static void requireBouncyCastleProvider() {
-    try {
-      final Class<?> providerClass =
-          Class.forName("org.bouncycastle.jce.provider.BouncyCastleProvider");
-      final Provider provider =
-          (Provider) providerClass.getDeclaredConstructor().newInstance();
-      if (Security.getProvider(provider.getName()) == null) {
-        Security.addProvider(provider);
-      }
-    } catch (final ReflectiveOperationException | ClassCastException ex) {
-      throw new AssertionError("BouncyCastle provider is required by this test", ex);
-    }
-  }
-
-  private static KeyPairGenerator bouncyCastleEd25519Generator() throws Exception {
-    try {
-      return KeyPairGenerator.getInstance("Ed25519", "BC");
-    } catch (final NoSuchAlgorithmException | NoSuchProviderException ex) {
-      return KeyPairGenerator.getInstance("EdDSA", "BC");
-    }
-  }
-
   private static void rejectsUnsupportedVersion() throws Exception {
     final SoftwareKeyProvider provider = new SoftwareKeyProvider();
     final KeyPair keyPair = provider.generate("version-reject");

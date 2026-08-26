@@ -232,11 +232,4 @@ public actor ConnectClient {
         return try ConnectCodec.decode(data)
     }
 
-    private static func validateNonEmpty(_ value: String, field: String) throws -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw ToriiClientError.invalidPayload("\(field) must be a non-empty string")
-        }
-        return trimmed
-    }
 }

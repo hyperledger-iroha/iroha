@@ -100,6 +100,17 @@ func musubiCompareStringV1(_ left: String, _ right: String) -> Int {
   return leftBytes.count < rightBytes.count ? -1 : 1
 }
 
+func musubiRequireUniqueParentLocalAliasesV1(
+  _ aliases: [String],
+  field: String
+) throws {
+  guard Set(aliases).count == aliases.count else {
+    throw MusubiV1Error.invalidValue(
+      "\(field) must use unique parent-local aliases."
+    )
+  }
+}
+
 func musubiComparePackageV1(
   _ left: MusubiPackageIdV1,
   _ right: MusubiPackageIdV1

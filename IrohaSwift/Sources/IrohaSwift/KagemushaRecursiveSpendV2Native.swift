@@ -125,6 +125,7 @@ extension NoritoNativeBridge {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt64>?, CUnsignedLong
     ) -> Int32
     private typealias KagemushaV4ArtifactSetStatusFn = @convention(c) (
@@ -787,9 +788,10 @@ extension NoritoNativeBridge {
               let rawSignature,
               rawSignatureLength == CUnsignedLong(KagemushaDeviceSignatureV2.rawByteCount),
               let authenticatorData,
-              (KagemushaRecursiveSpend.minimumIosAppAttestAuthenticatorDataBytesV2...
-                  KagemushaRecursiveSpend.maximumIosAppAttestAuthenticatorDataBytesV2)
-                .contains(Int(authenticatorDataLength)) else {
+              Int(authenticatorDataLength)
+                >= KagemushaRecursiveSpend.minimumIosAppAttestAuthenticatorDataBytesV2,
+              Int(authenticatorDataLength)
+                <= KagemushaRecursiveSpend.maximumIosAppAttestAuthenticatorDataBytesV2 else {
             throw NativeBridgeError.kagemushaProve
         }
         return (
@@ -1302,6 +1304,7 @@ extension NoritoNativeBridge {
         expectedManifestSHA256: Data,
         trustedPolicyArchive: Data,
         releaseAttestationArchive: Data,
+        internalValidationReceiptArchive: Data,
         benchmarkEvidence: Data,
         cryptographicReview: Data,
         promotionRecordArchive: Data,
@@ -1316,28 +1319,32 @@ extension NoritoNativeBridge {
             expectedManifestSHA256.withUnsafeBytes { digestBuffer in
                 trustedPolicyArchive.withUnsafeBytes { policyBuffer in
                     releaseAttestationArchive.withUnsafeBytes { attestationBuffer in
-                        benchmarkEvidence.withUnsafeBytes { benchmarkBuffer in
-                            cryptographicReview.withUnsafeBytes { reviewBuffer in
-                                promotionRecordArchive.withUnsafeBytes { promotionBuffer in
-                                    handles.withUnsafeBufferPointer { handlesBuffer in
-                                        function(
-                                            manifestBuffer.bindMemory(to: UInt8.self).baseAddress,
-                                            CUnsignedLong(manifestBuffer.count),
-                                            digestBuffer.bindMemory(to: UInt8.self).baseAddress,
-                                            CUnsignedLong(digestBuffer.count),
-                                            policyBuffer.bindMemory(to: UInt8.self).baseAddress,
-                                            CUnsignedLong(policyBuffer.count),
-                                            attestationBuffer.bindMemory(to: UInt8.self).baseAddress,
-                                            CUnsignedLong(attestationBuffer.count),
-                                            benchmarkBuffer.bindMemory(to: UInt8.self).baseAddress,
-                                            CUnsignedLong(benchmarkBuffer.count),
-                                            reviewBuffer.bindMemory(to: UInt8.self).baseAddress,
-                                            CUnsignedLong(reviewBuffer.count),
-                                            promotionBuffer.bindMemory(to: UInt8.self).baseAddress,
-                                            CUnsignedLong(promotionBuffer.count),
-                                            handlesBuffer.baseAddress,
-                                            CUnsignedLong(handlesBuffer.count)
-                                        )
+                        internalValidationReceiptArchive.withUnsafeBytes { receiptBuffer in
+                            benchmarkEvidence.withUnsafeBytes { benchmarkBuffer in
+                                cryptographicReview.withUnsafeBytes { reviewBuffer in
+                                    promotionRecordArchive.withUnsafeBytes { promotionBuffer in
+                                        handles.withUnsafeBufferPointer { handlesBuffer in
+                                            function(
+                                                manifestBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                                CUnsignedLong(manifestBuffer.count),
+                                                digestBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                                CUnsignedLong(digestBuffer.count),
+                                                policyBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                                CUnsignedLong(policyBuffer.count),
+                                                attestationBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                                CUnsignedLong(attestationBuffer.count),
+                                                receiptBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                                CUnsignedLong(receiptBuffer.count),
+                                                benchmarkBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                                CUnsignedLong(benchmarkBuffer.count),
+                                                reviewBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                                CUnsignedLong(reviewBuffer.count),
+                                                promotionBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                                CUnsignedLong(promotionBuffer.count),
+                                                handlesBuffer.baseAddress,
+                                                CUnsignedLong(handlesBuffer.count)
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1353,6 +1360,7 @@ extension NoritoNativeBridge {
         _ = expectedManifestSHA256
         _ = trustedPolicyArchive
         _ = releaseAttestationArchive
+        _ = internalValidationReceiptArchive
         _ = benchmarkEvidence
         _ = cryptographicReview
         _ = promotionRecordArchive

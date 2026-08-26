@@ -67,7 +67,7 @@ fn assert_lengths_match_payload_for_supported_layouts<T: NoritoSerialize>(
         PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
     ] {
         norito::core::reset_decode_state();
-        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         let mut payload = Vec::new();
         norito::core::serialize_to_buffer(value, &mut payload)
             .expect("serialize derived byte-array payload");

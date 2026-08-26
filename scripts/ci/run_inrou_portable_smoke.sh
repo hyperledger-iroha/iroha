@@ -46,6 +46,10 @@ esac
 require_cmd cargo
 require_cmd qemu-img
 require_cmd tar
+if [ ! -x /usr/sbin/mke2fs ] && [ ! -x /sbin/mke2fs ]; then
+  echo "ERROR: required root-custodied mke2fs was not found at /usr/sbin/mke2fs or /sbin/mke2fs." >&2
+  exit 1
+fi
 
 require_env_file IROHA_INROU_PORTABLE_KERNEL_IMAGE
 require_env_file IROHA_INROU_PORTABLE_ROOTFS_IMAGE
@@ -64,6 +68,9 @@ cargo test --locked -p irohad --bin iroha3d build_inrou_user_data_projects_isola
 
 echo "+ cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_root_disk_is_a_standalone_authenticated_copy -- --nocapture"
 cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_root_disk_is_a_standalone_authenticated_copy -- --nocapture
+
+echo "+ cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_lease_disks_format_before_publish_and_reuse_ext4 -- --nocapture"
+cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_lease_disks_format_before_publish_and_reuse_ext4 -- --nocapture
 
 echo "+ cargo test --locked -p irohad --bin iroha3d inrou_portable_smoke_boots_debian_guest_and_serves_healthcheck -- --ignored --nocapture"
 cargo test --locked -p irohad --bin iroha3d inrou_portable_smoke_boots_debian_guest_and_serves_healthcheck -- --ignored --nocapture

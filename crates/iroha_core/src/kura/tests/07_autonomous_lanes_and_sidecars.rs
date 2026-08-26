@@ -1840,13 +1840,13 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
         .expect("restart recovery");
     assert_eq!(recovered.1.descriptor.lane_block_view, 258);
     let snapshot = reopened
-        .latest_autonomous_lane_block_artifacts_snapshot(network_id, 1, |_| epoch)
+        .latest_autonomous_lane_block_artifacts_snapshot(network_id, 1, |_| Ok(epoch))
         .expect("load bounded route-latest snapshot");
     assert_eq!(snapshot.len(), 1);
     assert_eq!(snapshot[0].1.descriptor.lane_block_view, 258);
     assert!(
         reopened
-            .latest_autonomous_lane_block_artifacts_snapshot(network_id, 0, |_| epoch)
+            .latest_autonomous_lane_block_artifacts_snapshot(network_id, 0, |_| Ok(epoch))
             .expect("zero-cap snapshot is empty")
             .is_empty(),
         "a zero global recovery limit must not enumerate durable history"

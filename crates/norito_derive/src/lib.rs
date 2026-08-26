@@ -2781,28 +2781,11 @@ fn derive_enum_deserialize(
                                     }
                                 }
                             } else {
-                                let is_opt_res = is_option_or_result(ty);
-                                if is_opt_res {
-                                    quote! {
-                                        norito::core::decode_context_field_canonical::<#ty>(
-                                            ptr,
-                                            &mut offset,
-                                        )
-                                    }
-                                } else if is_vec_type(ty) {
-                                    quote! {
-                                        norito::core::decode_context_field_canonical::<#ty>(
-                                            ptr,
-                                            &mut offset,
-                                        )
-                                    }
-                                } else {
-                                    quote! {
-                                        norito::core::decode_context_field_canonical::<#ty>(
-                                            ptr,
-                                            &mut offset,
-                                        )
-                                    }
+                                quote! {
+                                    norito::core::decode_context_field_canonical::<#ty>(
+                                        ptr,
+                                        &mut offset,
+                                    )
                                 }
                             };
                             let value = quote! { (#decode)? };
@@ -3051,10 +3034,7 @@ fn json_flatten_parts(
             });
         }
         let missing_key = container_attrs.rename_field(field_ident, &attrs);
-        let missing = syn::LitStr::new(
-            &format!("missing field `{missing_key}`"),
-            proc_macro2::Span::call_site(),
-        );
+        let missing_key = syn::LitStr::new(&missing_key, proc_macro2::Span::call_site());
         let default = if let Some(path) = &attrs.default_fn {
             Some(quote! { (#path)() })
         } else if attrs.default {
@@ -3070,8 +3050,16 @@ fn json_flatten_parts(
             )
         } else if let Some(default) = default {
             quote! { #variable.unwrap_or_else(|| #default) }
+        } else if fast {
+            quote! {
+                #variable.ok_or_else(|| norito::Error::from(
+                    norito::json::Error::missing_field(#missing_key)
+                ))?
+            }
         } else {
-            quote! { #variable.ok_or_else(|| #error::Message(#missing.into()))? }
+            quote! {
+                #variable.ok_or_else(|| norito::json::Error::missing_field(#missing_key))?
+            }
         };
         finals.push(quote! { #field_ident: #value });
     }
@@ -3439,7 +3427,11 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                             } else if is_option && !attrs.required {
                                 finals.push(quote! { #name: #name.unwrap_or(None) });
                             } else {
-                                finals.push(quote! { #name: #name.ok_or_else(|| norito::Error::Message(format!("missing field `{}`", stringify!(#name))))? });
+                                finals.push(quote! {
+                                    #name: #name.ok_or_else(|| norito::Error::from(
+                                        norito::json::Error::missing_field(#key_lit)
+                                    ))?
+                                });
                             }
                         }
 
@@ -3722,12 +3714,10 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                                     #var_ident = ::core::option::Option::Some(value);
                                 }
                             });
-                            let missing_text =
-                                format!("missing field `{key}` in variant `{variant_name}`");
-                            let missing_msg =
-                                syn::LitStr::new(&missing_text, proc_macro2::Span::call_site());
                             finals.push(quote! {
-                                #field_ident: #var_ident.ok_or_else(|| norito::Error::Message(#missing_msg.into()))?
+                                #field_ident: #var_ident.ok_or_else(|| norito::Error::from(
+                                    norito::json::Error::missing_field(#key_lit)
+                                ))?
                             });
                         }
                         parse_arms.push(quote! {
@@ -4402,10 +4392,6 @@ fn derive_struct_json_deserialize(
                         #var_ident = ::core::option::Option::Some(value);
                     }
                 });
-                let missing_msg = syn::LitStr::new(
-                    &format!("missing field `{key}`"),
-                    proc_macro2::Span::call_site(),
-                );
                 let default_expr = if let Some(path) = &attrs.default_fn {
                     Some(quote! { (#path)() })
                 } else if attrs.default {
@@ -4424,7 +4410,7 @@ fn derive_struct_json_deserialize(
                     finals.push(quote! { #field_ident: #var_ident.unwrap_or_else(|| #expr) });
                 } else {
                     finals.push(quote! {
-                        #field_ident: #var_ident.ok_or_else(|| norito::json::Error::Message(#missing_msg.into()))?
+                        #field_ident: #var_ident.ok_or_else(|| norito::json::Error::missing_field(#key_lit))?
                     });
                 }
             }
@@ -4830,11 +4816,8 @@ fn derive_enum_json_deserialize(
                             #var_ident = ::core::option::Option::Some(value);
                         }
                     });
-                    let missing_text = format!("missing field `{key}` in variant `{variant_name}`");
-                    let missing_msg =
-                        syn::LitStr::new(&missing_text, proc_macro2::Span::call_site());
                     finals.push(quote! {
-                        #field_ident: #var_ident.ok_or_else(|| norito::json::Error::Message(#missing_msg.into()))?
+                        #field_ident: #var_ident.ok_or_else(|| norito::json::Error::missing_field(#key_lit))?
                     });
                 }
                 arms.push(quote! {

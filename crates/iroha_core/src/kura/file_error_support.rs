@@ -23,6 +23,11 @@ impl FileWrap {
             opts.write(true).read(true).create(true).truncate(false);
         })
     }
+    fn open_read_only(path: PathBuf) -> Result<Self> {
+        Self::open_with(path, |opts| {
+            opts.read(true);
+        })
+    }
     fn try_io<F, T>(&mut self, f: F) -> Result<T>
     where
         F: FnOnce(&mut std::fs::File) -> std::io::Result<T>,
@@ -277,6 +282,13 @@ pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 pub enum Error {
     /// Production Kura store root resolved to an empty path
     EmptyStoreRoot,
+    /// Autonomous payload epoch resolution failed at proposal height `{proposal_height}`: {reason}
+    AutonomousEpochResolution {
+        /// Proposal height whose authenticated consensus epoch could not be resolved.
+        proposal_height: u64,
+        /// Fail-closed epoch-schedule diagnostic.
+        reason: String,
+    },
     /// Failed reading/writing {1:?} from disk: {0}
     IO(#[source] std::io::Error, PathBuf),
     /// Lane-geometry publication failed and exact prior-journal restoration was not proven: publication={publication}; restoration={restoration}
@@ -363,6 +375,11 @@ pub enum Error {
     },
     /// Kura hash-only history is provisional until a signed snapshot authenticates its lineage
     SnapshotBootstrapAuthenticationPending,
+    /// Kura auxiliary history `{subsystem}` is unavailable after emergency Fast startup; restart in Strict mode
+    EmergencyFastAuxiliaryUnavailable {
+        /// Deferred inventory or derived index that cannot safely be represented as empty.
+        subsystem: &'static str,
+    },
     /// Authenticated snapshot bootstrap finalization failed: {reason}
     SnapshotBootstrapFinalization {
         /// Exact deferred recovery or immutable context-publication failure.

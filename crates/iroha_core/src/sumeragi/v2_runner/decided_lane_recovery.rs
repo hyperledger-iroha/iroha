@@ -6,6 +6,38 @@ enum DecidedLaneRecoveryIngressPreparation {
     LeaderWireRetire,
 }
 
+/// Dequeue at most one lane-local occurrence while a lifecycle owner blocks ordinary ingress.
+///
+/// The checked predicate is the entire authority boundary: global V2 traffic, certified Serve,
+/// Kura adverts, and every other message class remain queued for their ordinary or Apply-terminal
+/// owner.
+fn select_blocked_ordinary_lane_local_ingress(
+    receiver: &FairV2Ingress,
+    permit: LifecycleBlockedOrdinaryLaneLocalIngressPermitV1,
+) -> Result<Option<InboundBlockMessage>, V2RunnerError> {
+    receiver
+        .try_recv_lifecycle_lane_local_checked(permit)
+        .map_err(V2RunnerError::Service)
+}
+
+fn drain_blocked_ordinary_lane_local_ingress(
+    receiver: &FairV2Ingress,
+    lane_work: &mut V2LaneWorkAdapter,
+    active_view: wire::View,
+    permit: LifecycleBlockedOrdinaryLaneLocalIngressPermitV1,
+) -> Result<bool, V2RunnerError> {
+    let Some(inbound) = select_blocked_ordinary_lane_local_ingress(receiver, permit)? else {
+        return Ok(false);
+    };
+    if !inbound.message().is_lane_local() {
+        return Err(V2RunnerError::Service(
+            "blocked-ordinary lane-local selector returned global ingress".to_owned(),
+        ));
+    }
+    let _ = lane_work.accept_lane_message_with_ingress_ownership(inbound, active_view);
+    Ok(true)
+}
+
 enum DecidedLaneRecoveryDrainAuthorization {
     LaneLocal,
     KuraReplicaAdvert,
@@ -181,11 +213,7 @@ impl DecidedLaneRecoveryServeScope {
         }
     }
 
-    fn permits_subject(
-        self,
-        request: wire::BlockSubject,
-        decided: wire::BlockSubject,
-    ) -> bool {
+    fn permits_subject(self, request: wire::BlockSubject, decided: wire::BlockSubject) -> bool {
         match self {
             Self::Current => request == decided,
             Self::Historical => true,

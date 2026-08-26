@@ -18,11 +18,16 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   submission and SoraFS pin registration validate it before network I/O, and
   framed, bare, headerless, alternate-layout, opaque-prefix, and raw-entrypoint
   submission fallbacks are removed.
-- Require per-request canonical account authentication for the legacy SoraFS
-  alias and replication inventory helpers, and require an immutable
-  exact-network `OperatorSigningContext` for storage-state and legacy
-  storage-fetch diagnostics. Public live integration no longer performs the
-  retired unsigned diagnostic fetch.
+- Require per-request canonical account authentication for the SoraFS alias
+  and replication inventory helpers, and require an immutable exact-network
+  `OperatorSigningContext` for operator-only storage-state and storage-fetch
+  diagnostics. Public live integration invokes only the signed inventory
+  routes available to account clients.
+- Hard-cut SoraFS alias inventory responses to the closed first-release Torii
+  projection. Attestation, lineage, cache evaluation, successor, governance,
+  status, and policy fields are required and cross-checked; unknown fields,
+  coercive values, stale reason literals, and inconsistent pagination fail
+  closed. `proof_expires_in_seconds` is present only while the proof is live.
 - Add strict signed SoraFS orderbook submit helpers with native route/signature/network preflight, pinned Norito receipt authentication, exact identity headers, one-shot deadlines, and non-resubmittable ambiguous-admission errors.
 - Hard-cut SoraFS pin listing to finalized, byte-bounded exclusive-keyset
   pages. The client rejects `offset`, legacy attestation/full-record payloads,
@@ -30,13 +35,16 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   now strict summaries with consensus-maintained charged count/byte totals.
 - Closed every governance mutation request shape before network I/O and reject
   all retired private-key aliases, including inside ZK public inputs and the
-  nested V1 ballot proof. Deploy proposals now expose exact typed public
-  manifest provenance and reject the ignored `limits` field; legacy ZK public
+  nested V1 ballot proof. Deploy proposals now encode `ContractCodeHash` and
+  `ContractAbiHash` with their versioned 32-byte Norito layout, encode
+  `AbiVersion` as numeric V1, expose exact typed public manifest provenance,
+  and reject the ignored `limits`, `window`, and `mode` fields. SCCP proposal
+  instructions bind the complete action to the exact `NetworkId` anchor. ZK public
   inputs are closed to their six wire fields. Plain-ballot durations use
-  canonical u64 decimal strings and accept zero. Added typed Parliament ballot
-  parity for `/v1/gov/parliament/ballots`; governance drafts remain locally
-  signed. Finalize uses the shared governance hash grammar, enact accepts only
-  the exact lowercase committed proposal id, protected namespaces are exact
+  canonical u64 decimal strings and accept zero. Retired the proposal-backed
+  equal-Parliament-ballot, finalize, and enact client methods; binding proposal
+  transitions now use certificate-driven Parliament attempts, while standalone
+  plain/ZK referendum ballots remain available. Protected namespaces are exact
   printable-ASCII tokens, and Ministry agenda drafts now validate a closed,
   recursively secret-free typed V1 proposal while preserving full-u64
   timestamps losslessly.
@@ -61,10 +69,12 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   `getOfflineCapability()`/`OfflineStatus` contract. The first-release hard cut
   removes selector-taking readiness methods, normalizers, types, and exports.
 - Bound validation-fee policy and payout-lifecycle proposal fingerprints to
-  the complete first-release PLAIN electorate rules. Both native exports now
-  validate exact JSON and compute canonical `ProposalKind` fingerprints, and
-  the JavaScript/TypeScript package exposes both required-argument helpers
-  without a fallback hashing path.
+  the canonical proposal operator and exact typed proposal payload. Both native
+  exports validate exact JSON and compute canonical `ProposalKind`
+  fingerprints, and the JavaScript/TypeScript package exposes their current
+  signatures without a fallback hashing path. Verified policy projections now
+  retain the complete, recursively validated Parliament certificate and its
+  proposal and enactment bindings.
 - Bound the `CancelAssetLock` lock-ID preimage to the public V1 limit of 4,096
   UTF-8 bytes while preserving the fixed 32-byte `EscrowId` wire field.
 - Added strict JavaScript/TypeScript `CancelAssetLock` parity. The new builder
@@ -323,10 +333,8 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   query parameters, Torii health snapshots now only parse JSON responses, the `X-Iroha-API-Token`
   alias is no longer emitted, V1 telemetry counter aliases are dropped, and account address
   decoding rejects extension-flag headers. Tests and docs now reflect the first-release surface.
-- Added `ToriiClient.iterateVerifyingKeys` and `iterateProverReports` plus
-  iterator option whitelists so SoraFS/registry/prover paginators accept their
-  filter fields alongside paging knobs; typings, README snippets, and Jest
-  coverage close the remaining JS-04/JS-07 pagination gaps.【javascript/iroha_js/src/toriiClient.js:1181】【javascript/iroha_js/src/toriiClient.js:4671】【javascript/iroha_js/src/toriiClient.js:6949】【javascript/iroha_js/index.d.ts:5470】【javascript/iroha_js/test/toriiClient.test.js:761】【javascript/iroha_js/test/toriiClient.test.js:11493】【javascript/iroha_js/README.md:106】
+- Added `ToriiClient.iterateVerifyingKeys` and an iterator option whitelist so
+  registry pagination accepts its filter fields alongside paging knobs.
 - The JS SNS helpers now track the ledger-backed `/v1/sns/names...` Torii API.
   `createSnsGovernanceCase`, `exportSnsGovernanceCases`, and
   `iterateSnsGovernanceCases` are retained only as validation stubs that reject
@@ -378,12 +386,10 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   `options` payloads are rejected before hitting Torii, and added Jest coverage
   to exercise the new JS-04 validation paths across the registry, PoR, storage,
   DA ingest, and Space Directory surfaces.【javascript/iroha_js/src/toriiClient.js:889】【javascript/iroha_js/src/toriiClient.js:5320】【javascript/iroha_js/test/toriiClient.test.js:1872】
-- `ToriiClient.getSorafsPinManifest` now treats `404 Not Found` as `null`
-  so callers can distinguish between "missing" and "malformed" responses, and
-  `getSorafsPinManifestTyped` raises an explicit error when Torii cannot locate
-  the requested digest. README guidance and Jest coverage document the stricter
-  behaviour to keep JS-04 validation aligned with the SoraFS rollout
-  requirements.【javascript/iroha_js/src/toriiClient.js:1438】【javascript/iroha_js/test/toriiClient.test.js:1515】【javascript/iroha_js/README.md:903】
+- `ToriiClient.getSorafsPinManifest` now returns the exact finalized native
+  `{ finalized_cursor, manifest }` response (or `null` for `404`), validates
+  approval history, and exposes only the native manifest record. Alias and
+  replication inventories are queried through their dedicated endpoints.
 - Added `ToriiClient.getUaidPortfolio`, `getUaidBindings`, and `getUaidManifests`
   plus TypeScript definitions, README docs, and Jest coverage so the JS SDK
   mirrors the Nexus NX-16 UAID portfolio and Space Directory manifest APIs
@@ -503,9 +509,9 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   parity remains strict across runtimes. Tests now assert both happy-path
   normalisation and failure diagnostics.
 - Added `listSorafsPinManifests` to `ToriiClient` plus typed DTOs for the pin
-  registry so SDK consumers can page `/v1/sorafs/pin` with status filters and
-  attestation metadata, completing the registry listing coverage called out in
-  the pin-registry plan.
+  registry so SDK consumers can page strict finalized summaries from
+  `/v1/sorafs/pin` with status filters, bounded keyset pagination, and
+  consensus-maintained charged usage totals.
 - Added `listSorafsAliases` and `listSorafsReplicationOrders` to `ToriiClient`
   so the JS SDK can page the `/v1/sorafs/aliases` and `/v1/sorafs/replication`
   endpoints with typed attestation metadata, fulfilling the remaining JS-07
@@ -526,10 +532,10 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 ## [0.0.2] - 2026-01-27
 
 - Added governance instruction support to native Norito helpers so
-  `buildCastZkBallotInstruction`, `buildCastPlainBallotInstruction`,
-  `buildEnactReferendumInstruction`, `buildFinalizeReferendumInstruction`, and
-  `buildPersistCouncilForEpochInstruction` now round-trip through
-  `noritoEncodeInstruction`.
+  `buildCastZkBallotInstruction`, `buildCastPlainBallotInstruction`, and
+  `buildPersistCouncilForEpochInstruction` round-trip through
+  `noritoEncodeInstruction`. Proposal-backed certification and execution are
+  consensus-owned and have no client-side finalize or enact builders.
 - Updated the native build script to try an offline cargo build first and
   automatically retry online when dependencies are missing.
 - Added release documentation automation script covering changelog/status/roadmap updates.

@@ -37,6 +37,7 @@ use iroha_data_model::{
         pin_registry::{
             PinManifestRecord, PinStatus, ProviderIngestFinalizedAnchorV1, ReplicationOrderId,
             ReplicationOrderRecord, ReplicationOrderStatus,
+            derive_sorafs_auto_replication_order_id_v1,
         },
     },
     transaction::{
@@ -101,6 +102,7 @@ use std::{
     cell::Cell,
     fmt,
     io::{self, Read},
+    num::NonZeroUsize,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -109,6 +111,7 @@ use std::{
 };
 const SHUTDOWN_WAIT_FLOOR: Duration = Duration::from_secs(2);
 const READINESS_STALE_TICK_MULTIPLIER_V1: u32 = 3;
+const MILLIS_PER_UNIX_SECOND: u64 = 1_000;
 const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
 const REPLICATION_ORDER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     MAX_CAPACITY_METADATA_VALUE_BYTES,
@@ -1793,15 +1796,24 @@ fn validate_completion_order_binding(
     provider_id: ProviderId,
     order_record: &ReplicationOrderRecord,
     pin: &PinManifestRecord,
-    current_height: u64,
+    current_finalized_unix_epoch: u64,
 ) -> std::result::Result<(), ProviderIngestCompletionPayloadErrorV1> {
     let order_id = ReplicationOrderId::new(request.authorization.order_id());
+    let PinStatus::Approved(approved_epoch) = pin.status else {
+        return Err(ProviderIngestCompletionPayloadErrorV1::Rejected);
+    };
+    let is_automatic = order_record.order_id
+        == derive_sorafs_auto_replication_order_id_v1(&order_record.manifest_digest);
     if !matches!(order_record.status, ReplicationOrderStatus::Pending)
         || order_record.provider_completion(provider_id).is_some()
+        || pin.approved_epoch != Some(approved_epoch)
+        || order_record.issued_epoch < approved_epoch
+        || is_automatic && order_record.issued_epoch != approved_epoch
         || order_record.assignment_revision != request.expected_assignment_revision
         || request.completion_epoch < order_record.issued_epoch
         || request.completion_epoch > order_record.deadline_epoch
-        || current_height > order_record.deadline_epoch
+        || request.completion_epoch > current_finalized_unix_epoch
+        || current_finalized_unix_epoch > order_record.deadline_epoch
         || order_record.order_id != order_id
         || *order_record.manifest_digest.as_bytes() != request.authorization.manifest_digest()
         || order_record.manifest_root_cid.as_bytes() != request.authorization.manifest_cid()
@@ -1823,11 +1835,12 @@ fn validate_completion_order_binding(
         || order.order_id != request.authorization.order_id()
         || order.manifest_digest != request.authorization.manifest_digest()
         || order.manifest_cid.as_slice() != request.authorization.manifest_cid()
+        || order.issued_at != order_record.issued_epoch
+        || order.deadline_at != order_record.deadline_epoch
         || !order
             .assignments
             .iter()
             .any(|assignment| assignment.provider_id == request.authorization.provider_id())
-        || !matches!(pin.status, PinStatus::Approved(_))
         || pin.digest != order_record.manifest_digest
         || pin.root_cid != order_record.manifest_root_cid
         || pin.chunker.to_handle() != request.authorization.chunker_handle()
@@ -1896,12 +1909,28 @@ impl NativeCompletionPayloadBuilderV1 {
             .latest_block_hash()
             .map(|hash| *hash.as_ref())
             .ok_or(ProviderIngestCompletionPayloadErrorV1::Unavailable)?;
+        let finalized_height = usize::try_from(request.finalized_cursor.height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .ok_or(ProviderIngestCompletionPayloadErrorV1::Rejected)?;
+        let finalized_at_unix_ms = view
+            .block_by_height(finalized_height)
+            .ok_or(ProviderIngestCompletionPayloadErrorV1::Unavailable)?
+            .header()
+            .creation_time_ms;
+        let head_at_unix_ms = view
+            .latest_block()
+            .ok_or(ProviderIngestCompletionPayloadErrorV1::Unavailable)?
+            .header()
+            .creation_time_ms;
         if view.network_id() != &self.network_id
             || !completion_payload_anchor_matches_committed_chain(
                 request.finalized_cursor,
                 request.completion_epoch,
+                finalized_at_unix_ms,
                 height,
                 head_hash,
+                head_at_unix_ms,
                 view.block_hashes(),
             )
         {
@@ -1928,7 +1957,13 @@ impl NativeCompletionPayloadBuilderV1 {
             .pin_manifests()
             .get(&order_record.manifest_digest)
             .ok_or(ProviderIngestCompletionPayloadErrorV1::Rejected)?;
-        validate_completion_order_binding(&request, provider_id, order_record, pin, height)?;
+        validate_completion_order_binding(
+            &request,
+            provider_id,
+            order_record,
+            pin,
+            head_at_unix_ms / MILLIS_PER_UNIX_SECOND,
+        )?;
         let mut payload = self.unsigned_completion_payload(request, order_id, provider_id)?;
         let route = self
             .queue
@@ -2049,8 +2084,7 @@ impl NativeTransactionIngressV1 {
         }
         let hash =
             HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(transaction_hash));
-        let entrypoint_hash =
-            iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash);
+        let entrypoint_hash = iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash);
         let Some(height) = self.state.committed_entrypoint_height(&entrypoint_hash) else {
             return if self
                 .queue
@@ -2385,12 +2419,17 @@ fn cursor_matches_committed_hashes(
 fn completion_payload_anchor_matches_committed_chain(
     cursor: ProviderIngestFinalizedCursorV1,
     completion_epoch: u64,
+    finalized_at_unix_ms: u64,
     head_height: u64,
     head_hash: [u8; 32],
+    head_at_unix_ms: u64,
     committed_hashes: &[HashOf<BlockHeader>],
 ) -> bool {
+    let finalized_unix_epoch = finalized_at_unix_ms / MILLIS_PER_UNIX_SECOND;
+    let head_unix_epoch = head_at_unix_ms / MILLIS_PER_UNIX_SECOND;
     cursor.height <= head_height
-        && completion_epoch == cursor.height
+        && completion_epoch == finalized_unix_epoch
+        && finalized_unix_epoch <= head_unix_epoch
         && committed_head_matches_hash_journal(head_height, head_hash, committed_hashes)
         && cursor_matches_committed_hashes(cursor, committed_hashes)
 }

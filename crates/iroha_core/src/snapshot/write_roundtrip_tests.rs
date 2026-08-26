@@ -1122,12 +1122,7 @@ async fn snapshot_write_signature_file_uses_checked_signing_and_verifies_digest(
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
-    let digest_hex = std::fs::read_to_string(current_generation_artifact(
-        &store_dir,
-        SNAPSHOT_DIGEST_FILE_NAME,
-    ))
-    .expect("snapshot digest");
-    let digest = hex::decode(digest_hex.trim()).expect("snapshot digest hex");
+    let bundle_digest = current_snapshot_bundle_auth_digest(&store_dir);
     let signature_hex = std::fs::read_to_string(current_generation_artifact(
         &store_dir,
         SNAPSHOT_SIGNATURE_FILE_NAME,
@@ -1135,7 +1130,7 @@ async fn snapshot_write_signature_file_uses_checked_signing_and_verifies_digest(
     .expect("snapshot signature");
     let signature = Signature::try_from_hex(signature_hex.trim()).expect("snapshot signature hex");
     signature
-        .verify(key_pair.public_key(), &digest)
+        .verify(key_pair.public_key(), &bundle_digest)
         .expect("checked snapshot signature must verify");
 }
 #[tokio::test]
@@ -1145,14 +1140,9 @@ async fn snapshot_read_rejects_wrong_key_signature_for_matching_digest() {
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
-    let digest_hex = std::fs::read_to_string(current_generation_artifact(
-        &store_dir,
-        SNAPSHOT_DIGEST_FILE_NAME,
-    ))
-    .expect("snapshot digest");
-    let digest = hex::decode(digest_hex.trim()).expect("snapshot digest hex");
+    let bundle_digest = current_snapshot_bundle_auth_digest(&store_dir);
     let wrong_key_pair = checked_random_snapshot_keypair();
-    let wrong_signature = Signature::try_new(wrong_key_pair.private_key(), &digest)
+    let wrong_signature = Signature::try_new(wrong_key_pair.private_key(), &bundle_digest)
         .expect("checked wrong-key snapshot signature");
     std::fs::write(
         current_generation_artifact(&store_dir, SNAPSHOT_SIGNATURE_FILE_NAME),

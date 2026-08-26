@@ -1,10 +1,10 @@
 # Torii Router Composition
 
-Torii exposes its HTTP surface through a staged builder that groups related
-routes and wires shared state exactly once. The `RouterBuilder` helper lives in
-`iroha_torii::router::builder` and wraps `axum::Router<SharedAppState>`. Each
-`Torii::add_*_routes` helper now accepts `&mut RouterBuilder` and performs its
-registrations via `RouterBuilder::apply`.
+Torii exposes its HTTP surface through a staged, crate-internal builder that
+groups related routes and wires shared state exactly once. `RouterBuilder`
+wraps `axum::Router<SharedAppState>` and accepts only catalog-backed route
+registrations. Each `Torii::add_*_routes` helper receives the same mutable
+builder.
 
 ## Builder Pattern
 
@@ -12,7 +12,11 @@ The builder API removes the old "return a new `Router`" pattern. Instead of
 reassigning a router after every helper, callers invoke the helpers in sequence:
 
 ```rust
-let mut builder = RouterBuilder::new(app_state.clone());
+let mut builder = RouterBuilder::new(
+    app_state.clone(),
+    RouteCatalog::new(route_catalog::CATALOGED_ROUTES),
+    compiled_route_features(),
+)?;
 
 // Feature-neutral groups
 torii.add_sumeragi_routes(&mut builder);
@@ -25,13 +29,17 @@ torii.add_connect_routes(&mut builder);
 #[cfg(feature = "app_api")]
 torii.add_app_api_routes(&mut builder);
 
-let router = builder.finish();
+let (router, mounted_manifest) = builder.finish()?;
 ```
 
-This approach guarantees that:
+Construction validates the catalog once and indexes its stable route IDs.
+Each mount then performs a direct catalog lookup instead of scanning or
+cloning the growing registration manifest. This approach guarantees that:
 
-- The shared `AppState` is cloned only when needed (`apply_with_state` remains
-  available for handlers that require it).
+- A route's method, authentication policy, path, feature gate, and stable ID
+  agree with its canonical descriptor.
+- Duplicate registrations are rejected by stable ID, while finalization
+  rejects both missing and unexpected mounts.
 - Feature-gated helpers compose deterministically regardless of compile-time
   configuration.
 - Tests can exercise different combinations without juggling intermediate
@@ -108,23 +116,9 @@ proof id, the routed path now normalizes that miss back to `404 Not Found`
 instead of surfacing the executor's internal
 `QueryExecutionFail::Conversion("ProofRecord not found")` shape as `400`.
 
-## Migration Notes
-
-Projects embedding Torii should migrate any direct `Router` manipulations to
-`RouterBuilder` helpers.
-The historical pattern of returning a modified router from each `add_*_routes`
-helper has been replaced by in-place builder composition.
-
-Recommended migration pattern:
-
-1. Construct `RouterBuilder::new(app_state.clone())`.
-2. Call the `Torii::add_*_routes` helpers in the desired order.
-3. Register custom routes with `builder.apply(...)` (or
-   `builder.apply_with_state(...)` when extra state is required).
-4. Finalize with `builder.finish()`.
-
-This keeps route registration deterministic across feature flags and avoids
-reassigning intermediate `Router` values.
+`RouterBuilder` is not a compatibility surface for external route injection.
+The first release has one catalog-enforced composition path and carries no
+adapter for older builder shapes.
 
 ## Further Reading
 

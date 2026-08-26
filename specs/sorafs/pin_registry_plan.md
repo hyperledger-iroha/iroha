@@ -25,9 +25,9 @@ and operational requirements.
 
 | Struct | Description | Fields |
 |--------|-------------|--------|
-| `PinManifestRecord` | Chain-authoritative manifest lifecycle entry. `submitted_epoch` and the approval/retirement epochs carried by `status` are evidence derived from block consensus time; they are never supplied by the client. The envelope digest and exact 36-byte CIDv1/dag-cbor/BLAKE3-256 content root are distinct commitments. | `digest`, `root_cid`, `chunker`, `chunk_digest_sha3_256`, `por_root`, `content_length`, `policy`, `submitted_by`, `submitted_epoch`, `alias`, `successor_of`, `metadata`, `status`, `retirement_reason`, `council_envelope_digest`, `pin_fee_payment`. |
+| `PinManifestRecord` | Chain-authoritative manifest lifecycle entry. `submitted_epoch` and the approval/retirement epochs carried by `status` are evidence derived from block consensus time; they are never supplied by the client. The immutable nullable `approved_epoch` preserves approval history after retirement. The envelope digest and exact 36-byte CIDv1/dag-cbor/BLAKE3-256 content root are distinct commitments. | `digest`, `root_cid`, `chunker`, `chunk_digest_sha3_256`, `por_root`, `content_length`, `policy`, `submitted_by`, `submitted_epoch`, `approved_epoch`, `alias`, `successor_of`, `metadata`, `status`, `retirement_reason`, `council_envelope_digest`, `pin_fee_payment`. |
 | `PinManifestFinalizedRecordV1` | Immutable read result binding one native manifest record to the finalized block used for the query. | `finalized_cursor`, `manifest`. |
-| `PinManifestSummaryV1` | Bounded list projection that deliberately omits alias proofs, metadata, council envelopes, and fee-payment details. | `digest`, `submitted_by`, `submitted_epoch`, `content_length`, `retention_epoch`, `status`, `successor_of`. |
+| `PinManifestSummaryV1` | Bounded list projection that deliberately omits alias proofs, metadata, council envelopes, and fee-payment details while retaining the required nullable approval epoch. | `digest`, `submitted_by`, `submitted_epoch`, `approved_epoch`, `content_length`, `retention_epoch`, `status`, `successor_of`. |
 | `PinManifestPageV1` | Finalized exclusive-keyset page with both row and encoded-byte ceilings. | `finalized_cursor`, `charged_usage`, `manifests`, `has_more`, `next_after_digest`. |
 | `PinResourceUsage` | Consensus-maintained resource charge for the global registry or one authenticated account. `manifest_count` covers every retained lifecycle record; `content_bytes` covers live replicated content. | `manifest_count`, `content_bytes`. |
 | `PinLineageSummaryV1` | Consensus-maintained bounded succession state used without traversing complete manifest history. | `depth`, `direct_successor_count`. |
@@ -91,7 +91,7 @@ Coverage:
 
 | Component | Task | Owner(s) |
 |-----------|------|----------|
-| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest_hex}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication`. The pin-list route executes `FindSorafsPinManifests` and returns `PinManifestPageV1`; the detail route returns exact native `PinManifestFinalizedRecordV1` JSON. Both accept only an optional paired expected finalized height/hash precondition. The legacy alias/replication projections require canonical-account request signatures because their response pagination follows authoritative-inventory materialization. Each replication-order projection includes `assignment_revision`; each retained completion includes the accepted revision, nested owner/signer-policy identity, and nested finalized height/hash anchor. | Networking TL / Core Infra |
+| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest_hex}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication`. The pin-list route executes `FindSorafsPinManifests` and returns `PinManifestPageV1`; the detail route returns exact native `PinManifestFinalizedRecordV1` JSON. Both accept only an optional paired expected finalized height/hash precondition. The alias/replication projections require canonical-account request signatures and return closed typed V1 response objects because their response pagination follows authoritative-inventory materialization. Each replication-order projection includes `assignment_revision`; each retained completion includes the accepted revision, nested owner/signer-policy identity, and nested finalized height/hash anchor. | Networking TL / Core Infra |
 | Finality binding | Every pin page and detail response carries the height/hash from the same immutable finalized view. Clients continue a page with the returned non-zero `next_after_digest` as an exclusive `after_digest_hex` key and repeat that finalized pair; a stale requested cursor fails with HTTP 409. There is no offset or live-list compatibility mode. | Core Infra |
 | CLI | `iroha app sorafs pin register`, `pin list`, `pin show`, `alias list`, and `replication list` wrap the REST and ISI surfaces for operator audits. | Tooling WG |
 | SDK | Rust request builders and the Kotlin/mirrored-Java, JavaScript, Python, Swift, and C# guard lanes mirror the signed `RegisterPinManifest` hard cut. Lifecycle event epochs are readback evidence only, never builder inputs. | SDK Teams |
@@ -111,9 +111,16 @@ Operations:
   bounded native `manifest`. The retired `limit`, attestation, embedded
   alias/order arrays, counts, truncation fields, and list paging selectors are
   absent; callers use
-  `/v1/sorafs/aliases` and `/v1/sorafs/replication` for authenticated legacy
+  `/v1/sorafs/aliases` and `/v1/sorafs/replication` for authenticated
   list queries. Their returned pages are bounded, but the current handlers
   materialize the authoritative inventory before applying the page.
+- `GET /v1/sorafs/aliases` accepts bounded `limit=1..=500` and canonical
+  `u32` `offset` selectors plus optional exact case-sensitive canonical
+  lowercase `namespace` and non-zero lowercase 32-byte `manifest_digest`
+  filters. Unknown, duplicate, empty, noncanonical, and percent-encoded
+  parameters are rejected before the authoritative query. Its response is the
+  closed `SorafsAliasListResponseV1` projection, including exact typed lineage,
+  cache-decision, and governance assessment objects.
 - `GET /v1/sorafs/replication` accepts bounded `limit`/`offset` pagination plus
   `status` and `manifest_digest` filters. Each order emits
   `assignment_revision`. Every `provider_completions[]` entry emits
@@ -123,9 +130,10 @@ Operations:
   and `finalized_anchor.{height,block_hash_hex}`. These are retained ledger
   facts, not live substitutions from the provider registry.
   Selectors are a strict hard cut: `limit` is `1..=500`, `offset` is a
-  canonical `u32`, `status` is exactly lowercase `pending`, `completed`, or
-  `expired`, and `manifest_digest` is a non-zero lowercase 32-byte digest;
-  unknown, duplicate, empty, and alias parameters are rejected. The listing
+  canonical `u32`, `status` is exactly lowercase `pending`, `completed`,
+  `cancelled`, or `expired`, and `manifest_digest` is a non-zero lowercase
+  32-byte digest;
+  unknown, duplicate, empty, and alternate parameter names are rejected. The listing
   attestation and world data are derived from one full `StateView` generation.
 - Registration is submitted as one canonical `SignedTransaction` containing
   exactly one `RegisterPinManifest`. The authenticated transaction authority
@@ -151,7 +159,9 @@ Operations:
   must still match. One account need not own every provider in a multi-provider
   order. Exact retained completion replays are idempotent even after a later
   authority rotation; stale prepared completions and conflicting replays fail,
-  and retiring a manifest expires its pending orders.
+  and retiring a manifest cancels each pending order at or before its inclusive
+  deadline and expires it only when retirement occurs strictly after that
+  deadline.
 - `ExpireReplicationOrder` closes a still-pending order only when its supplied
   epoch is strictly later than the inclusive completion deadline. It requires
   `CanIssueSorafsReplicationOrder`, accepts only an exact idempotent replay, and

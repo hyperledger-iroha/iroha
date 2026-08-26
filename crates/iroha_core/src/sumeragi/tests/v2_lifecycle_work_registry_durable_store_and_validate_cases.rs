@@ -1,5 +1,36 @@
 #[cfg(feature = "bls")]
 #[test]
+fn durable_store_finalization_census_projects_exact_closed_row() {
+    let DurableStoreFixture {
+        registry,
+        address,
+        effect,
+        ..
+    } = durable_store_fixture(0x40);
+    let work = registry
+        .entries
+        .get(&address)
+        .expect("durable Store census fixture retains its closed row");
+    let ConcreteLifecycleWorkKind::DurableStoreBody(store) = &work.kind else {
+        unreachable!("durable Store census fixture retains one Store carrier")
+    };
+    let expected = PublishedLifecycleStoreRetryCensusEntryV1::from_exact_published_store(
+        &effect,
+        &store.pending,
+        &store.durable_receipt,
+    )
+    .expect("reconstruct the exact closed Store publication");
+    assert_eq!(expected.key(), (store.durable_receipt.round(), store.durable_receipt.subject()));
+    assert_eq!(
+        registry
+            .published_lifecycle_store_retry_census()
+            .expect("project the authenticated registry Store census"),
+        BTreeMap::from([(expected.key(), expected)]),
+    );
+}
+
+#[cfg(feature = "bls")]
+#[test]
 fn durable_store_prepare_and_drop_preserve_the_closed_row() {
     let DurableStoreFixture {
         mut registry,
@@ -220,6 +251,12 @@ fn assert_corrupt_durable_store_rejected(
         .expect("corruption fixture retains its closed Store row");
     corrupt(work);
     assert!(!work.validate_exact());
+    assert!(
+        registry
+            .published_lifecycle_store_retry_census()
+            .is_err(),
+        "finalization census must reject corrupt authenticated Store work",
+    );
     let before = format!("{registry:?}");
     assert!(matches!(
         registry.prepare_durable_store_execution(&lease, slot, &verified),

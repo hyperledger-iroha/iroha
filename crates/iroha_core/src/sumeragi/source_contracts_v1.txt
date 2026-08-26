@@ -239,6 +239,7 @@ region|production|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
 count|production|prepare_direct_validation_succeeded(|3|only the strict private definition, recovered-Decision fast-forward, and cfg(test) sealed settlement helper may name the strict preview
 count|production|prepare_direct_validation_succeeded_with_local_origin_manifest(|3|only the private definition, strict wrapper, and sealed Ready bridge may name the local-origin successful preview
 count|production|stage_direct_validation_registry(|3|only the shared staging definition and the two closed direct-validation previews may stage registry state
+count|production|self.validation_completion_tag(|2|only successful and failed exact durable-body completions may request a current-view acknowledgement tag
 region|recovered_fast_forward|adapter|after|fn prepare_recovered_decision_apply_fast_forward(|before|/// Preview a certified Fetch completion directly
 count|recovered_fast_forward|prepare_direct_validation_succeeded(|1|the recovered-Decision preview call stays sealed inside replay
 region|tokens|adapter|at|enum DirectValidationSucceededStutter|before|/// Opaque staged adapter state for the fixed recovered Decision body fast-forward.
@@ -278,13 +279,19 @@ forbidden|tokens|AdapterOutcome|sealed direct-validation tokens expose forbidden
 forbidden|tokens|encode_wal_entry|sealed direct-validation tokens expose forbidden surface encode_wal_entry
 region|method|adapter|at|fn prepare_direct_validation_succeeded(|before|\n    /// Preview one exact deterministic rejection
 region|staging|adapter|at|fn stage_direct_validation_registry(|before|\n    /// Preview one exact successful deterministic validation directly against
+region|completion_tag|adapter|at|fn validation_completion_tag(|before|\n    /// Preview one exact successful deterministic validation directly against
 required|staging|local_origin_manifest: Option<&wire::PayloadManifest>|direct-validation registry staging lost its sealed optional local manifest
 required|staging|let mut next_registry = self.registry.clone()|direct-validation registry staging must remain drop-inert
 required|staging|next_registry.manifest_to_core(manifest, &self.wire_context)?|local-origin manifest must enter only the staged registry
 required|staging|.ok_or(AdapterError::MissingManifest)?|remote and strict direct validation must still require prior manifest registration
 forbidden|staging|self.registry =|direct-validation preflight must not publish live registry state
 forbidden|staging|wal.append(|direct-validation registry staging must remain WAL-inert
+required|completion_tag|tag.height() == current.height()|late validation acknowledgement changed height scope
+required|completion_tag|tag.view() < current.view()|late validation acknowledgement stopped requiring a strictly older view
+required|completion_tag|self.reducer.body_state(round, subject) == reducer::BodyState::Durable|late validation acknowledgement stopped binding the exact still-Durable body
+order|completion_tag|3|let current = self.reducer.current_tag()|if tag.height() == current.height()|current\n        } else {\n            tag|late validation acknowledgement must return only the current tag for the narrow exact-body case and otherwise preserve the original authenticated tag
 required|method|self.prepare_direct_validation_succeeded_with_local_origin_manifest(|strict successful validation must delegate without widening its surface
+order|method|4|self.stage_direct_validation_registry(|next_registry.register_execution_commitment(|let tag = self.validation_completion_tag(|let event = reducer::Event::ValidationCompleted {|successful validation must authenticate and register the exact receipt before a narrowly rebound reducer event
 forbidden|method|drive_effects(|inert direct-validation preview invokes forbidden machinery drive_effects(
 forbidden|method|wal.append(|inert direct-validation preview invokes forbidden machinery wal.append(
 forbidden|method|step_with_completion_evidence(|inert direct-validation preview invokes forbidden machinery step_with_completion_evidence(
@@ -320,6 +327,7 @@ required|method|self.prepare_direct_validation_failed_with_local_origin_manifest
 required|method|durable_receipt: &DurableBodyReceipt|direct-rejection preview must borrow the durable body receipt
 required|method|valid: false|direct-rejection preview must emit an invalid validation event
 required|method|wire::GlobalPhase::Prepare|direct-rejection preview must remain in Prepare
+order|method|3|self.stage_direct_validation_registry(|let tag = self.validation_completion_tag(|let event = reducer::Event::ValidationCompleted {|failed validation must authenticate the exact durable receipt before a narrowly rebound reducer event
 forbidden|method|ValidatedBodyReceipt|inert direct-rejection preview invokes forbidden machinery ValidatedBodyReceipt
 forbidden|method|self.validation_failed(|inert direct-rejection preview invokes forbidden machinery self.validation_failed(
 forbidden|method|BodyPipelineCompletionEvidence|inert direct-rejection preview invokes forbidden machinery BodyPipelineCompletionEvidence
@@ -351,7 +359,12 @@ case|local_body_replay_authority_is_linear_nondecode_and_closed_to_fixed_joins
 region|production|replay_authority|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|local|replay_authority|after|pub(in crate::sumeragi) struct LocalBodyPreIntentReplaySealV1|before|/// Selector-authenticated origin awaiting one exact durable body-frame binding.
 region|derive_local_pre_intent|replay_authority|last|#[derive(|before|pub(in crate::sumeragi) struct LocalBodyPreIntentReplaySealV1 {
-region|runtime|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|protected_lock_reseed_source|replay_authority_certified_body|at|pub(in crate::sumeragi) fn from_exact_protected_lock_validate(|before|/// Report whether this closed test-only carrier may project a local-proposal handoff.
+region|protected_lock_standalone_auth|replay_authority_certified_body|at|fn authenticated_refined_proposal_standalone_source(|before|fn standalone_validate_effect(
+region|protected_lock_pre_admission|registry|at|pub(in crate::sumeragi) fn seal_exact_protected_lock_validate(|before|/// Consume the exact local Validate owner and its Store-projected replay seal.
+region|protected_lock_validate_certificate|effects|at|fn exact_remote_proposal_validate_authority_certificate(|before|fn preflight_authenticated_genesis_store_completion(
+region|protected_lock_validate_reseed|effects|at|// A TC may promote an older PrepareQC|before|        let authority_certificate =\n            self.exact_remote_proposal_validate_authority_certificate
+region|runtime|runtime|begin|-|before|\n#[cfg(test)]\npub(in crate::sumeragi) mod tests {
 region|executor|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
 required|local|store_pending: PendingRuntimeEffectBinding|local replay authority omitted store_pending: PendingRuntimeEffectBinding
 required|local|pub(in crate::sumeragi) struct LocalValidateReplayEvidenceV1|local replay authority omitted pub(in crate::sumeragi) struct LocalValidateReplayEvidenceV1
@@ -365,6 +378,52 @@ required|local|exactly_matches_proposal_intent(|local replay authority omitted e
 required|local|exactly_matches_proposal_intent_effect(|local replay authority omitted exactly_matches_proposal_intent_effect(
 required|local|fn bind_proposal_intent(|local replay authority omitted fn bind_proposal_intent(
 required|local|BodyPipelineOriginV1::LocalBody(manifest.clone())|local replay authority omitted BodyPipelineOriginV1::LocalBody(manifest.clone())
+required|protected_lock_reseed_source|certificate.phase != wire::GlobalPhase::Prepare|protected-lock Validate reseed stopped requiring a full PrepareQC
+required|protected_lock_reseed_source|statement.execution_commitment() != Some(certificate.execution_commitment)|protected-lock Validate reseed stopped binding the runtime statement to the QC commitment
+required|protected_lock_reseed_source|fetch_manifest_present: true|protected-lock Validate reseed lost its persisted manifest discriminator
+required|protected_lock_reseed_source|certified_sources: Vec::new()|protected-lock Validate reseed became indistinguishable from a generic certified Fetch
+required|protected_lock_reseed_source|exact_certified_body_pipeline_family(&coordinates, receipt)?|protected-lock Validate reseed stopped binding the recovered manifest and durable receipt
+required|protected_lock_reseed_source|LifecycleStageKind::ValidateBody|protected-lock reseed stopped remaining an exact Validate-only source
+required|protected_lock_reseed_source|AuthenticatedCertifiedLocalValidateFamilyV1::ProtectedLock(family)|protected-lock reseed stopped retaining its closed authenticated-certified subtype
+count|protected_lock_reseed_source|from_exact_protected_lock_validate(|1|protected-lock Validate replay evidence must have one closed constructor
+forbidden|protected_lock_reseed_source|LifecycleStageKind::FetchBody|protected-lock Validate replay evidence must not mint generic Fetch authority
+forbidden|protected_lock_reseed_source|LifecycleStageKind::StoreBody|protected-lock Validate replay evidence must not mint a Store shortcut
+forbidden|protected_lock_reseed_source|LocalProposalReady|protected-lock Validate replay evidence must not project local proposal readiness
+required|protected_lock_standalone_auth|certified_sources.is_empty()|standalone protected-lock replay stopped requiring its empty certified-Fetch source set
+required|protected_lock_standalone_auth|certificate.validate(context).is_ok()|standalone protected-lock replay stopped validating the complete QC structure
+required|protected_lock_standalone_auth|verified.verify_quorum_certificate(certificate).is_ok()|standalone protected-lock replay stopped authenticating the full PrepareQC against the frozen roster
+required|protected_lock_pre_admission|ownership.exact_pending_adapter_effect_binding(&effect)|protected-lock Validate pre-admission stopped consuming the exact runtime binding
+required|protected_lock_pre_admission|LocalValidateReplayEvidenceV1::from_exact_protected_lock_validate(|protected-lock Validate pre-admission stopped delegating to the closed replay constructor
+required|protected_lock_pre_admission|if !prepared.validates()|protected-lock Validate pre-admission stopped rechecking the assembled carrier
+count|protected_lock_pre_admission|ownership.exact_pending_adapter_effect_binding(&effect)|2|protected-lock Validate pre-admission must derive both installed and replay bindings from the exact owner
+forbidden|protected_lock_pre_admission|PreparedCertifiedFetchReplayPreAdmission|protected-lock Validate pre-admission must not route through generic certified Fetch
+required|protected_lock_validate_certificate|.durable_body_authority_certificate()|protected-lock Validate stopped obtaining the full reducer-authenticated QC
+required|protected_lock_validate_certificate|.verify_certificate(&self.context, &certificate)|protected-lock Validate stopped verifying the complete QC against the frozen height
+required|protected_lock_validate_certificate|certificate.phase != phase|protected-lock Validate stopped matching the QC phase to the runtime candidate statement
+required|protected_lock_validate_certificate|certificate.execution_commitment) != statement.execution_commitment()|protected-lock Validate stopped matching the full QC commitment to the runtime candidate statement
+required|protected_lock_validate_certificate|wire::GlobalPhase::Prepare => {|protected-lock Validate stopped classifying Prepare authority separately from Decision authority
+required|protected_lock_validate_certificate|self.protected_decision.is_none()|Prepare fallback stopped requiring the absence of a terminal Decision
+required|protected_lock_validate_certificate|self.protected_lock\n                        == Some((certificate.proposal_round, certificate.subject))|Prepare fallback stopped requiring the exact currently protected lock
+required|protected_lock_validate_certificate|if !protected {|protected-lock Validate stopped failing closed on ordinary or foreign quorum authority
+forbidden|protected_lock_validate_certificate|replayed_highest_prepare_certificate_ref|cleanup-only durable high must not substitute for the protected full PrepareQC
+required|protected_lock_validate_reseed|exact_remote_proposal_validate_authority_certificate(&effect, &ownership)?|historical protected-lock Validate stopped authenticating its complete runtime QC
+required|protected_lock_validate_reseed|.filter(\pcertificate\p certificate.phase == wire::GlobalPhase::Prepare)|historical protected-lock Validate stopped requiring Prepare authority
+required|protected_lock_validate_reseed|.recovered_bodies|historical protected-lock Validate stopped sourcing its manifest and receipt from recovered durable storage
+required|protected_lock_validate_reseed|if recovered_receipt != receipt|historical protected-lock Validate stopped comparing the exact recovered durable receipt
+required|protected_lock_validate_reseed|DurableStoreTerminalRetrySealV1::seal_validate_predecessor(|historical protected-lock Validate stopped recovering its inert Store predecessor from the exact Validate owner
+required|protected_lock_validate_reseed|protected-lock ValidateBody could not seal its exact Store predecessor|historical protected-lock Validate stopped failing closed when its Store predecessor cannot be reconstructed
+required|protected_lock_validate_reseed|PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_lock_validate(|historical protected-lock Validate stopped using the closed typed reseed
+required|protected_lock_validate_reseed|self.install_pending_durable_validate_admission(|historical protected-lock Validate stopped entering the normal lifecycle admission transaction
+required|protected_lock_validate_reseed|prepared.into_pending_durable_validate_admission()|historical protected-lock Validate stopped consuming the typed carrier into normal durable admission
+required|protected_lock_validate_reseed|Some(store_terminal)|historical protected-lock Validate admission stopped retaining its inert Store predecessor
+count|protected_lock_validate_reseed|seal_exact_protected_lock_validate(|1|historical protected-lock Validate must have one typed reseed call
+count|protected_lock_validate_reseed|seal_validate_predecessor(|1|historical protected-lock Validate must reconstruct exactly one inert Store predecessor
+count|protected_lock_validate_reseed|install_pending_durable_validate_admission(|1|historical protected-lock Validate must have one normal admission install
+order|protected_lock_validate_reseed|6|if recovered_receipt != receipt|let validate_ownership = ownership;|DurableStoreTerminalRetrySealV1::seal_validate_predecessor(|PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_lock_validate(|self.install_pending_durable_validate_admission(|Some(store_terminal)|historical protected-lock Validate must verify durability, reconstruct its predecessor, reseal replay, and install both atomically
+forbidden|protected_lock_validate_reseed|PreparedCertifiedFetchReplayPreAdmission|historical protected-lock Validate must not manufacture generic certified Fetch authority
+forbidden|protected_lock_validate_reseed|pending_durable_validate_admissions.insert|historical protected-lock Validate must not bypass the normal admission installer
+forbidden|protected_lock_validate_reseed|AdapterEffect::FetchBody|historical protected-lock Validate must not synthesize a Fetch effect
+forbidden|protected_lock_validate_reseed|prepared.into_pending_durable_validate_admission(),\n                    None,|historical protected-lock Validate must not install without its reconstructed Store predecessor
 forbidden|derive_local_pre_intent|Clone|local body pre-intent seal became cloneable
 forbidden|derive_local_pre_intent|Copy|local body pre-intent seal became copyable
 forbidden|local|Decode|local replay authority exposed or reserved Decode
@@ -412,7 +471,7 @@ region|lifecycle_open|lifecycle_open|begin|-|end|-
 region|outside|coordinator|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|outside|ledger|begin|-|before|pub(crate) mod tests {
 region|outside|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
-region|outside|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|outside|runtime|begin|-|before|\n#[cfg(test)]\npub(in crate::sumeragi) mod tests {
 region|outside|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|outside|runner|begin|-|end|-
 region|outside_terminal|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -781,7 +840,7 @@ region|derive_remote_proposal_validate_evidence|replay_authority|last|#[derive(|
 region|remote|replay_authority|after|pub(in crate::sumeragi) struct RemoteProposalFetchReplayEvidenceV1|before|/// Move-only pre-intent replay seal for one exact local
 region|authenticated_genesis|replay_authority|at|pub(in crate::sumeragi) struct InstalledAuthenticatedGenesisReplayAuthorityV1|before|fn remote_proposal_origin_matches_fetch(
 region|remote_certified_body|replay_authority|at|fn remote_proposal_origin_matches_fetch(|before|impl CertifiedFetchReplayEvidenceV1 {
-region|runtime|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|runtime|runtime|begin|-|before|\n#[cfg(test)]\npub(in crate::sumeragi) mod tests {
 region|adapter|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|executor|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|outside|ledger|begin|-|before|pub(crate) mod tests {
@@ -939,7 +998,8 @@ region|production|replay_authority|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|live|replay_authority|after|struct LiveWalPersistedReplaySealV1|before|/// Canonical inert replay evidence for one exact signed broadcast effect.
 region|adapter|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|handoff|adapter|after|pub(crate) struct LiveProposalIntentWalSignHandoffV1 {|before|/// Exact process-local pair of authenticated artifacts proving equivocation.
-region|runtime|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|runtime|runtime|begin|-|before|\n#[cfg(test)]\npub(in crate::sumeragi) mod tests {
+region|direct_apply_causality|runtime|at|fn effect_causality(\n        effect: &Self::Effect,\n        source: RuntimeEffectSource,\n    ) -> RuntimeEffectCausality {|before|fn effect_refinement_kind(effect: &Self::Effect) -> u8 {
 region|work_registry|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|ready_sign|adapter|after|// READY_DURABLE_VALIDATE_LIVE_SIGN_BEGIN|before|// READY_DURABLE_VALIDATE_LIVE_SIGN_END
 region|outside|ledger|begin|-|end|-
@@ -957,6 +1017,22 @@ required|live|bind_exact_validate_sign_pending(|live WAL seal omitted bind_exact
 required|live|exactly_binds_validate_sign_pending(&self)|live WAL seal omitted exactly_binds_validate_sign_pending(&self)
 required|live|project_validate_apply_successor(predecessor_effect, &self.effect)|live WAL seal omitted project_validate_apply_successor(predecessor_effect, &self.effect)
 required|live|exactly_matches_apply_effect(&self.effect, receipt)|live WAL seal omitted exactly_matches_apply_effect(&self.effect, receipt)
+required|direct_apply_causality|source == RuntimeEffectSource::Retransmit|runtime causality stopped restricting fresh ownership to retransmission
+required|direct_apply_causality|matches!(effect, AdapterEffect::FetchBody { .. })|runtime causality stopped restricting fresh ownership to historical locked-body Fetch
+required|direct_apply_causality|RuntimeEffectCausality::Fresh(RuntimeFreshRootKind::HistoricalLockedRetransmit)|historical locked-body retransmit lost its reviewed fresh-root class
+required|direct_apply_causality|else {\n            RuntimeEffectCausality::Inherit|ordinary Decision Apply stopped inheriting its authenticated runtime command owner
+order|direct_apply_causality|4|source == RuntimeEffectSource::Retransmit|matches!(effect, AdapterEffect::FetchBody { .. })|RuntimeEffectCausality::Fresh(RuntimeFreshRootKind::HistoricalLockedRetransmit)|RuntimeEffectCausality::Inherit|only the historical locked-body retransmit Fetch may mint fresh runtime causality; every other effect, including Apply, must inherit
+forbidden|direct_apply_causality|AdapterEffect::Apply { .. } => RuntimeEffectCausality::Fresh|ordinary Decision Apply became a fresh or synthesized runtime root
+required|adapter|let pending_decision_apply =\n                        if let reducer::WalRecord::Decision(certificate) =|Decision WAL acknowledgement stopped deferring its Apply seal until the reducer continuation is known
+required|adapter|Some((wal_identity, apply, certificate.clone()))|Decision WAL acknowledgement minted deferred authority before classifying the reducer continuation
+required|adapter|direct_apply_count = direct_apply_count.saturating_add(1)|Decision WAL acknowledgement stopped counting direct Apply continuations
+required|adapter|*apply_tag == tag|direct Decision Apply changed its exact reducer tag
+required|adapter|*subject == decision.subject()|direct Decision Apply changed its exact decided subject
+required|adapter|certificate == &decision|direct Decision Apply changed its exact durable certificate
+required|adapter|if direct_apply_count > 1|Decision WAL acknowledgement stopped rejecting multiple direct Apply children
+required|adapter|if direct_apply_count == 0 {|Decision WAL acknowledgement stopped retaining its seal only for a deferred Validate join
+count|adapter|self.pending_live_decision_apply = Some(sealed)|1|only a Decision continuation without direct Apply may install the deferred live WAL seal
+order|adapter|7|let pending_decision_apply =\n                        if let reducer::WalRecord::Decision(certificate) =|Some((wal_identity, apply, certificate.clone()))|let continuation = continuation.into_effects()|if direct_apply_count > 1|if direct_apply_count == 0 {|SealedLiveWalPersistedEffectV1::from_exact_live_append(|self.pending_live_decision_apply = Some(sealed)|Decision WAL sealing must retain only inert frame/effect coordinates until fsync continuation inspection, then mint and install authority solely for the deferred Validate join
 required|production|ReplayWalRoleV1::PROPOSAL_INTENT|live WAL seal omitted ReplayWalRoleV1::PROPOSAL_INTENT
 required|production|ReplayWalRoleV1::PREPARE_INTENT|live WAL seal omitted ReplayWalRoleV1::PREPARE_INTENT
 required|production|ReplayWalRoleV1::LOCK_AND_COMMIT|live WAL seal omitted ReplayWalRoleV1::LOCK_AND_COMMIT
@@ -991,7 +1067,7 @@ end
 case|live_proposal_intent_sign_is_joined_before_generic_effect_dispatch
 region|adapter|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|handoff|adapter|after|pub(crate) struct LiveProposalIntentWalSignHandoffV1 {|before|/// Exact process-local pair of authenticated artifacts proving equivocation.
-region|runtime|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|runtime|runtime|begin|-|before|\n#[cfg(test)]\npub(in crate::sumeragi) mod tests {
 region|executor|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|settlement|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|registry|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -1038,6 +1114,7 @@ forbidden|carrier|Encode|concrete live Sign carrier became codec-constructible
 forbidden|carrier|Decode|concrete live Sign carrier became codec-constructible
 count|runner|settle_pending_live_wal_sign_admission(lifecycle_owner, services)|2|runner must settle live Sign admission at both executor seams
 count|runner|settle_pending_lifecycle_output_admissions(lifecycle_owner, services)|2|runner must retain both generic output settlement seams
+count|runner|.requires_outer_executor_yield()|2|runner must classify newly terminalized output separately at both executor seams
 order|runner|4|settle_pending_live_wal_sign_admission(lifecycle_owner, services)|settle_pending_lifecycle_output_admissions(lifecycle_owner, services)|settle_pending_live_wal_sign_admission(lifecycle_owner, services)|settle_pending_lifecycle_output_admissions(lifecycle_owner, services)|live WAL Sign admission must precede generic signed-output settlement at both runner seams
 end
 case|live_validate_wal_pre_admissions_are_closed_and_scheduler_owned
@@ -1073,6 +1150,22 @@ region|store_declaration|registry|after|PreparedRemoteProposalStoreReplayPreAdmi
 region|stored_declaration|registry|after|PreparedRemoteProposalStoredReplayPreAdmission {|before|}
 region|validate_declaration|registry|after|PreparedRemoteProposalValidateReplayPreAdmission {|before|}
 region|authenticated_genesis_token|registry|at|impl PreparedAuthenticatedGenesisFetchReplayPreAdmission {|before|impl PreparedRemoteProposalFetchReplayPreAdmission {
+region|reconciliation_frontier|effects|at|pub(crate) struct RuntimeReconciliationFrontier {|before|/// Closed body-owner retirement predicate shared by pre-dispatch filtering and
+region|owned_effect_sidecar|effects|at|struct OwnedAdapterEffect {|before|struct LocalProposalIntentProjection {
+region|sidecar_capture|effects|at|let highest_prepare_retention = (index == 0|before|        if retained.is_empty() {
+region|sidecar_guard|effects|at|if highest_prepare_retention.is_some()|before|        let mut pending_kura_successor = None;
+region|highest_prepare_preflight|effects|at|fn preflight_highest_prepare_frontier(|before|/// Reject a malformed reducer frontier before consuming its move-only
+region|batch_frontier_preflight|effects|at|fn preflight_effect_batch_frontier(|before|/// Retire only not-yet-dispatched ordinary work which the reducer's new
+region|view_cleanup|effects|at|fn install_view<S: V2EffectServices>(|before|fn ensure_pending_slot(&self)
+region|protected_lock_body_projection|effects|at|fn protected_lock_body(|before|fn highest_prepare_body(
+region|view_fetch_cleanup|effects|at|let stale_fetches = self|before|        let stale = self
+region|view_ready_cleanup|effects|at|for key in &stale_body_cleanup.stale_ready {|before|let protected_ready_rebind_keys = stale_body_cleanup
+region|view_pipeline_owner_retention|effects|at|let retained_apply_owners = self|before|        // Unprotected Proposal families retire with the superseded view.
+region|adapter_recovered_validation_high|adapter|at|pub(crate) fn recovered_validation_authority(|before|/// Reauthenticate one complete recovered WAL frame and seal its exact identity.
+region|adapter_high_accessor|adapter|at|pub(crate) fn replayed_highest_prepare_certificate_ref(|before|/// Return the strongest complete body certificate retained by durable reducer state.
+region|leader_wire_replay_lock_authority|adapter|at|pub(crate) fn leader_wire_recovery_authority(|before|/// Mint the sole fixed leader-wire sibling owner from this exact open WAL.
+region|runtime_high_accessor|runtime|at|pub(crate) fn replayed_highest_prepare_certificate_ref(|before|/// Return the exact Decision key reconstructed by safety-WAL replay.
+region|leader_wire_live_lock_authority|worker|at|fn entered_view(\n        &mut self,\n        tag: EventTag,\n        certificate: wire::TimeoutCertificate,\n        protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,|before|    fn report_equivocation(
 region|callers|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|callers|selector|begin|-|end|-
 region|callers|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -1109,6 +1202,69 @@ required|token|_fetch: PreparedRemoteProposalFetchReplayPreAdmission|remote Prop
 required|token|_store: PreparedRemoteProposalStoreReplayPreAdmission|remote Proposal replay token omitted {required}
 required|token|_stored: PreparedRemoteProposalStoredReplayPreAdmission|remote Proposal replay token omitted {required}
 required|token|_ownership: RuntimeEffectOwnership|remote Proposal replay token omitted {required}
+required|reconciliation_frontier|highest_prepare: Option<wire::QuorumCertificateRef>|runtime reconciliation frontier lost its cleanup-only durable Prepare high-water mark
+count|reconciliation_frontier|highest_prepare: Option<wire::QuorumCertificateRef>|1|runtime reconciliation frontier must carry one bounded highest-Prepare reference
+forbidden|reconciliation_frontier|highest_prepare: Option<wire::QuorumCertificate>|runtime reconciliation frontier must not widen cleanup authority into a full voting certificate
+required|owned_effect_sidecar|highest_prepare_retention: Option<wire::QuorumCertificateRef>|retained adapter effect lost its cleanup-only highest-Prepare sidecar
+count|owned_effect_sidecar|highest_prepare_retention: Option<wire::QuorumCertificateRef>|1|owned adapter effect must carry one bounded cleanup sidecar
+forbidden|owned_effect_sidecar|highest_prepare_retention: Option<wire::QuorumCertificate>|owned adapter effect must not carry a full voting certificate
+required|sidecar_capture|index == 0|cleanup-only highest Prepare stopped binding to the leading reducer effect
+required|sidecar_capture|matches!(&effect, AdapterEffect::EnterView { .. })|cleanup-only highest Prepare escaped the EnterView-only capture
+required|sidecar_capture|.then_some(frontier.highest_prepare)|EnterView sidecar stopped deriving from the same atomic reconciliation frontier
+count|sidecar_capture|matches!(&effect, AdapterEffect::EnterView { .. })|1|highest-Prepare retention must have one EnterView-only capture predicate
+required|sidecar_guard|!matches!(&effect, AdapterEffect::EnterView { .. })|effect consumption stopped rejecting a cleanup sidecar on non-EnterView work
+required|sidecar_guard|cleanup-only highest Prepare sidecar escaped its EnterView|effect consumption lost its fail-closed non-EnterView diagnostic
+count|sidecar_guard|cleanup-only highest Prepare sidecar escaped its EnterView|1|non-EnterView sidecar rejection must remain singular
+required|highest_prepare_preflight|highest.phase != wire::GlobalPhase::Prepare|highest-Prepare structural preflight stopped requiring Prepare phase
+required|highest_prepare_preflight|highest.round != highest.proposal_round|highest-Prepare structural preflight stopped requiring same-round Prepare authority
+required|highest_prepare_preflight|highest.round.context_id != self.context.id()|highest-Prepare structural preflight stopped binding the frozen context
+required|highest_prepare_preflight|highest.round.height != self.context.height|highest-Prepare structural preflight stopped binding the frozen height
+required|highest_prepare_preflight|highest.round.view > tag.view()|highest-Prepare structural preflight accepted a future durable reference
+forbidden|highest_prepare_preflight|self.protected_lock =|highest-Prepare structural preflight must not mutate the voting lock
+required|batch_frontier_preflight|self.preflight_highest_prepare_frontier(frontier.tag, frontier.highest_prepare)?|effect-batch preflight stopped validating the atomic durable high-water mark
+required|batch_frontier_preflight|highest.round.view >= tag.view()|EnterView batch preflight stopped requiring a historical cleanup frontier
+required|protected_lock_body_projection|protected_lock.map(\pcertificate\p (certificate.proposal_round, certificate.subject))|EnterView stopped projecting the exact authenticated durable-lock coordinates
+required|view_cleanup|self.preflight_highest_prepare_frontier(Some(tag), highest_prepare_retention)?|EnterView stopped structurally validating its cleanup-only sidecar
+required|view_cleanup|protected.validate(&self.context)|EnterView stopped authenticating its protected lock
+required|view_cleanup|protected.phase != wire::GlobalPhase::Prepare|EnterView stopped requiring Prepare lock authority
+required|view_cleanup|protected.proposal_round.view >= tag.view()|EnterView admitted a non-historical protected lock
+required|view_cleanup|let highest_prepare_body = highest_prepare_body(highest_prepare_retention)|EnterView stopped reducing the durable high-water mark to one cleanup body key
+required|view_cleanup|Some(*key) == protected_body \p\p Some(*key) == highest_prepare_body|EnterView cleanup stopped using the exact protected-or-high bounded union
+count|view_cleanup|Some(*key) == highest_prepare_body|4|EnterView must use the cleanup-high key only for both Store replay families and both Validate retry-marker maps
+required|view_cleanup|RemoteProposalReplayStageV1::Store { .. }|EnterView cleanup stopped retaining the in-flight remote Proposal Store lineage
+required|view_cleanup|RemoteProposalReplayStageV1::Stored { .. }|EnterView cleanup stopped retaining the fsynced remote Proposal Store lineage
+required|view_cleanup|AuthenticatedGenesisReplayStageV1::Store { .. }|EnterView cleanup stopped retaining the in-flight authenticated-genesis Store lineage
+required|view_cleanup|AuthenticatedGenesisReplayStageV1::Stored { .. }|EnterView cleanup stopped retaining the fsynced authenticated-genesis Store lineage
+forbidden|view_cleanup|RemoteProposalReplayStageV1::Fetch {|cleanup-only durable high must not retain remote Proposal Fetch replay
+forbidden|view_cleanup|RemoteProposalReplayStageV1::BodyAvailable(|cleanup-only durable high must not retain remote Proposal BodyAvailable replay
+forbidden|view_cleanup|RemoteProposalReplayStageV1::StoreAdmission(|cleanup-only durable high must not retain transient remote Proposal Store admission
+forbidden|view_cleanup|AuthenticatedGenesisReplayStageV1::BodyAvailable(|cleanup-only durable high must not retain authenticated-genesis BodyAvailable replay
+forbidden|view_cleanup|AuthenticatedGenesisReplayStageV1::StoreAdmission(|cleanup-only durable high must not retain transient authenticated-genesis Store admission
+forbidden|view_fetch_cleanup|highest_prepare_body|cleanup-only durable high must not protect or rebind Fetch ownership
+forbidden|view_ready_cleanup|highest_prepare_body|cleanup-only durable high must not preserve ready-body ownership
+required|view_pipeline_owner_retention|let retained_store_owners = self|body-pipeline cleanup stopped deriving retained ownership from exact pending Stores
+required|view_pipeline_owner_retention|.pending_stores|body-pipeline cleanup stopped enumerating the complete pending Store set
+required|view_pipeline_owner_retention|retained_store_owners.contains(key)|body-pipeline cleanup stopped preserving the owner of each still-pending Store
+count|view_pipeline_owner_retention|retained_store_owners.contains(key)|1|body-pipeline cleanup must have one pending-Store retention predicate
+forbidden|view_pipeline_owner_retention|highest_prepare_body|a bare durable high must not retain a body-pipeline owner without pending Store work
+forbidden|view_pipeline_owner_retention|protected_body|a bare protected key must not retain a body-pipeline owner without existing work
+required|adapter_recovered_validation_high|if let Some(certificate) = self.replayed_highest_prepare_certificate_ref()?|recovered validation authority stopped including the durable highest Prepare
+required|adapter_recovered_validation_high|retain(certificate.proposal_round, certificate.subject)?|recovered validation authority stopped retaining the exact highest-Prepare body key
+required|adapter_recovered_validation_high|keys.len() > MAX_RECOVERED_VALIDATION_AUTHORITIES|recovered validation authority stopped enforcing its exact bounded census
+count|callers|const MAX_RECOVERED_VALIDATION_AUTHORITIES: usize = MAX_ADAPTER_EFFECTS_PER_MACRO_STEP + 3;|1|recovered validation authority must budget only high, lock, and Decision beyond the effect batch
+required|adapter_high_accessor|.durable_state()|adapter highest-Prepare accessor stopped reading durable reducer state
+required|adapter_high_accessor|.highest_prepare()|adapter highest-Prepare accessor stopped reading the exact WAL-replayed high-water mark
+required|adapter_high_accessor|wire::QuorumCertificateRef {|adapter highest-Prepare accessor stopped returning a cleanup-only reference
+forbidden|adapter_high_accessor|qc_to_wire|adapter highest-Prepare accessor must not widen the cleanup reference into a full certificate
+required|leader_wire_replay_lock_authority|self.registry.round_to_wire(certificate.proposal_round())|cold leader-wire authority lost the replayed lock round
+required|leader_wire_replay_lock_authority|self.registry.subject(certificate.subject())?|cold leader-wire authority lost the replayed lock subject
+required|leader_wire_replay_lock_authority|.with_protected_lock(protected_lock)|cold leader-wire authority omitted its authenticated durable lock
+order|leader_wire_replay_lock_authority|7|.durable_state()|.locked()|.round_to_wire(certificate.proposal_round())|.transpose()?|LeaderWireRecoveryAuthority::from_replayed_adapter(|.with_protected_lock(protected_lock)|.map_err(AdapterError::ServicedCandidateStore)|cold replay must authenticate, convert, attach, and surface the durable lock in order
+required|runtime_high_accessor|self.driver.replayed_highest_prepare_certificate_ref()|serialized runtime stopped forwarding the exact durable-high accessor
+count|runtime_high_accessor|replayed_highest_prepare_certificate_ref|2|runtime highest-Prepare wrapper must contain exactly its declaration and one driver delegation
+order|view_cleanup|6|protected.validate(&self.context)|let protected_body = protected_lock_body(protected_lock.as_ref());|self.reconcile_protected_lock(tag, protected_body, highest_prepare_body, services)?;|.reconcile_active_view_producer(tag, retain_local_producer)|.entered_view(tag, certificate, protected_body)|self.reconciled_tag = Some(tag);|validated lock reconciliation and live recovery-cut publication must precede installed-view exposure
+required|leader_wire_live_lock_authority|protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>|production EnterView lost its exact protected-lock input
+order|leader_wire_live_lock_authority|3|.advance_view(tag.view(), protected_lock)?|.advance_leader_wire_recovery_cut(next_recovery_authority)?|self.leader_wire_recovery_authority = next_recovery_authority;|EnterView must validate and persist the cut before exposing its authority
 forbidden|token|Decode|remote Proposal replay token exposed forbidden surface {forbidden}
 forbidden|token|fn from_parts(|remote Proposal replay token exposed forbidden surface {forbidden}
 forbidden|token|fn into_parts(|remote Proposal replay token exposed forbidden surface {forbidden}
@@ -1150,9 +1306,364 @@ required|callers|.bind_durable_body(receipt.clone())|live Proposal replay handof
 required|callers|.project_validate(effect.clone(), validate_ownership.clone())|live Proposal replay handoff omitted {required}
 required|callers|.into_pending_durable_validate_admission()|live Proposal replay handoff omitted {required}
 required|callers|durable_validate_retry_seals_are_finalization_inert(|executor rollover stopped proving every surviving Validate retry seal belongs to the exact decided body
+required|callers|seal.lifecycle_ordinal().is_none()|executor rollover accepted a still-live Validate retry authority as an inert tombstone
+required|callers|!marker.owns_live_lifecycle_row()|executor rollover accepted a still-live direct Validate marker as inert
 required|callers|.chain(self.durable_validate_retry_seals.keys())|protected-lock retirement omitted inert Validate retry seals from its exact body census
-required|callers|.retain(\pkey, _\p !drain_decision_body && *key == decision_body)|Decision cleanup stopped retaining only the exact live decision-body Validate retry seal
-required|callers|.retain(\pkey, _\p Some(*key) == protected_body)|EnterView cleanup stopped retaining only the exact protected-body Validate retry seal
+required|callers|Some(*key) == protected_body \p\p Some(*key) == highest_prepare_body|EnterView cleanup stopped retaining only the exact protected-or-high Validate retry-seal union
+required|callers|seal.lifecycle_ordinal().is_some()|cleanup stopped preserving exact still-live Validate retry authority
+required|callers|marker.owns_live_lifecycle_row()|cleanup stopped preserving exact still-live direct Validate authority
+required|callers|!drain_decision_body && *key == decision_body|Decision cleanup stopped retaining the selected inert Validate retry tombstone
+required|callers|Some(*key) == protected_body|EnterView cleanup stopped retaining the protected inert Validate retry tombstone
+required|callers|fn release_validate_retry_lifecycle_ordinal(|executor omitted exact post-publication Validate authority release
+required|callers|.release_lifecycle_ordinal(lifecycle_ordinal)|Validate authority release stopped checking its exact logical row
+required|callers|self.decision_body_drained \p\p selected != key|resolved losing or drained Validate authority stopped retiring after deferred cleanup
+required|callers|fn bind_validate_retry_lifecycle_ordinal(|committed generic Validate admission stopped binding its exact logical row
+required|callers|commit_published_lifecycle_validate_retry_marker(|direct Store-to-Validate publication stopped binding its exact logical child row
+end
+case|stored_replay_store_coalescing_and_cleanup_are_owner_closed
+region|store_terminal_seal|registry|at|pub(in crate::sumeragi) struct DurableStoreTerminalRetrySealV1 {|before|/// Rebind one immutable Store task to a same-body carrier
+region|validate_predecessor_terminal_seal|registry|at|pub(in crate::sumeragi) fn seal_validate_predecessor(|before|    fn validates(&self) -> bool {
+region|validate_retry_seal|effects|at|enum DurableValidateRetrySealV1 {|before|struct DurableValidateRetryProjectionV1
+region|validate_retry_projection|effects|at|impl DurableValidateRetrySealV1 {|before|/// Atomic executor-side sink for one complete recovered Validate retry census.
+region|stored_projection|effects|at|fn stored_replay_incumbent_store_ownership(|before|fn stored_replay_incumbent_validate_ownership(
+region|retention_preplan|effects|at|for (index, (effect, evidence)) in effects.iter().zip(&mut ownership).enumerate() {|before|let fetch_key = match effect {
+region|active_store_overlay_batch|effects|at|let mut retained_published_store_retry_markers =|before|let mut retained_published_validate_retry_markers =
+region|active_store_overlay_commit|effects|at|self.published_lifecycle_store_retry_markers = retained_published_store_retry_markers;|before|self.published_lifecycle_validate_retry_markers = retained_published_validate_retry_markers;
+region|cleanup_high_selection|effects|at|let mut superseded_keys = BTreeSet::new();|before|for pending in self.pending_applications.values()
+region|validate_store_predecessor_projection|runtime|at|pub(in crate::sumeragi) fn project_validate_store_predecessor(|before|pub(crate) fn project_store_validate_successor_with_commit_refinement(
+region|validate_store_predecessor_callers|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|store_retry_fingerprint|runtime|at|/// Cloneable comparison-only fingerprint of one exact pending Store binding.|before|/// Move-only restart successor derived from one exact recovered WAL vote.
+region|store_retry_fingerprint_projection|runtime|at|pub(in crate::sumeragi) fn published_store_retry_fingerprint(|before|fn validate_exact(
+region|published_store_terminal_seal|effects|at|struct PublishedLifecycleStoreTerminalRetrySealV1 {|before|/// Inert fingerprint for one Validate row published
+region|published_store_census_entry|effects|at|pub(in crate::sumeragi) struct PublishedLifecycleStoreRetryCensusEntryV1 {|before|impl PublishedLifecycleStoreTerminalRetrySealV1 {
+region|published_store_census_projection|effects|at|impl PublishedLifecycleStoreRetryCensusEntryV1 {|before|/// Inert fingerprint for one Validate row published
+region|published_validate_marker|effects|at|struct PublishedLifecycleValidateRetryMarkerV1 {|before|/// Move-only preflight for installing
+region|published_validate_retry_projection|effects|at|fn project_retry(\n        &self,\n        effect: &AdapterEffect,\n        incoming: &RuntimeEffectOwnership,|before|fn project_store_retry(
+region|published_store_preflight|effects|at|pub(in crate::sumeragi) struct PreparedPublishedLifecycleStoreRetryMarkerV1 {|before|/// Move-only preflight for installing one direct lifecycle Validate marker
+region|retry_marker_finalization|effects|at|fn durable_validate_retry_seals_are_finalization_inert(&self) -> bool {|before|/// Preflight one inert retry marker before the direct Fetch-to-Store
+region|published_marker_handoff|effects|at|fn prepare_from_published_store(|before|/// Exact carrier block hashes still owned by retained missing-sidecar work.
+region|active_published_store_stutter|effects|at|if let AdapterEffect::StoreBody { round, subject, .. } = effect\n                && let Some(marker) = retained_published_store_retry_markers\n                    .get|before|if let AdapterEffect::StoreBody { round, subject, .. } = effect\n                && let Some(marker) =\n                    retained_published_validate_retry_markers.get
+region|published_store_stutter|effects|at|if let AdapterEffect::StoreBody { round, subject, .. } = effect\n                && let Some(marker) =\n                    retained_published_validate_retry_markers.get|before|if let AdapterEffect::ValidateBody { round, subject, .. } = effect\n                && let Some(marker) = retained_published_validate_retry_markers
+region|published_validate_stutter|effects|at|if let AdapterEffect::ValidateBody { round, subject, .. } = effect\n                && let Some(marker) = retained_published_validate_retry_markers\n                    .get(&(*round, *subject))\n                    .cloned()|before|if let AdapterEffect::ValidateBody { round, subject, .. } = effect\n                && let Some(seal) = retained_validate_retry_seals
+region|historical_store_completion_projection|effects|at|/// Compare an already-running physical Store task with a row published|before|impl PublishedLifecycleStoreRetryCensusEntryV1 {
+region|historical_validate_store_completion_projection|effects|at|/// Prove that an older physical Store completion is already represented|before|/// Move-only preflight for installing one exact Store marker
+region|store_completion_marker_coalescing|effects|at|pub(crate) fn complete_body_store<S: V2EffectServices>(|before|/// Retry every retained Apply task waiting for one exact certified merge entry.
+region|coalesced_local_store_preflight|effects|at|if coalesces_published_store_terminal {\n                    // The published row is already the sole successor.|before|                } else {\n                    let validate_effect = AdapterEffect::ValidateBody {
+region|coalesced_local_store_settlement|effects|at|let projected_local_admission = if coalesces_local_store_replay {|before|        } else if let Some((store_effect, validate_effect, validate_ownership, store_terminal)) =
+region|live_store_publication|scheduler_inputs|at|fn publish_certified_fetch_store(|before|fn publish_durable_store_validate(
+region|recovered_store_projection|registry|at|pub(super) fn recovered_published_store_retry_markers(|before|/// Borrow every exact durable Validate row whose executable lifecycle
+region|registry_store_census|registry|at|pub(super) fn published_lifecycle_store_retry_census(|before|/// Borrow every exact durable Store row whose executable lifecycle owner
+region|recovered_store_publication|launch|at|pub(in crate::sumeragi) fn settle_recovered_decision_fetch_store(|before|/// Reserve, claim, and queue one recovered Sign
+region|recovered_store_install|launch|at|.recovered_published_store_retry_markers()|before|if !body_store
+region|finalization_store_cross_census|launch|at|fn verify_published_store_marker_finalization_census(&self) -> Result<(), String> {|before|impl ActivatedProductionLifecycleV1 {
+region|pending_kura_store_cross_census|pending_lifecycle|at|/// Consume the no-clock height into the shared finalized-output rollover.|before|        let Self {
+region|cleanup_terminal_retirement|effects|at|let protected_ready_rebind_keys = stale_body_cleanup|before|// Unprotected Proposal families retire with the superseded view.
+region|lock_retry_marker_cleanup|effects|at|self.durable_validate_retry_seals.retain(\pkey, seal\p {\n            seal.lifecycle_ordinal().is_some()\n                \p\p !superseded_keys.contains(key)\n                \p\p Some(*key) == highest_prepare_body\n        });|before|if retire_retained {
+region|decision_retry_marker_cleanup|effects|at|self.durable_validate_retry_seals.retain(\pkey, seal\p {\n            seal.lifecycle_ordinal().is_some() \p\p (!drain_decision_body && *key == decision_body)\n        });|before|self.body_pipeline_owners.retain
+region|enter_view_retry_marker_cleanup|effects|at|self.durable_validate_retry_seals.retain(\pkey, seal\p {\n            seal.lifecycle_ordinal().is_some()\n                \p\p Some(*key) == protected_body\n                \p\p Some(*key) == highest_prepare_body\n        });|before|let retain_local_producer
+region|stale_foreign_owner_guard|runtime|at|let replacement_statement = match relation {|before|Ok(Some(RuntimeBodyCompletionOwnershipPlan {
+required|stored_projection|one stored body retained two replay lineages|Stored replay projection must reject dual Proposal and authenticated-genesis lineage
+required|store_terminal_seal|store_effect: AdapterEffect|post-Validate Store seal lost its exact predecessor effect
+required|store_terminal_seal|durable_receipt: DurableBodyReceipt|post-Validate Store seal lost its exact durable receipt
+required|store_terminal_seal|ownership: RuntimeEffectOwnership|post-Validate Store seal lost its physical runtime owner
+required|store_terminal_seal|fn seal_exact(|post-Validate Store seal lost its exact closed constructor
+required|store_terminal_seal|fn exactly_precedes_validate(|post-Validate Store seal stopped proving its monotonic Validate successor
+required|store_terminal_seal|fn project_retry_ownership(|post-Validate Store seal stopped projecting late Store retries
+required|store_terminal_seal|project_incumbent_store_retry_ownership(|post-Validate Store seal bypassed typed same-stage owner adoption
+forbidden|store_terminal_seal|replay_evidence:|inert post-Validate Store seal must not duplicate executable replay authority
+required|validate_predecessor_terminal_seal|fn seal_validate_predecessor(|protected-lock Store predecessor lost its closed constructor
+required|validate_predecessor_terminal_seal|AdapterEffect::ValidateBody {|protected-lock Store predecessor stopped requiring an exact Validate source
+required|validate_predecessor_terminal_seal|AdapterEffect::StoreBody {|protected-lock Store predecessor stopped reconstructing the same-tag Store effect
+required|validate_predecessor_terminal_seal|.project_validate_store_predecessor(validate_effect, &store_effect)?|protected-lock Store predecessor bypassed the closed inverse binding projection
+required|validate_predecessor_terminal_seal|.rebind_as_inherited_adapter_effect(&store_effect)|protected-lock Store predecessor stopped inheriting the Validate lifecycle owner
+required|validate_predecessor_terminal_seal|(store_pending == projected_store_pending).then_some(())?|protected-lock Store predecessor stopped requiring byte-identical reconstructed pending authority
+required|validate_predecessor_terminal_seal|Self::seal_exact(&store_effect, &store_ownership, durable_receipt)|protected-lock Store predecessor bypassed the exact inert Store seal
+count|validate_predecessor_terminal_seal|fn seal_validate_predecessor(|1|protected-lock Store predecessor must have exactly one closed constructor
+order|validate_predecessor_terminal_seal|6|exact_pending_adapter_effect_binding(validate_effect)|.project_validate_store_predecessor(validate_effect, &store_effect)?|.rebind_as_inherited_adapter_effect(&store_effect)|exact_pending_adapter_effect_binding(&store_effect)|(store_pending == projected_store_pending).then_some(())?|Self::seal_exact(&store_effect, &store_ownership, durable_receipt)|protected-lock Store predecessor must inverse-project, inherit, compare, and seal in that order
+forbidden|validate_predecessor_terminal_seal|RuntimeEffectOwnership::|protected-lock Store predecessor must not mint a new runtime owner
+required|validate_retry_seal|store_terminal: Option<DurableStoreTerminalRetrySealV1>|live Validate retry seal stopped retaining its inert Store predecessor
+required|validate_retry_projection|store_terminal: store_terminal.clone()|Validate retry refinement stopped preserving the inert Store predecessor
+required|validate_retry_projection|fn project_store_terminal_retry(|Validate retry seal lost its closed Store-terminal projection
+required|validate_retry_projection|.project_retry_ownership(durable_receipt, effect, incoming)|Validate retry seal bypassed the typed Store-terminal owner projection
+required|stored_projection|RemoteProposalReplayStageV1::Stored { replay, ownership }|Stored replay projection lost the typed remote Proposal branch
+required|stored_projection|AuthenticatedGenesisReplayStageV1::Stored { replay, ownership }|Stored replay projection lost the typed authenticated-genesis branch
+count|stored_projection|let receipt = self.durable_bodies.get(&key)|3|both Stored replay families and the post-Validate seal must resolve the exact durable receipt
+count|stored_projection|.project_retry_ownership(receipt, ownership, effect, incoming)|2|both Stored replay families must use their typed retry-owner projection
+order|stored_projection|6|RemoteProposalReplayStageV1::Stored { replay, ownership }|let receipt = self.durable_bodies.get(&key)|.project_retry_ownership(receipt, ownership, effect, incoming)|AuthenticatedGenesisReplayStageV1::Stored { replay, ownership }|let receipt = self.durable_bodies.get(&key)|.project_retry_ownership(receipt, ownership, effect, incoming)|each Stored replay family must bind its durable receipt before typed owner projection
+forbidden|stored_projection|adopt_incumbent_candidate_for_semantic_retry|Stored replay owner projection must not fall back to generic candidate adoption
+required|stored_projection|stored body replay could not project its incumbent Store owner|failed typed Store-owner projection must remain fail closed
+required|stored_projection|.durable_validate_retry_seals|post-Validate Store projection lost its inert Validate-seal catalog
+required|stored_projection|seal.project_store_terminal_retry(receipt, effect, incoming)|post-Validate Store projection bypassed its inert predecessor seal
+required|stored_projection|one durable Store retained both a replay phase and post-Validate terminal owner|impossible live-replay and post-Validate phase overlap must fail closed
+required|retention_preplan|if let AdapterEffect::StoreBody { round, subject, .. } = effect|pre-terminal replay projection must remain StoreBody-only
+count|retention_preplan|stored_replay_incumbent_store_ownership(|1|retention must perform exactly one Stored replay owner projection
+count|retention_preplan|.plan_body_pipeline_candidate_terminal(effect, evidence)|1|retention must perform exactly one runtime terminal plan
+order|retention_preplan|5|if let AdapterEffect::StoreBody { round, subject, .. } = effect|self.stored_replay_incumbent_store_ownership(|*evidence = adopted;|let candidate = production_adapter_effect_candidate_semantic_identity(effect);|.plan_body_pipeline_candidate_terminal(effect, evidence)|typed Stored replay ownership must replace the incoming carrier before candidate identity and terminal planning
+required|retention_preplan|let preterminal_body_stage_incumbent = match effect {|retention stopped selecting its exact Store/Validate executor lineage before terminal planning
+required|retention_preplan|retained_store_lineages.get(&(*round, *subject))|pre-terminal adoption omitted the exact Store lineage
+required|retention_preplan|retained_validation_lineages.get(&(*round, *subject))|pre-terminal adoption omitted the exact Validate lineage
+required|retention_preplan|.adopt_incumbent_body_stage_for_retry_or_authority(evidence, effect)|pre-terminal adoption bypassed the typed body-stage authority lattice
+order|retention_preplan|5|let preterminal_body_stage_incumbent = match effect {|if let Some(incumbent) = preterminal_body_stage_incumbent {|*evidence = incumbent|let candidate = production_adapter_effect_candidate_semantic_identity(effect);|.plan_body_pipeline_candidate_terminal(effect, evidence)|executor-held Store/Validate ownership must replace the incoming carrier before terminal planning
+required|validate_store_predecessor_projection|predecessor_tag != successor_tag|inverse Store projection stopped binding the exact consumer tag
+required|validate_store_predecessor_projection|predecessor_round != successor_round|inverse Store projection stopped binding the exact proposal round
+required|validate_store_predecessor_projection|predecessor_subject != successor_subject|inverse Store projection stopped binding the exact body subject
+required|validate_store_predecessor_projection|RUNTIME_CANDIDATE_KIND_STORE_BODY|inverse Store projection stopped requiring the exact Store candidate kind
+required|validate_store_predecessor_projection|Self::from_effect_candidate(self.causal_lifecycle_key, predecessor, Some(&candidate))|inverse Store projection stopped retaining the immutable causal key
+required|validate_store_predecessor_projection|.project_store_validate_successor(predecessor, successor)|inverse Store projection stopped checking its reviewed forward edge
+required|validate_store_predecessor_projection|== Some(self)|inverse Store projection stopped requiring byte-identical forward reconstruction
+count|validate_store_predecessor_projection|fn project_validate_store_predecessor(|1|runtime must expose exactly one closed inverse Store projection
+forbidden|validate_store_predecessor_projection|RuntimeEffectOwnership::|ordinal-free inverse Store proof must not mint executable runtime ownership
+count|validate_store_predecessor_callers|.project_validate_store_predecessor(|2|the inverse Store proof must have exactly the cold-recovery seal and live Store-to-Validate handoff callers
+required|store_retry_fingerprint|#[derive(Clone, Debug, PartialEq, Eq)]|published Store fingerprint lost its explicit comparison-only value semantics
+required|store_retry_fingerprint|struct PendingRuntimeEffectFingerprintV1 {|published Store fingerprint lost its closed runtime-owned representation
+required|store_retry_fingerprint|fn exactly_binds_adapter_effect(&self, effect: &AdapterEffect) -> bool {|published Store fingerprint stopped revalidating its complete effect
+required|store_retry_fingerprint|PendingRuntimeEffectBinding {|published Store fingerprint stopped delegating integrity validation to the sealed pending representation
+required|store_retry_fingerprint|fn candidate_statement(&self) -> Option<RuntimeCandidateSemanticStatement>|published Store fingerprint stopped exposing its immutable comparison statement
+forbidden|store_retry_fingerprint|RuntimeEffectOwnership|comparison-only Store fingerprint must not retain executable runtime ownership
+forbidden|store_retry_fingerprint|fn into_pending|comparison-only Store fingerprint must not reconstruct move-only pending authority
+required|store_retry_fingerprint_projection|matches!(effect, AdapterEffect::StoreBody { .. })|published Store fingerprint projection stopped remaining Store-only
+required|store_retry_fingerprint_projection|!self.validate_exact(effect)|published Store fingerprint projection stopped checking the complete sealed binding
+required|store_retry_fingerprint_projection|Some(PendingRuntimeEffectFingerprintV1 {|published Store fingerprint projection stopped constructing the closed comparison value
+required|store_retry_fingerprint_projection|causal_lifecycle_key: self.causal_lifecycle_key|published Store fingerprint lost its immutable causal root
+required|store_retry_fingerprint_projection|projection_hash: self.projection_hash|published Store fingerprint lost its complete integrity projection
+forbidden|store_retry_fingerprint_projection|RuntimeEffectOwnership|Store fingerprint projection must not mint executable runtime ownership
+required|published_store_census_entry|effect: AdapterEffect|finalization Store census lost the complete published effect
+required|published_store_census_entry|pending: PendingRuntimeEffectFingerprintV1|finalization Store census lost the immutable pending fingerprint
+required|published_store_census_entry|durable_receipt: DurableBodyReceipt|finalization Store census lost the exact durable receipt
+forbidden|published_store_census_entry|statement: RuntimeCandidateSemanticStatement|mutable authority overlay must not enter immutable finalization identity
+forbidden|published_store_census_entry|RuntimeEffectOwnership|finalization Store census must not duplicate executable runtime ownership
+required|published_store_census_projection|fn from_exact_published_store(|registry Store census lost its closed immutable constructor
+required|published_store_census_projection|PublishedLifecycleStoreTerminalRetrySealV1::seal_published_store(|registry Store census bypassed the same exact publication seal as the executor
+required|published_store_census_projection|.publication_census_entry()|registry Store census stopped projecting only immutable publication identity
+required|published_store_census_projection|fn key(|finalization Store census lost its exact body-key projection
+required|published_store_census_projection|AdapterEffect::StoreBody { round, subject, .. }|finalization Store census stopped remaining StoreBody-only
+required|published_store_terminal_seal|pending: PendingRuntimeEffectFingerprintV1|published Store predecessor stopped retaining its comparison-only ordinal-free fingerprint
+required|published_store_terminal_seal|durable_receipt: DurableBodyReceipt|published Store predecessor lost its exact durable receipt
+required|published_store_terminal_seal|fn seal_published_store(|live Store publication stopped sealing its active retry marker
+required|published_store_terminal_seal|pending.published_store_retry_fingerprint(effect)|published Store marker bypassed the closed comparison-only projection
+required|published_store_terminal_seal|pending.exactly_binds_adapter_effect(&self.effect)|published Store marker stopped revalidating its retained complete effect
+required|published_store_terminal_seal|.project_validate_store_predecessor(validate_effect, &effect)|published Store predecessor bypassed the closed inverse projection
+required|published_store_terminal_seal|.project_store_validate_successor(&effect, validate_effect)|published Store predecessor stopped checking the reviewed forward edge
+required|published_store_terminal_seal|.exact_pending_adapter_effect_binding(effect)|published Store retry stopped requiring an exact incoming runtime binding
+required|published_store_terminal_seal|.body_stage_authority_relation_to(incoming_statement)|published Store retry stopped requiring comparable body authority
+required|published_store_terminal_seal|Ok(incoming_statement)|published Store retry stopped returning authority for dominance checking
+required|published_store_terminal_seal|fn project_active_store_retry(|active Store marker lost its closed monotonic retry projection
+required|published_store_terminal_seal|published.body_stage_authority_relation_to(self.statement)|active Store marker stopped proving its authority overlay monotonically refines the immutable published fingerprint
+required|published_store_terminal_seal|let relation = self\n            .statement\n            .body_stage_authority_relation_to(incoming_statement)|active Store retry stopped comparing the incoming carrier against its strongest retained authority
+required|published_store_terminal_seal|RuntimeFetchAuthorityRelation::Upgrade => incoming_statement|active Store retry stopped retaining a valid stronger authority carrier
+required|published_store_terminal_seal|statement,\n            ..self.clone()|active Store authority refinement stopped preserving the immutable published fingerprint and receipt
+required|published_store_terminal_seal|published lifecycle Store retry broke its immutable published binding|active Store authority refinement stopped revalidating its exact published lineage
+forbidden|published_store_terminal_seal|ownership: RuntimeEffectOwnership|published Store predecessor must remain inert and non-executable
+required|published_store_preflight|marker: Option<PublishedLifecycleStoreTerminalRetrySealV1>|Store publication preflight stopped requiring a sealed successor before commit
+required|published_store_preflight|fn bind_store_successor(|Store publication preflight lost its exact successor binding step
+required|published_store_preflight|PublishedLifecycleStoreTerminalRetrySealV1::seal_published_store(|Store publication preflight bypassed the closed active-marker constructor
+required|published_store_preflight|direct lifecycle Store marker changed its exact Fetch successor|Store publication successor mismatch stopped failing closed
+required|retry_marker_finalization|self.published_lifecycle_store_retry_markers\n            .iter()|executor finalization stopped validating every retained Store cancellation companion
+required|retry_marker_finalization|.publication_census_entry()|executor finalization stopped revalidating immutable Store publication identity
+required|retry_marker_finalization|entry.key() == *key|executor finalization stopped binding each Store marker to its exact map key
+required|retry_marker_finalization|.chain(self.published_lifecycle_validate_retry_markers.keys())|rollover stopped scoping published Validate tombstones to the exact decided body
+forbidden|retry_marker_finalization|self.published_lifecycle_store_retry_markers.is_empty()|valid registry Store rows must not wedge executor readiness before all-row retirement
+forbidden|retry_marker_finalization|.chain(self.published_lifecycle_store_retry_markers.keys())|active Store cancellation companions must use exact cross-census instead of the decision-body tombstone shortcut
+required|retry_marker_finalization|fn published_lifecycle_store_retry_census(|executor finalization lost its immutable Store publication census
+required|retry_marker_finalization|marker.publication_census_entry()|executor Store census bypassed marker integrity validation
+required|retry_marker_finalization|entry.key() != *key|executor Store census stopped rejecting a changed body key
+required|retry_marker_finalization|census.insert(*key, entry).is_some()|executor Store census stopped rejecting duplicate body keys
+required|retry_marker_finalization|executor published Store marker lost its immutable publication identity|invalid executor Store marker stopped failing closed
+required|published_validate_marker|store_terminal: PublishedLifecycleStoreTerminalRetrySealV1|published Validate marker lost its mandatory Store predecessor
+forbidden|published_validate_marker|store_terminal: Option<PublishedLifecycleStoreTerminalRetrySealV1>|published Validate marker must not make its Store predecessor optional
+required|published_validate_marker|PublishedLifecycleStoreTerminalRetrySealV1::seal_exact(|published Validate marker stopped constructing its exact Store predecessor
+required|published_validate_marker|store_terminal: self.store_terminal.clone()|Validate authority refinement stopped retaining the exact Store predecessor
+required|published_validate_marker|fn project_store_retry(|published Validate marker lost its closed Store retry projection
+required|published_validate_marker|.exactly_precedes_validate_marker(&self.effect, self.statement)|published Validate marker stopped checking its retained Store predecessor
+required|published_validate_marker|incoming_statement.body_stage_authority_relation_to(self.statement)|published Store stutter stopped proving that Validate authority dominates the incoming Store
+required|published_validate_marker|published lifecycle Store retry outran its published Validate authority|stronger Store authority must fail closed instead of being silently discarded
+required|published_validate_retry_projection|incoming_tag != incumbent_tag && !incoming_tag.strictly_advances(*incumbent_tag)|published Validate retry stopped rejecting tag regression
+required|published_validate_retry_projection|incoming_round != incumbent_round|published Validate retry stopped binding the exact proposal round
+required|published_validate_retry_projection|incoming_subject != incumbent_subject|published Validate retry stopped binding the exact subject
+required|published_validate_retry_projection|self.durable_receipt.round() != *incumbent_round|published Validate retry stopped binding its durable receipt round
+required|published_validate_retry_projection|self.durable_receipt.subject() != *incumbent_subject|published Validate retry stopped binding its durable receipt subject
+required|published_validate_retry_projection|.exact_pending_adapter_effect_binding(effect)|published Validate retry stopped requiring an exact incoming runtime binding
+required|published_validate_retry_projection|.body_stage_authority_relation_to(incoming_statement)|published Validate retry stopped requiring a comparable authority refinement
+required|published_validate_retry_projection|RuntimeFetchAuthorityRelation::Upgrade => incoming_statement|published Validate retry stopped retaining a stronger exact authority overlay
+required|published_validate_retry_projection|RuntimeFetchAuthorityRelation::Same \p RuntimeFetchAuthorityRelation::Stale|published Validate retry stopped preserving its incumbent against equal or stale authority
+required|published_validate_retry_projection|.exactly_precedes_validate_marker(effect, statement)|published Validate retry lost its exact Store predecessor proof
+required|published_validate_retry_projection|lifecycle_ordinal: self.lifecycle_ordinal|published Validate retry changed or reminted its logical lifecycle row
+forbidden|published_validate_retry_projection|AdapterEffect::Apply|published Validate retry synthesized an Apply effect
+forbidden|published_validate_retry_projection|rebind_as_inherited_adapter_effect|published Validate retry minted executable inherited ownership
+forbidden|published_validate_retry_projection|install_pending_durable_validate_admission|published Validate retry re-entered lifecycle admission
+forbidden|published_validate_retry_projection|enqueue_|published Validate retry performed service I/O
+required|published_marker_handoff|fn prepare_published_lifecycle_store_retry_marker(|live Store publication stopped preflighting the unique executor marker slot
+required|published_marker_handoff|direct lifecycle Store marker overlaps a foreign executor body owner|live Store marker preflight stopped rejecting an existing body owner
+required|published_marker_handoff|fn commit_published_lifecycle_store_retry_marker(|live Store publication stopped installing its marker after durable publication
+required|published_marker_handoff|.published_lifecycle_store_retry_markers|live Store publication lost its active executor marker catalog
+required|published_marker_handoff|direct lifecycle Validate marker omitted its published Store predecessor|live Store-to-Validate handoff stopped requiring the active predecessor
+required|published_marker_handoff|PublishedLifecycleValidateRetryMarkerV1::prepare_from_published_store(|live Store-to-Validate handoff bypassed its exact inverse-and-forward proof
+required|published_marker_handoff|projected_store != store_terminal.pending|live Store-to-Validate handoff stopped preserving byte-exact reverse projection to the published Store binding
+required|published_marker_handoff|.body_stage_authority_relation_to(published_statement)|live Store-to-Validate handoff stopped joining the authority overlay with the registry-derived successor
+required|published_marker_handoff|RuntimeFetchAuthorityRelation::Stale => {\n                store_terminal.statement|live Store-to-Validate handoff stopped carrying a stronger Store overlay into Validate
+required|published_marker_handoff|.remove(&key)|published Validate commit stopped consuming the exact active Store marker
+required|published_marker_handoff|assert_eq!(store_terminal, marker.store_terminal);|published Validate commit stopped checking the consumed Store marker byte-for-byte
+required|published_marker_handoff|fn install_recovered_published_lifecycle_store_retry_marker(|cold recovery stopped reinstalling authenticated durable Store rows
+required|published_marker_handoff|.prepare_published_lifecycle_store_retry_marker(durable_receipt)?|cold Store recovery bypassed the same overlap preflight as live publication
+required|published_marker_handoff|.bind_store_successor(effect, pending)|cold Store recovery bypassed the same exact successor seal as live publication
+order|published_marker_handoff|4|.remove(&key)|assert_eq!(store_terminal, marker.store_terminal);|.published_lifecycle_validate_retry_markers|fn install_recovered_published_lifecycle_validate_retry_marker(|live Store ownership must transfer exactly into Validate before cold-recovery constructors
+required|active_published_store_stutter|.get(&(*round, *subject))|active Store stutter stopped selecting the exact published Store marker
+required|active_published_store_stutter|stored_replay_adopted \p\p preterminal_body_stage_incumbent.is_some()|active Store stutter stopped rejecting overlapping physical lineages
+required|active_published_store_stutter|let receipt = self.durable_bodies.get(&key)|active Store stutter stopped resolving its exact durable receipt
+required|active_published_store_stutter|.project_active_store_retry(receipt, effect, evidence)|active Store stutter bypassed its typed fingerprint and authority proof
+required|active_published_store_stutter|RuntimeCandidateAdmissionDisposition::CoalescedRetry|active Store retry stopped requiring an exact one-to-one stutter
+required|active_published_store_stutter|production_adapter_effect_candidate_trace_projection(|active Store retry stopped refining the reviewed candidate trace
+required|active_published_store_stutter|check_production_effect_to_candidate_transition(|active Store retry stopped checking its candidate refinement
+required|active_published_store_stutter|.insert((*round, *subject), projected)|active Store retry stopped committing its monotonic authority overlay
+required|active_published_store_stutter|retain_effect.push(false);|active Store retry regained executor dispatch
+required|active_published_store_stutter|continue;|active Store retry stopped before all later terminal-owner paths
+forbidden|active_published_store_stutter|plan_body_pipeline_candidate_terminal|active Store retry must stutter before runtime terminal-owner comparison
+required|active_store_overlay_batch|let mut retained_published_store_retry_markers =|active Store authority overlay stopped using an atomic batch-local catalog
+required|active_store_overlay_batch|self.published_lifecycle_store_retry_markers.clone()|active Store authority overlay stopped snapshotting the exact committed catalog
+required|active_store_overlay_commit|self.published_lifecycle_store_retry_markers = retained_published_store_retry_markers;|successful batch commit stopped publishing the monotonic active Store authority overlay
+order|retention_preplan|4|retained_published_store_retry_markers\n                    .get|.project_active_store_retry(receipt, effect, evidence)|retain_effect.push(false);\n                continue;|.plan_body_pipeline_candidate_terminal(effect, evidence)|active Store marker proof and stutter must precede generic runtime terminal planning
+required|published_store_stutter|stored_replay_adopted \p\p preterminal_body_stage_incumbent.is_some()|published Store stutter stopped rejecting overlapping physical lineages
+required|published_store_stutter|let receipt = self.durable_bodies.get(&key)|published Store stutter stopped resolving its exact durable receipt
+required|published_store_stutter|.project_store_retry(receipt, effect, evidence)|published Store stutter bypassed its typed predecessor and authority proof
+required|published_store_stutter|RuntimeCandidateAdmissionDisposition::CoalescedRetry|published Store retry stopped requiring an exact one-to-one stutter
+required|published_store_stutter|production_adapter_effect_candidate_trace_projection(|published Store retry stopped refining the reviewed candidate trace
+required|published_store_stutter|check_production_effect_to_candidate_transition(|published Store retry stopped checking its candidate refinement
+required|published_store_stutter|retain_effect.push(false);|published Store retry regained executor dispatch
+required|published_store_stutter|continue;|published Store retry stopped before the generic runtime terminal path
+forbidden|published_store_stutter|plan_body_pipeline_candidate_terminal|published Store retry must stutter before runtime terminal-owner comparison
+order|retention_preplan|4|if let AdapterEffect::StoreBody { round, subject, .. } = effect\n                && let Some(marker) =\n                    retained_published_validate_retry_markers.get|.project_store_retry(receipt, effect, evidence)|retain_effect.push(false);\n                continue;|.plan_body_pipeline_candidate_terminal(effect, evidence)|published Store marker proof and stutter must precede generic runtime terminal planning
+required|published_validate_stutter|.project_retry(effect, evidence)|published Validate stutter bypassed its monotonic exact-body authority projection
+required|published_validate_stutter|RuntimeCandidateAdmissionDisposition::CoalescedRetry|published Validate retry stopped requiring an exact one-to-one stutter
+required|published_validate_stutter|production_adapter_effect_candidate_trace_projection(|published Validate retry stopped refining the reviewed candidate trace
+required|published_validate_stutter|check_production_effect_to_candidate_transition(|published Validate retry stopped checking its candidate refinement
+required|published_validate_stutter|retained_published_validate_retry_markers.insert(key, projected)|published Validate retry stopped committing its monotonic inert marker overlay
+required|published_validate_stutter|retain_effect.push(false);|published Validate retry regained executor dispatch
+required|published_validate_stutter|continue;|published Validate retry reached later lifecycle or terminal planning
+order|published_validate_stutter|7|.project_retry(effect, evidence)|RuntimeCandidateAdmissionDisposition::CoalescedRetry|production_adapter_effect_candidate_trace_projection(|check_production_effect_to_candidate_transition(|retained_published_validate_retry_markers.insert(key, projected)|retain_effect.push(false);|continue;|published Validate retry must prove exact monotonic refinement and terminate inertly
+forbidden|published_validate_stutter|install_pending_durable_validate_admission|published Validate retry re-entered lifecycle admission
+forbidden|published_validate_stutter|enqueue_|published Validate retry performed service I/O
+forbidden|published_validate_stutter|AdapterEffect::Apply|published Validate retry synthesized an Apply effect
+forbidden|published_validate_stutter|begin_apply(|published Validate retry entered ordinary Apply dispatch
+forbidden|published_validate_stutter|pending_applications|published Validate retry mutated ordinary Apply ownership
+forbidden|published_validate_stutter|live_lifecycle_decision_apply|published Validate retry synthesized lifecycle Apply ownership
+forbidden|published_validate_stutter|plan_body_pipeline_candidate_terminal|published Validate retry must stutter before runtime terminal-owner comparison
+order|retention_preplan|4|retained_published_validate_retry_markers\n                    .get|.project_retry(effect, evidence)|retain_effect.push(false);\n                continue;|.plan_body_pipeline_candidate_terminal(effect, evidence)|published Validate marker proof and stutter must precede generic runtime terminal planning
+required|published_store_terminal_seal|enum PublishedLifecycleStoreCompletionPlanV1 {|Store completion coalescing lost its closed preflight disposition
+required|published_store_terminal_seal|const fn coalesces_terminal(&self) -> bool {|Store completion disposition stopped distinguishing published terminal ownership
+required|historical_store_completion_projection|fn project_historical_store_completion(|historical Store completion lost its comparison-only projector
+required|historical_store_completion_projection|(task_tag != marker_tag && !marker_tag.strictly_advances(*task_tag))|historical Store completion stopped allowing only equality or one-way marker advance over the immutable task tag
+required|historical_store_completion_projection|.exact_pending_adapter_effect_binding(effect)|historical Store completion stopped proving the immutable physical task binding
+required|historical_store_completion_projection|.body_stage_authority_relation_to(task_statement)|historical Store completion bypassed the typed same-body authority lattice
+required|historical_store_completion_projection|RuntimeFetchAuthorityRelation::Upgrade => task_statement|historical Store completion stopped retaining a valid stronger authority carrier
+required|historical_store_completion_projection|if !projected.validates()|historical Store completion stopped revalidating the immutable published marker
+forbidden|historical_store_completion_projection|rebind_as_inherited_adapter_effect|historical Store completion must not mint a live capability at the published marker tag
+forbidden|historical_store_completion_projection|RuntimeEffectOwnership::fresh|historical Store completion must remain comparison-only
+order|historical_store_completion_projection|5|marker_tag.strictly_advances(*task_tag)|.exact_pending_adapter_effect_binding(effect)|.body_stage_authority_relation_to(task_statement)|if !projected.validates()|Ok(projected)|historical completion must prove time, task identity, authority, and marker integrity before projection
+required|historical_validate_store_completion_projection|.exactly_precedes_validate_marker(&self.effect, self.statement)|historical Store completion stopped authenticating the immutable Validate successor
+required|historical_validate_store_completion_projection|.project_historical_store_completion(|historical Store completion bypassed its sealed Store predecessor
+required|historical_validate_store_completion_projection|.body_stage_authority_relation_to(self.statement)|historical Store completion stopped proving that Validate authority dominates it
+required|historical_validate_store_completion_projection|Some(RuntimeFetchAuthorityRelation::Same \p RuntimeFetchAuthorityRelation::Upgrade)|historical Store completion stopped requiring published Validate authority to equal or dominate its projected Store authority
+required|historical_validate_store_completion_projection|published lifecycle Store completion outran its published Validate authority|historical Store authority must fail closed when stronger than Validate
+forbidden|historical_validate_store_completion_projection|rebind_as_inherited_adapter_effect|published Validate comparison must not mint executable Store ownership
+required|store_completion_marker_coalescing|let (marker_effect, marker_ownership, historical_completion) = match &pending.consumer {|Store completion stopped selecting attached versus immutable-task marker evidence
+required|store_completion_marker_coalescing|Some(StoreConsumer::LocalProposal { .. }) \p None => (|detached and local physical completions stopped using historical task evidence
+required|store_completion_marker_coalescing|pending.task.ownership()|historical Store completion stopped using its immutable task owner
+order|store_completion_marker_coalescing|5|Some(StoreConsumer::Reducer { tag, ownership }) => (|ownership,\n                false,|Some(StoreConsumer::LocalProposal { .. }) \p None => (|pending.task.ownership(),\n                true,|let published_store_completion_plan = match (|attached Reducer completions must use live consumer authority while detached and local completions use immutable historical task evidence
+required|store_completion_marker_coalescing|late Store completion found two published lifecycle terminals|late physical Store completion stopped rejecting impossible dual published markers
+count|store_completion_marker_coalescing|marker.project_historical_store_completion(|2|both active Store and published Validate markers must prove historical completions
+required|store_completion_marker_coalescing|marker.project_active_store_retry(&receipt, &marker_effect, marker_ownership)|attached reducer completion bypassed the active Store authority projector
+required|store_completion_marker_coalescing|marker.project_store_retry(&receipt, &marker_effect, marker_ownership)|attached reducer completion bypassed the published Validate predecessor projector
+required|store_completion_marker_coalescing|published_store_completion_plan.coalesces_terminal()|Store completion stopped deriving suppression from its closed preflight plan
+required|store_completion_marker_coalescing|owner.manifest_hash == Some(HashOf::new(&manifest))|detached completion stopped authenticating its retained pipeline manifest
+required|store_completion_marker_coalescing|(owner.tag == pending.task.tag()\n                            \p\p owner.tag.strictly_advances(pending.task.tag()))|detached completion stopped allowing only the same or a monotonically advanced retained pipeline owner
+required|store_completion_marker_coalescing|detached Store completion changed its retained pipeline owner|invalid detached pipeline ownership stopped failing closed
+count|store_completion_marker_coalescing|if !coalesces_published_store_terminal {|2|both replay promotion and runtime BodyStored publication must remain behind the marker-stutter guard
+required|store_completion_marker_coalescing|let removed = self.authenticated_genesis_replay.remove(&key);|coalesced authenticated-genesis completion retained a second replay lineage
+required|coalesced_local_store_preflight|coalesces_local_store_replay = true;|coalesced local completion stopped recording exact replay retirement
+forbidden|coalesced_local_store_preflight|rebind_as_inherited_adapter_effect|coalesced local completion must not construct a discarded executable Validate capability
+forbidden|coalesced_local_store_preflight|AdapterEffect::ValidateBody|coalesced local completion must remain Store-only
+required|coalesced_local_store_settlement|debug_assert!(coalesces_published_store_terminal);|local replay retirement stopped checking its published terminal owner
+required|coalesced_local_store_settlement|let removed = self.local_store_replay.remove(&completion.work_id());|coalesced local completion retained its pre-intent replay lineage
+forbidden|coalesced_local_store_settlement|project_exact_validate|coalesced local completion must not project a competing Validate replay
+order|coalesced_local_store_settlement|3|debug_assert!(coalesces_published_store_terminal);|self.local_store_replay.remove(&completion.work_id())|debug_assert!(removed.is_some());\n            None|coalesced local replay must retire only under its published terminal and produce no admission
+required|store_completion_marker_coalescing|let removed = self.body_pipeline_owners.remove(&key);|coalesced Store completion retained its obsolete executor pipeline owner
+required|store_completion_marker_coalescing|debug_assert_eq!(removed, coalesced_pipeline_owner);|pipeline retirement stopped matching the exact preflighted owner
+required|store_completion_marker_coalescing|PublishedLifecycleStoreCompletionPlanV1::ActiveStore(projected)|active Store completion stopped carrying its monotonic marker projection to commit
+required|store_completion_marker_coalescing|published_lifecycle_store_retry_markers\n                .get_mut(&key)|active Store completion stopped committing its monotonic authority overlay
+order|store_completion_marker_coalescing|8|let published_store_completion_plan = match (|late Store completion found two published lifecycle terminals|let coalesced_pipeline_owner = if coalesces_published_store_terminal {|owner.manifest_hash == Some(HashOf::new(&manifest))|detached Store completion changed its retained pipeline owner|let local_replay_projection = match &pending.consumer {|replay.exactly_matches_store_task(|self.remote_proposal_replay.remove(&key)|both marker catalogs and detached pipeline/local replay ownership must preflight before any replay mutation
+order|store_completion_marker_coalescing|9|self.remote_proposal_replay.remove(&key)|if !coalesces_published_store_terminal {|RemoteProposalReplayStageV1::Stored {|self.commit_authenticated_genesis_store_completion(|let removed = self.authenticated_genesis_replay.remove(&key);|if !coalesces_published_store_terminal {\n                    self.runtime\n                        .enqueue_body_stored_with_owner(|let projected_local_admission = if coalesces_local_store_replay {|let removed = self.local_store_replay.remove(&completion.work_id());|self.pending_stores.remove(&completion.work_id());|coalescing must consume remote, authenticated-genesis, and local replay while suppressing the duplicate runtime terminal before physical task retirement
+order|store_completion_marker_coalescing|9|self.pending_stores.remove(&completion.work_id());|self.pending_store_bytes = pending_store_bytes;|if coalesces_published_store_terminal {|let removed = self.body_pipeline_owners.remove(&key);|if let PublishedLifecycleStoreCompletionPlanV1::ActiveStore(projected) =|published_lifecycle_store_retry_markers\n                .get_mut(&key)|self.recovered_bodies\n            .insert(key, (manifest.clone(), receipt.clone()));|self.durable_bodies.insert(key, receipt.clone());|self.publish_status(services)|task and byte settlement, coalesced pipeline retirement, active overlay commit, both durable catalogs, and status publication must remain serialized
+required|live_store_publication|.prepare_published_lifecycle_store_retry_marker(execution.durable_body_receipt())|live Fetch-to-Store publication stopped reserving its active marker before adapter projection
+required|live_store_publication|.bind_store_successor(|live Fetch-to-Store publication stopped binding the sealed Store successor
+required|live_store_publication|transition.persist_exact_successor()|live Store marker must not commit before the exact lifecycle row is durable
+required|live_store_publication|transition.commit_after_publication();|live Store marker lost its committed lifecycle predecessor
+required|live_store_publication|executor.commit_published_lifecycle_store_retry_marker(retry_marker);|live Store publication stopped installing its active retry marker
+required|live_store_publication|operation.complete();|live Store publication stopped closing its fail-stop output operation
+order|live_store_publication|6|.prepare_published_lifecycle_store_retry_marker(|.bind_store_successor(|transition.persist_exact_successor()|transition.commit_after_publication();|executor.commit_published_lifecycle_store_retry_marker(retry_marker);|operation.complete();|live Store marker must bind before persistence and install only after lifecycle publication
+required|recovered_store_publication|.prepare_published_lifecycle_store_retry_marker(body.durable())|recovered Decision Fetch-to-Store publication stopped reserving its active marker before adapter projection
+required|recovered_store_publication|.bind_store_successor(|recovered Decision Store publication stopped binding the sealed successor
+required|recovered_store_publication|transition.persist_exact_successor()|recovered Decision Store marker must not commit before its exact lifecycle row is durable
+required|recovered_store_publication|transition.commit_after_publication();|recovered Decision Store marker lost its committed lifecycle predecessor
+required|recovered_store_publication|executor.commit_published_lifecycle_store_retry_marker(retry_marker);|recovered Decision Store publication stopped installing its active retry marker
+required|recovered_store_publication|executor.commit_recovered_decision_fetch_owner_retirement(retirement);|recovered Decision Fetch owner stopped retiring after Store marker publication
+required|recovered_store_publication|operation.complete();|recovered Decision Store publication stopped closing its fail-stop output operation
+order|recovered_store_publication|7|.prepare_published_lifecycle_store_retry_marker(|.bind_store_successor(|transition.persist_exact_successor()|transition.commit_after_publication();|executor.commit_published_lifecycle_store_retry_marker(retry_marker);|executor.commit_recovered_decision_fetch_owner_retirement(retirement);|operation.complete();|recovered Store marker must bind before persistence and install before predecessor retirement
+required|recovered_store_projection|if !work.validate_exact()|cold Store marker census stopped authenticating every complete lifecycle row
+required|recovered_store_projection|ConcreteLifecycleWorkKind::DurableStoreBody(store)|cold Store marker census omitted ordinary durable Store rows
+required|recovered_store_projection|ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(store)|cold Store marker census omitted recovered Decision Store rows
+required|recovered_store_projection|store.store_effect()|recovered Decision Store marker stopped borrowing its exact effect
+required|recovered_store_projection|store.store.pending_effect_binding()|recovered Decision Store marker stopped borrowing its exact pending binding
+required|recovered_store_projection|store.store.durable_body_receipt()|recovered Decision Store marker stopped borrowing its exact durable receipt
+required|registry_store_census|ConcreteLifecycleWorkKind::DurableStoreBody(store)|finalization Store census omitted ordinary lifecycle Store rows
+required|registry_store_census|ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(store)|finalization Store census omitted recovered Decision Store rows
+required|registry_store_census|if !work.validate_exact()|finalization Store census stopped authenticating complete registry work
+required|registry_store_census|PublishedLifecycleStoreRetryCensusEntryV1::from_exact_published_store(|registry finalization census bypassed the closed immutable publication constructor
+required|registry_store_census|let key = entry.key();|registry finalization census stopped deriving the exact body key from publication identity
+required|registry_store_census|census.insert(key, entry).is_some()|registry finalization census stopped rejecting duplicate body keys
+required|registry_store_census|lifecycle registry retained duplicate Store rows for one body|duplicate registry Store owners stopped failing closed
+required|finalization_store_cross_census|self.executor.published_lifecycle_store_retry_census()?|finalization stopped projecting the complete executor Store-marker census
+required|finalization_store_cross_census|.published_lifecycle_store_retry_census()?|finalization stopped projecting the complete authenticated registry Store census
+required|finalization_store_cross_census|if executor != registry|finalization stopped requiring byte-identical immutable Store publications
+required|finalization_store_cross_census|executor markers differ from authenticated lifecycle Store rows|cross-owner Store mismatch stopped failing closed
+required|finalization_store_cross_census|.exactly_covers_finalization_work(&self.owner.coordinator);|Store cross-census must follow the ordinary complete lifecycle finalization census
+order|finalization_store_cross_census|4|let locally_ready = self.executor.ready_to_finish()|.exactly_covers_finalization_work(&self.owner.coordinator);|if !locally_ready {|self.verify_published_store_marker_finalization_census()|incomplete lifecycle work must remain pending before immutable Store mismatch classification
+required|finalization_store_cross_census|map_err(ProductionLifecycleFinalizationErrorV1::StoreMarkerCensus)?|authenticated Store census mismatch stopped surfacing as a fail-stop finalization error
+required|pending_kura_store_cross_census|.exactly_covers_finalization_work(&self.launched.owner.coordinator)|pending-Kura finalization stopped authenticating complete registry work before Store cross-census
+required|pending_kura_store_cross_census|.verify_published_store_marker_finalization_census()|pending-Kura finalization bypassed the exact executor-registry Store comparison
+required|pending_kura_store_cross_census|map_err(ProductionLifecycleFinalizationErrorV1::StoreMarkerCensus)?|pending-Kura Store mismatch stopped failing finalization closed
+order|pending_kura_store_cross_census|3|.exactly_covers_finalization_work(&self.launched.owner.coordinator)|return Err(ProductionLifecycleFinalizationErrorV1::NotReady);|.verify_published_store_marker_finalization_census()|pending-Kura must classify incomplete lifecycle work before immutable Store mismatch
+required|recovered_store_install|.recovered_published_store_retry_markers()|startup stopped enumerating every authenticated durable Store row
+required|recovered_store_install|.install_recovered_published_lifecycle_store_retry_marker(|startup stopped reinstalling active Store markers before clocks
+required|recovered_store_install|.recovered_published_validate_retry_markers()|startup stopped enumerating every authenticated durable Validate row
+required|recovered_store_install|.install_recovered_published_lifecycle_validate_retry_marker(|startup stopped reinstalling Validate tombstones before clocks
+order|recovered_store_install|4|.recovered_published_store_retry_markers()|.install_recovered_published_lifecycle_store_retry_marker(|.recovered_published_validate_retry_markers()|.install_recovered_published_lifecycle_validate_retry_marker(|cold Store markers must install before cold Validate markers
+forbidden|lock_retry_marker_cleanup|self.published_lifecycle_store_retry_markers|protected-lock cleanup must not orphan an executable lifecycle Store row
+required|lock_retry_marker_cleanup|self.published_lifecycle_validate_retry_markers|protected-lock cleanup omitted published Validate tombstones
+required|lock_retry_marker_cleanup|marker.owns_live_lifecycle_row()\n                    \p\p !superseded_keys.contains(key)\n                    \p\p Some(*key) == highest_prepare_body|protected-lock cleanup stopped preserving live rows and only bounded cleanup-high tombstones
+count|lock_retry_marker_cleanup|.retain(|2|protected-lock cleanup must apply the same bounded rule to both inert Validate retry-marker catalogs
+forbidden|decision_retry_marker_cleanup|self.published_lifecycle_store_retry_markers|Decision cleanup must not orphan an executable lifecycle Store row
+required|decision_retry_marker_cleanup|self.published_lifecycle_validate_retry_markers|Decision cleanup omitted published Validate tombstones
+required|decision_retry_marker_cleanup|!drain_decision_body && *key == decision_body|Decision cleanup stopped retaining markers only for the selected undrained body
+count|decision_retry_marker_cleanup|.retain(|2|Decision cleanup must apply the same bounded rule to both inert Validate retry-marker catalogs
+forbidden|enter_view_retry_marker_cleanup|self.published_lifecycle_store_retry_markers|EnterView cleanup must not orphan an executable lifecycle Store row
+required|enter_view_retry_marker_cleanup|self.published_lifecycle_validate_retry_markers|EnterView cleanup omitted published Validate tombstones
+required|enter_view_retry_marker_cleanup|marker.owns_live_lifecycle_row()\n                    \p\p Some(*key) == protected_body\n                    \p\p Some(*key) == highest_prepare_body|EnterView cleanup stopped preserving live rows and only protected-or-cleanup-high tombstones
+count|enter_view_retry_marker_cleanup|.retain(|2|EnterView cleanup must apply the same bounded rule to both inert Validate retry-marker catalogs
+required|cleanup_high_selection|highest_prepare_body.filter(\phighest\p *highest != replacement)|cleanup-only highest Prepare must be distinguished from the voting lock
+count|cleanup_high_selection|superseded_keys.insert(cleanup_only_high);|1|cleanup-only highest Prepare must enter the superseded cleanup set exactly once
+order|cleanup_high_selection|3|let mut superseded_keys = BTreeSet::new();|highest_prepare_body.filter(\phighest\p *highest != replacement)|superseded_keys.insert(cleanup_only_high);|cleanup-only highest Prepare must be forced through bounded non-Store cleanup
+required|cleanup_terminal_retirement|let protected_ready_rebind_keys = stale_body_cleanup|terminal retirement stopped enumerating protected ready-pipeline rebinds
+required|cleanup_terminal_retirement|.protected_ready_rebinds|terminal retirement stopped deriving its exclusion set from exact ready rebinds
+required|cleanup_terminal_retirement|tag.strictly_advances(owner.tag) && !protected_ready_rebind_keys.contains(key)|terminal retirement stopped selecting only superseded unprotected pipeline owners
+required|cleanup_terminal_retirement|.then_some((*key, *owner))|terminal retirement stopped retaining each exact body key and owner tag
+required|cleanup_terminal_retirement|.retire_body_pipeline_completions(owner.tag, key.0, key.1)|terminal retirement stopped binding the exact stale owner and body key
+count|cleanup_terminal_retirement|.retire_body_pipeline_completions(|1|EnterView must perform one complete exact-stage retirement pass
+order|cleanup_terminal_retirement|4|let protected_ready_rebind_keys = stale_body_cleanup|let stale_pipeline_owners = self|.retire_body_pipeline_completions(owner.tag, key.0, key.1)|self.body_pipeline_owners.retain(\pkey, owner\p {|queued stale terminals must retire before aggregate pipeline-owner release
+required|stale_foreign_owner_guard|RuntimeFetchAuthorityRelation::Stale => {|runtime terminal coalescing lost its stale-authority branch
+required|stale_foreign_owner_guard|if retained_owner != *ownership.owner()|stale terminal authority must retain exact physical-owner equality
+count|stale_foreign_owner_guard|coalesced body completion changed its exact lifecycle owner|1|the stale foreign-owner rejection must remain singular
+order|stale_foreign_owner_guard|6|RuntimeFetchAuthorityRelation::Stale => {|if retained_owner != *ownership.owner()|self.latch_fail_closed(|coalesced body completion changed its exact lifecycle owner|return Err(EnqueueError::FailClosed);|None|foreign stale owners must fail closed before same-owner stale authority can stutter
+forbidden|stale_foreign_owner_guard|RuntimeFetchAuthorityRelation::Stale => None|stale foreign terminal authority must not bypass exact owner comparison
 end
 case|invalid_body_replay_pre_admission_is_closed_exact_and_lifecycle_owned
 region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -1250,7 +1761,13 @@ region|output_join|registry|after|pub(super) enum LifecycleOutputRegistryJoinV1 
 region|output_settlement|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|output_pending|registry|after|pub(in crate::sumeragi) struct PendingLifecycleOutputAdmissionV1 {|before|impl PreparedLifecycleOutputExecutionV1 {
 region|runtime_occurrence|runtime|after|pub(crate) fn exactly_binds_adapter_effect(&self, effect: &AdapterEffect) -> bool {|before|/// Mint the ordinal-free lifecycle-admission binding for this exact effect.
+region|periodic_output_pending|registry|at|fn is_periodic_retransmit_broadcast(&self) -> bool {|before|/// Restore the exact bounded handoff when lifecycle ordering defers I/O.
+region|periodic_runtime_occurrence|runtime|at|fn exactly_binds_periodic_retransmit_broadcast(|before|fn validate_exact(&self) -> bool {
+region|periodic_runtime_identity|runtime|at|const PERIODIC_RETRANSMIT_ROOT_IDENTITY: &[u8] =|before|/// Maximum base intervals assigned to one certified view.
+region|periodic_runtime_timer|runtime|at|fn freeze_due_clock_owners(&mut self, now: Instant)|before|fn minimum_active_lifecycle_ordinal(&self)
 region|cold_service|effects|after|pub(in crate::sumeragi) fn execute_recovered_lifecycle_output_service|before|/// Exhaustive source inventory of effects which may create pending work.
+region|output_summary|effects|after|/// Bounded outcome census for one lifecycle-output settlement pass.|before|/// Return whether an exact durable Validate owner is parked at lifecycle admission.
+region|runner_slice_outcome|runner|after|pub(in crate::sumeragi) enum AdvanceExecutorSliceOutcomeV1 {|before|fn advance_executor(
 region|cold_settlement|lifecycle_open|at|pub(in crate::sumeragi) fn settle_next_recovered_lifecycle_output<E>(|before|fn recovered_output_matches_ready_coordinator(
 region|cold_census|lifecycle_open|at|pub(super) fn exact_ready_ordinals_for_registry_census(|before|/// Result of attempting the oldest authenticated cold output.
 region|cold_runner|runner|after|fn advance_executor(|before|fn reconcile_executor_locked_body(
@@ -1277,7 +1794,15 @@ required|output_join|metadata.continuation == super::schema::DurableContinuation
 required|output_join|metadata.replay_authority == authority|terminal direct output retry stopped comparing the byte-exact signed payload authority
 required|output_join|authority.structurally_matches_record(|terminal direct output retry stopped authenticating exact context, key, class, stage, and payload
 required|output_settlement|LifecycleOutputRegistryJoinV1::TerminalDirectOutputDuplicate|generic output settlement stopped recognizing exact terminal direct-output retries
-required|output_settlement|ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted|exact terminal direct-output retry no longer stutters before service I/O
+required|output_settlement|if !execution.is_periodic_retransmit_broadcast()|non-periodic terminal direct-output retry no longer stutters before service I/O
+required|output_settlement|execution.execute_with(execute)|periodic terminal control retry stopped reaching exact output service
+required|output_settlement|LifecycleOutputServiceDispositionV1::SourceRetained|periodic terminal control retry stopped preserving exact backpressure ownership
+required|periodic_output_pending|fn is_periodic_retransmit_broadcast(&self)|output settlement lost its sealed periodic-reservice classifier
+required|periodic_runtime_occurrence|fn exactly_binds_periodic_retransmit_broadcast(|runtime omitted the authenticated periodic Broadcast occurrence classifier
+required|periodic_runtime_occurrence|RuntimeFreshRootKind::Retransmit|periodic Broadcast classifier stopped requiring the retransmit root family
+required|periodic_runtime_occurrence|PERIODIC_RETRANSMIT_ROOT_IDENTITY|periodic Broadcast classifier stopped sharing the timer root identity
+required|periodic_runtime_identity|b"periodic-retransmit"|periodic Broadcast classifier changed the serialized timer root identity
+count|periodic_runtime_timer|PERIODIC_RETRANSMIT_ROOT_IDENTITY|2|periodic timer classification and owner mint must share the one serialized root identity
 required|output_settlement|LifecycleOutputServiceDispositionV1::SourceRetained|generic output settlement stopped distinguishing transport backpressure from acceptance
 required|output_settlement|ProductionLifecycleOutputAdmissionSettlementV1::Deferred(\n                    execution.into_pending(),\n                )|transport backpressure no longer returns the exact Ready output owner
 order|output_settlement|3|execution.execute_with(execute)|LifecycleOutputServiceDispositionV1::SourceRetained|let mut staged = self.coordinator.stage_durable_transaction()|source-retained output must defer before terminal LedgerV1 staging
@@ -1286,6 +1811,13 @@ required|runtime_occurrence|pub(crate) fn exactly_matches_bound_effect_occurrenc
 required|runtime_occurrence|self.binding == other.binding|full-occurrence comparison stopped authenticating the positional effect binding
 required|cold_service|ConsensusBroadcastDisposition::SourceRetained => {|cold output service stopped preserving transport backpressure
 required|cold_service|LifecycleOutputServiceDispositionV1::SourceRetained|cold output service stopped returning typed backpressure
+required|output_summary|struct LifecycleOutputAdmissionSettlementSummaryV1|generic output settlement lost its typed fresh-versus-duplicate census
+required|output_summary|summary.newly_completed = summary.newly_completed.saturating_add(1)|fresh lifecycle-output completion stopped advancing only the service-and-durability census
+required|output_summary|summary.already_completed = summary.already_completed.saturating_add(1)|terminal lifecycle-output duplicate stopped advancing only the pre-service stutter census
+required|output_summary|self.newly_completed > 0|terminal lifecycle-output duplicates can preempt ordinary ingress again
+required|runner_slice_outcome|Idle|executor slice lost its authenticated idle classification
+required|runner_slice_outcome|AdvancedAtSliceBoundary|executor slice budget exhaustion became indistinguishable from idle again
+required|runner_slice_outcome|Yielded(AdvanceExecutorYieldV1)|executor slice lost its typed ownership-barrier yield
 required|cold_settlement|LifecycleOutputServiceDispositionV1::SourceRetained|cold output settlement stopped recognizing typed backpressure
 required|cold_settlement|return Ok(RecoveredLifecycleOutputSettlementV1::SourceRetained)|cold output settlement stopped distinguishing retained-source ownership from ordering deferral
 order|cold_settlement|3|match execute(output.effect())|LifecycleOutputServiceDispositionV1::SourceRetained|let mut staged = coordinator.stage_durable_transaction()|cold source-retained output must defer before terminal LedgerV1 staging
@@ -1295,6 +1827,9 @@ required|cold_census|recovered_output_matches_ready_coordinator_row(coordinator,
 required|cold_census|self.entries.keys().copied().collect()|cold output census stopped projecting the exact owner-held ordinal set
 required|cold_census|self.lifecycle_outputs.as_ref().map_or_else(|authenticated recovery cut stopped proving the complete optional cold-output census
 required|cold_runner|fn recovered_lifecycle_output_requires_yield(|executor advancement stopped exhaustively classifying cold-output settlement
+required|cold_runner|EffectExecutorStep::Idle => return Ok(AdvanceExecutorSliceOutcomeV1::Idle)|an actually idle executor no longer terminalizes the bounded slice directly
+required|cold_runner|Ok(AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary)|executor budget exhaustion can fall through as false idle again
+count|cold_runner|.requires_outer_executor_yield()|2|runner must ignore terminal output duplicates at both executor seams
 required|cold_runner|RecoveredLifecycleOutputSettlementV1::SourceRetained => {\n            true|executor advancement stopped yielding while a source-retained cold carrier owns the Ready minimum
 required|cold_height_driver|RecoveredLifecycleOutputSettlementV1::SourceRetained => {|outer Completion scheduling stopped recognizing a source-retained owner-only row
 required|cold_height_driver|LifecycleV2IngressDrainDispositionV1::retry_before_producer(|source-retained cold output stopped selecting the timed retry disposition
@@ -1362,7 +1897,7 @@ required|sealed_projection|ConcreteWorkAddress::new(lease.owner(), lease.ordinal
 required|sealed_projection|work.validates_at(address)|sealed body successor projection omitted {required}
 required|sealed_projection|work.digest != digest|sealed body successor projection omitted {required}
 required|sealed_projection|completion.address != self.completion_address|sealed body successor projection omitted {required}
-required|sealed_projection|store.address != self.store_address|sealed body successor projection omitted {required}
+required|sealed_projection|store.address == self.store_address|sealed body successor projection omitted {required}
 required|sealed_projection|self.durable_body.manifest_hash() != self.expected_manifest_hash|sealed body successor projection omitted {required}
 required|sealed_projection|self.adapter.store_effect() != &self.store_effect|sealed body successor projection omitted {required}
 required|sealed_projection|self.adapter.validate_effect() != &self.validate_effect|sealed body successor projection omitted {required}
@@ -1404,7 +1939,7 @@ region|carrier|registry|after|struct DurableStoreBody {|before|impl DurableStore
 region|validation|registry|after|impl DurableStoreBody {|before|struct DurableValidateBody
 region|preparation|registry_recovery_impl|after|pub(super) fn prepare_durable_store_execution(|before|pub(super) fn prepare_durable_validate_execution(
 region|execution|registry|after|impl<'a> PreparedDurableStoreExecution<'a>|before|fn sealed_successor_parent<'a>(
-region|validate_token|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {|before|/// Move-only Store projection sealed under its closed Fetch parent
+region|validate_token|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {|before|#[derive(Clone, Copy)]\nenum DurableStoreValidateParentV1
 region|fetch_execution|registry|after|impl<'a> PreparedCertifiedFetchExecution<'a>|before|impl<'a> PreparedDurableStoreExecution<'a>
 region|callers|selector|begin|-|end|-
 region|callers|effects|begin|-|end|-
@@ -1424,7 +1959,7 @@ required|validation|durable_receipt.context_id()|durable Store validation omitte
 required|validation|durable_receipt.round()|durable Store validation omitted {required}
 required|validation|durable_receipt.subject()|durable Store validation omitted {required}
 required|validation|durable_receipt.manifest_hash() == self.expected_manifest_hash|durable Store validation omitted {required}
-required|preparation|store\n            .project_candidate(verified)|durable Store preparation omitted {required}
+required|preparation|store\n                    .project_candidate(verified)|durable Store preparation omitted {required}
 required|preparation|durable_validate_body_payload(&store.durable_receipt)|durable Store preparation omitted {required}
 required|preparation|candidate.key != lease.key()|durable Store preparation omitted {required}
 required|preparation|candidate.causal_root != lease.owner().causal_root()|durable Store preparation omitted {required}
@@ -1473,7 +2008,7 @@ region|live_sign_carrier|registry|after|struct DurableLiveWalSignWork {|before|i
 region|live_sign_install|registry|after|impl LiveValidateSignRegistryReservation<'_> {|before|#[cfg_attr(not(test), allow(dead_code))]
 region|preparation|registry_recovery_impl|after|pub(super) fn prepare_durable_validate_execution(|before|pub(super) fn classify_ready_validate_carrier(
 region|execution_impl|registry_recovery|after|impl PreparedDurableValidateExecution<'_>|end|-
-region|validate_successor|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {|before|/// Move-only Store projection sealed under its closed Fetch parent
+region|validate_successor|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {|before|#[derive(Clone, Copy)]\nenum DurableStoreValidateParentV1
 region|scheduler|scheduler_inputs|begin|-|end|-
 region|worker_path|worker|begin|-|end|-
 region|turn_driver|turn_driver|begin|-|end|-
@@ -2062,8 +2597,10 @@ required|owner|expected_decision: Option<(|cold Validate owner lost the exact re
 required|owner|effect: AdapterEffect|cold Validate owner lost the immutable Validate effect
 required|owner|durable_receipt: DurableBodyReceipt|cold Validate owner lost its checksummed body receipt
 required|owner|binding: RecoveredDurableValidateRetryBindingV1|cold Validate owner lost its exact runtime binding
+required|owner|lifecycle_ordinal: u128|cold Validate owner lost its exact live logical row
 forbidden|owner|Clone|cold Validate owner became cloneable
 required|owner_impl|fn key(|cold Validate owner lost its exact proposal-round and subject key
+required|owner_impl|fn lifecycle_ordinal(|cold Validate owner stopped exposing its immutable logical row only to the closed executor install
 required|owner_impl|fn bind_validated_marker(|cold Validate owner lost its exact marker-binding oracle
 required|owner_impl|fn exactly_matches_validated_marker(|cold Validate owner lost post-binding marker revalidation
 required|owner_impl|self.key() == key|cold Validate marker deferral stopped checking the exact owner key
@@ -2120,6 +2657,7 @@ required|projection|coordinator.ready_index.contains(&record.ordinal)|cold censu
 required|projection|validate.matches_recovered_record(|cold census omitted complete recovered-carrier validation
 required|projection|project_recovered_durable_validate_retry_binding(|cold census lost its opaque exact runtime binding
 required|projection|matching_decision|cold census failed to pass the associated Decision ceiling into retry binding
+required|projection|lifecycle_ordinal: address.ordinal|cold census stopped transferring the exact registry row into its closed owner
 required|projection|owners.insert(key, owner).is_some()|cold census stopped rejecting a second exact-key owner
 required|projection|RecoveredDurableValidateRetryCensusV1 {|cold census stopped sealing the complete owner map behind one opaque move-only value
 count|projection_source|pub(super) fn project_recovered_durable_validate_retry_census(|1|cold Validate census must have one registry mint
@@ -2176,8 +2714,14 @@ required|seal|Live {|Validate retry seal lost the distinct live lineage
 required|seal|Recovered {|Validate retry seal lost the distinct recovered lineage
 required|seal|owner:|recovered retry seal lost its immutable storage-authenticated owner
 required|seal|frontier:|recovered retry seal lost its persistent monotonic authority frontier
+required|seal|lifecycle_ordinal: Option<u128>|Validate retry seal stopped distinguishing a live registry row from an inert tombstone
 forbidden|seal|Recovered(Arc<RecoveredDurableValidateRetryOwnerV1>)|recovered retry seal retained the immutable-startup tuple which permits effect or authority rollback
 required|seal_projection|Some(Self::Live {|normal admission stopped minting only the live retry lineage
+required|seal_projection|lifecycle_ordinal: None|fresh pre-admission Validate retry seal incorrectly claimed a committed registry row
+required|seal_projection|fn lifecycle_ordinal(|Validate retry seal lost its exact live-row observation
+required|seal_projection|fn bind_lifecycle_ordinal(|Validate retry settlement lost its one-way exact row bind
+required|seal_projection|fn release_lifecycle_ordinal(|Validate retry resolution lost its exact row release
+required|seal_projection|existing != ordinal|Validate retry authority accepted logical-row substitution
 required|seal_projection|Self::Recovered {|retry projection stopped distinguishing recovered ownership
 required|seal_projection|frontier|recovered retry projection stopped consulting its retained authority and EventTag frontier
 required|seal_projection|exactly_matches_retry|recovered retry projection stopped proving its exact cold owner
@@ -2192,6 +2736,7 @@ forbidden|seal_projection|owner: Arc::new(incoming|recovered retry projection pe
 required|install|owner.exactly_matches_validated_marker(key, validated)|cold owner installation stopped rechecking the marker-derived authority ceiling
 required|install|frontier: owner.initial_retry_frontier()|cold owner installation stopped sealing the marker-derived commitment and startup statement into its retry frontier
 required|install|DurableValidateRetrySealV1::Recovered {|cold owner installation lost its lineage-tagged persistent retry frontier
+required|install|lifecycle_ordinal: Some(owner.lifecycle_ordinal())|cold owner installation stopped retaining its exact live registry row
 required|install|owner: Arc::new(owner)|cold owner installation lost its immutable storage-authenticated owner
 forbidden|install|DurableValidateRetrySealV1::Recovered(Arc::new(owner))|cold owner installation retained immutable startup authority and accepted later conflicting refinements
 required|runtime_decision|self.driver.replayed_decision_key()|cold launch stopped reading the runtime's exact replayed Decision
@@ -2227,9 +2772,11 @@ required|decision_cleanup|.transpose()|Decision cleanup stopped propagating a co
 required|decision_cleanup|!self.pending_durable_validate_admissions.is_empty()|Decision cleanup must not overtake live Validate admission ownership
 required|decision_cleanup|let Some(seal) = projected_recovered_decision_seal|Decision cleanup lost its preflighted replacement recovered frontier
 required|decision_cleanup|.insert(decision_body, seal);|Decision cleanup stopped committing the replacement frontier only after fallible retirement work
-required|decision_cleanup|self.durable_validate_retry_seals|Decision cleanup lost the inert retry-seal map
-required|decision_cleanup|.retain(\pkey, _\p !drain_decision_body && *key == decision_body);|Decision cleanup must retain only the exact selected-body stutter or drain it terminally
-order|decision_cleanup|7|project_recovered_commitment_ceiling(decision_commitment)|self.preflight_remote_proposal_replay_indexes()?|retire_proposal_work_after_decision(|let Some(seal) = projected_recovered_decision_seal|.insert(decision_body, seal);|.retain(\pkey, _\p !drain_decision_body && *key == decision_body);|self.protected_decision = Some(durable_decision)|Decision commitment conflict preflight must precede fallible retirement, and replacement frontier commit must precede final cleanup publication
+required|decision_cleanup|self.durable_validate_retry_seals|Decision cleanup lost the retry-authority map
+required|decision_cleanup|seal.lifecycle_ordinal().is_some()|Decision cleanup retired an unresolved Validate lifecycle row
+required|decision_cleanup|!drain_decision_body && *key == decision_body|Decision cleanup lost the selected inert retry tombstone
+required|decision_cleanup|marker.owns_live_lifecycle_row()|Decision cleanup retired an unresolved direct Store-to-Validate row
+order|decision_cleanup|7|project_recovered_commitment_ceiling(decision_commitment)|self.preflight_remote_proposal_replay_indexes()?|retire_proposal_work_after_decision(|let Some(seal) = projected_recovered_decision_seal|.insert(decision_body, seal);|self.durable_validate_retry_seals.retain(\pkey, seal\p {|self.protected_decision = Some(durable_decision)|Decision commitment conflict preflight must precede fallible retirement, and replacement frontier commit plus live-authority filtering must precede final cleanup publication
 order|launch|4|.replayed_decision_key()|project_recovered_durable_validate_retry_census(|V2EffectExecutor::open_with_body_store(|ProductionV2Services::start_with_apply_service(|cold Validate census projection, closed marker deferral and installation, and service exposure must remain ordered
 required|launch|recovered_validate_retry_census|body-store open lost the exact opaque census by-value handoff
 forbidden|launch|&recovered_validate_retry_census|launch borrowed a reusable or caller-selectable cold owner census
@@ -2346,6 +2893,19 @@ region|completion_dispatch|turn_driver|at|match self.services.take_next_lifecycl
 region|deferred_retry|launch|after|impl RetainedLifecycleDecisionApplyDeferredV1|before|/// Fail-stop class while durably terminalizing
 region|drive|launch|after|pub(in crate::sumeragi) fn drive_lifecycle_decision_apply_deferred(|before|/// Settle one already-classified lifecycle Decision Apply completion.
 region|sidecar|lane_work|begin|-|end|-
+region|pending_owner_join|coordinator_support|begin|-|before|\n#[cfg(test)]
+region|pending_registry_ordinal|registry_recovery_impl|at|pub(super) fn exact_recovered_decision_apply_ready_ordinal(|before|/// Verify WAL-authority startup coverage beside authenticated cold outputs.
+region|pending_replay|pending_kura|begin|-|end|-
+region|pending_verify|effects|at|pub(in crate::sumeragi) fn verify_pending_kura_recovered_apply_replay(|before|/// Authenticate and enqueue one reducer-directed v2 network message
+region|pending_dispatch|effects|at|pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_executor_dispatch|before|/// Install the distinct preliminary retransmit exclusion
+region|pending_completion_exact|adapter|at|pub(in crate::sumeragi) fn exactly_matches_pending_kura_recovery(|before|impl SumeragiV2Adapter {
+region|pending_driver|pending_lifecycle|at|pub(in crate::sumeragi) fn drive_apply_recovery_turn(|before|/// Construct and authenticate lane recovery after the local Apply completes.
+region|pending_settlement|launch|at|pub(in crate::sumeragi) fn settle_pending_kura_applied_decision_apply_completion(|before|/// Fail-stop failure while consuming the recovered lifecycle owner into I/O.
+region|attempt_settlement|effects|at|pub(crate) fn begin_pending_tip_recovery_attempt(|before|/// Begin the asynchronous durable-store
+region|generic_apply|effects|at|fn begin_apply<S: V2EffectServices>(|before|fn reconcile_runtime_decision<S: V2EffectServices>(
+region|generic_completion|effects|at|pub(crate) fn complete_application<S: V2EffectServices>(|before|/// Current bounded operational status.
+region|effects_production|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|runtime_all|runtime|begin|-|end|-
 required|recovered_projection|self.exact_body_binding()|recovered completion projection lost transitive body validation
 required|recovered_projection|LifecycleDecisionApplyLineageV1::Recovered|recovered completion projection lost its explicit lineage
 required|live_projection|LifecycleDecisionApplyLineageV1::Live|live completion projection lost its explicit lineage
@@ -2627,6 +3187,15 @@ required|surface|identity: BodyValidationRejectionIdentity|durable rejection mus
 required|surface|pub(crate) const fn rejection_identity|durable rejection identity accessor is missing
 required|api|error.rejection_identity().canonical_code()|validation API lost canonical rejection classification
 required|api|persist_rejected_outcome|validation API lost durable rejected-outcome persistence
+required|api|self.reusable_validated_commitment_for_exact_body(&durable, &envelope)?|live locked-body validation lost its exact authenticated reuse seam
+required|api|round.view < durable.round().view|live validation reuse stopped requiring a strictly earlier proposal view
+required|api|.max_by_key(\p((round, _), _)\p round.view)|live validation reuse lost its deterministic newest earlier-view source
+required|api|*source_round != validated.durable().round()|live validation reuse stopped checking its active catalog key against the nested durable receipt
+required|api|previous.manifest.payload_size_bytes == current.manifest.payload_size_bytes|live validation reuse stopped checking exact same-body manifest identity
+required|api|previous.canonical_wire != current.canonical_wire|live validation reuse stopped byte-comparing the checksummed canonical body
+required|api|self.persist_validated_receipt(&durable, execution_commitment)?|live validation reuse stopped fsyncing a fresh target-round marker
+forbidden|api|pending_revalidation|quarantined restart markers must not authorize live validation reuse
+forbidden|api|retired_revalidation|retired restart markers must not authorize live validation reuse
 required|error|fn rejection_identity(&self)|body validation error classification lost rejection identity
 required|error|BodyValidationRejectionIdentity::Rejected|body validation error classification lost rejected identity
 end
@@ -2731,7 +3300,7 @@ region|callers|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|callers|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|callers|runner|begin|-|end|-
 region|callers|worker|begin|-|end|-
-region|callers|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|callers|runtime|begin|-|before|\n#[cfg(test)]\npub(in crate::sumeragi) mod tests {
 region|callers|coordinator|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|callers|scheduler_inputs|begin|-|end|-
 region|publication|body_pipeline|last|pub(super) fn persist_and_publish(|before|\n}\ninclude!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
@@ -3152,7 +3721,7 @@ region|successor|runtime|at|pub(crate) struct RecoveredWalVoteSuccessor|before|f
 region|projection|runtime|at|pub(crate) fn project_recovered_wal_vote_successor(|before|    fn project_recovered_ordinary_validate_commit_successor(
 region|commit_relation|runtime|at|enum CommitSuccessorTagRelation|before|\nimpl PendingRuntimeEffectBinding
 region|live_commit|runtime|after|pub(crate) fn project_validate_sign_commit_successor(|before|/// Project a Commit-vote successor for an ordinary Validate
-region|runtime_production|runtime|begin|-|before|#[cfg(test)]\nmod tests
+region|runtime_production|runtime|begin|-|before|#[cfg(test)]\npub(in crate::sumeragi) mod tests
 region|replay|replay_authority_base|begin|-|end|-
 region|replay|replay_authority_certified_body|begin|-|end|-
 region|reconstructed|runtime|at|pub(crate) fn reconstruct_recovered_wal_vote_successor(|before|\nimpl PendingRuntimeEffectBinding
@@ -3759,7 +4328,7 @@ required|validate|&self.effect,\n                &self.durable_receipt,\n       
 required|completion|incumbent: DurableValidateBody|Validate completion omitted its incumbent
 required|fetch_successor|replay_evidence: CertifiedStoreReplayEvidenceV1|Fetch-to-Store successor omitted replay evidence
 required|fetch_successor|PreparedCertifiedFetchStoreAdapterV1<'adapter>|Fetch-to-Store successor omitted adapter owner
-required|validate_successor|replay_evidence: CertifiedValidateReplayEvidenceV1|Store-to-Validate successor omitted replay evidence
+required|validate_successor|replay_evidence: DurableValidateReplayEvidenceV1|Store-to-Validate successor omitted replay evidence
 required|validate_successor|PreparedDurableStoreValidateAdapterV1<'adapter>|Store-to-Validate successor omitted adapter owner
 required|fetch_projection|completion.replay_evidence.project_store(|Fetch-to-Store projection omitted replay projection
 required|fetch_projection|replay_evidence,|Fetch-to-Store projection omitted replay evidence transfer
@@ -3908,7 +4477,7 @@ required|validate_child|restore_deferred_validated_marker(marker)|pending-Kura p
 required|consume_child|if let Some(stage) = recovery_transition {|pending-Kura child dispatch omitted the outer stage commit
 order|consume_child|4|result?|if let Some(stage) = recovery_transition {|.stage = stage|if let Some(successor) = pending_kura_successor|pending-Kura child dispatch did not commit the outer Apply stage before recursion
 required|consume_child|PendingKuraApplySuccessorExecutorPermitV1::new()|pending-Kura child dispatch omitted its private permit
-required|consume_child|self.consume_one(effect, ownership, services)|pending-Kura child dispatch omitted its bounded local continuation
+required|consume_child|self.consume_one(effect, ownership, None, services)|pending-Kura child dispatch omitted its bounded local continuation
 required|consume_child|EffectExecutorError::Contract(format!(|pending-Kura postcommit child failure did not fail stop
 forbidden|consume_child|periodic_timer|pending-Kura direct Apply child reintroduced timer dispatch
 required|recovery_step|self.consume_pending_tip_recovery_effects(effects, services)?|pending-Kura recovery step bypassed the exact stage-complete local consumer

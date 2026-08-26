@@ -345,26 +345,34 @@ fn drain_decided_lane_recovery_ingress_authorizes_terminal_current_serve() {
         DecidedLaneRecoveryIngressPreparation::CurrentServe
     ));
     assert!(matches!(
-        authorize_decided_lane_recovery_drain(
-            DecidedLaneRecoveryIngressPreparation::CurrentServe
-        ),
+        authorize_decided_lane_recovery_drain(DecidedLaneRecoveryIngressPreparation::CurrentServe),
         DecidedLaneRecoveryDrainAuthorization::CurrentServe
     ));
-    assert!(DecidedLaneRecoveryServeScope::Current
-        .permits_height(context.height, context.height));
-    assert!(!DecidedLaneRecoveryServeScope::Current
-        .permits_height(context.height.saturating_sub(1), context.height));
-    assert!(!DecidedLaneRecoveryServeScope::Current
-        .permits_height(context.height.saturating_add(1), context.height));
-    assert!(DecidedLaneRecoveryServeScope::Historical
-        .permits_height(context.height.saturating_sub(1), context.height));
-    assert!(!DecidedLaneRecoveryServeScope::Historical
-        .permits_height(context.height, context.height));
+    assert!(DecidedLaneRecoveryServeScope::Current.permits_height(context.height, context.height));
+    assert!(
+        !DecidedLaneRecoveryServeScope::Current
+            .permits_height(context.height.saturating_sub(1), context.height)
+    );
+    assert!(
+        !DecidedLaneRecoveryServeScope::Current
+            .permits_height(context.height.saturating_add(1), context.height)
+    );
+    assert!(
+        DecidedLaneRecoveryServeScope::Historical
+            .permits_height(context.height.saturating_sub(1), context.height)
+    );
+    assert!(
+        !DecidedLaneRecoveryServeScope::Historical.permits_height(context.height, context.height)
+    );
     assert!(DecidedLaneRecoveryServeScope::Current.permits_subject(subject, subject));
-    assert!(!DecidedLaneRecoveryServeScope::Current
-        .permits_subject(proposal_subject(b"losing decided recovery subject"), subject));
-    assert!(DecidedLaneRecoveryServeScope::Historical
-        .permits_subject(proposal_subject(b"historical recovery subject"), subject));
+    assert!(!DecidedLaneRecoveryServeScope::Current.permits_subject(
+        proposal_subject(b"losing decided recovery subject"),
+        subject
+    ));
+    assert!(
+        DecidedLaneRecoveryServeScope::Historical
+            .permits_subject(proposal_subject(b"historical recovery subject"), subject)
+    );
 
     let future_round = wire::ConsensusRound {
         height: context.height.saturating_add(1),
@@ -431,6 +439,56 @@ fn terminal_current_serve_binds_leader_wire_before_guarded_service() {
 }
 
 #[test]
+fn terminal_current_serve_source_retention_retries_without_reopening_runtime() {
+    let mut source_retained = true;
+    let mut retry_attempts = 0_u8;
+    let runtime_turns = Cell::new(0_u8);
+
+    let still_pending = super::lifecycle_run_inner::retry_decided_lane_recovery_exact_output(
+        LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion
+            .decided_lane_recovery_permit()
+            .expect("Apply completion mints decided-lane recovery authority"),
+        || {
+            retry_attempts = retry_attempts.saturating_add(1);
+            Ok(source_retained)
+        },
+    )
+    .expect("an Apply completion barrier may retry its owned CurrentServe response");
+    assert!(still_pending, "source retention remains explicit");
+
+    source_retained = false;
+    let still_pending = super::lifecycle_run_inner::retry_decided_lane_recovery_exact_output(
+        LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
+            .decided_lane_recovery_permit()
+            .expect("settled Apply mints decided-lane recovery authority"),
+        || {
+            retry_attempts = retry_attempts.saturating_add(1);
+            Ok(source_retained)
+        },
+    )
+    .expect("the settled Apply barrier must release the retained response owner");
+    assert!(!still_pending);
+    assert_eq!(retry_attempts, 2);
+    assert_eq!(
+        runtime_turns.get(),
+        0,
+        "the exact-output retry has no reducer/runtime callback"
+    );
+
+    assert!(
+        LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar
+            .decided_lane_recovery_permit()
+            .is_none(),
+        "a non-Apply lane barrier cannot mint terminal response authority"
+    );
+    assert_eq!(
+        runtime_turns.get(),
+        0,
+        "unauthorized retry must fail before touching the output owner"
+    );
+}
+
+#[test]
 fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traffic() {
     let (context, keys) = context();
     let round = wire::ConsensusRound {
@@ -491,11 +549,75 @@ fn drain_decided_lane_recovery_ingress_authorizes_lane_local_qc() {
         DecidedLaneRecoveryDrainAuthorization::LaneLocal
     ));
 }
-fn leader_wire_runtime_ingress_fixture() -> (
+#[test]
+fn lifecycle_lane_local_selector_bypasses_only_productive_global_barrier() {
+    let (_directory, ingress, gate, _global, semantic_origin) =
+        queued_leader_wire_ingress_fixture();
+    let global_scheduler_ordinal = gate
+        .earliest_ingress_scheduler_ordinal()
+        .expect("read the productive global ingress owner")
+        .expect("the queued Proposal owns the durable leader-wire barrier");
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            super::super::v2_worker::tests::lane_commit_qc_block_message(semantic_origin.clone()),
+            semantic_origin,
+        )),
+        Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+    ));
+
+    assert!(
+        ingress
+            .try_recv_if_checked(|inbound| inbound.message().is_lane_local())
+            .expect("ordinary selection preserves the productive gate")
+            .is_none(),
+        "the leader-wire barrier blocks a later lane-local occurrence on the ordinary path"
+    );
+    let selected = ingress
+        .try_recv_lifecycle_lane_local_checked(
+            LifecycleProducerClaimDispositionV1::AwaitingCompletion
+                .blocked_ordinary_lane_local_ingress_permit()
+                .expect("Broadcast worker ownership blocks only ordinary global ingress"),
+        )
+        .expect("lifecycle lane-local selection preserves checked dequeue failures")
+        .expect("the later lane-local occurrence remains selectable");
+    assert!(selected.message().is_lane_local());
+    let selected_ownership = selected
+        .ingress_ownership()
+        .expect("selected lane occurrence retains ingress ownership");
+    assert_eq!(selected_ownership.first.physical_admission_ordinal, 2);
+    assert!(selected_ownership.validate_exact());
+    assert!(selected_ownership.leader_wire_token().is_none());
+    assert!(selected_ownership.leader_wire_runtime_receipt().is_none());
+    assert_eq!(ingress.len(), 1);
+    assert_eq!(
+        gate.earliest_ingress_scheduler_ordinal()
+            .expect("read the retained productive global ingress owner"),
+        Some(global_scheduler_ordinal),
+        "lane-local service must not retire or runtime-bind the global barrier"
+    );
+
+    let remaining = ingress
+        .try_recv()
+        .expect("the blocked global occurrence remains queued exactly once");
+    assert!(!remaining.message().is_lane_local());
+    let remaining_ownership = remaining
+        .ingress_ownership()
+        .expect("remaining global occurrence retains ingress ownership");
+    assert_eq!(remaining_ownership.first.physical_admission_ordinal, 1);
+    assert!(remaining_ownership.leader_wire_token().is_some());
+    assert!(remaining_ownership.leader_wire_runtime_receipt().is_some());
+    assert_eq!(ingress.len(), 0);
+    assert_eq!(
+        gate.earliest_ingress_scheduler_ordinal()
+            .expect("read the runtime-bound productive owner"),
+        None
+    );
+}
+
+fn queued_leader_wire_ingress_fixture() -> (
     TempDir,
     FairV2Ingress,
     Arc<LeaderWireLifecycleStoreGate>,
-    FairV2IngressOwnershipEvidence,
     wire::ConsensusMessageV2,
     PeerId,
 ) {
@@ -607,6 +729,18 @@ fn leader_wire_runtime_ingress_fixture() -> (
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
+    (directory, ingress, gate, message, semantic_origin)
+}
+
+fn leader_wire_runtime_ingress_fixture() -> (
+    TempDir,
+    FairV2Ingress,
+    Arc<LeaderWireLifecycleStoreGate>,
+    FairV2IngressOwnershipEvidence,
+    wire::ConsensusMessageV2,
+    PeerId,
+) {
+    let (directory, ingress, gate, message, semantic_origin) = queued_leader_wire_ingress_fixture();
     let mut admitted = ingress
         .try_recv()
         .expect("drain runner leader-wire fixture");
@@ -664,6 +798,42 @@ fn fail_closed_authenticated_coalesce_releases_gate_and_suppresses_retry() {
             .expect("retry retains the terminal tombstone"),
         None
     );
+}
+#[test]
+fn authentication_rejection_volatile_terminalizes_exact_leader_wire() {
+    let (_directory, ingress, gate, ownership, message, semantic_origin) =
+        leader_wire_runtime_ingress_fixture();
+    let token = ownership
+        .leader_wire_token()
+        .expect("the runner fixture owns one productive token")
+        .clone();
+    complete_control_ingress_admission(
+        &ingress,
+        &ownership,
+        Err(NetworkIngressError::Authentication(
+            super::super::v2::AdapterError::AuthenticatedTimeoutVoteOriginMismatch {
+                signer: 1,
+                semantic_origin: semantic_origin.clone(),
+            },
+        )),
+    )
+    .expect("remote authentication rejection is nonfatal");
+    assert_eq!(
+        ingress.state.lock().leader_wire_lifecycles[&token.slot].status,
+        super::super::FairV2IngressLeaderWireStatus::VolatileTerminal
+    );
+    assert_eq!(
+        gate.earliest_ingress_scheduler_ordinal()
+            .expect("read volatile-terminal runner leader-wire minimum"),
+        None
+    );
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(message),
+            semantic_origin,
+        )),
+        Ok(super::super::FairV2IngressPushDisposition::Coalesced)
+    ));
 }
 fn test_predecessor(context: &wire::HeightContext, label: &[u8]) -> DurableV2PredecessorIdentity {
     DurableV2PredecessorIdentity::for_test(context.height, label)

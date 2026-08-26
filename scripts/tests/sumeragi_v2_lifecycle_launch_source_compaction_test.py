@@ -12,13 +12,26 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs"
-SOURCE = SOURCE_PATH.read_text(encoding="utf-8")
+PROVIDER_PATHS = (
+    ROOT
+    / "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_recovered_fetch_source_tests.rs",
+    ROOT
+    / "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_recovered_fetch_settlement_source_tests.rs",
+)
+ROOT_SOURCE = SOURCE_PATH.read_text(encoding="utf-8")
+PROVIDER_SOURCES = tuple(path.read_text(encoding="utf-8") for path in PROVIDER_PATHS)
+PROVIDER_INCLUDES = tuple(f'include!("{path.name}");\n' for path in PROVIDER_PATHS)
+SOURCE = ROOT_SOURCE
+for provider_include, provider_source in zip(PROVIDER_INCLUDES, PROVIDER_SOURCES):
+    if SOURCE.count(provider_include) != 1:
+        raise AssertionError("lifecycle-launch tests lost an exact recovered-Fetch provider")
+    SOURCE = SOURCE.replace(provider_include, provider_source, 1)
 GUARD_START = "#[test]\nfn launch_source_keeps_status_sealed_and_orders_store_transfer()"
 GUARD_END = (
     "#[test]\n"
     "fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_and_commit"
 )
-EXPECTED_FINGERPRINT = "a7dad7da7c94d55364f8642e3c38719c64707b464c743ec66fe9f9b91e64c670"
+EXPECTED_FINGERPRINT = "7f6cdbc7fb18199365777f2bba799f22e645d46621a9650ea2600c742b4f5d2e"
 
 
 def guarded_source(source: str = SOURCE) -> str:
@@ -179,7 +192,9 @@ def assert_ordered(source: str, tokens: tuple[str, ...]) -> None:
 class LifecycleLaunchSourceCompactionTest(unittest.TestCase):
     def test_guarded_source_fingerprint_and_size_gate(self) -> None:
         self.assertEqual(fingerprint(guarded_source()), EXPECTED_FINGERPRINT)
-        self.assertLessEqual(len(SOURCE.splitlines()), 2_316)
+        self.assertLessEqual(len(ROOT_SOURCE.splitlines()), 2_316)
+        for provider_source in PROVIDER_SOURCES:
+            self.assertLessEqual(len(provider_source.splitlines()), 676)
         for name in (
             "launch_source_keeps_status_sealed_and_orders_store_transfer",
             "recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed",
@@ -216,7 +231,7 @@ class LifecycleLaunchSourceCompactionTest(unittest.TestCase):
                 "reservation.commit(prepared)",
             ),
             (
-                "recovered_lifecycle_sign_completion.take()",
+                "PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)",
                 "prepare_recovered_lifecycle_sign_completion(authority)",
                 "prepare_recovered_lifecycle_sign_broadcast_successor(",
                 "prepare_recovered_lifecycle_sign_broadcast_transition(",
@@ -228,10 +243,10 @@ class LifecycleLaunchSourceCompactionTest(unittest.TestCase):
             ),
             (
                 "if exact_ready != self.coordinator.ready_index",
-                "work_class == LifecycleWorkClass::Broadcast",
+                "record.work_class != LifecycleWorkClass::Broadcast",
                 "recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal",
                 "attest_ready_recovered_lifecycle_signed_broadcast",
-                "for ready_ordinal in &exact_ready",
+                "let factory = AuthenticatedSchedulerInputsFactory::new()",
                 "attest_ready_recovered_lifecycle_sign(",
                 "self.coordinator.plan_turn(inputs)",
                 "project_claimed_recovered_lifecycle_signed_broadcast_output",
@@ -240,7 +255,7 @@ class LifecycleLaunchSourceCompactionTest(unittest.TestCase):
                 "output.commit_after_publication()",
             ),
             (
-                "recovered_lifecycle_sign_completion.take()",
+                "PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)",
                 "prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)",
                 "RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal",
                 "preview.project_proposal_exact_output_authority()",
@@ -270,14 +285,14 @@ class LifecycleLaunchSourceCompactionTest(unittest.TestCase):
             ("owner.launch(inputs)?", 1),
             ("set_v2_effect_completion_observer(", 1),
             ("self.block_ingress.close()", 3),
-            ("self.ingress_ready.store(false, Ordering::Release)", 1),
-            ("self.block_ingress.close()", 1),
+            ("self.ingress_ready.store(false, Ordering::Release)", 2),
+            ("self.block_ingress.close()", 2),
             ("self.coordinator.rollback_unpublished_turn(&lease)", 1),
             ("rollback_unpublished_reserved_turn(&lease", 3),
             ("reservation.cancel_uncommitted()", 6),
             ("self.matches_current_terminal_parent(coordinator)", 2),
             ("metadata.continuation == super::schema::DurableContinuation::None", 2),
-            ("operation.complete()", 5),
+            ("operation.complete()", 4),
             ("output.abort_before_publication()", 2),
         }
         self.assertTrue(expected <= actual)

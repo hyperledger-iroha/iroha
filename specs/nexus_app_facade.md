@@ -39,12 +39,23 @@ V1 accepts Ed25519 signatures only. SDKs must fail closed with
 `unsupported_signature_algorithm` for other algorithms unless that SDK already
 has tested parity. SDKs also fail with `missing_signing_public_key` when the
 approved account cannot provide or derive the signing public key and no
-explicit override was supplied.
+explicit override was supplied. Every supplied signing key is matched against
+the single Ed25519 controller decoded from its canonical approval/authority
+account before any wallet or Torii request; a mismatch is
+`approval_account_mismatch`.
+
+The approval transport result contains only the approved account and its
+transaction signing key. It must not return a replacement Connect session.
+`awaitApproval` copies the caller's exact session and enriches that copy with
+the validated account and controller key; a transport-supplied `session` field
+is rejected as `approval_session_mismatch`.
 
 Default transports/codecs are intentionally additive. JS browser apps can use
 the `connect.browser` transport through `@iroha/iroha-js/nexus-app`. Python
 uses the native transaction builder by default and can open a Connect
-WebSocket when constructed with `NexusAppConfig(base_url=...)`; install the
+WebSocket when constructed with
+`NexusAppConfig(network_id=..., account_chain_discriminant=..., base_url=...)`;
+install the
 `ws` extra for that path. Rust, Swift, Kotlin/JVM, and Java Android keep
 explicit transport injection for wallet/session orchestration while using their
 SDK-native transaction codecs.
@@ -54,7 +65,11 @@ SDK-native transaction codecs.
 The shared fixture is `fixtures/sdk/nexus_connect_transfer_v1.json`. It contains
 deterministic Connect session data, wallet approval, transfer input, expected
 payload bytes/hash, a wallet signature, a signed transaction hash, final status
-sequence, and typed error cases.
+sequence, and typed error cases. The transfer input declares the exact
+`account_chain_discriminant` used to render its I105 account literals; consumers
+must apply that one context while decoding every authority, destination, source
+owner, approval, and session account into a domainless `AccountId`. Nexus facade
+configs have no implicit/default account-chain fallback.
 
 Use this fixture for cross-SDK tests before adding live smoke tests. Live tests
 should stay behind opt-in environment variables such as `NEXUS_CONNECT_LIVE=1`,

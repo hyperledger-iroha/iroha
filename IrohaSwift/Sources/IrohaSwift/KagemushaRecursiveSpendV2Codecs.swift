@@ -864,21 +864,6 @@ public enum KagemushaRecursiveSpendCodecs {
         )
     }
 
-    private static func topUpShieldEvidence(
-        _ value: KagemushaTopUpShieldEvidence
-    ) throws -> Data {
-        var writer = CompactNoritoWriter()
-        writer.writeField(value.initialRoot)
-        writer.writeField(value.finalizedRoot)
-        writer.writeField(uint32(value.leafIndex))
-        writer.writeField(try nestedPayload(
-            value.proofAttachment,
-            schema: KagemushaRecursiveSpend.proofAttachmentWireName,
-            field: "shieldEvidence.proofAttachment"
-        ))
-        return writer.data
-    }
-
     private static func decodeTopUpShieldEvidence(
         _ data: Data
     ) throws -> KagemushaTopUpShieldEvidence {
@@ -1039,9 +1024,7 @@ public enum KagemushaRecursiveSpendCodecs {
         compact.append(value.payload)
         var writer = CompactNoritoWriter()
         writer.writeUInt64LE(UInt64(compact.count))
-        for byte in compact {
-            writer.writeField(Data([byte]))
-        }
+        writer.writeByteFields(compact)
         return writer.data
     }
 
@@ -1361,10 +1344,7 @@ public enum KagemushaRecursiveSpendCodecs {
 
     private static func constVec(_ value: Data) -> Data {
         var writer = CompactNoritoWriter()
-        for byte in value {
-            writer.writeLength(1)
-            writer.writeUInt8(byte)
-        }
+        writer.writeByteFields(value)
         return writer.data
     }
 
@@ -1378,26 +1358,6 @@ public enum KagemushaRecursiveSpendCodecs {
             }
             value.append(byte)
         }
-        return value
-    }
-
-    private static func decodeSignature(_ data: Data, field: String) throws -> Data {
-        var reader = KagemushaV2Reader(data)
-        let count = try reader.uint64()
-        guard count <= UInt64(Int.max),
-              count <= UInt64((data.count - 8) / 2) else {
-            throw KagemushaRecursiveSpendError.invalidArchive(field)
-        }
-        var value = Data()
-        value.reserveCapacity(Int(count))
-        for _ in 0..<count {
-            let element = try reader.field()
-            guard element.count == 1, let byte = element.first else {
-                throw KagemushaRecursiveSpendError.invalidArchive(field)
-            }
-            value.append(byte)
-        }
-        try reader.finish(field)
         return value
     }
 

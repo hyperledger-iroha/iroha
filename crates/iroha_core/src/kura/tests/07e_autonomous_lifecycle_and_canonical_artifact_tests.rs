@@ -271,7 +271,7 @@ fn autonomous_route_latest_snapshot_rejects_runtime_index_corruption() {
     fs::write(&route_latest_path, [0xFF, 0x00, 0xAA])
         .expect("corrupt the live route-latest pointer");
     assert!(
-        kura.latest_autonomous_lane_block_artifacts_snapshot(network_id, 1, |_| epoch)
+        kura.latest_autonomous_lane_block_artifacts_snapshot(network_id, 1, |_| Ok(epoch))
             .is_err(),
         "runtime hydration must fail closed instead of hiding durable queue ownership",
     );
@@ -1349,11 +1349,14 @@ fn lane_block_payload_availability_rebuilds_missing_artifact_sidecar_from_canoni
     );
     {
         let mut block_data = kura.block_data.lock();
-        for (_, block) in block_data.iter_mut() {
-            *block = None;
+        for index in 0..block_data.len() {
+            block_data[index].1 = None;
         }
         assert!(
-            block_data.iter().all(|(_, block)| block.is_none()),
+            block_data
+                .as_slice()
+                .iter()
+                .all(|(_, block)| block.is_none()),
             "test setup should force recovery through durable block rehydration"
         );
     }

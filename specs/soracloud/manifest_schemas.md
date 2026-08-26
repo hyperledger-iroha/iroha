@@ -40,18 +40,40 @@ remain fixed for one economic lease. An upgrade or rollback that retains that
 lease must reject unit-price drift; a reporting rollover never renews or
 reprices the lease and never changes a leased volume's start or expiry.
 
-Every newly assigned Inrou reporter must first submit an accepted zero/open
-checkpoint for the current `reporting_epoch` before its replica may be marked
-as serving. Reporter counters are monotonic and terminal delivery is explicit.
-Reports that neither increase bytes nor change open/terminal state are rejected
-instead of consuming an audit or state transition.
-At exactly 4,096 reporter identities, the exact newly assigned active
-public-lane validator may compare-and-swap to `reporting_epoch + 1` only with a
-zero/open counter, after every old checkpoint is finalized and none of those
-old keys remains placed. The transition folds the exact checked `u128` old
-total into `settled_egress_bytes`, opens the trigger checkpoint, and records a
-typed audit event atomically. No manager or reconciliation path may force-clear
-unknown usage.
+Every lease-usage report must compare-and-swap against both the exact economic
+lease incarnation (`lease_started_height`) and the current
+`reporting_epoch`. A report from any prior lease incarnation is rejected even
+if its epoch, revision, replica slot, and validator otherwise match. Every newly
+assigned Inrou reporter must first submit an accepted zero/open checkpoint for
+that exact lease-and-epoch pair before its replica may be marked as serving.
+Reporter counters are monotonic and terminal delivery is explicit. At exactly
+4,096 reporter identities, the exact newly assigned active public-lane
+validator may compare-and-swap the same `lease_started_height` and the exact
+successor `reporting_epoch` only with a zero/open counter, after every prior
+checkpoint has been explicitly finalized and no exact prior reporter remains
+actively placed. A former reporter may include its final monotonic delta in its
+one terminal update; after that, only an exact terminal replay is idempotent. If
+the exact assignment becomes active again, it must first reopen at that exact
+terminal byte value and may increase monotonically only in later reports.
+Checkpoint age is never evidence that all usage was delivered, so there is no
+timeout, manager override, or consensus force-finalization path. The transition
+folds the exact checked `u128` old total into
+`settled_egress_bytes`, opens the trigger checkpoint, and records a typed audit
+event atomically.
+
+Reporter checkpoints are keyed by the canonical validator `AccountId`, not by
+its routable peer ID. Capability adverts and placements must still match the
+validator's exact active on-chain peer binding, so a peer rotation invalidates
+stale routing immediately without resetting the authority's durable usage
+counter. The replacement worker must retain or transfer that counter before it
+can pass the zero/open checkpoint gate.
+
+The daemon may submit a terminal reporter checkpoint only after it has attested
+that the child process exited and the worker's dedicated cgroup is empty. A
+failed shutdown remains quarantined under the daemon's confinement ownership:
+it cannot finalize its checkpoint or relaunch until the shutdown attestation
+succeeds. This keeps terminal accounting evidence coupled to the absence of a
+worker that could still emit egress.
 
 Liveness therefore assumes an honest retiring worker can stop, join its final
 writes, and deliver its terminal report. A crashed or malicious reporter that
@@ -75,6 +97,19 @@ no assignment. Runtime reconciliation removes state for unavailable or
 identity/incarnation-mismatched placements. Serving health and Torii routing
 require `Available`, the exact placement incarnation and host identity, and
 authoritative `Healthy` state.
+
+## Agent-apartment runtime status
+
+`SoraAgentApartmentRecordV1` stores the authoritative lease heights but does
+not persist a runtime-status copy. `Running` and `LeaseExpired` are projections
+of the row paired with the current height of the same committed state view. A
+row is runnable only at or after `last_renewed_height` and strictly before
+`lease_expires_height`; older-view pairings fail closed.
+
+Late renewal may leave a real inactive height gap. The current row does not
+retain the prior expiry needed to answer historical status queries after that
+renewal. Historical consumers must replay the ordered apartment audit events,
+whose status remains an event-local consensus-height projection.
 
 ## Scope
 

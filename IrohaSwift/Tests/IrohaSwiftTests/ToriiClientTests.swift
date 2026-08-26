@@ -272,7 +272,7 @@ private func mutateFirstNativeAmxQcBody(
     }
 }
 
-private final class StubGatewayFetcher: SorafsGatewayFetching, @unchecked Sendable {
+final class StubGatewayFetcher: SorafsGatewayFetching, @unchecked Sendable {
     var capturedPlan: ToriiJSONValue?
     var capturedProviders: [SorafsGatewayProvider]?
     var capturedOptions: SorafsGatewayFetchOptions?
@@ -496,6 +496,19 @@ final class ToriiClientTests: XCTestCase {
             localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
             operatorSigningContext: operatorSigningContext
         )
+    }
+
+    private func canonicalSignedPipelineTransaction() throws -> Data {
+        let signer = try SigningKey.ed25519(privateKey: canonicalSigningSeed)
+        let payload = try CanonicalUnsignedTransactionTestSupport.genericPayload(
+            authority: authority
+        )
+        let signature = try signer.sign(IrohaHash.hash(payload))
+        return try ToriiCanonicalTransactionDraft.finalize(
+            transactionPayload: payload,
+            publicKey: signer.publicKey(),
+            signature: signature
+        ).signedTransaction
     }
 
     private func assertOperatorAuthentication(
@@ -2099,7 +2112,7 @@ final class ToriiClientTests: XCTestCase {
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            return (response, self.ramLfeExecuteResponseJSON())
+            return (response, ramLfeExecuteResponseJSON())
         }
 
         let response = try await makeClient().executeRamLfeProgram(
@@ -2173,7 +2186,7 @@ final class ToriiClientTests: XCTestCase {
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            return (response, self.ramLfeReceiptVerifyResponseJSON())
+            return (response, ramLfeReceiptVerifyResponseJSON())
         }
 
         let response = try await makeClient().verifyRamLfeReceipt(
@@ -4597,6 +4610,7 @@ final class ToriiClientTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitTransactionAsync() async throws {
+        let transaction = try canonicalSignedPipelineTransaction()
         StubURLProtocol.handler = { request in
             switch request.url?.path {
             case "/v1/node/capabilities":
@@ -4609,6 +4623,7 @@ final class ToriiClientTests: XCTestCase {
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), ToriiWireFormatPreference.noritoPreferred.acceptHeader)
+                XCTAssertEqual(self.bodyData(from: request), transaction)
                 let response = HTTPURLResponse(url: request.url!,
                                                statusCode: 202,
                                                httpVersion: nil,
@@ -4624,12 +4639,91 @@ final class ToriiClientTests: XCTestCase {
             }
         }
 
-        let payload = try await makeClient().submitTransaction(data: Data([0x00]))
+        let payload = try await makeClient().submitTransaction(data: transaction)
         XCTAssertEqual(payload?.hash, Self.pipelineHash)
         XCTAssertEqual(payload?.payload.submittedAtMs, 1)
         XCTAssertEqual(payload?.payload.submittedAtHeight, 2)
         XCTAssertEqual(payload?.payload.signer, "signer")
         XCTAssertEqual(payload?.signature, "deadbeef")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitTransactionRejectsNoncanonicalWireBeforeAnyRequest() async throws {
+        let canonical = try canonicalSignedPipelineTransaction()
+        StubURLProtocol.handler = { request in
+            XCTFail("noncanonical transaction reached HTTP dispatch: \(request.url?.path ?? "")")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 500,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data())
+        }
+
+        let invalidWires = [
+            Data(),
+            Data([0x00]) + Data(canonical.dropFirst()),
+            Data(canonical.dropFirst()),
+            canonical + Data([0x00]),
+        ]
+        for invalidWire in invalidWires {
+            do {
+                _ = try await makeClient().submitTransaction(data: invalidWire)
+                XCTFail("expected canonical V1 transaction rejection")
+            } catch let error as ToriiClientError {
+                guard case let .invalidPayload(reason) = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+                XCTAssertTrue(reason.contains("canonical V1 versioned signed transaction"))
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitTransactionRejectsRetiredSuccessStatusCodes() async throws {
+        let transaction = try canonicalSignedPipelineTransaction()
+        for statusCode in [200, 201, 204] {
+            StubURLProtocol.handler = { request in
+                switch request.url?.path {
+                case "/v1/node/capabilities":
+                    let response = HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )!
+                    return (response, self.nodeCapabilitiesBody())
+                case "/v1/pipeline/transactions":
+                    let response = HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: statusCode,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )!
+                    return (response, Data())
+                default:
+                    XCTFail("unexpected request: \(request.url?.path ?? "")")
+                    let response = HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 404,
+                        httpVersion: nil,
+                        headerFields: nil
+                    )!
+                    return (response, Data())
+                }
+            }
+
+            do {
+                _ = try await makeClient().submitTransaction(data: transaction)
+                XCTFail("expected HTTP \(statusCode) rejection")
+            } catch let error as ToriiClientError {
+                guard case let .httpStatus(code, _, _) = error else {
+                    return XCTFail("unexpected error for HTTP \(statusCode): \(error)")
+                }
+                XCTAssertEqual(code, statusCode)
+            }
+        }
     }
 
     func testSubmitTransactionResponseDecodesCanonicalJsonReceiptFields() throws {
@@ -5340,6 +5434,87 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testCurrentV1TransactionIngressSurfacesRequireExact202() async throws {
+        enum Surface: String, CaseIterable {
+            case transactionJson
+            case entrypointNorito
+            case entrypointJson
+
+            var path: String {
+                switch self {
+                case .transactionJson:
+                    "/v1/pipeline/transactions"
+                case .entrypointNorito, .entrypointJson:
+                    "/v1/pipeline/transaction-entrypoints"
+                }
+            }
+        }
+
+        for surface in Surface.allCases {
+            for statusCode in [200, 201, 204] {
+                var submissionCount = 0
+                StubURLProtocol.handler = { request in
+                    switch request.url?.path {
+                    case "/v1/node/capabilities":
+                        let response = HTTPURLResponse(
+                            url: request.url!,
+                            statusCode: 200,
+                            httpVersion: nil,
+                            headerFields: ["Content-Type": "application/json"]
+                        )!
+                        return (response, self.nodeCapabilitiesBody())
+                    case surface.path:
+                        submissionCount += 1
+                        let response = HTTPURLResponse(
+                            url: request.url!,
+                            statusCode: statusCode,
+                            httpVersion: nil,
+                            headerFields: ["Content-Type": "application/json"]
+                        )!
+                        return (response, Data())
+                    default:
+                        XCTFail("unexpected request: \(request.url?.path ?? "")")
+                        let response = HTTPURLResponse(
+                            url: request.url!,
+                            statusCode: 404,
+                            httpVersion: nil,
+                            headerFields: nil
+                        )!
+                        return (response, Data())
+                    }
+                }
+
+                let client = makeClient()
+                do {
+                    switch surface {
+                    case .transactionJson:
+                        _ = try await client.submitTransaction(
+                            jsonData: Data("{\"version\":1,\"content\":{}}".utf8)
+                        )
+                    case .entrypointNorito:
+                        _ = try await client.submitTransactionEntrypoint(data: Data([1]))
+                    case .entrypointJson:
+                        _ = try await client.submitTransactionEntrypoint(
+                            jsonData: Data("{\"version\":1,\"content\":{}}".utf8)
+                        )
+                    }
+                    XCTFail("\(surface.rawValue) must reject HTTP \(statusCode)")
+                } catch let error as ToriiClientError {
+                    guard case let .httpStatus(code, _, _) = error else {
+                        return XCTFail("unexpected \(surface.rawValue) error: \(error)")
+                    }
+                    XCTAssertEqual(code, statusCode)
+                }
+                XCTAssertEqual(
+                    submissionCount,
+                    1,
+                    "\(surface.rawValue) HTTP \(statusCode) must remain one-shot"
+                )
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testSubmitTransactionRejectCodeHeaderSurfaced() async throws {
         StubURLProtocol.handler = { request in
             switch request.url?.path {
@@ -5372,7 +5547,9 @@ final class ToriiClientTests: XCTestCase {
         }
 
         do {
-            _ = try await makeClient().submitTransaction(data: Data([0x01]))
+            _ = try await makeClient().submitTransaction(
+                data: try canonicalSignedPipelineTransaction()
+            )
             XCTFail("expected rejection")
         } catch let error as ToriiClientError {
             guard case let .httpStatus(code, message, rejectCode) = error else {
@@ -5408,7 +5585,9 @@ final class ToriiClientTests: XCTestCase {
         }
 
         do {
-            _ = try await makeClient().submitTransaction(data: Data([0x02]))
+            _ = try await makeClient().submitTransaction(
+                data: try canonicalSignedPipelineTransaction()
+            )
             XCTFail("expected data model mismatch")
         } catch let error as ToriiClientError {
             guard case let .dataModelMismatch(expected, actual) = error else {
@@ -5443,7 +5622,9 @@ final class ToriiClientTests: XCTestCase {
         }
 
         do {
-            _ = try await makeClient().submitTransaction(data: Data([0x03]))
+            _ = try await makeClient().submitTransaction(
+                data: try canonicalSignedPipelineTransaction()
+            )
             XCTFail("expected schema mismatch")
         } catch let error as ToriiClientError {
             guard case let .transactionSchemaMismatch(expected, actual) = error else {
@@ -5478,7 +5659,9 @@ final class ToriiClientTests: XCTestCase {
         }
 
         do {
-            _ = try await makeClient().submitTransaction(data: Data([0x04]))
+            _ = try await makeClient().submitTransaction(
+                data: try canonicalSignedPipelineTransaction()
+            )
             XCTFail("expected schema mismatch")
         } catch let error as ToriiClientError {
             guard case let .transactionSchemaMismatch(expected, actual) = error else {
@@ -5514,7 +5697,9 @@ final class ToriiClientTests: XCTestCase {
         }
 
         do {
-            _ = try await makeClient().submitTransaction(data: Data([0x05]))
+            _ = try await makeClient().submitTransaction(
+                data: try canonicalSignedPipelineTransaction()
+            )
             XCTFail("expected schema mismatch")
         } catch let error as ToriiClientError {
             guard case let .transactionSchemaMismatch(expected, actual) = error else {
@@ -5558,7 +5743,9 @@ final class ToriiClientTests: XCTestCase {
         }
 
         do {
-            _ = try await makeClient().submitTransaction(data: Data([0x06]))
+            _ = try await makeClient().submitTransaction(
+                data: try canonicalSignedPipelineTransaction()
+            )
             XCTFail("expected missing capabilities to reject submission")
         } catch let error as ToriiClientError {
             guard case let .httpStatus(code, _, _) = error else {
@@ -5602,7 +5789,9 @@ final class ToriiClientTests: XCTestCase {
         }
 
         do {
-            _ = try await makeClient().submitTransaction(data: Data([0x07]))
+            _ = try await makeClient().submitTransaction(
+                data: try canonicalSignedPipelineTransaction()
+            )
             XCTFail("expected rate-limited capabilities to reject submission")
         } catch let error as ToriiClientError {
             guard case let .httpStatus(code, _, _) = error else {
@@ -5646,7 +5835,9 @@ final class ToriiClientTests: XCTestCase {
         }
 
         do {
-            _ = try await makeClient().submitTransaction(data: Data([0x08]))
+            _ = try await makeClient().submitTransaction(
+                data: try canonicalSignedPipelineTransaction()
+            )
             XCTFail("expected failed capabilities to reject submission")
         } catch let error as ToriiClientError {
             guard case let .httpStatus(code, _, _) = error else {
@@ -12104,7 +12295,7 @@ final class ToriiClientTests: XCTestCase {
         let payload = """
         {
           "cash_handoff_capability": "cash_handoff_v1",
-          "required_bridge_abi_version": 22,
+          "required_bridge_abi_version": 23,
           "max_hops": 8,
           "ready": true
         }
@@ -12125,7 +12316,7 @@ final class ToriiClientTests: XCTestCase {
 
         let status = try await makeClient().getOfflineCapability()
         XCTAssertEqual(status.cashHandoffCapability, "cash_handoff_v1")
-        XCTAssertEqual(status.requiredBridgeAbiVersion, 22)
+        XCTAssertEqual(status.requiredBridgeAbiVersion, 23)
         XCTAssertEqual(status.maxHops, 8)
         XCTAssertTrue(status.ready)
     }
@@ -12133,14 +12324,14 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineCapabilityRejectsNonUniversalClaims() async throws {
         let invalidPayloads = [
-            #"{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":22,"max_hops":8,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":9,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[]}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"blockers":[]}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"future":true}"#,
+            #"{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":23,"max_hops":8,"ready":true}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":9,"ready":true}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":false}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"assets":[]}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"blockers":[]}"#,
+            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"future":true}"#,
         ]
 
         for payload in invalidPayloads {
@@ -12165,7 +12356,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineCapabilityRejectsDuplicateKeysAndInvalidUtf8() async throws {
         let payloads = [
-            Data(#"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"ready":true}"#.utf8),
+            Data(#"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"ready":true}"#.utf8),
             Data([0xff, 0xfe, 0xfd]),
         ]
         for payload in payloads {
@@ -12792,7 +12983,7 @@ final class ToriiClientTests: XCTestCase {
         let payload = """
         {
           "cash_handoff_capability": "cash_handoff_v1",
-          "required_bridge_abi_version": 22,
+          "required_bridge_abi_version": 23,
           "max_hops": 8,
           "ready": true,
           "assets": [],
@@ -18167,118 +18358,6 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
-    func testListProverReportsAppliesFilterAndDecodes() {
-        let expectation = expectation(description: "list prover reports")
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/zk/prover/reports")
-            let comps = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
-            let items = comps?.queryItems ?? []
-            let dict = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(dict["ok_only"], "true")
-            XCTAssertEqual(dict["content_type"], "application/json")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            [{"id":"abc","ok":true,"content_type":"application/json","size":10,"created_ms":1,"processed_ms":2,"latency_ms":1,"zk1_tags":["TEST"]}]
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        var filter = ToriiProverReportsFilter()
-        filter.okOnly = true
-        filter.contentType = "application/json"
-
-        makeClient().listProverReports(filter: filter) { result in
-            switch result {
-            case .success(let reports):
-                XCTAssertEqual(reports.count, 1)
-                XCTAssertEqual(reports.first?.zk1_tags ?? [], ["TEST"])
-            case .failure(let error):
-                XCTFail("unexpected error: \(error)")
-            }
-            expectation.fulfill()
-        }
-
-        waitForExpectations(timeout: 1)
-    }
-
-    func testCountProverReportsRejectsFractionalCount() {
-        let expectation = expectation(description: "count prover reports")
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/zk/prover/reports/count")
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {"count":1.5}
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        makeClient().countProverReports { result in
-            switch result {
-            case .success:
-                XCTFail("expected failure for fractional count")
-            case .failure(let error):
-                guard case ToriiClientError.invalidPayload = error else {
-                    XCTFail("unexpected error: \(error)")
-                    break
-                }
-            }
-            expectation.fulfill()
-        }
-
-        waitForExpectations(timeout: 1)
-    }
-
-    func testGetProverReportEncodesId() {
-        let expectation = expectation(description: "get prover report")
-        let reportId = "report/1"
-        StubURLProtocol.handler = { request in
-            // URL.path always returns decoded path. Check absoluteString to verify encoding.
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/zk/prover/reports/report%2F1"))
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {"id":"report/1","ok":true,"content_type":"application/json","size":10,"created_ms":1,"processed_ms":2}
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        makeClient().getProverReport(id: reportId) { result in
-            switch result {
-            case .success(let report):
-                XCTAssertEqual(report.id, reportId)
-            case .failure(let error):
-                XCTFail("unexpected error: \(error)")
-            }
-            expectation.fulfill()
-        }
-        waitForExpectations(timeout: 1)
-    }
-
-    func testDeleteProverReportEncodesId() {
-        let expectation = expectation(description: "delete prover report")
-        let reportId = "report/1"
-        StubURLProtocol.handler = { request in
-            // URL.path always returns decoded path. Check absoluteString to verify encoding.
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/zk/prover/reports/report%2F1"))
-            XCTAssertEqual(request.httpMethod, "DELETE")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!
-            return (response, Data())
-        }
-
-        makeClient().deleteProverReport(id: reportId) { result in
-            if case let .failure(error) = result {
-                XCTFail("unexpected error: \(error)")
-            }
-            expectation.fulfill()
-        }
-        waitForExpectations(timeout: 1)
-    }
-
     func testGetAttachmentEncodesId() {
         let expectation = expectation(description: "get attachment")
         let attachmentId = "abc/def"
@@ -19868,7 +19947,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 quantity: "5",
                 destinationAccountID: destination,
                 feePayment: .authority(chargeLimits: [], gasLimit: nil),
-            )
+            ),
+            accountChainDiscriminant: 753
         )
         let nativeMagic = Data([0x4e, 0x52, 0x54, 0x30])
         try requireNativeTestCapability(
@@ -20541,8 +20621,9 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
-    func testSubmitTransactionPostsNorito() {
+    func testSubmitTransactionPostsNorito() throws {
         let expectation = expectation(description: "submit transaction")
+        let transaction = try canonicalSignedPipelineTransaction()
         StubURLProtocol.handler = { request in
             switch request.url?.path {
             case "/v1/node/capabilities":
@@ -20555,7 +20636,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), ToriiWireFormatPreference.noritoPreferred.acceptHeader)
-                XCTAssertEqual(self.bodyData(from: request), Data([0x01, 0x02]))
+                XCTAssertEqual(self.bodyData(from: request), transaction)
                 let response = HTTPURLResponse(url: request.url!,
                                                statusCode: 202,
                                                httpVersion: nil,
@@ -20571,7 +20652,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             }
         }
 
-        makeClient().submitTransaction(data: Data([0x01, 0x02])) { result in
+        makeClient().submitTransaction(data: transaction) { result in
             switch result {
             case .success(let payload):
                 XCTAssertEqual(payload?.hash, Self.pipelineHash)
@@ -20590,20 +20671,19 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testSubmitGovernanceDeployContractProposalEncodesAliasSelector() {
         let expectation = expectation(description: "governance proposal")
         let proposalId = String(repeating: "3", count: 64)
-        let codeHash = String(repeating: "4", count: 64)
-        let encodedCodeHash = "BlAkE2b32:0X\(codeHash)"
-        let abiHash = String(repeating: "5", count: 64)
+        let codeHash = Data(repeating: 0x44, count: 32)
+        let abiHash = Data(repeating: 0x55, count: 32)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/gov/proposals/deploy-contract")
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             let body = self.bodyJSON(from: request)
             XCTAssertEqual(body["contract_alias"] as? String, "demo::universal")
-            XCTAssertEqual(body["code_hash"] as? String, codeHash)
-            XCTAssertEqual(body["abi_hash"] as? String, abiHash)
-            XCTAssertEqual(body["abi_version"] as? String, "1")
-            XCTAssertEqual(body["mode"] as? String, "Plain")
-            XCTAssertNil(body["limits"])
+            XCTAssertEqual(body["code_hash"] as? String, codeHash.hexLowercased())
+            XCTAssertEqual(body["abi_hash"] as? String, abiHash.hexLowercased())
+            XCTAssertEqual((body["abi_version"] as? NSNumber)?.uint16Value, 1)
+            XCTAssertNil(body["window"])
+            XCTAssertNil(body["mode"])
             let provenance = body["manifest_provenance"] as? [String: Any]
             XCTAssertEqual(provenance?["signer"] as? String, "ed25519:public")
             XCTAssertEqual(provenance?["signature"] as? String, "ed25519:signature")
@@ -20612,17 +20692,14 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let payload = """
-            {"ok":true,"proposal_id":"\(proposalId)","tx_instructions":[{"wire_id":"FinalizeReferendum","payload_hex":"00ff"}]}
+            {"proposal_id":"\(proposalId)","tx_instructions":[{"wire_id":"iroha_data_model::isi::governance::ProposeDeployContract","payload_hex":"00ff"}]}
             """.data(using: .utf8)!
             return (response, payload)
         }
 
         let request = ToriiGovernanceDeployContractProposalRequest(contractAlias: "demo::universal",
-                                                                   codeHashHex: encodedCodeHash,
-                                                                   abiHashHex: abiHash,
-                                                                   abiVersion: "1",
-                                                                   window: ToriiGovernanceWindow(lower: 10, upper: 20),
-                                                                   mode: .plain,
+                                                                   codeHash: codeHash,
+                                                                   abiHash: abiHash,
                                                                    manifestProvenance: .init(
                                                                     signer: "ed25519:public",
                                                                     signature: "ed25519:signature"
@@ -20630,9 +20707,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         makeClient().submitGovernanceDeployContractProposal(request, canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success(let response):
-                XCTAssertTrue(response.ok)
                 XCTAssertEqual(response.proposalId, proposalId)
-                XCTAssertEqual(response.txInstructions.first?.wireId, "FinalizeReferendum")
+                XCTAssertEqual(
+                    response.txInstructions.first?.wireId,
+                    "iroha_data_model::isi::governance::ProposeDeployContract"
+                )
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
             }
@@ -20645,8 +20724,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let request = ToriiGovernanceDeployContractProposalRequest(
             contractAddress: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             contractAlias: "demo::universal",
-            codeHashHex: String(repeating: "4", count: 64),
-            abiHashHex: String(repeating: "5", count: 64)
+            codeHash: Data(repeating: 0x44, count: 32),
+            abiHash: Data(repeating: 0x55, count: 32)
         )
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
             guard case let ToriiClientError.invalidPayload(message) = error else {
@@ -20657,11 +20736,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     }
 
     func testGovernanceDeployContractProposalRejectsNonV1AbiVersion() {
-        for abiVersion in ["2", "01", " 1", "1 "] {
+        for abiVersion: UInt16 in [0, 2, .max] {
             let request = ToriiGovernanceDeployContractProposalRequest(
                 contractAlias: "demo::universal",
-                codeHashHex: String(repeating: "4", count: 64),
-                abiHashHex: String(repeating: "5", count: 64),
+                codeHash: Data(repeating: 0x44, count: 32),
+                abiHash: Data(repeating: 0x55, count: 32),
                 abiVersion: abiVersion
             )
             XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
@@ -20673,161 +20752,57 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
-    func testGovernanceWindowEncodesEntireUInt64Domain() throws {
-        let window = ToriiGovernanceWindow(lower: 0, upper: UInt64.max)
-        let data = try JSONEncoder().encode(window)
-        let decoded = try JSONDecoder().decode(ToriiGovernanceWindow.self, from: data)
-        XCTAssertEqual(decoded.lower, 0)
-        XCTAssertEqual(decoded.upper, UInt64.max)
-        XCTAssertTrue(
-            String(decoding: data, as: UTF8.self)
-                .contains("\"upper\":18446744073709551615")
-        )
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGovernanceWindowRejectsReversedBoundsBeforeTransportDispatch() async {
-        var dispatched = false
-        StubURLProtocol.handler = { request in
-            dispatched = true
-            XCTFail("reversed governance window reached transport dispatch: \(request)")
-            return (
-                HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: 500,
-                    httpVersion: nil,
-                    headerFields: nil
-                )!,
-                Data()
-            )
-        }
-        let request = ToriiGovernanceDeployContractProposalRequest(
-            contractAlias: "demo::universal",
-            codeHashHex: String(repeating: "4", count: 64),
-            abiHashHex: String(repeating: "5", count: 64),
-            window: .init(lower: 2, upper: 1)
-        )
-
-        await XCTAssertThrowsErrorAsync(
-            try await makeClient().submitGovernanceDeployContractProposal(request, canonicalAuth: canonicalReadAuth)
-        ) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                return XCTFail("unexpected error: \(error)")
-            }
-            XCTAssertTrue(reason.contains("upper bound must not precede"))
-        }
-        XCTAssertFalse(dispatched)
-    }
-
-    func testGovernanceDeployContractProposalRejectsUndeclaredHashAliases() {
-        let hash = String(repeating: "4", count: 64)
-        for codeHash in [
-            ":\(hash)",
-            " \(hash)",
-            "\(hash) ",
-            "blake2b32:\(hash):ignored",
-            "sha256:\(hash)"
-        ] {
+    func testGovernanceDeployContractProposalRejectsWrongHashLengths() {
+        for length in [0, 31, 33] {
             let request = ToriiGovernanceDeployContractProposalRequest(
                 contractAlias: "demo::universal",
-                codeHashHex: codeHash,
-                abiHashHex: String(repeating: "5", count: 64)
+                codeHash: Data(repeating: 0x44, count: length),
+                abiHash: Data(repeating: 0x55, count: 32)
             )
             XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
                 guard case let ToriiClientError.invalidPayload(message) = error else {
                     return XCTFail("unexpected error: \(error)")
                 }
-                XCTAssertTrue(message.contains("code_hash must be a 32-byte hex string"))
+                XCTAssertTrue(message.contains("code_hash must contain exactly 32 bytes"))
             }
         }
     }
 
-    func testFinalizeGovernanceRequiresOneExactProposalFingerprint() throws {
-        let proposalId = String(repeating: "ab", count: 32)
-        let request = ToriiGovernanceFinalizeRequest(
-            referendumId: proposalId,
-            proposalId: proposalId
+    func testGovernanceProposalResponseRejectsLegacyOkField() {
+        let proposalId = String(repeating: "3", count: 64)
+        let legacy = Data(
+            """
+            {"ok":true,"proposal_id":"\(proposalId)","tx_instructions":[{"wire_id":"iroha_data_model::isi::governance::ProposeDeployContract","payload_hex":"00ff"}]}
+            """.utf8
         )
-        let data = try JSONEncoder().encode(request)
-        let json = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: data) as? [String: Any]
-        )
-        XCTAssertEqual(json["referendum_id"] as? String, proposalId)
-        XCTAssertEqual(json["proposal_id"] as? String, proposalId)
-
-        for invalidReferendum in [
-            "", "ref-1", " ref-1", "ref-1 ", "ref 1", "ref\t1", "ref\u{0000}1",
-            "ref/1", ".hidden", "ref%31", "投票", String(repeating: "a", count: 129),
-            "0x\(proposalId)", proposalId.uppercased()
-        ] {
-            XCTAssertThrowsError(
-                try JSONEncoder().encode(
-                    ToriiGovernanceFinalizeRequest(
-                        referendumId: invalidReferendum,
-                        proposalId: proposalId
-                    )
-                )
-            )
-        }
-        for invalidProposal in [
-            ":\(proposalId)",
-            "0x\(proposalId)",
-            proposalId.uppercased(),
-            " \(proposalId)",
-            "\(proposalId) ",
-            "blake2b32:\(proposalId)",
-            "sha256:\(proposalId)"
-        ] {
-            XCTAssertThrowsError(
-                try JSONEncoder().encode(
-                    ToriiGovernanceFinalizeRequest(
-                        referendumId: proposalId,
-                        proposalId: invalidProposal
-                    )
-                )
-            )
-        }
         XCTAssertThrowsError(
-            try JSONEncoder().encode(
-                ToriiGovernanceFinalizeRequest(
-                    referendumId: proposalId,
-                    proposalId: String(repeating: "7", count: 64)
-                )
-            )
-        ) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                return XCTFail("unexpected error: \(error)")
-            }
-            XCTAssertTrue(reason.contains("referendum_id must equal proposal_id"))
-        }
+            try JSONDecoder().decode(ToriiGovernanceProposalResponse.self, from: legacy)
+        )
     }
 
-    func testEnactGovernanceEncodesOnlyExactLowercaseProposalId() throws {
-        let proposalId = String(repeating: "7", count: 64)
-        let data = try JSONEncoder().encode(ToriiGovernanceEnactRequest(proposalId: proposalId))
-        let json = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: data) as? [String: Any]
-        )
-        XCTAssertEqual(json["proposal_id"] as? String, proposalId)
-        XCTAssertEqual(Set(json.keys), Set(["proposal_id"]))
-
-        for invalid in ["0x\(proposalId)", String(repeating: "A", count: 64), " \(proposalId)"] {
+    func testGovernanceProposalResponseRequiresOneFullWireInstruction() {
+        let proposalId = String(repeating: "3", count: 64)
+        for instructions in [
+            "[]",
+            "[{\"wire_id\":\"ProposeDeployContract\",\"payload_hex\":\"00ff\"}]",
+            "[{\"wire_id\":\"iroha_data_model::isi::governance::ProposeDeployContract\",\"payload_hex\":\"00ff\"},{\"wire_id\":\"iroha_data_model::isi::governance::ProposeDeployContract\",\"payload_hex\":\"00ff\"}]",
+        ] {
+            let data = Data(
+                """
+                {"proposal_id":"\(proposalId)","tx_instructions":\(instructions)}
+                """.utf8
+            )
             XCTAssertThrowsError(
-                try JSONEncoder().encode(ToriiGovernanceEnactRequest(proposalId: invalid))
-            ) { error in
-                guard case let ToriiClientError.invalidPayload(reason) = error else {
-                    return XCTFail("unexpected error: \(error)")
-                }
-                XCTAssertTrue(reason.contains("exactly 64 lowercase hexadecimal"))
-            }
+                try JSONDecoder().decode(ToriiGovernanceProposalResponse.self, from: data)
+            )
         }
     }
 
     func testGetGovernanceProposalDecodesRecord() {
         let expectation = expectation(description: "proposal lookup")
         let proposalId = String(repeating: "6", count: 64)
-        let codeHash = String(repeating: "7", count: 64)
-        let abiHash = String(repeating: "8", count: 64)
+        let codeHash = Data(repeating: 0x77, count: 32)
+        let abiHash = Data(repeating: 0x88, count: 32)
         let contractAddress = "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/gov/proposals/\(proposalId)")
@@ -20836,7 +20811,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let payload = """
-            {"found":true,"proposal":{"proposer":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","kind":{"DeployContract":{"contract_address":"\(contractAddress)","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","abi_version":"1"}},"created_height":42,"status":"Approved"}}
+            {"found":true,"proposal":{"proposer":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","kind":{"kind":"DeployContract","payload":{"contract_address":"\(contractAddress)","code_hash":"\(codeHash.hexLowercased())","abi_hash":"\(abiHash.hexLowercased())","abi_version":1,"manifest_provenance":{"signer":"ed25519:public","signature":"ed25519:signature"}}},"created_height":42,"status":"Enacted"}}
             """.data(using: .utf8)!
             return (response, payload)
         }
@@ -20850,6 +20825,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                     return XCTFail("expected deploy contract kind")
                 }
                 XCTAssertEqual(payload.contractAddress, contractAddress)
+                XCTAssertEqual(payload.codeHash, codeHash)
+                XCTAssertEqual(payload.abiHash, abiHash)
+                XCTAssertEqual(payload.abiVersion, 1)
+                XCTAssertEqual(payload.manifestProvenance?.signer, "ed25519:public")
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
             }
@@ -20912,50 +20891,51 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testGovernanceGetIdentifiersRejectAliasesBeforeTransportDispatch() async throws {
         let client = makeClient()
         let proposalId = String(repeating: "ab", count: 32)
+        let auth = canonicalReadAuth
         let invalidCalls: [(String, () async throws -> Void)] = [
             ("uppercase proposal", {
-                _ = try await client.getGovernanceProposal(idHex: proposalId.uppercased(), canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: proposalId.uppercased(), canonicalAuth: auth)
             }),
             ("prefixed proposal", {
-                _ = try await client.getGovernanceProposal(idHex: "0x\(proposalId)", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: "0x\(proposalId)", canonicalAuth: auth)
             }),
             ("padded proposal", {
-                _ = try await client.getGovernanceProposal(idHex: " \(proposalId)", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: " \(proposalId)", canonicalAuth: auth)
             }),
             ("slash proposal", {
-                _ = try await client.getGovernanceProposal(idHex: "proposal/segment", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: "proposal/segment", canonicalAuth: auth)
             }),
             ("padded referendum", {
-                _ = try await client.getGovernanceReferendum(id: " ref-1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: " ref-1", canonicalAuth: auth)
             }),
             ("internal referendum whitespace", {
-                _ = try await client.getGovernanceReferendum(id: "ref 1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "ref 1", canonicalAuth: auth)
             }),
             ("slash referendum", {
-                _ = try await client.getGovernanceReferendum(id: "ref/1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "ref/1", canonicalAuth: auth)
             }),
             ("leading-dot referendum", {
-                _ = try await client.getGovernanceReferendum(id: ".hidden", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: ".hidden", canonicalAuth: auth)
             }),
             ("percent referendum", {
-                _ = try await client.getGovernanceReferendum(id: "ref%31", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "ref%31", canonicalAuth: auth)
             }),
             ("unicode referendum", {
-                _ = try await client.getGovernanceReferendum(id: "投票", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "投票", canonicalAuth: auth)
             }),
             ("tally tab", {
-                _ = try await client.getGovernanceTally(id: "ref\t1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceTally(id: "ref\t1", canonicalAuth: auth)
             }),
             ("overlong tally", {
                 _ = try await client.getGovernanceTally(
-                    id: String(repeating: "a", count: 129), canonicalAuth: canonicalReadAuth
+                    id: String(repeating: "a", count: 129), canonicalAuth: auth
                 )
             }),
             ("locks control", {
-                _ = try await client.getGovernanceLocks(referendumId: "ref\u{0000}1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceLocks(referendumId: "ref\u{0000}1", canonicalAuth: auth)
             }),
             ("locks unicode whitespace", {
-                _ = try await client.getGovernanceLocks(referendumId: "ref\u{2003}1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceLocks(referendumId: "ref\u{2003}1", canonicalAuth: auth)
             }),
         ]
         var dispatched = false

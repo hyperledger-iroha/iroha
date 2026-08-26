@@ -1803,6 +1803,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
             .unwrap_or(usize::MAX),
         state: state.clone(),
         #[cfg(feature = "app_api")]
+        parliament_tle_release_coordinator: Arc::new(
+            iroha_core::tle_release::TleReleaseCoordinatorV1::without_signer(),
+        ),
+        #[cfg(feature = "app_api")]
         musubi_search: Arc::new(RwLock::new(
             iroha_core::musubi_search::MusubiSearchIndexV1::default(),
         )),
@@ -1840,7 +1844,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         content_egress_limiter: limits::RateLimiter::new_u64(None, None),
         proof_limits: routing::ProofApiLimits::default(),
         content_config: content_config_snapshot,
-        soracloud_hf_config: Default::default(),
         ws_message_timeout: Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),
         require_api_token: false,
         api_tokens_set: api_tokens_set.clone(),
@@ -2192,8 +2195,20 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
         None,
         routing::MaybeTelemetry::disabled(),
     );
-    assert_eq!(torii.tx_rate_per_authority_per_sec.unwrap().get(), 123);
-    assert_eq!(torii.tx_burst_per_authority.unwrap().get(), 456);
+    assert!(
+        torii
+            .tx_rate_limiter
+            .allow_cost("configured-tx-rate", 456)
+            .await,
+        "configured burst must admit its full initial capacity"
+    );
+    assert!(
+        !torii
+            .tx_rate_limiter
+            .allow_cost("configured-tx-rate", 456)
+            .await,
+        "configured limiter must reject another full burst immediately"
+    );
     assert_eq!(torii.high_load_tx_threshold, 50);
 }
 #[cfg(feature = "app_api")]

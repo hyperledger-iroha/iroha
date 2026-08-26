@@ -3569,6 +3569,8 @@ pub struct Queue {
     /// bit is set, but ordinary admission, gossip, and global/lane selection
     /// remain closed.
     lane_reservation_reconciliation_pending: AtomicBool,
+    /// Process-lifetime emergency gate which keeps durable queue journals unopened.
+    emergency_fast_startup: AtomicBool,
     /// Exact queue hashes fenced by an in-construction global carrier candidate.
     global_selection_owners: parking_lot::Mutex<BTreeMap<EntrypointHash, u64>>,
     /// Monotonic, nonzero process-local global selection owner identity.
@@ -4961,6 +4963,67 @@ impl Queue {
     fn encode_gossip_payload(tx: &AcceptedTransaction<'_>) -> Arc<Vec<u8>> {
         tx.entrypoint_bytes()
     }
+    /// Keep a newly constructed queue passive for an emergency Fast startup.
+    ///
+    /// This startup-only transition deliberately leaves both durable journals unopened and
+    /// preserves their bytes for a later Strict restart. The existing reconciliation gate then
+    /// rejects transaction admission and every global or lane selection path for the lifetime of
+    /// this process.
+    ///
+    /// # Errors
+    /// Returns an invalid-state error if journal installation, replay, admission, or selection has
+    /// already started.
+    pub fn enter_emergency_fast_startup(&self) -> std::io::Result<()> {
+        let _plan_install_guard = self.plan_journal_install_lock.lock();
+        if self.emergency_fast_startup.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        if self.plan_journal_installed.load(Ordering::Acquire)
+            || self.plan_journal.lock().is_some()
+            || self.plan_journal_startup_replay_receipt.lock().is_some()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "emergency Fast queue quarantine must precede plan-journal installation",
+            ));
+        }
+
+        let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
+        if self.lane_reservation_journal.lock().is_some()
+            || self
+                .lane_reservation_snapshot_replay_receipt
+                .lock()
+                .is_some()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "emergency Fast queue quarantine must precede reservation-journal installation",
+            ));
+        }
+
+        let _queue_guard = self.push_remove_lock.lock();
+        let reservations = self.lane_reservations.lock();
+        if self.inflight_guards.load(Ordering::Acquire) != 0
+            || self.selection_attempts.load(Ordering::Acquire) != 0
+            || !self.txs.is_empty()
+            || !self.durable_plan_claims.is_empty()
+            || !reservations.live_by_entrypoint.is_empty()
+            || !reservations.commit_barriers.is_empty()
+            || !reservations.plan_tombstoned.is_empty()
+            || !reservations.release_barriers.is_empty()
+            || !reservations.completed_releases.is_empty()
+            || !reservations.missing_payload_hashes.is_empty()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "emergency Fast queue quarantine requires a fresh empty queue",
+            ));
+        }
+        self.lane_reservation_reconciliation_pending
+            .store(true, Ordering::Release);
+        self.emergency_fast_startup.store(true, Ordering::Release);
+        Ok(())
+    }
     /// Install the local pending queue-plan journal during startup and return the number of
     /// replayable records.
     ///
@@ -4997,6 +5060,12 @@ impl Queue {
             self.capacity.get(),
         );
         let _installation_guard = self.plan_journal_install_lock.lock();
+        if self.emergency_fast_startup.load(Ordering::Acquire) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "queue plan journal is unavailable during emergency Fast startup",
+            ));
+        }
         {
             let _queue_guard = self.push_remove_lock.lock();
             if self.plan_journal_installed.load(Ordering::Acquire) {
@@ -5089,6 +5158,12 @@ impl Queue {
         // either can touch storage, while the expensive open/repair/replay runs without the queue
         // lock. Publication rechecks selection state under the queue lock.
         let reservation_transition_guard = self.lane_reservation_transition_lock.lock();
+        if self.emergency_fast_startup.load(Ordering::Acquire) {
+            return Err(LaneQueueReservationError::Journal(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "lane reservation journal is unavailable during emergency Fast startup",
+            )));
+        }
         {
             let _queue_guard = self.push_remove_lock.lock();
             if self.inflight_guards.load(Ordering::Acquire) != 0
@@ -9853,6 +9928,11 @@ impl Queue {
     ) -> Result<(), LaneQueueReservationError> {
         let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
         let queue_guard = self.push_remove_lock.lock();
+        if self.emergency_fast_startup.load(Ordering::Acquire) {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "emergency Fast queue quarantine requires a Strict restart".to_owned(),
+            ));
+        }
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
@@ -12514,6 +12594,7 @@ impl Queue {
                 lane_reservation_durability_fault: AtomicBool::new(false),
                 accepted_work_validation_fault: AtomicBool::new(false),
                 lane_reservation_reconciliation_pending: AtomicBool::new(false),
+                emergency_fast_startup: AtomicBool::new(false),
                 global_selection_owners: parking_lot::Mutex::new(BTreeMap::new()),
                 next_global_selection_owner: AtomicU64::new(1),
                 push_remove_lock: parking_lot::Mutex::new(()),
@@ -13362,10 +13443,14 @@ impl Queue {
                 }
                 GossipEntryState::Committed => {
                     drop(tx_arc);
-                    self.remove_committed_hashes_without_lane_reservation_ownership(
-                        [hash],
-                        backpressure_telemetry,
-                    );
+                    // A globally bound QueuePlan is still an authenticated
+                    // canonical-carrier owner after WSV publication. Gossip
+                    // retires only its own backlog cell; the State/Kura-bound
+                    // all-group cleanup must consume the Queue/FIFO/journal
+                    // owner. Removing it here races that cleanup and leaves a
+                    // raw FIFO tombstone which looks like conflicting live
+                    // ownership on lagging validators.
+                    self.remove_committed_hashes_inner([hash], backpressure_telemetry, true);
                 }
                 GossipEntryState::Other => {}
             }
@@ -18950,21 +19035,6 @@ impl Queue {
         guards.clear();
         Ok(report)
     }
-    /// Remove committed transactions that have no local durable lane-reservation owner.
-    ///
-    /// Canonical autonomous carriers execute on every validator, but only the
-    /// deterministic lane producer moves the selected transaction out of ordinary
-    /// FIFO ownership and into the reservation journal. Replica validators retain
-    /// their ordinary FIFO copy until the carrier commits. This helper consumes that
-    /// replica-side copy while leaving any live reservation, Commit barrier, or
-    /// release barrier untouched for the exact terminal reservation corridor.
-    pub(crate) fn remove_committed_hashes_without_lane_reservation_ownership(
-        &self,
-        hashes: impl IntoIterator<Item = EntrypointHash>,
-        telemetry: Option<&StateTelemetry>,
-    ) -> usize {
-        self.remove_committed_hashes_inner(hashes, telemetry, true)
-    }
     /// Remove committed transactions and their indexed queue metadata by hash.
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
     pub(crate) fn remove_committed_hashes(
@@ -18979,7 +19049,7 @@ impl Queue {
         &self,
         hashes: impl IntoIterator<Item = EntrypointHash>,
         telemetry: Option<&StateTelemetry>,
-        preserve_lane_reservation_owners: bool,
+        preserve_globally_bound_owners: bool,
     ) -> usize {
         let hashes = hashes.into_iter().collect::<Vec<_>>();
         // A hash being made durable is not yet selectable or externally acknowledged. If a
@@ -19001,13 +19071,12 @@ impl Queue {
             }
             let mut removed_inner = 0usize;
             let mut removals = Vec::new();
-            let lane_reservation_owned_hashes = preserve_lane_reservation_owners
-                .then(|| self.lane_reservations.lock().live_hashes());
             for hash in hashes {
-                if lane_reservation_owned_hashes
-                    .as_ref()
-                    .is_some_and(|owned| owned.contains(&hash))
-                {
+                // Strict QueuePlan publication and this check share the queue
+                // mutation lock. A gossip tick therefore cannot observe an
+                // unbound owner and delete it after a concurrent global claim
+                // becomes durable.
+                if preserve_globally_bound_owners && self.has_globally_bound_durable_claim(hash) {
                     continue;
                 }
                 let stale_fifo_hash_remains = self.queued_tx_enqueued_at_ms.contains_key(&hash);
@@ -19803,7 +19872,6 @@ pub mod tests {
     };
     use iroha_config::{
         base::WithOrigin,
-        kura::InitMode,
         parameters::actual::{Kura as KuraConfig, LaneRoutingMatcher, LaneRoutingRule},
     };
     use iroha_crypto::{
@@ -23176,6 +23244,50 @@ pub mod tests {
         assert!(one > 0, "each incoming tx must carry a non-zero floor");
         assert_eq!(Queue::retained_byte_cost_floor_for_transactions(0), 0);
         assert_eq!(Queue::retained_byte_cost_floor_for_transactions(3), one * 3);
+    }
+    #[test]
+    fn emergency_fast_queue_quarantine_leaves_journals_untouched() {
+        let dir = tempfile::tempdir().expect("Fast queue tempdir");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+
+        queue
+            .enter_emergency_fast_startup()
+            .expect("a fresh Queue can enter Fast quarantine");
+        queue
+            .enter_emergency_fast_startup()
+            .expect("Fast quarantine is idempotent");
+        assert!(queue.emergency_fast_startup.load(Ordering::Acquire));
+        assert!(queue.lane_reservation_startup_reconciliation_pending());
+
+        let plan_path = dir.path().join("queue-plan.norito");
+        let error = queue
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect_err("Fast must not open the queue-plan journal");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(!plan_path.exists());
+
+        let reservation_path = dir.path().join("lane-reservations.norito");
+        queue
+            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+            .expect_err("Fast must not open the reservation journal");
+        assert!(!reservation_path.exists());
+
+        let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
+        let failure = queue
+            .push(tx, state.view())
+            .expect_err("Fast queue quarantine must reject admission");
+        assert!(matches!(
+            failure.err,
+            Error::PlanJournalDurabilityRejected { .. }
+        ));
+        assert_eq!(queue.active_len(), 0);
     }
     #[test]
     fn queue_rejects_unregistered_authority_before_expensive_admission() {

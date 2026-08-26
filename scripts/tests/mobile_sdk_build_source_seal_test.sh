@@ -38,8 +38,8 @@ test_build_source_seal() {
   git -C "$root" -c user.name=test -c user.email=test@example.invalid \
     commit -qm source-seal-fixture
 
-  exact_rustc="$(rustup which --toolchain 1.93.1 rustc)"
-  exact_rustdoc="$(rustup which --toolchain 1.93.1 rustdoc)"
+  exact_rustc="$("$TEST_RUSTUP_BINARY" which --toolchain 1.93.1 rustc)"
+  exact_rustdoc="$("$TEST_RUSTUP_BINARY" which --toolchain 1.93.1 rustdoc)"
   export CARGO_BUILD_JOBS=1
   export CARGO_INCREMENTAL=0
   export CARGO_NET_OFFLINE=true
@@ -52,6 +52,27 @@ test_build_source_seal() {
 
   NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
     bash "$root/scripts/build_norito_xcframework.sh"
+
+  local invalid_rustup_output
+  local invalid_rustup
+  local rustup_link="$root/rustup-link"
+  local rustup_dir="${TEST_RUSTUP_BINARY%/*}"
+  local rustup_noncanonical="$rustup_dir/../${rustup_dir##*/}/${TEST_RUSTUP_BINARY##*/}"
+  ln -s "$TEST_RUSTUP_BINARY" "$rustup_link"
+  for invalid_rustup in "" rustup "$rustup_link" "$rustup_noncanonical"; do
+    if invalid_rustup_output="$(MOBILE_SDK_RUSTUP_BINARY="$invalid_rustup" \
+        NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
+        bash "$root/scripts/build_norito_xcframework.sh" 2>&1)"; then
+      fail "expected Apple builder to reject rustup override: $invalid_rustup"
+    fi
+    case "$invalid_rustup_output" in
+      *"MOBILE_SDK_RUSTUP_BINARY must be an absolute canonical non-symbolic executable"*) ;;
+      *)
+        printf '%s\n' "$invalid_rustup_output" >&2
+        fail "Apple builder rustup override rejection was not explicit"
+        ;;
+    esac
+  done
 
   local invalid_lock_output
   if invalid_lock_output="$(NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
@@ -111,4 +132,32 @@ test_build_source_seal() {
       fail "source seal mutation failure was not explicit"
       ;;
   esac
+
+  # The first external build helper must inherit the canonical source root,
+  # even when the caller invokes the builder from another workspace.
+  local foreign_caller="$TMP_DIR/source-seal-foreign-caller"
+  local helper_cwd_marker="$root/.build-helper-cwd"
+  local helper_status
+  mkdir -p "$foreign_caller"
+  printf '%s\n' \
+    "#!$TEST_PYTHON_BINARY" \
+    'from pathlib import Path' \
+    'marker = Path(__file__).resolve().parents[1] / ".build-helper-cwd"' \
+    'marker.write_text(str(Path.cwd().resolve()), encoding="utf-8")' \
+    'raise SystemExit(73)' \
+    >"$root/scripts/exec_with_file_lock.py"
+  chmod 0700 "$root/scripts/exec_with_file_lock.py"
+  set +e
+  (
+    cd "$foreign_caller"
+    /bin/bash "$root/scripts/build_norito_xcframework.sh" >/dev/null 2>&1
+  )
+  helper_status=$?
+  set -e
+  [[ "$helper_status" == "73" ]] \
+    || fail "expected the build-helper cwd probe to stop the fixture builder"
+  [[ -f "$helper_cwd_marker" ]] \
+    || fail "build-helper cwd probe did not record its working directory"
+  [[ "$(<"$helper_cwd_marker")" == "$root" ]] \
+    || fail "Apple builder did not anchor helpers to its source-sealed root"
 }

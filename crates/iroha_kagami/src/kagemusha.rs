@@ -2012,10 +2012,10 @@ impl PinnedPromotionParentV1 {
         // Unix filesystems disagree on whether a newly staged entry increments
         // its parent's link count. Admit only that single known transition.
         if !self.snapshot.matches_except_links(current)
-            || !current
+            || current
                 .links
                 .checked_sub(self.snapshot.links)
-                .is_some_and(|delta| delta <= 1)
+                .is_none_or(|delta| delta > 1)
         {
             bail!("promotion-record parent changed unexpectedly while staging {label}");
         }
@@ -3316,18 +3316,18 @@ mod tests {
         command: Command,
         output: &Path,
         canonical_input: &[u8],
-        expected: Vec<InstructionBox>,
+        expected: &[InstructionBox],
         operation: &str,
     ) {
-        let expected_instructions_hash = HashOf::new(&expected);
         let expected_input_sha256 = kagemusha_recursive_spend_release_sha256(canonical_input);
         let (outcome, report) = run_lifecycle_command(command);
         outcome.expect("prepare lifecycle instruction");
         let decoded: Vec<InstructionBox> = norito::json::from_slice(
-            &fs::read(&output).expect("read prepared lifecycle instruction"),
+            &fs::read(output).expect("read prepared lifecycle instruction"),
         )
         .expect("decode prepared lifecycle instruction");
-        assert_eq!(decoded, expected);
+        assert_eq!(decoded.as_slice(), expected);
+        let expected_instructions_hash = HashOf::new(&decoded);
         let report_lines = report.lines().collect::<Vec<_>>();
         assert_eq!(
             report_lines.len(),
@@ -3369,7 +3369,7 @@ mod tests {
             }),
             &cancellation_output,
             &cancellation_bytes,
-            expected_cancellation,
+            &expected_cancellation,
             "cancel-release-v4",
         );
 
@@ -3390,7 +3390,7 @@ mod tests {
             }),
             &deactivation_output,
             &deactivation_bytes,
-            expected_deactivation,
+            &expected_deactivation,
             "deactivate-issuance-v4",
         );
     }

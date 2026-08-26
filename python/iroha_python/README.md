@@ -483,7 +483,7 @@ asset_id = client.compose_asset_id(
     scope="dataspace:42",
 )
 
-client.mint_asset_and_wait(
+client.mint_asset_quantity_and_wait(
     authority="<asset-owner>",
     fee_payment=mint_fee_payment,
     private_key_hex="<64-hex-private-key>",
@@ -491,7 +491,7 @@ client.mint_asset_and_wait(
     quantity="100",
 )
 
-client.transfer_assets_and_wait(
+client.transfer_assets_quantity_and_wait(
     authority="<payer>",
     fee_payment=transfer_fee_payment,
     private_key_hex="<64-hex-private-key>",
@@ -2050,7 +2050,7 @@ Connect frame encoding and crypto helpers require the compiled
 directory before running tests that exercise Connect payloads.
 
 From the repository root, the SoraFS V1 native parity lane uses exact Python
-3.12 and rebuilds the ABI-22 extension from the current clean source revision:
+3.12 and rebuilds the ABI-23 extension from the current clean source revision:
 
 ```bash
 SORAFS_PYTHON_SDK_PYTHON_BIN=/path/to/python3.12 \
@@ -2101,7 +2101,7 @@ starts a four-validator committee by default.
 | `IROHA_TORII_URL` | Torii URL used by the tests (defaults to `http://127.0.0.1:8080`). |
 | `IROHA_GENESIS_PUBLIC_KEY_FILE` | Runtime genesis verifier-key file required by the default Compose stack. |
 | `IROHA_GENESIS_SIGNED_FILE` | Host-prepared signed genesis body required by the default Compose stack. |
-| `IROHA_GENESIS_EXPECTED_HASH_FILE` | Independently approved exact genesis hash required by the default Compose stack. |
+| `IROHA_GENESIS_EXPECTED_HASH_FILE` | Independently approved canonical checked NetworkId encoding the exact genesis hash, required by the default Compose stack. |
 
 When running against an external environment, set `--no-start`,
 `--torii-url` (or `IROHA_TORII_URL`), and optional auth tokens
@@ -2193,7 +2193,7 @@ The workflow now:
 
 1. Builds exactly one wheel candidate with `python -m build` and seals and structurally preflights it before installation.
 2. Installs the wheel into a fresh virtualenv, authenticates the complete installed package and native-extension provenance against that seal, and rejects path or file aliases.
-3. Requires the installed native extension to expose bridge ABI 22 and a non-empty compiled-profile catalog accepted by its native validator, then runs the Norito RPC parity suite.
+3. Requires the installed native extension to expose bridge ABI 23 and a non-empty compiled-profile catalog accepted by its native validator, then runs the Norito RPC parity suite.
 4. Runs `twine check` followed by a `twine upload --dry-run` call so PyPI metadata and credentials are validated ahead of time.
 
 The smoke harness accepts no signing, provenance, key, or manifest-output
@@ -2396,7 +2396,7 @@ no environment variables need to be exported.
 - Re-export the maintained Norito codec (`iroha-norito`) so payload encoding and
   decoding stay consistent with Rust fixtures.
 - Provide a convenient constructor for the Torii HTTP client used to manage
-  attachments and prover reports.
+  attachments.
 - Expose generic `CryptoKeyPair` helpers over every signature algorithm compiled
   into `iroha_crypto`: Ed25519, secp256k1, ML-DSA-65, the TC26 GOST R
   34.10-2012 parameter sets, BLS normal/small, and SM2. The helpers cover

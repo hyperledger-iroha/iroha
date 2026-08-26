@@ -16,7 +16,7 @@
 //! SIMD-accelerated path when available, while [`crc64_fallback`] forces the portable table
 //! implementation.
 //!
-//! Compatibility
+//! V1 layout selection
 //! - Header-framed decoders (`deserialize_stream`, `decode_from_bytes`,
 //!   `decode_from_reader`) validate the Norito header, require the fixed v1
 //!   minor (`VERSION_MINOR = 0x00`), and apply the header flag byte as the
@@ -53,21 +53,11 @@ pub mod columnar;
 pub mod core;
 pub mod schema;
 pub mod streaming;
-// Expose heuristics configuration helpers for hosts
-pub use codec::disable_packed_struct_layout;
-#[cfg(feature = "parallel-decode")]
-#[doc(hidden)]
-pub use core::decode_planned_sequence_parallel;
 pub use core::{
     Archived, ArchivedBox, Compression, CompressionConfig, DecodeLimits, Encoder, Error,
     NoritoDeserialize, NoritoSerialize, crc64_fallback, default_encode_flags, from_bytes,
-    from_compressed_bytes, hardware_crc64,
-    heuristics::{
-        Heuristics as HeuristicsConfig, get as get_heuristics,
-        select_layout_flags_for_size_with as select_layout_flags_with,
-    },
-    to_bytes, to_bytes_auto, to_bytes_in, to_compressed_bytes, with_decode_limits,
-    with_decode_limits_scope,
+    from_compressed_bytes, hardware_crc64, to_bytes, to_bytes_auto, to_bytes_in,
+    to_compressed_bytes, with_decode_limits, with_decode_limits_scope,
 };
 #[doc(hidden)]
 pub use core::{BinarySequenceLayout, SequencePlan, SequenceSpan, plan_binary_sequence};
@@ -173,83 +163,12 @@ pub mod derive {
     };
 }
 pub use derive::*;
-pub mod sequential;
 /// Bare Norito `Encode` and `Decode` traits used for compact payloads without a Norito header.
 pub mod codec {
     pub use super::Error;
     use super::{NoritoDeserialize, NoritoSerialize, core};
     pub use crate::derive::{Decode, Encode};
-    use std::{
-        io::{Read, Write},
-        sync::{
-            OnceLock,
-            atomic::{AtomicBool, Ordering},
-        },
-    };
-    // Lightweight telemetry for the generic two-pass `encode_adaptive` path.
-    // Separate from the columnar bucket to avoid conflating concerns.
-    mod telemetry {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static CALLS: AtomicU64 = AtomicU64::new(0);
-        static REENCODES: AtomicU64 = AtomicU64::new(0);
-        static BYTES_ABS_DIFF_TOTAL: AtomicU64 = AtomicU64::new(0);
-        #[cfg(feature = "adaptive-telemetry")]
-        static PASS1_TIME_NS_TOTAL: AtomicU64 = AtomicU64::new(0);
-        #[cfg(feature = "adaptive-telemetry")]
-        static PASS2_TIME_NS_TOTAL: AtomicU64 = AtomicU64::new(0);
-        #[derive(Clone, Copy, Debug)]
-        pub struct Snapshot {
-            pub calls: u64,
-            pub reencodes: u64,
-            pub bytes_abs_diff_total: u64,
-            #[cfg(feature = "adaptive-telemetry")]
-            pub pass1_time_ns_total: u64,
-            #[cfg(feature = "adaptive-telemetry")]
-            pub pass2_time_ns_total: u64,
-        }
-        #[inline]
-        pub fn record(
-            call_reencoded: bool,
-            first_len: usize,
-            final_len: usize,
-            _pass1_ns: u64,
-            _pass2_ns: u64,
-        ) {
-            CALLS.fetch_add(1, Ordering::Relaxed);
-            if call_reencoded {
-                REENCODES.fetch_add(1, Ordering::Relaxed);
-            }
-            let diff = first_len.abs_diff(final_len) as u64;
-            BYTES_ABS_DIFF_TOTAL.fetch_add(diff, Ordering::Relaxed);
-            #[cfg(feature = "adaptive-telemetry")]
-            {
-                PASS1_TIME_NS_TOTAL.fetch_add(_pass1_ns, Ordering::Relaxed);
-                PASS2_TIME_NS_TOTAL.fetch_add(_pass2_ns, Ordering::Relaxed);
-            }
-        }
-        pub fn snapshot() -> Snapshot {
-            Snapshot {
-                calls: CALLS.load(Ordering::Relaxed),
-                reencodes: REENCODES.load(Ordering::Relaxed),
-                bytes_abs_diff_total: BYTES_ABS_DIFF_TOTAL.load(Ordering::Relaxed),
-                #[cfg(feature = "adaptive-telemetry")]
-                pass1_time_ns_total: PASS1_TIME_NS_TOTAL.load(Ordering::Relaxed),
-                #[cfg(feature = "adaptive-telemetry")]
-                pass2_time_ns_total: PASS2_TIME_NS_TOTAL.load(Ordering::Relaxed),
-            }
-        }
-        #[allow(dead_code)]
-        pub fn reset() {
-            CALLS.store(0, Ordering::Relaxed);
-            REENCODES.store(0, Ordering::Relaxed);
-            BYTES_ABS_DIFF_TOTAL.store(0, Ordering::Relaxed);
-            #[cfg(feature = "adaptive-telemetry")]
-            {
-                PASS1_TIME_NS_TOTAL.store(0, Ordering::Relaxed);
-                PASS2_TIME_NS_TOTAL.store(0, Ordering::Relaxed);
-            }
-        }
-    }
+    use std::io::{Read, Write};
     struct CountingWriter<'a, W: Write> {
         inner: &'a mut W,
         bytes_written: usize,
@@ -301,7 +220,7 @@ pub mod codec {
     pub trait Input: Read {}
     impl<T: Read> Input for T {}
     /// Decode values from a byte stream produced by [`Encode`].
-    pub trait Decode: for<'de> NoritoDeserialize<'de> + Sized {
+    pub trait Decode: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Sized {
         /// Attempt to decode `Self` from the given input.
         fn decode<I: Input>(input: &mut I) -> Result<Self, Error> {
             // Ensure a clean thread-local decode state for headerless payloads.
@@ -311,103 +230,24 @@ pub mod codec {
             decode_adaptive::<Self>(&buf)
         }
     }
-    impl<T> Decode for T where T: for<'de> NoritoDeserialize<'de> + Sized {}
-    // Keep only the blanket Decode impl; container specializations are unnecessary
-    static MANUAL_DISABLE_PACKED_STRUCT: AtomicBool = AtomicBool::new(false);
-    fn packed_struct_disabled() -> bool {
-        if MANUAL_DISABLE_PACKED_STRUCT.load(Ordering::Relaxed) {
-            #[cfg(debug_assertions)]
-            {
-                static BANNER: OnceLock<()> = OnceLock::new();
-                BANNER.get_or_init(|| {
-                eprintln!(
-                    "norito: packed-struct layout disabled; MANUAL_DISABLE_PACKED_STRUCT override active"
-                );
-            });
-            }
-            return true;
-        }
-        #[cfg(any(test, debug_assertions))]
-        {
-            static DISABLE_PACKED_STRUCT: OnceLock<bool> = OnceLock::new();
-            *DISABLE_PACKED_STRUCT.get_or_init(|| {
-            match std::env::var_os("NORITO_DISABLE_PACKED_STRUCT") {
-                Some(_) => {
-                    eprintln!(
-                        "norito: NORITO_DISABLE_PACKED_STRUCT enabled; packed-struct layout disabled for this debug build"
-                    );
-                    true
-                }
-                None => false,
-            }
-        })
-        }
-        #[cfg(not(any(test, debug_assertions)))]
-        {
-            false
-        }
-    }
-    /// Permanently disables packed-struct layout for the current process.
-    ///
-    /// Intended for debug/testing scenarios that require forcing AoS layouts.
-    pub fn disable_packed_struct_layout() {
-        static FORCE_DISABLE: OnceLock<()> = OnceLock::new();
-        FORCE_DISABLE.get_or_init(|| {
-            if !cfg!(debug_assertions) {
-                panic!("packed-struct layout can only be disabled in debug builds");
-            }
-            MANUAL_DISABLE_PACKED_STRUCT.store(true, Ordering::Relaxed);
-            let _ = packed_struct_disabled();
-        });
-    }
+    impl<T> Decode for T where T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Sized {}
     /// Bare encode using the fixed v1 layout flags.
     pub fn encode_adaptive<T: NoritoSerialize>(value: &T) -> Vec<u8> {
         encode_adaptive_with_flags(value, core::default_encode_flags())
     }
     fn encode_adaptive_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
-        let encode_guard = core::EncodeContextGuard::enter();
         core::validate_header_flags(flags).expect("adaptive encode flags must be supported");
-        let _disable_packed_struct = packed_struct_disabled();
         #[cfg(debug_assertions)]
         if crate::debug_trace_enabled() {
             eprintln!("norito.codec.encode_adaptive: flags=0x{flags:02x}");
         }
-        let mut payload = Vec::new();
-        #[cfg(feature = "adaptive-telemetry")]
-        let __t0 = std::time::Instant::now();
-        {
-            let _fg = core::DecodeFlagsGuard::enter(flags);
-            let mut encoder = core::Encoder::for_buffer(&mut payload);
-            NoritoSerialize::serialize(value, &mut encoder).expect("encode pass 1");
-        }
-        #[cfg(feature = "adaptive-telemetry")]
-        let __pass1_ns = __t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-        #[cfg(not(feature = "adaptive-telemetry"))]
-        let __pass1_ns: u64 = 0;
-        let fixed_offsets_used = core::fixed_offsets_used();
-        let field_bitset_used = core::field_bitset_used();
-        let compact_len_used = core::compact_len_used();
-        {
-            telemetry::record(false, payload.len(), payload.len(), __pass1_ns, 0);
-            #[cfg(feature = "adaptive-telemetry-log")]
-            eprintln!(
-                "norito.codec.adapt: reencode=0 len={} pass1_ns={}",
-                payload.len(),
-                __pass1_ns
-            );
-        }
-        drop(encode_guard);
-        let final_flags = core::finalized_encode_flags(
-            flags,
-            fixed_offsets_used,
-            field_bitset_used,
-            compact_len_used,
-        );
+        let _flags = core::DecodeFlagsGuard::enter(flags);
+        let (payload, _final_flags) =
+            core::encode_bare_with_flags(value).expect("bare Norito encoding should succeed");
         #[cfg(debug_assertions)]
         if crate::debug_trace_enabled() {
-            eprintln!("norito.codec.encode_adaptive: final_flags=0x{final_flags:02x}");
+            eprintln!("norito.codec.encode_adaptive: final_flags=0x{_final_flags:02x}");
         }
-        core::record_last_header_flags(final_flags);
         payload
     }
     /// Bare encode into the provided writer using the fixed v1 layout flags.
@@ -424,49 +264,18 @@ pub mod codec {
         writer: &mut W,
         flags: u8,
     ) -> Result<usize, Error> {
-        let encode_guard = core::EncodeContextGuard::enter();
         core::validate_header_flags(flags)?;
-        let _disable_packed_struct = packed_struct_disabled();
         #[cfg(debug_assertions)]
         if crate::debug_trace_enabled() {
             eprintln!("norito.codec.encode_adaptive_into: flags=0x{flags:02x}");
         }
-        #[cfg(feature = "adaptive-telemetry")]
-        let __t0 = std::time::Instant::now();
         let mut counting = CountingWriter::new(writer);
         {
             let _fg = core::DecodeFlagsGuard::enter(flags);
             let mut encoder = core::Encoder::new(&mut counting);
             NoritoSerialize::serialize(value, &mut encoder)?;
         }
-        #[cfg(feature = "adaptive-telemetry")]
-        let __pass1_ns = __t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-        #[cfg(not(feature = "adaptive-telemetry"))]
-        let __pass1_ns: u64 = 0;
         let payload_len = counting.bytes_written();
-        let fixed_offsets_used = core::fixed_offsets_used();
-        let field_bitset_used = core::field_bitset_used();
-        let compact_len_used = core::compact_len_used();
-        {
-            telemetry::record(false, payload_len, payload_len, __pass1_ns, 0);
-            #[cfg(feature = "adaptive-telemetry-log")]
-            eprintln!(
-                "norito.codec.adapt: reencode=0 len={} pass1_ns={}",
-                payload_len, __pass1_ns
-            );
-        }
-        drop(encode_guard);
-        let final_flags = core::finalized_encode_flags(
-            flags,
-            fixed_offsets_used,
-            field_bitset_used,
-            compact_len_used,
-        );
-        #[cfg(debug_assertions)]
-        if crate::debug_trace_enabled() {
-            eprintln!("norito.codec.encode_adaptive_into: final_flags=0x{final_flags:02x}");
-        }
-        core::record_last_header_flags(final_flags);
         Ok(payload_len)
     }
     #[cfg(test)]
@@ -509,6 +318,19 @@ pub mod codec {
                 Some(1)
             }
         }
+        struct HugeHint(u8);
+        impl NoritoSerialize for HugeHint {
+            fn serialize(
+                &self,
+                encoder: &mut crate::core::Encoder<'_>,
+            ) -> Result<(), crate::Error> {
+                encoder.write_all(&[self.0])?;
+                Ok(())
+            }
+            fn encoded_len_hint(&self) -> Option<usize> {
+                Some(usize::MAX)
+            }
+        }
         struct AlwaysFails;
         impl NoritoSerialize for AlwaysFails {
             fn serialize(
@@ -547,11 +369,15 @@ pub mod codec {
             assert_eq!(EXACT_CALLS.load(Ordering::Relaxed), 1);
         }
         #[test]
-        fn seq_encoding_does_not_trust_len_hints() {
+        fn seq_encoding_uses_len_hints_only_for_capacity() {
             HINT_CALLS.store(0, Ordering::Relaxed);
             let items = vec![Hinted(1), Hinted(2), Hinted(3)];
             assert_eq!(items.encode().last(), Some(&3));
-            assert_eq!(HINT_CALLS.load(Ordering::Relaxed), 0);
+            assert_eq!(HINT_CALLS.load(Ordering::Relaxed), 3);
+        }
+        #[test]
+        fn huge_length_hint_is_capped_before_reservation() {
+            assert_eq!(HugeHint(9).encode(), vec![9]);
         }
         #[test]
         fn adaptive_writer_propagates_serializer_errors() {
@@ -564,13 +390,6 @@ pub mod codec {
             assert!(out.is_empty());
         }
         #[test]
-        fn take_last_encode_flags_reports_and_clears_adaptive_flags() {
-            let _ = super::take_last_encode_flags();
-            let _ = vec![1u8, 2, 3].encode();
-            assert!(super::take_last_encode_flags().is_some());
-            assert!(super::take_last_encode_flags().is_none());
-        }
-        #[test]
         fn adaptive_field_bitset_paths_retain_required_header_flags() {
             let value = AdaptiveFixedFields {
                 tag: 7,
@@ -579,22 +398,18 @@ pub mod codec {
             let requested = crate::core::header_flags::FIELD_BITSET
                 | crate::core::header_flags::PACKED_STRUCT
                 | crate::core::header_flags::COMPACT_LEN;
-            let payload = super::encode_adaptive_with_flags(&value, requested);
-            let flags =
-                super::take_last_encode_flags().expect("adaptive vector encode records flags");
+            let (payload, flags) = {
+                let _layout = crate::core::DecodeFlagsGuard::enter(requested);
+                crate::core::encode_bare_with_flags(&value)
+                    .expect("adaptive vector encode returns its flags")
+            };
             let mut streamed_payload = Vec::new();
             let written =
                 super::encode_adaptive_into_with_flags(&value, &mut streamed_payload, requested)
                     .expect("stream adaptive field-bitset payload");
             assert_eq!(written, streamed_payload.len());
-            let streamed_flags =
-                super::take_last_encode_flags().expect("adaptive stream encode records flags");
             assert_eq!(streamed_payload, payload);
-            assert_eq!(streamed_flags, flags);
-            for (label, payload, flags) in [
-                ("vector", payload, flags),
-                ("stream", streamed_payload, streamed_flags),
-            ] {
+            for (label, payload) in [("vector", payload), ("stream", streamed_payload)] {
                 crate::core::validate_header_flags(flags)
                     .expect("adaptive encoder must advertise valid field-bitset dependencies");
                 assert_eq!(
@@ -619,40 +434,12 @@ pub mod codec {
             core::encode_bare_with_flags(value).expect("encode_with_header_flags should succeed");
         (payload, flags)
     }
-    /// Return and clear the header flags recorded by the most recent framed encode on this thread.
-    pub fn take_last_encode_flags() -> Option<u8> {
-        core::take_last_header_flags()
-    }
     /// Bare decode using the fixed v1 layout flags.
     pub fn decode_adaptive<T>(bytes: &[u8]) -> Result<T, Error>
     where
-        T: for<'de> NoritoDeserialize<'de>,
+        T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
     {
         core::reset_decode_state();
-        #[inline]
-        fn decode_from_aligned<T: for<'de> NoritoDeserialize<'de>>(
-            buf: &[u8],
-            flags: u8,
-            logical_len: usize,
-        ) -> Result<T, Error> {
-            struct RootGuard;
-            impl Drop for RootGuard {
-                fn drop(&mut self) {
-                    core::clear_decode_root();
-                }
-            }
-            let _root_guard = if core::payload_root_span().is_none() {
-                let logical_len = logical_len.min(buf.len());
-                core::set_decode_root(&buf[..logical_len]);
-                Some(RootGuard)
-            } else {
-                None
-            };
-            let _fg = core::DecodeFlagsGuard::enter(flags);
-            let _pg = core::PayloadCtxGuard::enter_with_flags_len(buf, logical_len, flags);
-            let archived = unsafe { &*(buf.as_ptr() as *const core::Archived<T>) };
-            super::guarded_try_deserialize(|| <T as NoritoDeserialize>::try_deserialize(archived))
-        }
         let flags = core::default_encode_flags();
         if crate::debug_trace_enabled() {
             eprintln!(
@@ -662,49 +449,11 @@ pub mod codec {
                 bytes.as_ptr()
             );
         }
-        let min_size = core::archived_payload_size::<T>();
-        let logical_len = bytes.len();
-        if min_size > 0 && logical_len == 0 {
-            return Err(core::Error::LengthMismatch);
-        }
-        let align = core::archived_payload_align::<T>();
-        // If the payload is shorter than the established storage footprint,
-        // pad temporary storage while keeping the logical length constrained
-        // to the original slice for bounds checks during decode.
-        let backing: &[u8];
-        let _owned_pad: Option<Vec<u8>>;
-        if min_size > 0 && logical_len < min_size {
-            let mut pad = Vec::with_capacity(min_size);
-            pad.extend_from_slice(bytes);
-            pad.resize(min_size, 0);
-            _owned_pad = Some(pad);
-            backing = _owned_pad.as_deref().expect("pad present");
-        } else {
-            _owned_pad = None;
-            backing = bytes;
-        }
-        let aligned = match super::ArchiveSlice::new(backing, align) {
-            Ok(slice) => slice,
-            Err(err) => {
-                if align > 1 && backing.as_ptr().align_offset(align) != 0 {
-                    return Err(Error::misaligned(align, backing.as_ptr()));
-                }
-                return Err(err);
-            }
-        };
-        let aligned_slice = aligned.as_slice();
         let _reset = DecodeResetGuard;
-        if crate::debug_trace_enabled() {
-            if align <= 1 || aligned_slice.as_ptr() == bytes.as_ptr() {
-                eprintln!("norito.codec.decode_adaptive: aligned fast-path");
-            } else {
-                eprintln!(
-                    "norito.codec.decode_adaptive: realigned via copy ptr={:?}",
-                    aligned_slice.as_ptr()
-                );
-            }
-        }
-        decode_from_aligned::<T>(aligned_slice, flags, logical_len)
+        let _flags = core::DecodeFlagsGuard::enter(flags);
+        crate::with_decode_limits(crate::canonical_decode_limits(bytes.len()), || {
+            super::decode_payload_exact(bytes)
+        })
     }
     /// Bare decode from an exact slice using a type-provided slice decoder.
     ///
@@ -762,101 +511,27 @@ pub mod codec {
     pub trait DecodeAll: Decode {
         /// Decode `Self` from `input` verifying that the entire stream is consumed.
         fn decode_all<I: Input>(input: &mut I) -> Result<Self, Error> {
-            // Reuse the bare decoder which already mirrors the encode defaults.
-            // Tests in this workspace always feed exact payloads, so trailing bytes
-            // are not expected and would indicate upstream issues.
+            // The bare decoder enforces exact payload consumption.
             <Self as Decode>::decode(input)
         }
     }
     impl<T: Decode> DecodeAll for T {}
-    /// Return a snapshot of the codec two-pass adaptive metrics.
-    pub fn adaptive_metrics_snapshot() -> telemetry::Snapshot {
-        telemetry::snapshot()
-    }
-    /// Reset codec adaptive metrics (intended for tests/benches).
-    #[allow(dead_code)]
-    pub fn adaptive_metrics_reset() {
-        telemetry::reset()
-    }
-    /// JSON: export codec two-pass adaptive metrics as a compact JSON value.
-    pub fn adaptive_metrics_json_value() -> crate::json::Value {
-        let s = adaptive_metrics_snapshot();
-        let mut map = crate::json::Map::new();
-        map.insert("calls".into(), crate::json::Value::from(s.calls));
-        map.insert("reencodes".into(), crate::json::Value::from(s.reencodes));
-        map.insert(
-            "bytes_abs_diff_total".into(),
-            crate::json::Value::from(s.bytes_abs_diff_total),
-        );
-        #[cfg(feature = "adaptive-telemetry")]
-        {
-            map.insert(
-                "pass1_time_ns_total".into(),
-                crate::json::Value::from(s.pass1_time_ns_total),
-            );
-            map.insert(
-                "pass2_time_ns_total".into(),
-                crate::json::Value::from(s.pass2_time_ns_total),
-            );
-        }
-        crate::json::Value::Object(map)
-    }
-    /// JSON: export codec two-pass adaptive metrics as a compact JSON string.
-    pub fn adaptive_metrics_json_string() -> String {
-        let v = adaptive_metrics_json_value();
-        crate::json::to_string(&v).unwrap_or_else(|_| String::from("{}"))
-    }
-    /// JSON: compute fieldwise delta between two codec telemetry JSON maps.
-    pub fn adaptive_metrics_delta_json(
-        prev: &crate::json::Value,
-        curr: &crate::json::Value,
-    ) -> crate::json::Value {
-        use crate::json::Value;
-        let mut out = crate::json::Map::new();
-        let empty = crate::json::Map::new();
-        let p = prev.as_object().unwrap_or(&empty);
-        let c = curr.as_object().unwrap_or(&empty);
-        for k in [
-            "calls",
-            "reencodes",
-            "bytes_abs_diff_total",
-            #[cfg(feature = "adaptive-telemetry")]
-            "pass1_time_ns_total",
-            #[cfg(feature = "adaptive-telemetry")]
-            "pass2_time_ns_total",
-        ] {
-            if let (Some(Value::Number(a)), Some(Value::Number(b))) = (p.get(k), c.get(k)) {
-                let av = a.as_u64().unwrap_or(0);
-                let bv = b.as_u64().unwrap_or(0);
-                out.insert(k.to_string(), Value::from(bv.saturating_sub(av)));
-            }
-        }
-        Value::Object(out)
-    }
 }
 /// Telemetry helpers aggregating Norito metrics for easy ingestion.
 pub mod telemetry {
-    /// Reset all Norito telemetry buckets (columnar, codec, compression).
+    /// Reset all Norito telemetry buckets (columnar and compression).
     /// Intended for examples/benches/tests.
     pub fn reset_all() {
-        #[allow(unused)]
-        {
-            crate::columnar::adaptive_metrics_reset();
-            // codec bucket always available
-            crate::codec::adaptive_metrics_reset();
-        }
+        crate::columnar::adaptive_metrics_reset();
         crate::core::compression_metrics_reset();
     }
-    /// Build a compact JSON value aggregating columnar, codec, and compression telemetry.
+    /// Build a compact JSON value aggregating columnar and compression telemetry.
     pub fn snapshot_json_value() -> crate::json::Value {
         let mut root = crate::json::Map::new();
-        // Columnar may be feature-gated, guard call with cfg
         root.insert(
             "columnar".into(),
             crate::columnar::adaptive_metrics_json_value(),
         );
-        // Codec is always present
-        root.insert("codec".into(), crate::codec::adaptive_metrics_json_value());
         root.insert(
             "compression".into(),
             crate::core::compression_metrics_json_value(),
@@ -883,13 +558,6 @@ pub mod telemetry {
             crate::columnar::adaptive_metrics_delta_json(
                 p.get("columnar").unwrap_or(&Value::Null),
                 c.get("columnar").unwrap_or(&Value::Null),
-            ),
-        );
-        out.insert(
-            "codec".into(),
-            crate::codec::adaptive_metrics_delta_json(
-                p.get("codec").unwrap_or(&Value::Null),
-                c.get("codec").unwrap_or(&Value::Null),
             ),
         );
         out.insert(
@@ -9321,11 +8989,7 @@ pub fn serialize_into<W: Write, T: NoritoSerialize>(
     compression: Compression,
 ) -> Result<(), Error> {
     match compression {
-        Compression::None => {
-            let mut bytes = Vec::new();
-            core::to_bytes_in(value, &mut bytes)?;
-            writer.write_all(&bytes)?;
-        }
+        Compression::None => core::write_frame_to_writer(value, &mut writer)?,
         Compression::Zstd => {
             let bytes = to_compressed_bytes(value, Some(CompressionConfig::default()))?;
             writer.write_all(&bytes)?;
@@ -9336,6 +9000,7 @@ pub fn serialize_into<W: Write, T: NoritoSerialize>(
 /// Deserialize an object from the provided reader.
 pub fn deserialize_from<R: Read, T>(reader: R) -> Result<T, Error>
 where
+    T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     deserialize_stream(reader)
@@ -9344,12 +9009,13 @@ where
 /// buffering the entire input.
 pub fn deserialize_stream<R: Read, T>(mut reader: R) -> Result<T, Error>
 where
+    T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     use core::Header;
     let header = Header::read(&mut reader)?;
-    core::prepare_header_decode(header.flags, header.minor, false)?;
-    if header.schema != T::schema_hash() {
+    core::prepare_header_decode(header.flags, false)?;
+    if header.schema != <T as NoritoSerialize>::schema_hash() {
         return Err(Error::SchemaMismatch);
     }
     let payload_len = core::payload_len_to_usize(header.length)?;
@@ -9379,11 +9045,14 @@ where
                 payload.extend_from_slice(&buf[..read]);
                 remaining -= read;
             }
+            if reader.read(&mut [0u8; 1])? != 0 {
+                return Err(Error::LengthMismatch);
+            }
         }
         Compression::Zstd => {
-            #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+            #[cfg(feature = "compression")]
             {
-                let mut decoder = zstd::Decoder::new(reader)?;
+                let mut decoder = zstd::Decoder::new(reader)?.single_frame();
                 let mut buf = [0u8; 64 * 1024];
                 let mut remaining = payload_len;
                 while remaining > 0 {
@@ -9398,8 +9067,12 @@ where
                 if decoder.read(&mut [0u8; 1])? != 0 {
                     return Err(Error::LengthMismatch);
                 }
+                let mut compressed = decoder.finish();
+                if compressed.read(&mut [0u8; 1])? != 0 {
+                    return Err(Error::LengthMismatch);
+                }
             }
-            #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
+            #[cfg(not(feature = "compression"))]
             {
                 let _ = reader;
                 return Err(std::io::Error::other("compression support disabled").into());
@@ -9410,45 +9083,21 @@ where
     if crc != header.checksum {
         return Err(Error::ChecksumMismatch);
     }
-    let min_size = core::archived_payload_size::<T>();
-    let logical_len = payload.len();
-    let padded = if min_size > 0 && logical_len < min_size {
-        core::reserve_decode_allocation(min_size)?;
-        let mut buf = Vec::new();
-        buf.try_reserve_exact(min_size)
-            .map_err(|_| Error::AllocationFailed {
-                bytes: u64::try_from(min_size).unwrap_or(u64::MAX),
-            })?;
-        buf.extend_from_slice(&payload);
-        buf.resize(min_size, 0);
-        Some(buf)
-    } else {
-        None
-    };
-    let backing: &[u8] = match padded.as_deref() {
-        Some(buf) => buf,
-        None => payload.as_slice(),
-    };
-    let archived = core::archived_from_slice::<T>(backing)?;
-    let _payload_guard = if min_size > 0 && logical_len < min_size {
-        core::PayloadCtxGuard::enter_with_len(archived.bytes(), logical_len)
-    } else {
-        core::PayloadCtxGuard::enter(archived.bytes())
-    };
-    guarded_try_deserialize(|| <T as NoritoDeserialize>::try_deserialize(archived.archived()))
+    decode_payload_exact(&payload)
 }
 fn decode_from_uncompressed_bytes<T>(bytes: &[u8], header: core::Header) -> Result<T, Error>
 where
+    T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
-    core::prepare_header_decode(header.flags, header.minor, false)?;
+    core::prepare_header_decode(header.flags, false)?;
     if header.compression != Compression::None {
         return Err(Error::unsupported_compression_with(
             header.compression as u8,
             &[Compression::None],
         ));
     }
-    if header.schema != T::schema_hash() {
+    if header.schema != <T as NoritoSerialize>::schema_hash() {
         return Err(Error::SchemaMismatch);
     }
     let payload_len = core::payload_len_to_usize(header.length)?;
@@ -9460,41 +9109,25 @@ where
     if core::hardware_crc64(payload) != header.checksum {
         return Err(Error::ChecksumMismatch);
     }
-    let flags = header.flags;
-    let flags_hint = header.minor;
-    let min_size = core::archived_payload_size::<T>();
-    let logical_len = payload.len();
-    let padded = if min_size > 0 && logical_len < min_size {
-        core::reserve_decode_allocation(min_size)?;
-        let mut buf = Vec::new();
-        buf.try_reserve_exact(min_size)
-            .map_err(|_| Error::AllocationFailed {
-                bytes: u64::try_from(min_size).unwrap_or(u64::MAX),
-            })?;
-        buf.extend_from_slice(payload);
-        buf.resize(min_size, 0);
-        Some(buf)
-    } else {
-        None
-    };
-    let backing: &[u8] = match padded.as_deref() {
-        Some(buf) => buf,
-        None => payload,
-    };
-    let archived = core::archived_from_slice::<T>(backing)?;
-    guarded_try_deserialize(|| {
-        let _guard = if min_size > 0 && logical_len < min_size {
-            core::PayloadCtxGuard::enter_with_flags_hint_len(
-                archived.bytes(),
-                logical_len,
-                flags,
-                flags_hint,
-            )
-        } else {
-            core::PayloadCtxGuard::enter_with_flags_hint(archived.bytes(), flags, flags_hint)
-        };
-        <T as NoritoDeserialize>::try_deserialize(archived.archived())
-    })
+    let _flags = core::DecodeFlagsGuard::enter(header.flags);
+    decode_payload_exact(payload)
+}
+
+/// Decode one complete bare payload under the already-selected layout flags.
+///
+/// Instrumented decoders report complete consumption without another encode.
+/// Custom decoders that do not report complete byte access fall back to an
+/// allocation-free canonical byte comparison inside `decode_field_canonical`.
+fn decode_payload_exact<T>(payload: &[u8]) -> Result<T, Error>
+where
+    T: NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    let (value, used) = core::decode_field_canonical::<T>(payload)?;
+    if used != payload.len() {
+        return Err(Error::LengthMismatch);
+    }
+    Ok(value)
 }
 /// Prelude with commonly used items.
 pub mod prelude {
@@ -9553,6 +9186,7 @@ pub const fn canonical_decode_limits(payload_len: usize) -> DecodeLimits {
 include!("framed_decode.rs");
 fn decode_from_bytes_inner<T>(bytes: &[u8]) -> Result<T, Error>
 where
+    T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     use std::io::Cursor;
@@ -9578,6 +9212,7 @@ where
 /// Returns an archive-validation, deserialization, or resource-budget error.
 pub fn decode_from_bytes_with_limits<T>(bytes: &[u8], limits: DecodeLimits) -> Result<T, Error>
 where
+    T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     with_decode_limits(limits, || decode_from_bytes_inner(bytes))
@@ -9592,50 +9227,6 @@ where
     for<'de> T: NoritoDeserialize<'de>,
 {
     decode_canonical_with_limits(bytes, canonical_decode_limits(bytes.len()))
-}
-/// Allocation-free writer that verifies a streamed frame against one exact byte slice.
-///
-/// Mismatches are sticky while writes report full consumption, so later serializer errors cannot hide divergence; callers must require [`Self::is_complete`] after success.
-struct ExactSliceWriter<'a> {
-    expected: &'a [u8],
-    offset: usize,
-    mismatched: bool,
-}
-impl<'a> ExactSliceWriter<'a> {
-    const fn new(expected: &'a [u8]) -> Self {
-        Self {
-            expected,
-            offset: 0,
-            mismatched: false,
-        }
-    }
-    const fn mismatched(&self) -> bool {
-        self.mismatched
-    }
-    const fn is_complete(&self) -> bool {
-        !self.mismatched && self.offset == self.expected.len()
-    }
-}
-impl Write for ExactSliceWriter<'_> {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let Some(end) = self.offset.checked_add(bytes.len()) else {
-            self.mismatched = true;
-            return Ok(bytes.len());
-        };
-        let Some(expected) = self.expected.get(self.offset..end) else {
-            self.mismatched = true;
-            self.offset = self.expected.len();
-            return Ok(bytes.len());
-        };
-        if expected != bytes {
-            self.mismatched = true;
-        }
-        self.offset = end;
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 /// Verify that `value` encodes to exactly `expected` under the active layout.
 ///
@@ -9653,7 +9244,7 @@ pub fn verify_exact_frame<T>(value: &T, expected: &[u8]) -> Result<(), Error>
 where
     T: NoritoSerialize,
 {
-    let mut exact = ExactSliceWriter::new(expected);
+    let mut exact = core::ExactSliceWriter::new(expected);
     let encode_result = core::write_frame_to_writer(value, &mut exact);
     if exact.mismatched() {
         return Err(Error::NonCanonicalEncoding);
@@ -9700,7 +9291,7 @@ where
             }
             Err(error) => return Err(error),
         };
-        let mut exact = ExactSliceWriter::new(bytes);
+        let mut exact = core::ExactSliceWriter::new(bytes);
         let canonical_result = core::write_canonical_to_writer(&value, &mut exact);
         if exact.mismatched() {
             return Err(Error::NonCanonicalEncoding);
@@ -9717,6 +9308,7 @@ include!("canonical_codec_tests.rs");
 /// Accepts either compressed or uncompressed Norito payloads and returns `T`.
 pub fn decode_from_compressed_bytes<T>(bytes: &[u8]) -> Result<T, Error>
 where
+    T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     decode_from_bytes(bytes)
@@ -9725,6 +9317,7 @@ where
 /// This is a thin wrapper over `deserialize_stream` for convenience.
 pub fn decode_from_reader<R: Read, T>(reader: R) -> Result<T, Error>
 where
+    T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     deserialize_stream(reader)
@@ -9739,6 +9332,7 @@ pub fn decode_from_reader_with_limits<R: Read, T>(
     limits: DecodeLimits,
 ) -> Result<T, Error>
 where
+    T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     with_decode_limits(limits, || deserialize_stream(reader))
@@ -9752,45 +9346,7 @@ pub(crate) fn guarded_try_deserialize<T, F>(f: F) -> Result<T, Error>
 where
     F: FnOnce() -> Result<T, Error>,
 {
-    #[cfg(not(feature = "strict-safe"))]
-    {
-        return f();
-    }
-    #[cfg(feature = "strict-safe")]
-    {
-        install_decode_panic_hook();
-        struct PanicDepthGuard;
-        impl Drop for PanicDepthGuard {
-            fn drop(&mut self) {
-                DECODE_PANIC_DEPTH.with(|depth| {
-                    let current = depth.get();
-                    if current > 0 {
-                        depth.set(current - 1);
-                    }
-                });
-            }
-        }
-        DECODE_PANIC_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
-        let _guard = PanicDepthGuard;
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
-            Ok(res) => res,
-            Err(payload) => {
-                if crate::debug_trace_enabled() {
-                    let msg = payload
-                        .downcast_ref::<&str>()
-                        .copied()
-                        .or_else(|| payload.downcast_ref::<String>().map(|s| s.as_str()))
-                        .unwrap_or("<non-string panic>");
-                    eprintln!(
-                        "norito.decode suppressed panic while decoding {}: {}",
-                        std::any::type_name::<T>(),
-                        msg
-                    );
-                }
-                Err(Error::decode_panic(std::any::type_name::<T>()))
-            }
-        }
-    }
+    catch_decode_panic(std::any::type_name::<T>(), f)
 }
 /// Run a type-erased field decoder with the same panic policy as [`guarded_try_deserialize`].
 ///
@@ -9801,67 +9357,53 @@ pub(crate) fn guarded_try_deserialize_erased(
     type_name: &'static str,
     decode: &mut dyn FnMut() -> Result<(), Error>,
 ) -> Result<(), Error> {
-    #[cfg(not(feature = "strict-safe"))]
-    {
-        let _ = type_name;
-        return decode();
-    }
-    #[cfg(feature = "strict-safe")]
-    {
-        install_decode_panic_hook();
-        struct PanicDepthGuard;
-        impl Drop for PanicDepthGuard {
-            fn drop(&mut self) {
-                DECODE_PANIC_DEPTH.with(|depth| {
-                    let current = depth.get();
-                    if current > 0 {
-                        depth.set(current - 1);
-                    }
-                });
-            }
-        }
-        DECODE_PANIC_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
-        let _guard = PanicDepthGuard;
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode)) {
-            Ok(result) => result,
-            Err(payload) => {
-                if crate::debug_trace_enabled() {
-                    let msg = payload
-                        .downcast_ref::<&str>()
-                        .copied()
-                        .or_else(|| payload.downcast_ref::<String>().map(|s| s.as_str()))
-                        .unwrap_or("<non-string panic>");
-                    eprintln!(
-                        "norito.decode suppressed panic while decoding {}: {}",
-                        type_name, msg
-                    );
-                }
-                Err(Error::decode_panic(type_name))
-            }
-        }
-    }
+    catch_decode_panic(type_name, decode)
 }
-#[cfg(feature = "strict-safe")]
 thread_local! {
     static DECODE_PANIC_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+struct DecodePanicGuard;
+impl DecodePanicGuard {
+    fn enter() -> Self {
+        DECODE_PANIC_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
+        Self
+    }
+}
+impl Drop for DecodePanicGuard {
+    fn drop(&mut self) {
+        DECODE_PANIC_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+fn catch_decode_panic<T>(
+    type_name: &'static str,
+    decode: impl FnOnce() -> Result<T, Error>,
+) -> Result<T, Error> {
+    install_decode_panic_hook();
+    let _guard = DecodePanicGuard::enter();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode)) {
+        Ok(result) => result,
+        Err(payload) => {
+            if crate::debug_trace_enabled() {
+                let message = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("<non-string panic>");
+                eprintln!("norito.decode suppressed panic while decoding {type_name}: {message}");
+            }
+            Err(Error::decode_panic(type_name))
+        }
+    }
 }
 /// Returns true when a Norito decode is running under panic suppression.
 #[must_use]
 pub fn decode_panic_suppressed() -> bool {
-    #[cfg(feature = "strict-safe")]
-    {
-        DECODE_PANIC_DEPTH.with(|depth| depth.get() > 0)
-    }
-    #[cfg(not(feature = "strict-safe"))]
-    {
-        false
-    }
+    DECODE_PANIC_DEPTH.with(|depth| depth.get() > 0)
 }
-#[cfg(all(test, feature = "strict-safe"))]
+#[cfg(test)]
 thread_local! {
     static SUPPRESSED_DECODE_PANICS: Cell<usize> = const { Cell::new(0) };
 }
-#[cfg(feature = "strict-safe")]
 fn install_decode_panic_hook() {
     static HOOK: OnceLock<()> = OnceLock::new();
     HOOK.get_or_init(|| {
@@ -9879,7 +9421,7 @@ fn install_decode_panic_hook() {
         }));
     });
 }
-#[cfg(all(test, feature = "strict-safe"))]
+#[cfg(test)]
 mod guarded_tests {
     use super::{
         Error, SUPPRESSED_DECODE_PANICS, decode_panic_suppressed, guarded_try_deserialize,
@@ -9906,19 +9448,6 @@ mod guarded_tests {
         });
         assert!(result.is_ok());
         assert!(!decode_panic_suppressed());
-    }
-}
-#[cfg(all(test, not(feature = "strict-safe")))]
-mod guarded_non_strict_tests {
-    use super::{Error, guarded_try_deserialize};
-    #[test]
-    fn guarded_try_deserialize_propagates_panics_without_strict_safe() {
-        let result = std::panic::catch_unwind(|| {
-            let _ = guarded_try_deserialize::<(), _>(|| -> Result<(), Error> {
-                panic!("trigger panic");
-            });
-        });
-        assert!(result.is_err(), "expected panic to propagate");
     }
 }
 #[allow(dead_code)]
@@ -10130,7 +9659,7 @@ where
     use core::{Header, header_flags};
     let mut reader = reader;
     let header = Header::read(&mut reader)?;
-    core::prepare_header_decode(header.flags, header.minor, false)?;
+    core::prepare_header_decode(header.flags, false)?;
     if header.schema != expected_schema {
         return Err(Error::SchemaMismatch);
     }
@@ -10147,11 +9676,11 @@ where
     let boxed: Box<dyn Read> = match header.compression {
         Compression::None => Box::new(reader),
         Compression::Zstd => {
-            #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+            #[cfg(feature = "compression")]
             {
                 Box::new(zstd::Decoder::new(reader)?)
             }
-            #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
+            #[cfg(not(feature = "compression"))]
             {
                 return Err(std::io::Error::other("compression support disabled").into());
             }
@@ -10559,7 +10088,7 @@ where
     pub fn new<R: Read + 'static>(mut reader: R) -> Result<Self, Error> {
         use core::Header;
         let header = Header::read(&mut reader)?;
-        core::prepare_header_decode(header.flags, header.minor, true)?;
+        core::prepare_header_decode(header.flags, true)?;
         type Top<U> = Vec<U>;
         if header.schema != <Top<T> as NoritoDeserialize>::schema_hash() {
             return Err(Error::SchemaMismatch);
@@ -10577,11 +10106,11 @@ where
         let boxed: Box<dyn Read> = match header.compression {
             Compression::None => Box::new(reader),
             Compression::Zstd => {
-                #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+                #[cfg(feature = "compression")]
                 {
                     Box::new(zstd::Decoder::new(reader)?)
                 }
-                #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
+                #[cfg(not(feature = "compression"))]
                 {
                     return Err(std::io::Error::other("compression support disabled").into());
                 }
@@ -10925,7 +10454,7 @@ where
         use core::{Header, header_flags};
         use std::collections::{BTreeMap, HashMap};
         let header = Header::read(&mut reader)?;
-        core::prepare_header_decode(header.flags, header.minor, false)?;
+        core::prepare_header_decode(header.flags, false)?;
         if header.schema != expected_schema {
             return Err(Error::SchemaMismatch);
         }
@@ -10950,11 +10479,11 @@ where
         let mut r: Box<dyn Read> = match header.compression {
             Compression::None => Box::new(reader),
             Compression::Zstd => {
-                #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+                #[cfg(feature = "compression")]
                 {
                     Box::new(zstd::Decoder::new(reader)?)
                 }
-                #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
+                #[cfg(not(feature = "compression"))]
                 {
                     return Err(std::io::Error::other("compression support disabled").into());
                 }

@@ -11,9 +11,7 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
     let (lane_catalog, dataspace_catalog) = Queue::test_catalogs_for_routes(&routes);
     let kura_dir = tempdir().expect("authenticated queue Kura root");
     let lane_geometry = LaneGeometry::from_catalog(&lane_catalog);
-    let kura_config = KuraConfig {
-        init_mode: InitMode::Strict,
-        store_dir: WithOrigin::inline(kura_dir.path().join("kura")),
+    let kura_config = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(kura_dir.path().join("kura")),
         max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
         lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,

@@ -43,6 +43,7 @@ use super::{
         preflight_historical_autonomous_lane_recovery,
         validate_installed_historical_autonomous_lane_recoveries,
     },
+    v2_beacon::V2GlobalBeaconLifecycle,
     v2_block_sync::{
         CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
     },
@@ -123,7 +124,9 @@ pub(in crate::sumeragi) mod ordinary_ingress_consumer;
 #[path = "v2_runner/preactivation_ingress.rs"]
 mod preactivation_ingress;
 pub(in crate::sumeragi) use lifecycle_height_driver::{
-    LifecycleProducerClaimDispositionV1, drain_lifecycle_v2_ingress,
+    LifecycleApplyTerminalReadyBroadcastPermitV1, LifecycleBlockedOrdinaryLaneLocalIngressPermitV1,
+    LifecycleDecidedLaneRecoveryPermitV1, LifecycleProducerClaimDispositionV1,
+    drain_lifecycle_v2_ingress,
 };
 #[cfg(test)]
 use lifecycle_pending_kura::{PendingTipRecoveryDeadline, pending_tip_recovery_deadline_error};
@@ -888,6 +891,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         kura,
         provider_ingest_finalized_archive,
         reputation_finalized_archive,
+        global_beacon_partial_signer,
         startup_replay_plan,
         mut startup_replay_inventory_guard,
         network,
@@ -902,6 +906,22 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         consensus_frame_byte_capacity,
         block_sync_frame_byte_capacity,
     } = worker;
+    if kura.emergency_fast_startup_enabled() {
+        // Fast is a read-only emergency posture. Stop before active-height
+        // recovery: that path may hash the complete WSV, derive and persist
+        // H+1, repair lifecycle ledgers, or reconcile certified payload files.
+        // Strict startup remains the sole authority for all such recovery.
+        startup_replay_inventory_guard.finish();
+        ingress_ready.store(false, Ordering::Release);
+        block_rx.close();
+        iroha_logger::warn!(
+            "emergency Fast startup skipped Sumeragi recovery and keeps consensus ingress closed until a Strict restart"
+        );
+        while !shutdown_signal.is_sent() {
+            let _ = wake_rx.recv_timeout(IDLE_POLL);
+        }
+        return Ok(());
+    }
     // Reject an unsupported voting host before any recovery or durable
     // consensus constructor can touch validator storage. Observers remain
     // available for sync and query service on other platforms.
@@ -1030,6 +1050,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             kura,
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
+            global_beacon_partial_signer,
             network,
             block_rx,
             lane_relay_rx,
@@ -1071,6 +1092,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             kura,
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
+            global_beacon_partial_signer,
             network,
             block_rx,
             lane_relay_rx,
@@ -1166,6 +1188,7 @@ fn schedule_local_proposal(
     services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
     npos_vrf: &V2NposVrfLifecycle,
+    npos_beacon: &V2GlobalBeaconLifecycle,
     candidate_work_wait_bound: Duration,
 ) -> Result<(), V2RunnerError> {
     let directive = executor.local_proposal_directive()?;
@@ -1304,6 +1327,14 @@ fn schedule_local_proposal(
     if directive.locked_body().is_some() {
         return Ok(());
     }
+    if npos_beacon.pulse_requested()
+        && npos_beacon.pulse_required_for_consensus()
+        && npos_beacon
+            .finalized_pulse(directive.tag().view())
+            .is_none()
+    {
+        return Ok(());
+    }
     if context.height == 1 {
         let body = genesis_body.ok_or(V2RunnerError::MissingGenesisBody)?;
         // Genesis staging retains its deterministic execution image for application, while
@@ -1378,6 +1409,7 @@ fn schedule_local_proposal(
             directive.tag().view(),
             &carrier_context_header,
             npos_vrf,
+            npos_beacon,
             queue_plan_admissions,
         )?;
         let assembly = assembler.assemble(CandidateRequest {
@@ -1800,32 +1832,124 @@ fn commit_certificate_admission_completed(
         }
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum AdvanceExecutorYieldCheckpointV1 {
+    BeforeStep,
+    AfterStep,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum AdvanceExecutorYieldCauseV1 {
+    RecoveredLifecycleOutputCompleted,
+    RecoveredLifecycleOutputSourceRetained,
+    SettledLiveWalSign,
+    PendingLiveWalSign,
+    SettledLifecycleOutput,
+    PendingLifecycleOutput,
+    SettledDurableValidate,
+    PendingDurableValidate,
+}
+
+/// Exact short-circuit owner which made one serialized executor slice yield.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) struct AdvanceExecutorYieldV1 {
+    checkpoint: AdvanceExecutorYieldCheckpointV1,
+    cause: AdvanceExecutorYieldCauseV1,
+}
+
+impl AdvanceExecutorYieldV1 {
+    const fn new(
+        checkpoint: AdvanceExecutorYieldCheckpointV1,
+        cause: AdvanceExecutorYieldCauseV1,
+    ) -> Self {
+        Self { checkpoint, cause }
+    }
+}
+
+/// Exhaustive result of one bounded serialized executor slice.
+///
+/// `AdvancedAtSliceBoundary` records observed progress without claiming that
+/// the runtime is drained. Callers must therefore make an explicit fairness
+/// decision instead of treating budget exhaustion as `Idle`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum AdvanceExecutorSliceOutcomeV1 {
+    Idle,
+    AdvancedAtSliceBoundary,
+    Yielded(AdvanceExecutorYieldV1),
+}
+
 fn advance_executor(
     receiver: &FairV2Ingress,
     lifecycle_owner: &mut super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
     limit: usize,
-) -> Result<bool, V2RunnerError> {
+) -> Result<AdvanceExecutorSliceOutcomeV1, V2RunnerError> {
     for _ in 0..limit.max(1) {
-        if recovered_lifecycle_output_requires_yield(
-            super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
-                lifecycle_owner,
-                executor,
-                services,
-            )?,
-        ) || executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0
-            || executor.has_pending_live_wal_sign_admission()
-            || executor.settle_pending_lifecycle_output_admissions(lifecycle_owner, services)? > 0
-            || executor.has_pending_lifecycle_output_admissions()
-            || executor.settle_pending_durable_validate_admissions(lifecycle_owner, services)? > 0
-            || executor.has_pending_durable_validate_admissions()
+        let recovered = super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
+            lifecycle_owner,
+            executor,
+            services,
+        )?;
+        if let Some(cause) = recovered_lifecycle_output_yield_cause(recovered) {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(AdvanceExecutorYieldCheckpointV1::BeforeStep, cause),
+            ));
+        }
+        if executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0 {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::SettledLiveWalSign,
+                ),
+            ));
+        }
+        if executor.has_pending_live_wal_sign_admission() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::PendingLiveWalSign,
+                ),
+            ));
+        }
+        if executor
+            .settle_pending_lifecycle_output_admissions(lifecycle_owner, services)?
+            .requires_outer_executor_yield()
         {
-            return Ok(true);
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::SettledLifecycleOutput,
+                ),
+            ));
+        }
+        if executor.has_pending_lifecycle_output_admissions() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::PendingLifecycleOutput,
+                ),
+            ));
+        }
+        if executor.settle_pending_durable_validate_admissions(lifecycle_owner, services)? > 0 {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::SettledDurableValidate,
+                ),
+            ));
+        }
+        if executor.has_pending_durable_validate_admissions() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::PendingDurableValidate,
+                ),
+            ));
         }
         executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
         match executor.step(Instant::now(), services)? {
-            EffectExecutorStep::Idle => break,
+            EffectExecutorStep::Idle => return Ok(AdvanceExecutorSliceOutcomeV1::Idle),
             EffectExecutorStep::Advanced { .. } => {
                 // A PrepareQC can replace the protected lock without changing
                 // the EventTag. Reconcile immediately after every serialized
@@ -1834,23 +1958,89 @@ fn advance_executor(
                 let _ = reconcile_executor_locked_body(executor, services)?;
             }
         }
-        if recovered_lifecycle_output_requires_yield(
-            super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
-                lifecycle_owner,
-                executor,
-                services,
-            )?,
-        ) || executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0
-            || executor.has_pending_live_wal_sign_admission()
-            || executor.settle_pending_lifecycle_output_admissions(lifecycle_owner, services)? > 0
-            || executor.has_pending_lifecycle_output_admissions()
-            || executor.settle_pending_durable_validate_admissions(lifecycle_owner, services)? > 0
-            || executor.has_pending_durable_validate_admissions()
+        let recovered = super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
+            lifecycle_owner,
+            executor,
+            services,
+        )?;
+        if let Some(cause) = recovered_lifecycle_output_yield_cause(recovered) {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(AdvanceExecutorYieldCheckpointV1::AfterStep, cause),
+            ));
+        }
+        if executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0 {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::SettledLiveWalSign,
+                ),
+            ));
+        }
+        if executor.has_pending_live_wal_sign_admission() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::PendingLiveWalSign,
+                ),
+            ));
+        }
+        if executor
+            .settle_pending_lifecycle_output_admissions(lifecycle_owner, services)?
+            .requires_outer_executor_yield()
         {
-            return Ok(true);
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::SettledLifecycleOutput,
+                ),
+            ));
+        }
+        if executor.has_pending_lifecycle_output_admissions() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::PendingLifecycleOutput,
+                ),
+            ));
+        }
+        if executor.settle_pending_durable_validate_admissions(lifecycle_owner, services)? > 0 {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::SettledDurableValidate,
+                ),
+            ));
+        }
+        if executor.has_pending_durable_validate_admissions() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::PendingDurableValidate,
+                ),
+            ));
         }
     }
-    Ok(false)
+    Ok(AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary)
+}
+
+fn recovered_lifecycle_output_yield_cause(
+    settlement: super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1,
+) -> Option<AdvanceExecutorYieldCauseV1> {
+    if !recovered_lifecycle_output_requires_yield(settlement) {
+        return None;
+    }
+    match settlement {
+        super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed => {
+            Some(AdvanceExecutorYieldCauseV1::RecoveredLifecycleOutputCompleted)
+        }
+        super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::SourceRetained => {
+            Some(AdvanceExecutorYieldCauseV1::RecoveredLifecycleOutputSourceRetained)
+        }
+        super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty
+        | super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Deferred => {
+            unreachable!("non-yielding recovered output passed the exhaustive classifier")
+        }
+    }
 }
 fn recovered_lifecycle_output_requires_yield(
     settlement: super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1,
@@ -1937,6 +2127,12 @@ fn claim_runner_lifecycle_process_generation(
 ) -> Result<Option<AutonomousLifecycleProcessGenerationClaim>, V2RunnerError> {
     match role {
         NodeRole::Observer => Ok(None),
+        NodeRole::Validator if kura.emergency_fast_startup_enabled() => {
+            iroha_logger::warn!(
+                "emergency Fast startup left the validator process generation untouched and disabled local lifecycle production until a Strict restart"
+            );
+            Ok(None)
+        }
         NodeRole::Validator => kura
             .claim_autonomous_lifecycle_process_generation(context.network_id, local_peer)
             .map(Some)
@@ -2116,6 +2312,7 @@ fn candidate_attachments(
     view: wire::View,
     round_header: &BlockHeader,
     npos_vrf: &V2NposVrfLifecycle,
+    npos_beacon: &V2GlobalBeaconLifecycle,
     queue_plan_admissions: Vec<Vec<u8>>,
 ) -> Result<CandidateAttachments, V2RunnerError> {
     if round_header.height().get() != context.height
@@ -2128,7 +2325,7 @@ fn candidate_attachments(
             "certified merge carrier probe differs from the frozen round".to_owned(),
         ));
     }
-    let effects = if context.mode == wire::ConsensusMode::Npos {
+    let mut effects = if context.mode == wire::ConsensusMode::Npos {
         super::penalties::PenaltyApplier::from_parts(
             state,
             #[cfg(feature = "telemetry")]
@@ -2141,6 +2338,9 @@ fn candidate_attachments(
     } else {
         Default::default()
     };
+    npos_beacon
+        .attach_candidate_effects(view, &mut effects)
+        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
     let npos_consensus_effects = (!effects.is_empty()).then_some(effects);
     super::v2_npos::validate_candidate_records(context, state, npos_consensus_effects.as_ref())
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
@@ -2162,6 +2362,7 @@ fn candidate_attachments(
                 round_header,
                 expected_merge_epoch,
                 merge_selection,
+                context.mode,
             )
             .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
     } else {

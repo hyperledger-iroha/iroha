@@ -4,7 +4,9 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::BlockMessage;
-use crate::sumeragi::v2_lifecycle_coordinator::reviewed_lifecycle_ledger_source_for_test;
+use crate::sumeragi::v2_lifecycle_coordinator::{
+    reviewed_lifecycle_ledger_source_for_test, reviewed_v2_effects_source_for_test,
+};
 
 fn source_region<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     let Some((_, after_start)) = source.split_once(start) else {
@@ -483,12 +485,13 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         include_str!("v2_worker_services_impl.rs"),
         include_str!("v2_worker/effect_services_impl.rs")
     );
-    let effects_source = include_str!("v2_effects.rs");
+    let effects_source = reviewed_v2_effects_source_for_test();
     let runtime_source =
         crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
     let runner_source = include_str!("v2_runner.rs");
     let lifecycle_run_inner_source = include_str!("v2_runner/lifecycle_run_inner.rs");
-    let lifecycle_scheduler_source = include_str!("v2_lifecycle_scheduler_inputs.rs");
+    let lifecycle_scheduler_completion_source =
+        include_str!("tests/v2_lifecycle_scheduler_completion_cases.rs");
     let pending_kura_lifecycle_source = include_str!("v2_runner/lifecycle_pending_kura.rs");
     let runner_authority_source = concat!(
         include_str!("v2_runner/lifecycle_runner_authority.rs"),
@@ -810,6 +813,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "V2EffectExecutor::open_with_body_store(",
             "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
             "executor\n                .install_authenticated_genesis_body(authenticated_genesis)",
+            ".recovered_published_store_retry_markers()",
+            ".install_recovered_published_lifecycle_store_retry_marker(",
             ".recovered_published_validate_retry_markers()",
             ".install_recovered_published_lifecycle_validate_retry_marker(",
             "ProductionV2Services::start_with_apply_service(",
@@ -1331,7 +1336,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     );
     let finalization_readiness = source_region(
         &source,
-        "fn ready_for_finalized_rollover(&mut self) -> bool {",
+        "fn ready_for_finalized_rollover(\n        &mut self,\n    ) -> Result<bool, ProductionLifecycleFinalizationErrorV1> {",
         "impl ActivatedProductionLifecycleV1",
     );
     let owner_token = "let Self {\n            mut launched,\n            local_proposal,\n            runner_activation,";
@@ -1346,11 +1351,13 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "self.pending_ingress_capacity.is_none()",
             "self.completion_observer_activation.is_none()",
             "exactly_covers_finalization_work(&self.owner.coordinator)",
+            "verify_published_store_marker_finalization_census()",
+            "ProductionLifecycleFinalizationErrorV1::StoreMarkerCensus",
         ],
     );
     assert_source_tokens_in_order(
         activated_finalization,
-        &["!self.launched.ready_for_finalized_rollover()", owner_token],
+        &["!self.launched.ready_for_finalized_rollover()?", owner_token],
     );
     assert_source_tokens_in_order(
         activated_finalization,
@@ -1371,15 +1378,14 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some())",
             "schedule_local_proposal(",
             "let finalization_ready =",
-            "activated.ready_for_finalized_rollover(&mut active_runner)",
+            "activated.ready_for_finalized_rollover(&mut active_runner)?",
             "let rollover_ready = if finalization_ready",
             "preflight_finalized_lane_rollover(",
             "if ready_to_finish && !rollover_ready",
             "if rollover_ready",
             "close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)",
             "let drained_terminal_ingress = activated.with_runner_runtime(\n                &mut active_runner,\n                |_owner, executor, services, _local_proposal| {\n                    let drained = drain_decided_lane_recovery_ingress(",
-            "if drained_terminal_ingress",
-            "continue;",
+            "if drained_terminal_ingress {\n                continue;\n            }",
             "ensure_closed_drained_cut()",
             "finalize_lifecycle_height(",
         ],
@@ -1633,18 +1639,18 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         ],
     );
     assert!(lifecycle_run_inner_source.contains(
-        "let finalization_ready =\n            ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner);"
+        "let finalization_ready = if ready_to_finish {\n            activated.ready_for_finalized_rollover(&mut active_runner)?\n        } else {\n            false\n        };"
     ));
-    assert!(lifecycle_scheduler_source.contains(
+    assert!(lifecycle_scheduler_completion_source.contains(
         "finalization accepts the exact volatile refanout wait after its next Sign retires"
     ));
     assert!(
-        lifecycle_scheduler_source.contains(
+        lifecycle_scheduler_completion_source.contains(
             "finalization rejects a corrupted retained digest after paired Sign retirement"
         )
     );
     assert!(
-        lifecycle_scheduler_source.contains(
+        lifecycle_scheduler_completion_source.contains(
             "fn finalization_waits_for_every_authenticated_recovered_broadcast_refanout()"
         )
     );
@@ -2274,578 +2280,5 @@ fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart
     assert_forbidden_source_tokens(tail, &["return ", ".is_err()", "?"]);
 }
 
-#[test]
-fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_and_commit() {
-    let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
-    let dispatch = scheduler
-        .split_once("fn dispatch_completion_with_runner_debt(")
-        .expect("lifecycle Completion has one composite dispatch transaction")
-        .1
-        .split_once(
-            "/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.",
-        )
-        .expect("composite dispatch stays a bounded source region")
-        .0;
-    let census = dispatch
-        .find("capture_lifecycle_completion_capacity_census(probes)")
-        .expect("the joint physical census is captured");
-    let claim = dispatch
-        .find("self.coordinator.plan_turn(inputs)")
-        .expect("coordinator claim exists");
-    let output = dispatch
-        .find(".select_fetch(ordinal)")
-        .expect("the selected Fetch owns exact output");
-    let executor = dispatch
-        .find("prepare_recovered_decision_fetch_request_registration(owner)")
-        .expect("executor vacancy is reserved");
-    let staged_wait = dispatch
-        .find("let mut next = self.coordinator.stage_durable_transaction();")
-        .expect("the exact external wait is staged before owner mutation");
-    let registry = dispatch
-        .find("prepare_recovered_decision_fetch_dispatch(")
-        .expect("the claimed row projects its exact task");
-    let commit = dispatch
-        .find("registration.commit(prepared, wait_source)")
-        .expect("request owner has one commit tail");
-    let waiting = dispatch
-        .find("self.coordinator = next;")
-        .expect("the claimed Fetch is parked before external publication");
-    let publication = dispatch
-        .find("output.commit();")
-        .expect("exact output publishes after request installation");
-    assert!(
-        census < claim
-            && claim < output
-            && output < executor
-            && executor < staged_wait
-            && staged_wait < registry
-            && registry < commit
-            && commit < waiting
-            && waiting < publication
-    );
-}
-
-#[test]
-fn recovered_decision_fetch_queue_parks_generic_drain_and_uses_unified_completion_classifier() {
-    let worker = [
-        include_str!("v2_worker.rs"),
-        include_str!("v2_worker_services_impl.rs"),
-    ]
-    .concat();
-    let generic = worker
-        .split_once("fn take_io_completion(")
-        .expect("generic completion selector exists")
-        .1
-        .split_once("fn take_recovered_lifecycle_sign_completion(")
-        .expect("generic selector stays bounded")
-        .0;
-    assert!(generic.contains("V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)"));
-    assert!(generic.contains("self.held_io_completion = Some(completion);"));
-    let classifier = worker
-        .split_once("fn take_next_lifecycle_completion(")
-        .expect("unified recovered lifecycle classifier exists")
-        .1
-        .split_once("pub(in crate::sumeragi) fn drain_recovered_lifecycle_sign_completion(")
-        .expect("unified classifier stays bounded")
-        .0;
-    assert!(classifier.contains("V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded)"));
-    assert!(classifier.contains("LifecycleCompletionTakeV1::DecisionFetch("));
-    assert!(worker.contains("tracked.state = V2IoWorkState::Active;"));
-    assert!(worker.contains("tracked.state = V2IoWorkState::CompletionPending;"));
-    assert!(!worker.contains("drain_recovered_decision_fetch_body_completion"));
-}
-
-#[test]
-fn ordinary_certified_body_pipeline_has_no_retained_compatibility_carrier() {
-    let effects = include_str!("v2_effects.rs");
-    let runtime = include_str!("v2_runtime.rs");
-    let run_inner = include_str!("v2_runner/lifecycle_run_inner.rs");
-    let ordinary_consumer = include_str!("v2_runner/ordinary_ingress_consumer.rs");
-    let turn_driver = include_str!("v2_lifecycle_turn_driver.rs");
-
-    for (source, forbidden) in [
-        (effects, concat!("RetainedCertifiedBody", "Response")),
-        (effects, concat!("retained_certified_body_", "response")),
-        (
-            effects,
-            concat!("accept_certified_body_", "response_with_ingress_ownership"),
-        ),
-        (runtime, "retained_response_predecessor_target_ordinal"),
-        (runtime, "retained_response_predecessor_retry_attempted"),
-        (
-            run_inner,
-            concat!("service_retained_certified_", "response"),
-        ),
-        (
-            run_inner,
-            concat!("retry_retained_certified_body_", "response"),
-        ),
-    ] {
-        assert!(
-            !source.contains(forbidden),
-            "retired ordinary response compatibility surface returned: {forbidden}",
-        );
-    }
-    assert!(
-        ordinary_consumer.contains("retired certified body response outside lifecycle selection")
-    );
-    assert!(
-        ordinary_consumer
-            .contains("a selected fetch response must instead complete through lifecycle")
-    );
-    assert!(!ordinary_consumer.contains(concat!("accept_certified_body_", "response(")));
-    assert!(turn_driver.contains("drive_certified_fetch_ingress_selector(selector, runner)"));
-    assert!(turn_driver.contains("complete_certified_fetch_body_persistence("));
-}
-
-#[test]
-fn registered_validate_sidecar_barrier_services_only_lane_transport_before_yield() {
-    let run_inner = include_str!("v2_runner/lifecycle_run_inner.rs");
-    let barrier = source_region(
-        run_inner,
-        "let lane_only_completion_barrier = producer_claim.blocks_runtime();",
-        "let discovery_was_outstanding = if lane_only_completion_barrier",
-    );
-    assert_source_tokens_in_order(
-        barrier,
-        &[
-            "if lane_only_completion_barrier",
-            "drain_lane_relay_ingress(",
-            "lane_work.schedule_retransmission()?",
-            "dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)",
-        ],
-    );
-    assert!(!barrier.contains("advance_executor("));
-
-    let post_drain = source_region(
-        run_inner,
-        "producer_claim = drain_disposition.producer_claim();",
-        "let (ready_to_finish, lifecycle_yield)",
-    );
-    assert_source_tokens_in_order(
-        post_drain,
-        &[
-            "if drain_disposition.requires_yield()",
-            "wake_rx.recv_timeout(IDLE_POLL)",
-            "continue;",
-        ],
-    );
-}
-
-#[test]
-fn recovered_decision_fetch_phase_a_is_reachable_only_after_runner_validation() {
-    let driver = include_str!("v2_lifecycle_turn_driver.rs");
-    let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
-    let ingress_turn = driver
-        .split_once("pub(in crate::sumeragi) fn drive_ingress_turn")
-        .expect("unified ingress driver exists")
-        .1
-        .split_once("fn drive_recovered_ingress_selector")
-        .expect("runner validation precedes the recovered Phase-A helper")
-        .0;
-    let cursor = ingress_turn
-        .find("if !self.runner_turn_matches(")
-        .expect("the driver validates the borrow-bound runner");
-    let handoff = ingress_turn
-        .find("self.drive_recovered_ingress_selector(selector, runner)")
-        .expect("the validated runner enters recovered Phase A");
-    assert!(cursor < handoff);
-    assert!(driver.contains("persist_recovered_decision_fetch_response_after_runner("));
-    assert!(!scheduler.contains("fn persist_recovered_decision_fetch_response("));
-}
-
-#[test]
-fn authenticated_current_serve_context_drift_fails_closed_instead_of_retrying() {
-    let driver = include_str!("v2_lifecycle_turn_driver.rs");
-    let narrowing = source_region(
-        driver,
-        "let expected_context = lifecycle_context_for_ingress(executor.context());",
-        "let selector = match executor.capture_lifecycle_ingress_selector(lifecycle_cut)",
-    );
-    assert_source_tokens_in_order(
-        narrowing,
-        &[
-            "Ok(FairIngressTurnContextCut::Ordinary(cut))",
-            "authenticated current Certified-Serve lost its active lifecycle context",
-            "close_admission_for_restart()",
-            "drop(cut);",
-            "drop(runner);",
-            "ProductionLifecycleIngressSelectionV1::RestartRequired",
-        ],
-    );
-    assert!(!driver.contains("OrdinaryRetained"));
-}
-
-#[test]
-fn authenticated_current_serve_queue_refresh_retries_without_closing_output() {
-    let driver = include_str!("v2_lifecycle_turn_driver.rs");
-    let narrowing = source_region(
-        driver,
-        "let expected_context = lifecycle_context_for_ingress(executor.context());",
-        "let selector = match executor.capture_lifecycle_ingress_selector(lifecycle_cut)",
-    );
-    let retry = source_region(
-        narrowing,
-        "Err((FairIngressQueueCutError::QueueCutChanged, retained))",
-        "Err((error, retained))",
-    );
-    assert_source_tokens_in_order(
-        retry,
-        &[
-            "drop(retained);",
-            "drop(runner);",
-            "ProductionLifecycleIngressSelectionV1::CertifiedServeRetry",
-        ],
-    );
-    assert!(!retry.contains("close_admission_for_restart()"));
-
-    let structural_failure = source_region(
-        driver,
-        "Err((error, retained))",
-        "let selector = match executor.capture_lifecycle_ingress_selector(lifecycle_cut)",
-    );
-    assert_source_tokens_in_order(
-        structural_failure,
-        &[
-            "close_admission_for_restart()",
-            "drop(retained);",
-            "drop(runner);",
-            "ProductionLifecycleIngressSelectionV1::RestartRequired",
-        ],
-    );
-
-    let selector_capture = source_region(
-        driver,
-        "let selector = match executor.capture_lifecycle_ingress_selector(lifecycle_cut)",
-        "let (dequeue, target)",
-    );
-    let selector_retry = source_region(
-        selector_capture,
-        "Err(LifecycleIngressSelectorError::QueueCutChanged)",
-        "Err(error)",
-    );
-    assert_source_tokens_in_order(
-        selector_retry,
-        &[
-            "drop(runner);",
-            "ProductionLifecycleIngressSelectionV1::CertifiedServeRetry",
-        ],
-    );
-    assert!(!selector_retry.contains("close_admission_for_restart()"));
-
-    let selector_structural_failure = source_region(
-        driver,
-        "authenticated current Certified-Serve selector capture failed closed",
-        "let (dequeue, target)",
-    );
-    assert_source_tokens_in_order(
-        selector_structural_failure,
-        &[
-            "close_admission_for_restart()",
-            "drop(runner);",
-            "ProductionLifecycleIngressSelectionV1::RestartRequired",
-        ],
-    );
-
-    let exact_dequeue = source_region(driver, "let (dequeue, target)", "let ready_ledger =");
-    let exact_dequeue_retry = source_region(
-        exact_dequeue,
-        "Err(CertifiedServeExactDequeueErrorV1::Queue(",
-        "Err(error)",
-    );
-    assert_source_tokens_in_order(
-        exact_dequeue_retry,
-        &[
-            "FairIngressQueueCutError::QueueCutChanged",
-            "drop(runner);",
-            "ProductionLifecycleIngressSelectionV1::CertifiedServeRetry",
-        ],
-    );
-    assert!(!exact_dequeue_retry.contains("close_admission_for_restart()"));
-
-    let exact_dequeue_structural_failure = source_region(
-        driver,
-        "Certified-Serve exact dequeue failed closed",
-        "let ready_ledger =",
-    );
-    assert_source_tokens_in_order(
-        exact_dequeue_structural_failure,
-        &[
-            "close_admission_for_restart()",
-            "drop(runner);",
-            "ProductionLifecycleIngressSelectionV1::RestartRequired",
-        ],
-    );
-}
-
-#[test]
-fn certified_response_queue_refresh_retries_without_closing_output() {
-    let driver = include_str!("v2_lifecycle_turn_driver.rs");
-    let response_path = source_region(
-        driver,
-        "if !selected_ingress_is_certified_body_response",
-        "fn drive_recovered_ingress_selector",
-    );
-
-    let narrowing = source_region(
-        response_path,
-        "let expected_context = lifecycle_context_for_ingress(self.executor.context());",
-        "match contextual",
-    );
-    let narrowing_retry = source_region(
-        narrowing,
-        "Err((FairIngressQueueCutError::QueueCutChanged, retained))",
-        "Err((error, retained))",
-    );
-    assert_source_tokens_in_order(
-        narrowing_retry,
-        &[
-            "drop(retained);",
-            "drop(runner);",
-            "ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry",
-        ],
-    );
-    assert!(!narrowing_retry.contains("close_output_for_restart()"));
-
-    assert_source_tokens_in_order(
-        response_path,
-        &[
-            "classify_selected_certified_response_priority(&cut)",
-            "SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority",
-            "cut.into_ordinary_turn_cut()",
-            "SelectedCertifiedResponsePriorityV1::OrdinaryClaimed",
-            "capture_lifecycle_ingress_selector(cut)",
-            "self.drive_certified_fetch_ingress_selector(selector, runner)",
-            "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
-            "prepare_recovered_decision_fetch_from_selected_cut(cut)",
-            "self.drive_recovered_ingress_selector(selector, runner)",
-        ],
-    );
-
-    let priority = source_region(
-        response_path,
-        "let selected_priority = match self",
-        "match selected_priority",
-    );
-    let ordinary = source_region(
-        response_path,
-        "SelectedCertifiedResponsePriorityV1::OrdinaryClaimed",
-        "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
-    );
-    let recovered = source_region(
-        response_path,
-        "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
-        "self.drive_recovered_ingress_selector(selector, runner)",
-    );
-
-    for structural_failure in [
-        source_region(narrowing, "Err((error, retained))", "};"),
-        source_region(priority, "Err(error)", "};"),
-        source_region(ordinary, "Err(error)", "};"),
-        source_region(recovered, "Err(error)", "};"),
-    ] {
-        assert_source_tokens_in_order(
-            structural_failure,
-            &[
-                "close_output_for_restart();",
-                "drop(runner);",
-                "ProductionLifecycleIngressSelectionV1::RestartRequired",
-            ],
-        );
-    }
-}
-
-#[test]
-fn recovered_decision_fetch_phase_a_wakes_waiting_owner_before_queue_publication() {
-    let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
-    let registry = include_str!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs");
-    let phase_a = source_region(
-        scheduler,
-        "pub(super) fn persist_recovered_decision_fetch_response_after_runner(",
-        "/// Plan, submit, and reblock one exact selected certified-Fetch response.",
-    );
-    assert_source_tokens_in_order(
-        phase_a,
-        &[
-            "self.coordinator.active_lease.is_some()",
-            "attest_scheduler_recovered_fetch_carrier(",
-            "capture_lifecycle_capacity_rank(selector)",
-            "authenticated_waiting_fetch_ready_row(",
-            "prepare_recovered_decision_fetch_response_claim(&task)",
-            "let mut next = self.coordinator.stage_durable_transaction();",
-            "let lease = match next.plan_turn(inputs)",
-            "matches_claimed_dispatched_recovered_decision_fetch(",
-            "self.coordinator = next;",
-            "claim.commit_with_queue(reservation, task);",
-        ],
-    );
-    let swap = source_token_position(phase_a, "self.coordinator = next;");
-    let tail = &phase_a[swap..];
-    assert!(!tail.contains("return Err"));
-    assert!(!tail.contains("settle_turn("));
-    assert!(tail.contains("assert_eq!(self.coordinator.active_lease.as_ref(), Some(&lease))"));
-    let waiting_carrier = source_region(
-        registry,
-        "pub(super) fn matches_waiting_dispatched_recovered_decision_fetch(",
-        "/// Join one exact claimed recovered Decision Fetch back to its closed carrier.",
-    );
-    assert_required_source_tokens(
-        waiting_carrier,
-        &[
-            "coordinator.records.iter().any",
-            "*candidate != ordinal",
-            "wait.source() == wait_source",
-        ],
-    );
-}
-
-#[test]
-fn recovered_decision_fetch_response_claim_precedes_assertion_only_queue_publication() {
-    let effects = include_str!("v2_effects.rs");
-    let commit = effects
-        .split_once("pub(in crate::sumeragi) fn commit_with_queue(")
-        .expect("recovered response has one composite commit")
-        .1
-        .split_once("impl RecoveredDecisionFetchResponseCandidateV1")
-        .expect("composite commit stays bounded")
-        .0;
-    let claim = commit
-        .find("owner.commit_exact_response_claim(response_hash)")
-        .expect("exact response claim is installed");
-    let queue = commit
-        .find("queue.commit_recovered_decision_fetch_body_persistence(task)")
-        .expect("dedicated persistence is published");
-    assert!(claim < queue);
-    assert!(commit.contains("assert!(owner.matches_response_claim_preflight"));
-    let worker = include_str!("v2_worker.rs");
-    let queue_commit = worker
-        .split_once("fn commit_recovered_decision_fetch_body_persistence(")
-        .expect("dedicated queue commit exists")
-        .1
-        .split_once("#[cfg(test)]")
-        .expect("queue commit stays bounded")
-        .0;
-    assert!(queue_commit.contains("assert!("));
-    assert!(!queue_commit.contains("return Err"));
-}
-
-#[test]
-fn recovered_decision_fetch_store_settlement_is_restart_closed_and_tail_infallible() {
-    let launch = include_str!("v2_lifecycle_launch.rs");
-    let settlement = launch
-        .split_once("pub(in crate::sumeragi) fn settle_recovered_decision_fetch_store(")
-        .expect("recovered Fetch has one Store settlement transaction")
-        .1
-        .split_once("/// Reserve, claim, and queue one recovered Sign")
-        .expect("recovered Fetch Store settlement stays bounded")
-        .0;
-    let selector = settlement
-        .find("prepare_lifecycle_ingress_selector(")
-        .expect("fresh selector preflight exists");
-    let request = settlement
-        .find("prepare_recovered_decision_fetch_owner_retirement(")
-        .expect("request/response retirement preflight exists");
-    let ingress = settlement
-        .find("into_locked_recovered_decision_fetch_dequeue(")
-        .expect("exact ingress occurrence is locked");
-    let carrier = settlement
-        .find("prepare_recovered_decision_fetch_store_adapter_authority(")
-        .expect("claimed recovered carrier preflight exists");
-    let adapter = settlement
-        .find("prepare_recovered_decision_fetch_store_adapter(")
-        .expect("fixed reducer preview exists");
-    let registry = settlement
-        .find("prepare_recovered_decision_fetch_store_successor(")
-        .expect("dedicated Store carrier preflight exists");
-    let transition = settlement
-        .find("prepare_recovered_decision_fetch_store_transition(")
-        .expect("Fetch-to-Store coordinator successor is staged");
-    let output = settlement
-        .find("begin_fail_stop_operation()")
-        .expect("output fail-stop cut precedes publication");
-    let fsync = settlement
-        .find("transition.persist_exact_successor().is_err()")
-        .expect("exact LedgerV1 successor is fsynced once");
-    let coordinator_commit = settlement
-        .find("transition.commit_after_publication();")
-        .expect("coordinator/registry/adapter tail exists");
-    let request_commit = settlement
-        .find("commit_recovered_decision_fetch_owner_retirement(retirement);")
-        .expect("dedicated request owner retires after publication");
-    let ingress_commit = settlement
-        .find("locked_dequeue.commit();")
-        .expect("locked ingress occurrence retires after publication");
-    let worker_commit = settlement
-        .find("completion.acknowledge_after_publication();")
-        .expect("worker owner retires and disarms after publication");
-    let output_commit = settlement
-        .find("operation.complete();")
-        .expect("output fail-stop cut closes last");
-    assert!(
-        selector < request
-            && request < ingress
-            && ingress < carrier
-            && carrier < adapter
-            && adapter < registry
-            && registry < transition
-            && transition < output
-            && output < fsync
-            && fsync < coordinator_commit
-            && coordinator_commit < request_commit
-            && request_commit < ingress_commit
-            && ingress_commit < worker_commit
-            && worker_commit < output_commit
-    );
-    let tail = &settlement[coordinator_commit..];
-    assert!(!tail.contains("return "));
-    assert!(!tail.contains("Result<"));
-    assert!(!tail.contains(".is_err()"));
-
-    let worker = include_str!("v2_worker_completion.rs");
-    let guarded = worker
-        .split_once("impl GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1 {")
-        .expect("recovered Fetch completion has one armed guard")
-        .1
-        .split_once("impl GuardedCertifiedFetchBodyPersistenceCompletion")
-        .expect("recovered Fetch guard stays bounded")
-        .0;
-    assert!(guarded.contains("let _completion = self"));
-    assert!(guarded.contains(".take()"));
-    assert!(guarded.contains("self.drop_guard.disarm();"));
-    let prepared = worker
-        .split_once("impl PreparedRecoveredDecisionFetchBodyCompletionV1 {")
-        .expect("parked recovered Fetch completion has one consuming acknowledgement")
-        .1
-        .split_once("impl PreparedRecoveredLifecycleSignCompletionV1")
-        .expect("parked recovered Fetch acknowledgement stays bounded")
-        .0;
-    let index = prepared
-        .find("acknowledge_recovered_decision_fetch_body(key, id, response_hash);")
-        .expect("exact worker index is removed");
-    let disarm = prepared
-        .find("self.guarded.acknowledge_after_publication();")
-        .expect("restart guard is disarmed after index removal");
-    assert!(index < disarm);
-
-    let ledger = [
-        include_str!("v2_lifecycle_ledger.rs"),
-        include_str!("v2_lifecycle_ledger_operations.rs"),
-    ]
-    .concat();
-    let open = include_str!("v2_lifecycle_open.rs");
-    let registry_source = [
-        include_str!("v2_lifecycle_work_registry_validate_recovery.rs"),
-        include_str!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs"),
-    ]
-    .concat();
-    for required in [
-        "authenticate_recovered_decision_fetch_store",
-        "open_recovered_decision_store_startup",
-        "stage_recovered_decision_apply_projection",
-        "successor_records_after_live_store",
-    ] {
-        assert!(ledger.contains(required), "cold restart omitted {required}");
-    }
-    assert!(open.contains("RecoveredWalStartupProjectionV1::DecisionStore"));
-    assert!(registry_source.contains("install_recovered_wal_decision_store"));
-}
+include!("v2_lifecycle_launch_recovered_fetch_source_tests.rs");
+include!("v2_lifecycle_launch_recovered_fetch_settlement_source_tests.rs");

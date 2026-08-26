@@ -3743,6 +3743,8 @@ pub struct ProductionLeaderWireAdmissionTraceProjection {
     pub runtime_owner_after: bool,
     pub terminal_evidence_before: bool,
     pub terminal_evidence_after: bool,
+    pub incoming_phase_is_timeout_certificate: bool,
+    pub incumbent_phase_is_timeout_certificate: bool,
 }
 /// Verus-side primitive two-stage daemon retry trace.
 #[derive(Copy, Clone)]
@@ -4941,9 +4943,7 @@ pub proof fn production_ingress_reservation_materialization_refines_protected_ow
     reveal(check_production_ingress_reservation_materialization_transition);
     reveal(production_ingress_reservation_materialization_refines_protected_ownership_kernel);
 }
-/// One durable leader-wire admission preserves immutable identity and ordinal
-/// ownership, consumes restart-dormant potential atomically, or coalesces
-/// without mutation.
+/// One durable leader-wire admission preserves identity and ordinals, consumes restart-dormant potential atomically, or coalesces without mutation.
 pub proof fn production_leader_wire_admission_trace_refines_lifecycle_ownership(
     projection: ProductionLeaderWireAdmissionTraceProjection,
 )
@@ -4986,7 +4986,10 @@ pub proof fn production_leader_wire_admission_trace_refines_lifecycle_ownership(
             )
             && (
                 projection.operation == LEADER_WIRE_ADMISSION_REPLACE_TERMINAL
-                ==> projection.incoming_view > projection.incumbent_view
+                ==> (projection.incoming_view > projection.incumbent_view
+                        || (projection.incoming_phase_is_timeout_certificate
+                            && projection.incumbent_phase_is_timeout_certificate
+                            && projection.incoming_view == projection.incumbent_view))
                     && projection.incoming_admission_ordinal
                         > projection.incumbent_admission_ordinal
                     && projection.incoming_scheduler_ordinal
@@ -4997,8 +5000,7 @@ pub proof fn production_leader_wire_admission_trace_refines_lifecycle_ownership(
     reveal(check_production_leader_wire_admission_transition);
     reveal(production_leader_wire_admission_refines_lifecycle_ownership_kernel);
 }
-/// One exact retry preserves its authenticated source owner and rotates both
-/// the outer source and inner-source FIFO item to finite fair ranks.
+/// One exact retry preserves its authenticated source owner and rotates both FIFO ranks fairly.
 pub proof fn production_two_stage_relay_retry_trace_refines_source_fairness(
     projection: ProductionTwoStageRelayRetryTraceProjection,
 )
@@ -5016,9 +5018,7 @@ pub proof fn production_two_stage_relay_retry_trace_refines_source_fairness(
     reveal(check_production_two_stage_relay_retry_transition);
     reveal(production_two_stage_relay_retry_trace_refines_source_fairness_kernel);
 }
-/// Writer completion and lane application are one linked occurrence: the
-/// exact marker and cursors advance once, sibling state is unchanged, and the
-/// target is either retained at its fair rank or removed completely.
+/// Writer completion and lane application advance one exact marker and either retain or remove the target.
 pub proof fn production_reliable_flush_trace_refines_outbound_ownership(
     worker: ProductionReliableFlushTraceProjection,
     application: ProductionReliableFlushApplicationProjection,

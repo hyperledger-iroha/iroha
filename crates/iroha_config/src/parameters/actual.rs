@@ -208,8 +208,6 @@ pub struct SoracloudRuntime {
     pub submission: SoracloudRuntimeSubmission,
     /// Outbound egress policy enforced by the embedded runtime manager.
     pub egress: SoracloudRuntimeEgress,
-    /// Hugging Face metadata importer settings.
-    pub hf: SoracloudRuntimeHuggingFace,
 }
 impl_default!(SoracloudRuntime => {
         Self {
@@ -223,7 +221,6 @@ impl_default!(SoracloudRuntime => {
             inrou: SoracloudRuntimeInrou::default(),
             submission: SoracloudRuntimeSubmission::default(),
             egress: SoracloudRuntimeEgress::default(),
-            hf: SoracloudRuntimeHuggingFace::default(),
         }
 });
 impl SoracloudRuntime {
@@ -515,45 +512,6 @@ impl_default!(SoracloudRuntimeEgress => {
                 .and_then(NonZeroU32::new),
             max_bytes_per_minute: defaults::soracloud_runtime::EGRESS_MAX_BYTES_PER_MINUTE
                 .and_then(NonZeroU64::new),
-        }
-});
-/// Hugging Face importer settings for the embedded Soracloud runtime manager.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SoracloudRuntimeHuggingFace {
-    /// Base URL used to resolve repo files from the Hub.
-    pub hub_base_url: String,
-    /// Base URL used to fetch model metadata from the Hub API.
-    pub api_base_url: String,
-    /// Timeout applied to Hugging Face API and file requests.
-    pub request_timeout: Duration,
-    /// Exact HTTPS origins admitted for cross-origin importer redirects.
-    pub import_redirect_allowed_origins: Vec<String>,
-    /// Maximum number of files imported into the node-local shared cache for one source.
-    pub import_max_files: u32,
-    /// Maximum size of one imported Hub file.
-    pub import_max_file_bytes: u64,
-    /// Maximum aggregate size imported for one Hub source.
-    pub import_max_total_bytes: u64,
-    /// Maximum in-memory response accepted from the Hub model-info API.
-    pub model_info_max_response_bytes: u64,
-    /// File-selection allowlist used by the local importer.
-    pub import_file_allowlist: Vec<String>,
-}
-impl_default!(SoracloudRuntimeHuggingFace => {
-        Self {
-            hub_base_url: defaults::soracloud_runtime::hf::HUB_BASE_URL.to_owned(),
-            api_base_url: defaults::soracloud_runtime::hf::API_BASE_URL.to_owned(),
-            request_timeout: Duration::from_millis(
-                defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS,
-            ),
-            import_redirect_allowed_origins:
-                defaults::soracloud_runtime::hf::import_redirect_allowed_origins(),
-            import_max_files: defaults::soracloud_runtime::hf::IMPORT_MAX_FILES,
-            import_max_file_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES,
-            import_max_total_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES,
-            model_info_max_response_bytes:
-                defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES,
-            import_file_allowlist: defaults::soracloud_runtime::hf::import_file_allowlist(),
         }
 });
 /// See [`Root::from_toml_source`]
@@ -2049,6 +2007,107 @@ impl_default!(RuntimeUpgradeProvenancePolicy => {
                 defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD,
         }
 });
+/// Consensus-critical deterministic block-height and resource policy for private Parliament ballots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParliamentTimedOvn {
+    /// Consensus block-height span allotted to proof-validated registration submissions.
+    pub registration_phase_blocks: u64,
+    /// Consensus block-height span allotted to freezing pre-ballot dropouts and survivors.
+    pub survivor_freeze_phase_blocks: u64,
+    /// Consensus block-height span allotted to the exact masked-ballot commitment corpus.
+    pub commitment_phase_blocks: u64,
+    /// Consensus block-height span between commitment close and the earliest timed release.
+    pub release_delay_blocks: u64,
+    /// Consensus block-height grace window for aggregate opening after release begins.
+    pub opening_phase_blocks: u64,
+    /// Retry attempts permitted after the initial private ballot attempt, capped at 16.
+    pub max_ballot_retries: u32,
+    /// Maximum entries retained in any registration, survivor, or ballot corpus, capped at 1,000.
+    pub max_corpus_entries: u32,
+}
+impl ParliamentTimedOvn {
+    /// Return the complete sequential ballot-attempt span when it fits in `u64`.
+    #[must_use]
+    pub fn checked_attempt_span_blocks(&self) -> Option<u64> {
+        self.registration_phase_blocks
+            .checked_add(self.survivor_freeze_phase_blocks)?
+            .checked_add(self.commitment_phase_blocks)?
+            .checked_add(self.release_delay_blocks)?
+            .checked_add(self.opening_phase_blocks)
+    }
+
+    /// Return the maximum sequential lifecycle span, including every permitted retry.
+    #[must_use]
+    pub fn checked_max_lifecycle_span_blocks(&self) -> Option<u64> {
+        self.checked_attempt_span_blocks()?
+            .checked_mul(u64::from(self.max_ballot_retries).checked_add(1)?)
+    }
+
+    /// Fail closed unless all phase durations and first-release bounds are valid.
+    pub fn assert_valid(&self) {
+        for (name, blocks) in [
+            ("registration_phase_blocks", self.registration_phase_blocks),
+            (
+                "survivor_freeze_phase_blocks",
+                self.survivor_freeze_phase_blocks,
+            ),
+            ("commitment_phase_blocks", self.commitment_phase_blocks),
+            ("release_delay_blocks", self.release_delay_blocks),
+            ("opening_phase_blocks", self.opening_phase_blocks),
+        ] {
+            assert!(
+                blocks > 0,
+                "governance.parliament_timed_ovn.{name} must be non-zero"
+            );
+        }
+        assert!(
+            self.checked_attempt_span_blocks().is_some(),
+            "governance.parliament_timed_ovn phase schedule must fit in u64 blocks"
+        );
+        assert!(
+            self.max_ballot_retries
+                <= defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT,
+            "governance.parliament_timed_ovn.max_ballot_retries must be within 0..={}",
+            defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT
+        );
+        assert!(
+            self.checked_max_lifecycle_span_blocks().is_some(),
+            "governance.parliament_timed_ovn retry schedule must fit in u64 blocks"
+        );
+        let crypto_corpus_limit =
+            u32::try_from(iroha_crypto::timed_ovn::TIMED_OVN_MAX_PARTICIPANTS_V1)
+                .expect("timed-OVN participant limit fits u32");
+        assert_eq!(
+            defaults::governance::parliament_timed_ovn::MAX_CORPUS_ENTRIES_LIMIT,
+            crypto_corpus_limit,
+            "governance timed-OVN corpus limit must match the crypto decoder"
+        );
+        assert!(
+            (1..=crypto_corpus_limit).contains(&self.max_corpus_entries),
+            "governance.parliament_timed_ovn.max_corpus_entries must be within 1..={crypto_corpus_limit}"
+        );
+    }
+}
+impl_default!(ParliamentTimedOvn => {
+    let policy = Self {
+        registration_phase_blocks:
+            defaults::governance::parliament_timed_ovn::REGISTRATION_PHASE_BLOCKS,
+        survivor_freeze_phase_blocks:
+            defaults::governance::parliament_timed_ovn::SURVIVOR_FREEZE_PHASE_BLOCKS,
+        commitment_phase_blocks:
+            defaults::governance::parliament_timed_ovn::COMMITMENT_PHASE_BLOCKS,
+        release_delay_blocks:
+            defaults::governance::parliament_timed_ovn::RELEASE_DELAY_BLOCKS,
+        opening_phase_blocks:
+            defaults::governance::parliament_timed_ovn::OPENING_PHASE_BLOCKS,
+        max_ballot_retries:
+            defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES,
+        max_corpus_entries:
+            defaults::governance::parliament_timed_ovn::MAX_CORPUS_ENTRIES,
+    };
+    policy.assert_valid();
+    policy
+});
 /// Governance configuration (actual layer).
 #[derive(Debug, Clone)]
 pub struct Governance {
@@ -2132,6 +2191,18 @@ pub struct Governance {
     pub parliament_alternate_size: Option<usize>,
     /// Quorum requirement for council approvals (basis points, ceil-divided).
     pub parliament_quorum_bps: u16,
+    /// Consensus block-height span for immutable Parliament invitation responses.
+    pub parliament_invitation_phase_blocks: u64,
+    /// Consensus block-height span for public-finding endorsements after Reflection begins.
+    pub parliament_public_finding_phase_blocks: u64,
+    /// Consensus-critical timed-OVN phase and resource policy.
+    pub parliament_timed_ovn: ParliamentTimedOvn,
+    /// Public deployment binding for the runtime-only Parliament TLE release-share signer.
+    pub parliament_tle_partial_release_signer_provider_handle: Option<String>,
+    /// Exact non-zero provider contract revision paired with the TLE signer handle.
+    pub parliament_tle_partial_release_signer_provider_revision: Option<u64>,
+    /// Exact non-zero public policy commitment paired with the TLE signer binding.
+    pub parliament_tle_partial_release_signer_provider_policy_digest: Option<[u8; 32]>,
     /// Rules Committee size.
     pub rules_committee_size: usize,
     /// Agenda Council size.
@@ -2140,24 +2211,18 @@ pub struct Governance {
     pub interest_panel_size: usize,
     /// Review Panel size.
     pub review_panel_size: usize,
+    /// Coordination Council size.
+    pub coordination_council_size: usize,
     /// Policy Jury size.
     pub policy_jury_size: usize,
+    /// Maximum Confirmation Jury size.
+    pub confirmation_jury_size: usize,
     /// Oversight Committee size.
     pub oversight_committee_size: usize,
-    /// MPC/FMA board size.
+    /// MPC Committee size.
+    pub mpc_committee_size: usize,
+    /// FMA Committee size.
     pub fma_committee_size: usize,
-    /// Maximum blocks between proposal creation and referendum opening.
-    pub pipeline_study_sla_blocks: u64,
-    /// Maximum blocks allocated to the referendum voting window.
-    pub pipeline_review_sla_blocks: u64,
-    /// Maximum blocks allowed to compute/record the referendum decision.
-    pub pipeline_decision_sla_blocks: u64,
-    /// Maximum blocks allowed to enact an approved proposal after decision.
-    pub pipeline_enactment_sla_blocks: u64,
-    /// Maximum blocks allocated to rules committee approvals.
-    pub pipeline_rules_sla_blocks: u64,
-    /// Maximum blocks allocated to agenda council scheduling.
-    pub pipeline_agenda_sla_blocks: u64,
 }
 impl_default!(Governance => {
         Self {
@@ -2228,19 +2293,25 @@ impl_default!(Governance => {
             .expect("valid default governance asset id"),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
             parliament_quorum_bps: defaults::governance::PARLIAMENT_QUORUM_BPS,
+            parliament_invitation_phase_blocks:
+                defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
+            parliament_public_finding_phase_blocks:
+                defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
+            parliament_timed_ovn: ParliamentTimedOvn::default(),
+            parliament_tle_partial_release_signer_provider_handle: None,
+            parliament_tle_partial_release_signer_provider_revision: None,
+            parliament_tle_partial_release_signer_provider_policy_digest: None,
             rules_committee_size: defaults::governance::PARLIAMENT_RULES_COMMITTEE_SIZE,
             agenda_council_size: defaults::governance::PARLIAMENT_AGENDA_COUNCIL_SIZE,
             interest_panel_size: defaults::governance::PARLIAMENT_INTEREST_PANEL_SIZE,
             review_panel_size: defaults::governance::PARLIAMENT_REVIEW_PANEL_SIZE,
+            coordination_council_size:
+                defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE,
             policy_jury_size: defaults::governance::PARLIAMENT_POLICY_JURY_SIZE,
+            confirmation_jury_size: defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE,
             oversight_committee_size: defaults::governance::PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE,
+            mpc_committee_size: defaults::governance::PARLIAMENT_MPC_COMMITTEE_SIZE,
             fma_committee_size: defaults::governance::PARLIAMENT_FMA_COMMITTEE_SIZE,
-            pipeline_study_sla_blocks: defaults::governance::PIPELINE_STUDY_SLA_BLOCKS,
-            pipeline_review_sla_blocks: defaults::governance::PIPELINE_REVIEW_SLA_BLOCKS,
-            pipeline_decision_sla_blocks: defaults::governance::PIPELINE_DECISION_SLA_BLOCKS,
-            pipeline_enactment_sla_blocks: defaults::governance::PIPELINE_ENACTMENT_SLA_BLOCKS,
-            pipeline_rules_sla_blocks: defaults::governance::PIPELINE_RULES_SLA_BLOCKS,
-            pipeline_agenda_sla_blocks: defaults::governance::PIPELINE_AGENDA_SLA_BLOCKS,
         }
 });
 /// Concurrency controls for internal thread pools.
@@ -2477,25 +2548,10 @@ impl_default!(NexusRelayWorker => {
 pub struct NexusHfSharedLeases {
     /// Drain grace window applied after the last member leaves a shared lease pool.
     pub drain_grace: Duration,
-    /// Slash ratio applied when an assigned host never finishes warmup before expiry.
-    pub warmup_no_show_slash_bps: u16,
-    /// Slash ratio applied when repeated assigned-host heartbeat misses cross the threshold.
-    pub assigned_heartbeat_miss_slash_bps: u16,
-    /// Strike threshold for assigned-host heartbeat misses within one reservation window.
-    pub assigned_heartbeat_miss_strike_threshold: u32,
-    /// Slash ratio applied when a host advert is provably self-contradictory.
-    pub advert_contradiction_slash_bps: u16,
 }
 impl_default!(NexusHfSharedLeases => {
         Self {
             drain_grace: Duration::from_millis(defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS),
-            warmup_no_show_slash_bps: defaults::nexus::hf_shared_leases::WARMUP_NO_SHOW_SLASH_BPS,
-            assigned_heartbeat_miss_slash_bps:
-                defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_SLASH_BPS,
-            assigned_heartbeat_miss_strike_threshold:
-                defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_STRIKE_THRESHOLD,
-            advert_contradiction_slash_bps:
-                defaults::nexus::hf_shared_leases::ADVERT_CONTRADICTION_SLASH_BPS,
         }
 });
 /// Encrypted uploaded-model registry quota policy.
@@ -2800,7 +2856,7 @@ pub struct Nexus {
     pub relay_worker: NexusRelayWorker,
     /// Shared Hugging Face lease policy.
     pub hf_shared_leases: NexusHfSharedLeases,
-    /// Uploaded private-model quota policy.
+    /// Uploaded-model registry quota policy.
     pub uploaded_models: NexusUploadedModels,
     /// Domain endorsement controls.
     pub endorsement: NexusEndorsement,
@@ -3000,10 +3056,6 @@ struct NexusConsensusFeesV1 {
 #[derive(Encode)]
 struct NexusConsensusHfSharedLeasesV1 {
     drain_grace: NexusConsensusDurationV1,
-    warmup_no_show_slash_bps: u16,
-    assigned_heartbeat_miss_slash_bps: u16,
-    assigned_heartbeat_miss_strike_threshold: u32,
-    advert_contradiction_slash_bps: u16,
 }
 #[derive(Encode)]
 struct NexusConsensusUploadedModelsV1 {
@@ -3278,14 +3330,6 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
         },
         hf_shared_leases: NexusConsensusHfSharedLeasesV1 {
             drain_grace: nexus.hf_shared_leases.drain_grace.into(),
-            warmup_no_show_slash_bps: nexus.hf_shared_leases.warmup_no_show_slash_bps,
-            assigned_heartbeat_miss_slash_bps: nexus
-                .hf_shared_leases
-                .assigned_heartbeat_miss_slash_bps,
-            assigned_heartbeat_miss_strike_threshold: nexus
-                .hf_shared_leases
-                .assigned_heartbeat_miss_strike_threshold,
-            advert_contradiction_slash_bps: nexus.hf_shared_leases.advert_contradiction_slash_bps,
         },
         uploaded_models: NexusConsensusUploadedModelsV1 {
             max_plaintext_bytes_per_model: nexus.uploaded_models.max_plaintext_bytes_per_model,
@@ -3993,6 +4037,43 @@ pub fn execution_policy_digest_v1(
         "governance.parliament_quorum_bps",
         &governance.parliament_quorum_bps,
     );
+    policy.push(
+        "governance.parliament_invitation_phase_blocks",
+        &governance.parliament_invitation_phase_blocks,
+    );
+    policy.push(
+        "governance.parliament_public_finding_phase_blocks",
+        &governance.parliament_public_finding_phase_blocks,
+    );
+    let timed_ovn = governance.parliament_timed_ovn;
+    policy.push(
+        "governance.parliament_timed_ovn.registration_phase_blocks",
+        &timed_ovn.registration_phase_blocks,
+    );
+    policy.push(
+        "governance.parliament_timed_ovn.survivor_freeze_phase_blocks",
+        &timed_ovn.survivor_freeze_phase_blocks,
+    );
+    policy.push(
+        "governance.parliament_timed_ovn.commitment_phase_blocks",
+        &timed_ovn.commitment_phase_blocks,
+    );
+    policy.push(
+        "governance.parliament_timed_ovn.release_delay_blocks",
+        &timed_ovn.release_delay_blocks,
+    );
+    policy.push(
+        "governance.parliament_timed_ovn.opening_phase_blocks",
+        &timed_ovn.opening_phase_blocks,
+    );
+    policy.push(
+        "governance.parliament_timed_ovn.max_ballot_retries",
+        &timed_ovn.max_ballot_retries,
+    );
+    policy.push(
+        "governance.parliament_timed_ovn.max_corpus_entries",
+        &timed_ovn.max_corpus_entries,
+    );
     for (name, size) in [
         (
             "governance.rules_committee_size",
@@ -4007,10 +4088,22 @@ pub fn execution_policy_digest_v1(
             governance.interest_panel_size,
         ),
         ("governance.review_panel_size", governance.review_panel_size),
+        (
+            "governance.coordination_council_size",
+            governance.coordination_council_size,
+        ),
         ("governance.policy_jury_size", governance.policy_jury_size),
+        (
+            "governance.confirmation_jury_size",
+            governance.confirmation_jury_size,
+        ),
         (
             "governance.oversight_committee_size",
             governance.oversight_committee_size,
+        ),
+        (
+            "governance.mpc_committee_size",
+            governance.mpc_committee_size,
         ),
         (
             "governance.fma_committee_size",
@@ -4018,34 +4111,6 @@ pub fn execution_policy_digest_v1(
         ),
     ] {
         policy.push(name, &execution_policy_usize(size));
-    }
-    for (name, blocks) in [
-        (
-            "governance.pipeline_study_sla_blocks",
-            governance.pipeline_study_sla_blocks,
-        ),
-        (
-            "governance.pipeline_review_sla_blocks",
-            governance.pipeline_review_sla_blocks,
-        ),
-        (
-            "governance.pipeline_decision_sla_blocks",
-            governance.pipeline_decision_sla_blocks,
-        ),
-        (
-            "governance.pipeline_enactment_sla_blocks",
-            governance.pipeline_enactment_sla_blocks,
-        ),
-        (
-            "governance.pipeline_rules_sla_blocks",
-            governance.pipeline_rules_sla_blocks,
-        ),
-        (
-            "governance.pipeline_agenda_sla_blocks",
-            governance.pipeline_agenda_sla_blocks,
-        ),
-    ] {
-        policy.push(name, &blocks);
     }
     // Content execution policy. Gateway quotas/SLOs/PoW are deliberately not ledger policy.
     policy.push("content.max_bundle_bytes", &content.max_bundle_bytes);
@@ -6171,6 +6236,12 @@ impl_default!(SumeragiKeys => {
 pub struct Sumeragi {
     /// Node-local participation role.
     pub role: NodeRole,
+    /// Public deployment binding for the runtime-only global beacon share signer.
+    pub global_beacon_partial_signer_provider_handle: Option<String>,
+    /// Exact non-zero provider contract revision paired with the beacon signer handle.
+    pub global_beacon_partial_signer_provider_revision: Option<u64>,
+    /// Exact non-zero public policy commitment paired with the beacon signer binding.
+    pub global_beacon_partial_signer_provider_policy_digest: Option<[u8; 32]>,
     /// Finite candidate block limits.
     pub block: SumeragiBlock,
     /// Bounded asynchronous adapter queues.
@@ -6183,6 +6254,9 @@ pub struct Sumeragi {
 impl_default!(Sumeragi => {
         Self {
             role: NodeRole::Validator,
+            global_beacon_partial_signer_provider_handle: None,
+            global_beacon_partial_signer_provider_revision: None,
+            global_beacon_partial_signer_provider_policy_digest: None,
             block: SumeragiBlock::default(),
             queues: SumeragiQueues::default(),
             limits: SumeragiV2RuntimeLimits::default(),

@@ -330,14 +330,14 @@ async fn soracloud_signed_mutation_middleware_rate_limits_account_across_caller_
         .expect("test owns app state")
         .soracloud_mutation_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
     let router = Router::new()
-        .route("/v1/soracloud/hf/deploy", post(probe))
+        .route("/v1/soracloud/hf/lease/join", post(probe))
         .layer(axum::middleware::from_fn_with_state(
             app.clone(),
             enforce_soracloud_signed_mutation_request,
         ))
         .with_state(app);
     let method = axum::http::Method::POST;
-    let uri: axum::http::Uri = "/v1/soracloud/hf/deploy".parse().expect("uri");
+    let uri: axum::http::Uri = "/v1/soracloud/hf/lease/join".parse().expect("uri");
     let body = br#"{"model":"test"}"#;
     let mut statuses = Vec::new();
     for origin in ["https://wallet-a.test", "https://wallet-b.test"] {
@@ -387,7 +387,7 @@ fn soracloud_signed_mutation_route_groups_cover_load_gate_paths() {
         "upload"
     );
     assert_eq!(
-        super::soracloud_signed_mutation_route_group("/v1/soracloud/hf/deploy"),
+        super::soracloud_signed_mutation_route_group("/v1/soracloud/hf/lease/join"),
         "hf"
     );
     let model_key = super::soracloud_signed_mutation_rate_key(&account_id, "model");

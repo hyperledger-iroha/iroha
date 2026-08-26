@@ -26,7 +26,7 @@ public sealed class KagemushaToriiTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal("cash_handoff_v1", capability.CashHandoffCapability);
-        Assert.Equal(22U, capability.RequiredBridgeAbiVersion);
+        Assert.Equal(23U, capability.RequiredBridgeAbiVersion);
         Assert.Equal(8U, capability.MaxHops);
         Assert.True(capability.Ready);
         Assert.Null(typeof(ToriiClient).GetMethod("GetKagemushaReadinessV4Async"));
@@ -199,7 +199,7 @@ public sealed class KagemushaToriiTests
 
     private static string OfflineCapabilityJson(
         string cashHandoffCapability = "cash_handoff_v1",
-        int abiVersion = 22,
+        int abiVersion = 23,
         int maxHops = 8,
         bool ready = true,
         string? extra = null)

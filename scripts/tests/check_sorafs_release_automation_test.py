@@ -504,6 +504,29 @@ def test_runtime_provider_deployment_asset_removal_fails_closed(
         automation.validate_release_automation(tmp_path)
 
 
+def test_runtime_provider_deployment_markers_track_split_broker_modules() -> None:
+    markers = automation.RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS
+
+    assert markers["crates/irohad/src/runtime_provider_broker.rs"] == (
+        'include!("runtime_provider_broker/protocol.rs");',
+    )
+    assert markers["crates/irohad/src/runtime_provider_broker/platform.rs"] == (
+        "/run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock",
+        "/private/var/iroha/run/runtime-provider-broker-v1.sock",
+        'include!("pop_recipient_client.rs");',
+    )
+    assert markers[
+        "crates/irohad/src/runtime_provider_broker/platform_server_transport.rs"
+    ] == ("endpoint_recovery::prepare_endpoint",)
+    assert markers[
+        "crates/irohad/src/runtime_provider_broker/platform_operation_dispatch.rs"
+    ] == (
+        "OPERATION_POP_RUNTIME_OPEN_V1",
+        "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1",
+        "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1",
+    )
+
+
 @pytest.mark.parametrize(
     ("relative", "marker"),
     [
@@ -689,6 +712,9 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     workflow = (
         REPO_ROOT / ".github" / "workflows" / "pr_csharp.yml"
     ).read_text(encoding="utf-8")
+    build_job_start = workflow.index("  build-test-pack:\n")
+    build_steps_start = workflow.index("    steps:\n", build_job_start)
+    build_job_header = workflow[build_job_start:build_steps_start]
     validator_tests = (
         REPO_ROOT
         / "csharp"
@@ -698,10 +724,20 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     ).read_text(encoding="utf-8")
 
     assert 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"' in workflow
+    assert "Bind authenticated target-native package paths" in workflow
     assert (
-        "LD_LIBRARY_PATH: ${{ runner.temp }}/csharp-native-package/"
-        "runtimes/linux-x64/native"
+        "printf 'LD_LIBRARY_PATH=%s\\n' "
+        '"$RUNNER_TEMP/csharp-native-package/runtimes/linux-x64/native"'
     ) in workflow
+    assert (
+        "printf 'IrohaNativePackageRoot=%s\\n' "
+        '"$RUNNER_TEMP/csharp-native-package"'
+    ) in workflow
+    assert (
+        "printf 'CSHARP_SDK_PACKAGE_CONSUMER_NATIVE_PACKAGE_ROOT=%s\\n' "
+        '"$RUNNER_TEMP/csharp-native-package"'
+    ) in workflow
+    assert "${{ runner.temp }}" not in build_job_header
     assert (
         'cargo build --locked --release -p connect_norito_bridge --target "$target"'
         in workflow
@@ -713,7 +749,7 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     assert "WhenAvailable" not in validator_tests
     assert "Assert.True(" in validator_tests
     assert (
-        "ABI-22 connect_norito_bridge with Governance DAG symbols is required."
+        "ABI-23 connect_norito_bridge with Governance DAG symbols is required."
         in validator_tests
     )
 
@@ -1018,7 +1054,7 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",
-            "Build and authenticate the exact ABI-22 C# bridge",
+            "Build and authenticate the exact ABI-23 C# bridge",
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",

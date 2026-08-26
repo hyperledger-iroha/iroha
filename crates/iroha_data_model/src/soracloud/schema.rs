@@ -190,6 +190,28 @@ fn validate_peer_id_field(
     }
     Ok(())
 }
+fn validate_validator_account_peer_id(
+    manifest: &'static str,
+    validator_account_id: &AccountId,
+    peer_id: &str,
+) -> Result<(), SoracloudManifestError> {
+    validate_peer_id_field(manifest, peer_id)?;
+    let signatory = validator_account_id.try_signatory().ok_or_else(|| {
+        invalid_field(
+            manifest,
+            "validator_account_id",
+            "account-derived peer identity requires a single-signatory validator account",
+        )
+    })?;
+    if PeerId::from(signatory.clone()).to_string() != peer_id {
+        return Err(invalid_field(
+            manifest,
+            "peer_id",
+            "peer must be derived from the validator account's single signatory",
+        ));
+    }
+    Ok(())
+}
 fn invalid_field(
     manifest: &'static str,
     field: &'static str,
@@ -1469,8 +1491,54 @@ pub enum SoraServiceLeaseStatusV1 {
 /// This consensus constant bounds world-state and Norito growth under repeated
 /// revision rollout or validator churn. Once the bound is reached, the exact
 /// newly assigned reporter may advance the reporting epoch only after every
-/// prior checkpoint is terminal and no prior reporter remains actively placed.
+/// prior checkpoint is explicitly terminal and no prior reporter remains
+/// actively placed.
 pub const SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1: usize = 4_096;
+/// Maximum egress-byte increase one reporter may submit per elapsed consensus block.
+///
+/// Live execution and snapshot replay share this consensus bound so a persisted
+/// usage transition is accepted under exactly the same rate limit that admitted
+/// it originally.
+pub const SORA_SERVICE_LEASE_MAX_EGRESS_BYTES_PER_REPORTER_BLOCK_V1: u64 = 1024 * 1024 * 1024;
+/// Immutable placement evidence bound to one admitted egress reporter.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct SoraServiceLeaseReporterAssignmentV1 {
+    /// Schema version; must equal
+    /// [`SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1`].
+    pub schema_version: u16,
+    /// Exact service revision served by the assigned replica.
+    pub service_version: String,
+    /// Complete authoritative Inrou placement admitted for this reporter.
+    pub placement: SoraInrouReplicaPlacementV1,
+    /// Consensus timestamp of the placement reconciliation that produced this assignment.
+    pub placement_reconciled_at_ms: u64,
+}
+impl SoraServiceLeaseReporterAssignmentV1 {
+    /// Validate immutable reporter-assignment evidence.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_schema_version(
+            "sora service lease reporter assignment",
+            self.schema_version,
+            SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
+        )?;
+        validate_nonblank_field(
+            "sora service lease reporter assignment",
+            "service_version",
+            &self.service_version,
+        )?;
+        self.placement.validate()?;
+        if self.placement_reconciled_at_ms == 0 {
+            return Err(invalid_field(
+                "sora service lease reporter assignment",
+                "placement_reconciled_at_ms",
+                "must be greater than zero",
+            ));
+        }
+        Ok(())
+    }
+}
 /// One reporting-epoch-bound replica reporter's monotonic egress checkpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1478,22 +1546,54 @@ pub const SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1: usize = 4_096;
 pub struct SoraServiceLeaseEgressCheckpointV1 {
     /// Reporting epoch in which this checkpoint was admitted.
     pub reporting_epoch: u64,
-    /// Service revision for which the replica emitted this usage.
-    pub active_service_version: String,
-    /// One-based placed replica slot.
-    pub replica_slot: u16,
-    /// Exact host-assignment incarnation that emitted this usage.
-    pub placement_incarnation: Hash,
-    /// Validator authority authenticated when the checkpoint was accepted.
-    pub validator_account_id: AccountId,
+    /// Immutable placement evidence authenticated when the checkpoint was admitted.
+    pub assignment: SoraServiceLeaseReporterAssignmentV1,
     /// Monotonic egress bytes emitted by this exact reporter identity.
     pub accounted_egress_bytes: u64,
+    /// Consensus height of the most recent accepted update for this reporter.
+    pub last_updated_height: u64,
     /// Whether this reporter identity has submitted its terminal checkpoint.
     ///
-    /// An identical active placement may reopen the checkpoint before serving
-    /// again. Former reporters may transition an open checkpoint to terminal
-    /// exactly once; no-op replays are rejected.
+    /// An identical active placement may reopen the checkpoint at exactly this
+    /// terminal byte value before serving again, then resume monotonic reports.
+    /// A former reporter may submit one final monotonic increase; once terminal,
+    /// only an exact replay is idempotent.
     pub finalize_reporter: bool,
+}
+/// Exact input accepted for one hosted-service egress checkpoint transition.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct SoraServiceLeaseUsageAuditV1 {
+    /// Schema version; must equal [`SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1`].
+    pub schema_version: u16,
+    /// Reporting epoch targeted by the accepted transition.
+    pub reporting_epoch: u64,
+    /// Immutable placement evidence authenticated for this transition.
+    pub assignment: SoraServiceLeaseReporterAssignmentV1,
+    /// Exact monotonic bytes supplied by this reporter identity.
+    pub replica_accounted_egress_bytes: u64,
+    /// Whether the reporter closed its current-epoch checkpoint.
+    pub finalize_reporter: bool,
+}
+impl SoraServiceLeaseUsageAuditV1 {
+    /// Validate structural lease-usage audit material.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_schema_version(
+            "sora service lease usage audit",
+            self.schema_version,
+            SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
+        )?;
+        if self.reporting_epoch == 0 {
+            return Err(invalid_field(
+                "sora service lease usage audit",
+                "reporting_epoch",
+                "must be greater than zero",
+            ));
+        }
+        self.assignment.validate()?;
+        Ok(())
+    }
 }
 /// Typed audit payload for one hosted-service reporting-epoch rollover.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -1740,21 +1840,29 @@ impl SoraServiceLeaseStateV1 {
                     "checkpoint reporting_epoch must match the active reporting_epoch",
                 ));
             }
-            validate_nonblank_field(
-                "sora service lease state",
-                "egress_reporter_checkpoints.active_service_version",
-                &checkpoint.active_service_version,
-            )?;
-            validate_soracloud_digest_hash(
-                "sora service lease state",
-                "egress_reporter_checkpoints.placement_incarnation",
-                checkpoint.placement_incarnation,
-            )?;
-            if checkpoint.replica_slot == 0 || checkpoint.replica_slot > self.replica_count.get() {
+            checkpoint.assignment.validate()?;
+            let placement = &checkpoint.assignment.placement;
+            if placement.replica_slot > self.replica_count.get() {
                 return Err(invalid_field(
                     "sora service lease state",
                     "egress_reporter_checkpoints",
                     "replica slots must be within the lease replica range",
+                ));
+            }
+            if placement.economic_clock != self.economic_clock
+                || placement.lease_started_height != self.lease_started_height
+            {
+                return Err(invalid_field(
+                    "sora service lease state",
+                    "egress_reporter_checkpoints",
+                    "reporter assignment must belong to the exact economic lease incarnation",
+                ));
+            }
+            if checkpoint.last_updated_height == 0 {
+                return Err(invalid_field(
+                    "sora service lease state",
+                    "egress_reporter_checkpoints",
+                    "last_updated_height must be greater than zero",
                 ));
             }
         }
@@ -1773,17 +1881,17 @@ impl SoraServiceLeaseStateV1 {
             .any(|checkpoints| {
                 let left = (
                     checkpoints[0].reporting_epoch,
-                    checkpoints[0].active_service_version.as_str(),
-                    checkpoints[0].replica_slot,
-                    checkpoints[0].placement_incarnation,
-                    &checkpoints[0].validator_account_id,
+                    checkpoints[0].assignment.service_version.as_str(),
+                    checkpoints[0].assignment.placement.replica_slot,
+                    checkpoints[0].assignment.placement.placement_incarnation,
+                    &checkpoints[0].assignment.placement.validator_account_id,
                 );
                 let right = (
                     checkpoints[1].reporting_epoch,
-                    checkpoints[1].active_service_version.as_str(),
-                    checkpoints[1].replica_slot,
-                    checkpoints[1].placement_incarnation,
-                    &checkpoints[1].validator_account_id,
+                    checkpoints[1].assignment.service_version.as_str(),
+                    checkpoints[1].assignment.placement.replica_slot,
+                    checkpoints[1].assignment.placement.placement_incarnation,
+                    &checkpoints[1].assignment.placement.validator_account_id,
                 );
                 left >= right
             })
@@ -1889,6 +1997,13 @@ impl SoraServiceLeaseStateV1 {
             == SoraServiceLeaseStatusV1::Active)
     }
 }
+/// Derive the domain-separated commitment to a complete hosted-service lease state.
+#[must_use]
+pub fn derive_soracloud_service_lease_commitment_v1(lease: &SoraServiceLeaseStateV1) -> Hash {
+    let mut transcript = "soracloud:service-lease-state:v1".encode();
+    transcript.extend(lease.encode());
+    Hash::new(transcript)
+}
 /// Authoritative leased-volume state recorded by the hosting control plane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1914,9 +2029,6 @@ pub struct SoraServiceLeaseVolumeStateV1 {
     pub lease_expires_height: u64,
     /// Monotonic platform-side generation for the authoritative binding.
     pub authoritative_generation: u64,
-    /// Latest sequence that materialized this binding on a host, when known.
-    #[norito(required)]
-    pub last_materialized_sequence: Option<u64>,
 }
 impl SoraServiceLeaseVolumeStateV1 {
     /// Validate authoritative leased-volume metadata.
@@ -1960,16 +2072,6 @@ impl SoraServiceLeaseVolumeStateV1 {
                 "sora service lease volume state",
                 "lease_expires_height",
                 "must be greater than lease_started_height",
-            ));
-        }
-        if self
-            .last_materialized_sequence
-            .is_some_and(|sequence| sequence == 0)
-        {
-            return Err(invalid_field(
-                "sora service lease volume state",
-                "last_materialized_sequence",
-                "must be greater than zero when provided",
             ));
         }
         Ok(())
@@ -2182,7 +2284,7 @@ pub struct SoraMailboxContractV1 {
     pub max_pending_messages: NonZeroU32,
     /// Maximum payload size per message.
     pub max_message_bytes: NonZeroU64,
-    /// Retention bound for queued messages.
+    /// Retention bound in consensus blocks.
     pub retention_blocks: NonZeroU32,
 }
 impl SoraMailboxContractV1 {

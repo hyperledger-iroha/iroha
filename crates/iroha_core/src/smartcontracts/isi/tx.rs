@@ -337,6 +337,18 @@ fn transaction_query_plan(
     }
     (predicate_json, candidate_heights)
 }
+fn reject_unbounded_emergency_fast_transaction_history(
+    state_ro: &impl StateReadOnly,
+    candidate_heights: Option<&BTreeSet<NonZeroUsize>>,
+) -> Result<(), QueryExecutionFail> {
+    if state_ro.kura().emergency_fast_startup_enabled() && candidate_heights.is_none() {
+        return Err(QueryExecutionFail::Conversion(
+            "transaction history is unavailable without a complete positive index during emergency Fast mode; restart in Strict mode"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
 fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     if path.is_empty() {
         return None;
@@ -812,6 +824,7 @@ pub(crate) fn visit_committed_transactions(
 ) -> Result<bool, QueryExecutionFail> {
     anchor.validate(state_ro)?;
     let (predicate_json, candidate_heights) = transaction_query_plan(filter, state_ro);
+    reject_unbounded_emergency_fast_transaction_history(state_ro, candidate_heights.as_ref())?;
     let maximum_height = resume.map_or(anchor.height, |cursor| cursor.height.min(anchor.height));
     let heights: Box<dyn Iterator<Item = NonZeroUsize>> = match candidate_heights {
         Some(heights) => Box::new(
@@ -1047,6 +1060,7 @@ pub fn committed_transactions_bounded_snapshot(
 pub fn committed_transactions_snapshot(
     state_ro: &impl StateReadOnly,
 ) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
+    reject_unbounded_emergency_fast_transaction_history(state_ro, None)?;
     let merge_by_height = committed_merge_transactions_by_height(state_ro, None)?;
     let blocks = state_ro
         .all_blocks(nonzero!(1_usize))
@@ -1092,6 +1106,7 @@ impl ValidQuery for FindTransactions {
         state_ro: &impl StateReadOnly,
     ) -> Result<impl Iterator<Item = Self::Item>, QueryExecutionFail> {
         let (predicate_json, candidate_heights) = transaction_query_plan(&filter, state_ro);
+        reject_unbounded_emergency_fast_transaction_history(state_ro, candidate_heights.as_ref())?;
         // Indexed predicates resolve only the selected sparse carrier entries.
         // Kura's live store and lazy-load paths publish ordinary and merge-sidecar
         // fields under one index lock; startup reconciliation finishes before the

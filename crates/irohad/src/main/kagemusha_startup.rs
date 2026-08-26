@@ -19,7 +19,7 @@ use iroha_genesis::GenesisBlock;
 
 use super::kagemusha_validator_qualification_command;
 
-pub(super) fn load_configured_kagemusha_release_catalog(
+pub fn load_configured_kagemusha_release_catalog(
     config: &Config,
 ) -> Result<KagemushaReleaseCatalogV4, String> {
     KagemushaReleaseCatalogV4::from_offline_config(&config.settlement.offline)
@@ -41,7 +41,7 @@ fn load_and_build_configured_kagemusha_catalog_qualification_seal(
     Ok((capture.into_catalog(), seal))
 }
 
-pub(super) fn load_and_build_configured_kagemusha_validator_qualification_capture(
+pub fn load_and_build_configured_kagemusha_validator_qualification_capture(
     config: &Config,
 ) -> Result<KagemushaValidatorQualificationCatalogCaptureV1, String> {
     match (
@@ -73,7 +73,7 @@ pub(super) fn load_and_build_configured_kagemusha_validator_qualification_captur
     }
 }
 
-pub(super) fn install_configured_kagemusha_release_catalog(
+pub fn install_configured_kagemusha_release_catalog(
     state: &mut State,
     config: &Config,
 ) -> Result<(), String> {
@@ -82,7 +82,7 @@ pub(super) fn install_configured_kagemusha_release_catalog(
 }
 
 /// Install the process-local digest required by staged or enabled lifecycle execution.
-pub(super) fn install_runtime_effective_config(
+pub fn install_runtime_effective_config(
     config: &Config,
     state: &State,
     authenticated_snapshot_bootstrap: Option<&SnapshotV2BootstrapRecord>,
@@ -103,7 +103,7 @@ pub(super) fn install_runtime_effective_config(
 }
 
 /// Install the runtime projection after catalog authentication using one exact seal reader.
-pub(super) fn install_runtime_effective_config_with_validator_seal_reader(
+pub fn install_runtime_effective_config_with_validator_seal_reader(
     config: &Config,
     state: &State,
     authenticated_snapshot_bootstrap: Option<&SnapshotV2BootstrapRecord>,

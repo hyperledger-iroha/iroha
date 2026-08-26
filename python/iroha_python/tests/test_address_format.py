@@ -29,7 +29,7 @@ from iroha_python import (
 from iroha_python.address import AccountAddress, AccountAddressError
 from iroha_python.crypto import Ed25519KeyPair, ed25519_public_key_account_id
 
-CANONICAL_ACCOUNT_ID = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+CANONICAL_ACCOUNT_ID = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
 
 
 def _authority_fee_payment() -> Dict[str, Any]:

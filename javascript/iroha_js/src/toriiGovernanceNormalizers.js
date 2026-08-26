@@ -26,7 +26,6 @@ export function createToriiGovernanceNormalizers({
   ensureRecord,
   isPlainObject,
   normalizeArbitraryHex,
-  normalizeErrorPath,
   normalizeGovernanceUint64Integer,
   normalizeHex32String,
   normalizeManifestProvenancePayload,
@@ -43,21 +42,21 @@ export function createToriiGovernanceNormalizers({
   requireGovernanceSelectorString,
   requireNonEmptyString,
 }) {
-  const GOVERNANCE_WINDOW_KEYS = new Set(["lower", "upper"]);
-  const GOVERNANCE_FINALIZE_REQUEST_KEYS = new Set([
-    "referendumId",
-    "proposalId",
-  ]);
-  const GOVERNANCE_ENACT_REQUEST_KEYS = new Set(["proposalId"]);
   const GOVERNANCE_DEPLOY_CONTRACT_REQUEST_KEYS = new Set([
     "contractAddress",
     "contractAlias",
     "abiVersion",
     "codeHash",
     "abiHash",
-    "window",
-    "mode",
     "manifestProvenance",
+  ]);
+  const GOVERNANCE_PROPOSAL_DRAFT_RESPONSE_KEYS = new Set([
+    "proposal_id",
+    "tx_instructions",
+  ]);
+  const GOVERNANCE_PROPOSAL_INSTRUCTION_DRAFT_KEYS = new Set([
+    "wire_id",
+    "payload_hex",
   ]);
   const GOVERNANCE_MANIFEST_PROVENANCE_KEYS = new Set(["signer", "signature"]);
   const GOVERNANCE_PLAIN_BALLOT_REQUEST_KEYS = new Set([
@@ -68,13 +67,6 @@ export function createToriiGovernanceNormalizers({
     "amount",
     "durationBlocks",
     "direction",
-  ]);
-  const GOVERNANCE_PARLIAMENT_BALLOT_REQUEST_KEYS = new Set([
-    "authority",
-    "networkId",
-    "proposalId",
-    "body",
-    "decision",
   ]);
   const GOVERNANCE_ZK_BALLOT_V1_REQUEST_KEYS = new Set([
     "authority",
@@ -105,20 +97,20 @@ export function createToriiGovernanceNormalizers({
     "durationBlocks",
     "direction",
   ]);
-  const GOVERNANCE_PARLIAMENT_BODIES = new Set([
-    "rules-committee",
-    "agenda-council",
-    "interest-panel",
-    "review-panel",
-    "policy-jury",
-    "oversight-committee",
-    "fma-committee",
-  ]);
-  const GOVERNANCE_PARLIAMENT_DECISIONS = new Set([
-    "approve",
-    "reject",
-    "abstain",
-  ]);
+
+  function requireExactLowercaseHex(value, context, expectedBytes = null) {
+    const literal = requireExactNonEmptyString(value, context);
+    const hasExpectedLength = expectedBytes === null
+      ? literal.length % 2 === 0
+      : literal.length === expectedBytes * 2;
+    if (!hasExpectedLength || !/^[0-9a-f]+$/u.test(literal)) {
+      const size = expectedBytes === null
+        ? "a non-empty even-length"
+        : `exactly ${expectedBytes}-byte`;
+      throw new TypeError(`${context} must be ${size} lowercase hexadecimal`);
+    }
+    return literal;
+  }
 
   function rejectGovernancePrivateKeyFieldsDeep(value, context) {
     const pending = [{ value, path: context }];
@@ -156,69 +148,6 @@ export function createToriiGovernanceNormalizers({
         pending.push({ value: nested, path: `${current.path}.${key}` });
       }
     }
-  }
-
-  function normalizeGovernanceFinalizePayload(input) {
-    const context = "governanceFinalizeReferendum payload";
-    const record = ensureRecord(input, context);
-    rejectGovernancePrivateKeyFieldsDeep(record, context);
-    assertSupportedOptionKeys(record, GOVERNANCE_FINALIZE_REQUEST_KEYS, context);
-    const referendumId = record.referendumId;
-    if (referendumId === undefined || referendumId === null) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        "governanceFinalizeReferendum.referendumId is required",
-        "governanceFinalizeReferendum.referendumId",
-      );
-    }
-    const proposalId = record.proposalId;
-    if (proposalId === undefined || proposalId === null) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        "governanceFinalizeReferendum.proposalId is required",
-        "governanceFinalizeReferendum.proposalId",
-      );
-    }
-    const exactReferendumId = requireExactLowerHex32String(
-      referendumId,
-      "governanceFinalizeReferendum.referendumId",
-    );
-    const exactProposalId = requireExactLowerHex32String(
-      proposalId,
-      "governanceFinalizeReferendum.proposalId",
-    );
-    if (exactReferendumId !== exactProposalId) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        "governanceFinalizeReferendum.referendumId must equal proposalId",
-        "governanceFinalizeReferendum.referendumId",
-      );
-    }
-    return {
-      referendum_id: exactReferendumId,
-      proposal_id: exactProposalId,
-    };
-  }
-
-  function normalizeGovernanceEnactPayload(input) {
-    const context = "governanceEnactProposal payload";
-    const record = ensureRecord(input, context);
-    rejectGovernancePrivateKeyFieldsDeep(record, context);
-    assertSupportedOptionKeys(record, GOVERNANCE_ENACT_REQUEST_KEYS, context);
-    const proposalId = record.proposalId;
-    if (proposalId === undefined || proposalId === null) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        "governanceEnactProposal.proposalId is required",
-        "governanceEnactProposal.proposalId",
-      );
-    }
-    return {
-      proposal_id: requireExactLowerHex32String(
-        proposalId,
-        "governanceEnactProposal.proposalId",
-      ),
-    };
   }
 
   const MINISTRY_AGENDA_DRAFT_REQUEST_KEYS = new Set(["proposal", "authority"]);
@@ -643,50 +572,6 @@ export function createToriiGovernanceNormalizers({
     };
   }
 
-  function normalizeGovernanceWindow(value, name) {
-    const record = ensureRecord(value, name);
-    assertSupportedOptionKeys(record, GOVERNANCE_WINDOW_KEYS, name);
-    const lowerValue = record.lower;
-    const upperValue = record.upper;
-    if (lowerValue === undefined || upperValue === undefined) {
-      const basePath = normalizeErrorPath(name);
-      if (lowerValue === undefined) {
-        throw createValidationError(
-          ValidationErrorCode.INVALID_NUMERIC,
-          `${name}.lower is required`,
-          `${basePath}.lower`,
-        );
-      }
-      throw createValidationError(
-        ValidationErrorCode.INVALID_NUMERIC,
-        `${name}.upper is required`,
-        `${basePath}.upper`,
-      );
-    }
-    const lower = normalizeGovernanceUint64Integer(lowerValue, `${name}.lower`);
-    const upper = normalizeGovernanceUint64Integer(upperValue, `${name}.upper`);
-    if (upper < lower) {
-      throw createValidationError(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
-        `${name}.upper must be greater than or equal to lower`,
-        `${normalizeErrorPath(name)}.upper`,
-      );
-    }
-    return { lower, upper };
-  }
-
-  function normalizeGovernanceVotingMode(value, name) {
-    const canonical = requireExactNonEmptyString(value, name);
-    if (canonical === "Zk" || canonical === "Plain") {
-      return canonical;
-    }
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${name} must be either 'Zk' or 'Plain'`,
-      normalizeErrorPath(name),
-    );
-  }
-
   function normalizeGovernanceDraftResponse(
     payload,
     context = "governance draft response",
@@ -737,14 +622,41 @@ export function createToriiGovernanceNormalizers({
     return normalized;
   }
 
-  function createEmptyGovernanceDraftResponse(context) {
-    return normalizeGovernanceDraftResponse(
-      {
-        ok: true,
-        tx_instructions: [],
-      },
-      context,
+  function normalizeGovernanceProposalDraftResponseV1(
+    payload,
+    expectedWireId,
+    context = "governance proposal draft response",
+  ) {
+    const record = ensureRecord(payload, context);
+    assertSupportedOptionKeys(record, GOVERNANCE_PROPOSAL_DRAFT_RESPONSE_KEYS, context);
+    const proposalId = requireExactLowercaseHex(
+      record.proposal_id,
+      `${context}.proposal_id`,
+      32,
     );
+    if (!Array.isArray(record.tx_instructions) || record.tx_instructions.length !== 1) {
+      throw new TypeError(`${context}.tx_instructions must contain exactly one instruction`);
+    }
+    const itemContext = `${context}.tx_instructions[0]`;
+    const item = ensureRecord(record.tx_instructions[0], itemContext);
+    assertSupportedOptionKeys(item, GOVERNANCE_PROPOSAL_INSTRUCTION_DRAFT_KEYS, itemContext);
+    const wireId = requireExactNonEmptyString(item.wire_id, `${itemContext}.wire_id`);
+    if (wireId !== expectedWireId) {
+      throw new TypeError(`${itemContext}.wire_id must be exactly ${expectedWireId}`);
+    }
+    if (item.payload_hex === undefined || item.payload_hex === null) {
+      throw new TypeError(`${itemContext}.payload_hex is required`);
+    }
+    return {
+      proposal_id: proposalId,
+      tx_instructions: [{
+        wire_id: wireId,
+        payload_hex: requireExactLowercaseHex(
+          item.payload_hex,
+          `${itemContext}.payload_hex`,
+        ),
+      }],
+    };
   }
 
   function normalizeTriggerMutationResponse(
@@ -809,16 +721,11 @@ export function createToriiGovernanceNormalizers({
         "governanceProposeDeployContract requires exactly one of contractAddress or contractAlias",
       );
     }
-    const abiVersionValue =
-      record.abiVersion === undefined ? "1" : record.abiVersion;
-    const abiVersion = requireExactNonEmptyString(
-      abiVersionValue,
-      "governanceProposeDeployContract.abiVersion",
-    );
-    if (abiVersion !== "1") {
+    const abiVersion = record.abiVersion === undefined ? 1 : record.abiVersion;
+    if (abiVersion !== 1) {
       throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        "governanceProposeDeployContract.abiVersion must be exactly '1'",
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        "governanceProposeDeployContract.abiVersion must be exactly 1",
         "governanceProposeDeployContract.abiVersion",
       );
     }
@@ -852,21 +759,6 @@ export function createToriiGovernanceNormalizers({
       payload.contract_alias = requireNonEmptyString(
         contractAliasValue,
         "governanceProposeDeployContract.contractAlias",
-      );
-    }
-    const windowValue =
-      record.window;
-    if (windowValue !== undefined && windowValue !== null) {
-      payload.window = normalizeGovernanceWindow(
-        windowValue,
-        "governanceProposeDeployContract.window",
-      );
-    }
-    const modeValue = record.mode;
-    if (modeValue !== undefined && modeValue !== null) {
-      payload.mode = normalizeGovernanceVotingMode(
-        modeValue,
-        "governanceProposeDeployContract.mode",
       );
     }
     const manifestProvenance = record.manifestProvenance;
@@ -955,60 +847,6 @@ export function createToriiGovernanceNormalizers({
       ),
     };
     return payload;
-  }
-
-  function normalizeGovernanceParliamentBallotPayload(input) {
-    const context = "governanceSubmitParliamentBallot payload";
-    const record = ensureRecord(input, context);
-    rejectGovernancePrivateKeyFieldsDeep(record, context);
-    assertSupportedOptionKeys(record, GOVERNANCE_PARLIAMENT_BALLOT_REQUEST_KEYS, context);
-    return {
-      authority: ToriiClient._normalizeAccountId(
-        record.authority,
-        "governanceSubmitParliamentBallot.authority",
-      ),
-      network_id: normalizeNetworkId(
-        record.networkId,
-        "governanceSubmitParliamentBallot.networkId",
-      ),
-      proposal_id: normalizeHex32String(
-        record.proposalId,
-        "governanceSubmitParliamentBallot.proposalId",
-        { allowScheme: true, scheme: "blake2b32", exactString: true },
-      ),
-      body: normalizeGovernanceParliamentBody(
-        record.body,
-        "governanceSubmitParliamentBallot.body",
-      ),
-      decision: normalizeGovernanceParliamentDecision(
-        record.decision,
-        "governanceSubmitParliamentBallot.decision",
-      ),
-    };
-  }
-
-  function normalizeGovernanceParliamentBody(value, name) {
-    const body = requireExactTokenString(value, name);
-    if (!GOVERNANCE_PARLIAMENT_BODIES.has(body)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${name} must name a canonical Parliament body`,
-        name,
-      );
-    }
-    return body;
-  }
-
-  function normalizeGovernanceParliamentDecision(value, name) {
-    const decision = requireExactTokenString(value, name);
-    if (!GOVERNANCE_PARLIAMENT_DECISIONS.has(decision)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${name} must be approve, reject, or abstain`,
-        name,
-      );
-    }
-    return decision;
   }
 
   function normalizeGovernanceBallotDirection(value, name) {
@@ -1208,14 +1046,11 @@ export function createToriiGovernanceNormalizers({
   }
 
   return {
-    createEmptyGovernanceDraftResponse,
     normalizeGovernanceBallotIdentity,
     normalizeGovernanceBallotResponse,
     normalizeGovernanceDeployContractProposalPayload,
     normalizeGovernanceDraftResponse,
-    normalizeGovernanceEnactPayload,
-    normalizeGovernanceFinalizePayload,
-    normalizeGovernanceParliamentBallotPayload,
+    normalizeGovernanceProposalDraftResponseV1,
     normalizeGovernancePlainBallotPayload,
     normalizeGovernanceZkBallotProofPayload,
     normalizeGovernanceZkBallotV1Payload,

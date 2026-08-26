@@ -187,7 +187,7 @@ pub(crate) struct V2StartupFinalityProjection {
     snapshot_bootstrap: Option<(u64, HashOf<BlockHeader>)>,
 }
 impl V2StartupFinalityProjection {
-    fn from_artifact(artifact: &V2FinalityArtifact) -> Self {
+    pub(crate) fn from_artifact(artifact: &V2FinalityArtifact) -> Self {
         let execution = artifact.commit_qc.execution_commitment;
         Self {
             height: artifact.height,
@@ -275,7 +275,7 @@ struct V2StartupReplaySidecarsAtHeight {
     manifest: Option<V2StartupReplaySidecar<CommitManifest>>,
 }
 #[derive(Debug)]
-struct V2StartupFinalityVerificationInventory {
+pub(crate) struct V2StartupFinalityVerificationInventory {
     boundary: ExactReplayBoundary,
     canonical_storage: StableCanonicalBlockStoreMetadata,
     finality_directory: StableSidecarDirectoryMetadata,
@@ -293,22 +293,42 @@ struct V2StartupFinalityVerificationInventory {
     /// because finality may legitimately trail the durable block tip.
     highest_verified_finality_artifact: Option<V2FinalityArtifact>,
 }
+/// Minimal stable canonical-store identity retained by emergency Fast startup.
+#[derive(Debug)]
+pub(crate) struct EmergencyFastStartupReplayBinding {
+    count: u64,
+    tip_hash: Option<HashOf<BlockHeader>>,
+    canonical_storage: StableCanonicalBlockStoreMetadata,
+}
 /// Kura-minted identity binding carried from replay planning into active-height
 /// recovery.
 ///
-/// The binding never retains historical block bodies. It carries fixed-size
-/// finality projections, the sole durable-tip artifact exposed for exact
-/// lane-completion validation, and at most one highest verified artifact kept
-/// internally for status hydration when finality trails the block tip. Its
-/// fields are private so callers cannot construct a replay authorization
-/// without Kura's complete startup audit.
+/// Strict startup retains the complete verified finality inventory. Emergency
+/// Fast startup deliberately binds only the stable canonical journal image; it
+/// does not turn skipped historical audits into authority.
 #[derive(Debug, Clone)]
-pub(crate) struct V2StartupReplayStorageBinding {
-    inventory: Arc<V2StartupFinalityVerificationInventory>,
+pub(crate) enum V2StartupReplayStorageBinding {
+    /// Complete Strict-startup finality and sidecar inventory.
+    Strict(Arc<V2StartupFinalityVerificationInventory>),
+    /// Bounded emergency binding containing only the durable count and tip.
+    EmergencyFast(Arc<EmergencyFastStartupReplayBinding>),
 }
 impl V2StartupReplayStorageBinding {
-    pub(crate) fn replay_boundary(&self) -> &ExactReplayBoundary {
-        &self.inventory.boundary
+    /// Return the complete Strict replay boundary, when Strict startup produced this binding.
+    pub(crate) fn strict_replay_boundary(&self) -> Option<&ExactReplayBoundary> {
+        match self {
+            Self::Strict(inventory) => Some(&inventory.boundary),
+            Self::EmergencyFast(_) => None,
+        }
+    }
+    /// Return the bounded durable count and tip trusted by emergency Fast startup.
+    pub(crate) fn emergency_fast_boundary(
+        &self,
+    ) -> Option<(u64, Option<HashOf<BlockHeader>>)> {
+        match self {
+            Self::Strict(_) => None,
+            Self::EmergencyFast(binding) => Some((binding.count, binding.tip_hash)),
+        }
     }
 }
 /// Mutation-closed view of the startup finality inventory used by one replay

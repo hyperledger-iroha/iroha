@@ -1,8 +1,13 @@
 //! Integration coverage for validator admission of Parliament-enacted validation-fee policy.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+use iroha_config::parameters::actual::ParliamentTimedOvn;
 use iroha_core::{
-    block::{BlockBuilder, ValidBlock},
-    governance::manifest::LaneManifestRegistry,
+    governance::{
+        manifest::LaneManifestRegistry,
+        parliament::{
+            ParliamentAttemptStateV1, ParliamentDecisionModeV1, RequiredParliamentBodyV1,
+        },
+    },
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
@@ -10,10 +15,7 @@ use iroha_core::{
     state::{State, StateTransaction, World, WorldReadOnly},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{
-    Algorithm, Hash, KeyPair,
-    blake2::{Blake2b512, Digest as _},
-};
+use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
@@ -24,13 +26,15 @@ use iroha_data_model::{
         time::{ExecutionTime, TimeEventFilter},
     },
     governance::types::{
-        ParliamentBodies, ParliamentBody, ParliamentRoster, ProposalKind,
-        ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+        BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,
+        DeliberationPhaseV1, GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceAttemptV1,
+        GovernanceCertificateId, GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadV1,
+        GovernanceStageV1, ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
+        ParliamentBody, ProposalContentId, ProposalKind, RiskTierV1, SortitionRequestV1,
+        TleKeySessionId, TleSessionId, ValidationFeePayoutLifecycleProposal,
+        ValidationFeePolicyProposal, parliament_candidate_root_v1,
     },
-    isi::{
-        SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
-        governance::{AtWindow, EnactReferendum, FinalizeReferendum},
-    },
+    isi::{SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry},
     nexus::DataSpaceId,
     parameter::Parameter,
     prelude::*,
@@ -42,60 +46,28 @@ use iroha_data_model::{
     trigger::action::Repeats,
     validation_fee::{
         VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
-        VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1, VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS,
-        VALIDATION_FEE_POLICY_HASH_METADATA_KEY, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-        VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
+        VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
+        VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
         VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY,
         VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
-        ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
-        ValidationFeeGovernanceWindowV1, ValidationFeeParliamentAuthorizationV1,
-        ValidationFeePayoutLifecycleReferenceV1, ValidationFeePlainElectorateEligibilityRuleV1,
-        ValidationFeePlainElectorateMemberV1, ValidationFeePlainElectorateRulesV1,
-        ValidationFeePlainElectorateSnapshotV1, ValidationFeePolicyRegistryEntryV1,
-        ValidationFeePolicyRegistryV1, ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
-        ValidationFeeTreasuryPayoutRecipientV1,
+        ValidationFeeParliamentAuthorizationV1, ValidationFeePayoutLifecycleReferenceV1,
+        ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
+        ValidationFeeTreasuryPayoutBindingV1, ValidationFeeTreasuryPayoutRecipientV1,
     },
 };
 use iroha_primitives::{json::Json, numeric::NumericSpec};
 use mv::storage::StorageReadOnly;
-use sha2::Sha256;
-use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc};
+use sha2::{Digest as _, Sha256};
+use std::{num::NonZeroU64, sync::Arc};
 const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
-const TEST_REFERENDUM_DURATION_BLOCKS: u64 = 3_600;
-const TEST_LIFECYCLE_WINDOW_START_HEIGHT: u64 = 2;
-const TEST_LIFECYCLE_WINDOW_END_HEIGHT: u64 =
-    TEST_LIFECYCLE_WINDOW_START_HEIGHT + TEST_REFERENDUM_DURATION_BLOCKS - 1;
-const TEST_LIFECYCLE_ENACTMENT_HEIGHT: u64 = TEST_LIFECYCLE_WINDOW_END_HEIGHT + 1;
-const TEST_POLICY_WINDOW_START_HEIGHT: u64 = TEST_LIFECYCLE_ENACTMENT_HEIGHT + 1;
-const TEST_POLICY_WINDOW_END_HEIGHT: u64 =
-    TEST_POLICY_WINDOW_START_HEIGHT + TEST_REFERENDUM_DURATION_BLOCKS - 1;
-const TEST_POLICY_ENACTMENT_HEIGHT: u64 = TEST_POLICY_WINDOW_END_HEIGHT + 3_600;
+const TEST_POLICY_ENACTMENT_HEIGHT: u64 = 7_202;
 const TEST_POLICY_EFFECTIVE_HEIGHT: u64 =
     TEST_POLICY_ENACTMENT_HEIGHT + VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
+const TEST_PARLIAMENT_POLICY_VERSION: u64 = 1;
 fn quantity(value: &str) -> Quantity {
     value
         .parse()
         .expect("canonical validation-fee fixture quantity")
-}
-fn plain_electorate_rules() -> ValidationFeePlainElectorateRulesV1 {
-    ValidationFeePlainElectorateRulesV1 {
-        voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
-            .parse()
-            .expect("voting asset id"),
-        bond_escrow_account: payout_contract_address().subject_id(),
-        slash_receiver_account: account(6).0,
-        ballot_amount: 150_u64.into(),
-        ballot_duration_blocks: TEST_REFERENDUM_DURATION_BLOCKS,
-        citizenship_amount: 10_000_u64.into(),
-        max_members: VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1,
-        conviction_step_blocks: 100,
-        max_conviction: 6,
-        min_turnout: 1,
-        approval_threshold_numerator: 1,
-        approval_threshold_denominator: 2,
-        eligibility_rule:
-            ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
-    }
 }
 fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
     BlockHeader::new(
@@ -340,7 +312,7 @@ fn test_state() -> (
         Account::new(pool_contract_address().subject_id()).build(&user),
     ];
     accounts.extend((2..=6).map(|seed| Account::new(account(seed).0).build(&user)));
-    let mut state = State::new_for_testing(
+    let state = State::new_for_testing(
         World::with_assets(
             [domain],
             accounts,
@@ -351,13 +323,14 @@ fn test_state() -> (
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let mut governance = state.gov.clone();
-    governance.pipeline_enactment_sla_blocks = 3_600;
-    state.set_gov(governance);
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
+    state
+        .block(block_header(1, 1_700_000_000_000))
+        .commit()
+        .expect("commit canonical genesis asset-incarnation state");
     (state, user, user_key_pair, recipient, treasury, fee_asset)
 }
 fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransaction<'static> {
@@ -377,19 +350,6 @@ fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransacti
         crypto.as_ref(),
     )
     .expect("transaction admission should pass stateless checks")
-}
-fn commit_empty_genesis_like_block(state: &State) {
-    let block_signer = key_pair(240);
-    let new_block = BlockBuilder::new(Vec::new())
-        .chain(0, None)
-        .sign(block_signer.private_key())
-        .unpack(|_| {});
-    let mut state_block = state.block(new_block.header());
-    let valid_block =
-        ValidBlock::validate_unchecked(new_block.into(), &mut state_block).unpack(|_| {});
-    let committed_block = valid_block.commit_unchecked().unpack(|_| {});
-    let _events = state_block.apply_without_execution(&committed_block, Vec::new());
-    state_block.commit().expect("commit initial block hash");
 }
 fn validation_fee_policy(
     state: &State,
@@ -414,122 +374,360 @@ fn validation_fee_policy(
         treasury_payout_binding: Some(payout_binding),
     }
 }
-fn test_parliament_bodies(selection_epoch: u64) -> ParliamentBodies {
-    let member = account(250).0;
-    let rosters = [
+fn parliament_test_root(tag: u8) -> [u8; 32] {
+    [tag.max(1); 32]
+}
+fn parliament_test_candidates() -> Vec<AccountId> {
+    let mut candidates = (1_u8..=24).map(|seed| account(seed).0).collect::<Vec<_>>();
+    candidates.sort_unstable();
+    candidates
+}
+fn validation_fee_parliament_requirements() -> Vec<RequiredParliamentBodyV1> {
+    [
         ParliamentBody::RulesCommittee,
         ParliamentBody::AgendaCouncil,
         ParliamentBody::InterestPanel,
         ParliamentBody::ReviewPanel,
-        ParliamentBody::PolicyJury,
-        ParliamentBody::OversightCommittee,
+        ParliamentBody::CoordinationCouncil,
         ParliamentBody::FmaCommittee,
+        ParliamentBody::OversightCommittee,
+        ParliamentBody::PolicyJury,
     ]
     .into_iter()
-    .map(|body| {
-        (
-            body,
-            ParliamentRoster {
-                body,
-                epoch: selection_epoch,
-                members: vec![member.clone()],
-                alternates: Vec::new(),
-                candidate_count: 1,
-                derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Sortition,
-            },
-        )
+    .map(|body| RequiredParliamentBodyV1 {
+        body,
+        decision_mode: if body == ParliamentBody::PolicyJury {
+            ParliamentDecisionModeV1::HiddenBindingBallot
+        } else {
+            ParliamentDecisionModeV1::PublicFinding
+        },
     })
-    .collect();
-    ParliamentBodies {
-        selection_epoch,
-        rosters,
+    .collect()
+}
+fn parliament_test_governance(
+    requirements: &[RequiredParliamentBodyV1],
+) -> iroha_config::parameters::actual::Governance {
+    let mut governance = iroha_config::parameters::actual::Governance {
+        parliament_alternate_size: Some(0),
+        ..iroha_config::parameters::actual::Governance::default()
+    };
+    for requirement in requirements {
+        match requirement.body {
+            ParliamentBody::RulesCommittee => governance.rules_committee_size = 3,
+            ParliamentBody::AgendaCouncil => governance.agenda_council_size = 3,
+            ParliamentBody::InterestPanel => governance.interest_panel_size = 3,
+            ParliamentBody::ReviewPanel => governance.review_panel_size = 3,
+            ParliamentBody::CoordinationCouncil => governance.coordination_council_size = 3,
+            ParliamentBody::MpcCommittee => governance.mpc_committee_size = 3,
+            ParliamentBody::FmaCommittee => governance.fma_committee_size = 3,
+            ParliamentBody::OversightCommittee => governance.oversight_committee_size = 3,
+            ParliamentBody::PolicyJury => governance.policy_jury_size = 3,
+            ParliamentBody::ConfirmationJury => governance.confirmation_jury_size = 3,
+        }
     }
+    governance
 }
-fn test_roster_root(selection_epoch: u64) -> [u8; 32] {
-    let encoded = norito::encode_canonical(&test_parliament_bodies(selection_epoch))
-        .expect("canonically encode Parliament bodies");
-    let digest = Blake2b512::digest(encoded);
-    let mut root = [0; 32];
-    root.copy_from_slice(&digest[..32]);
-    root
-}
-fn test_plain_electorate_snapshot(
-    proposal_id: [u8; 32],
-    proposal_operator: &AccountId,
-    captured_at_height: u64,
-    approval_gate_height: u64,
-    rules: &ValidationFeePlainElectorateRulesV1,
-) -> ValidationFeePlainElectorateSnapshotV1 {
-    ValidationFeePlainElectorateSnapshotV1::from_canonical_members(
-        proposal_id,
-        proposal_operator.clone(),
-        captured_at_height,
-        approval_gate_height,
-        vec![ValidationFeePlainElectorateMemberV1 {
-            account_id: proposal_operator.clone(),
-            bonded_height: approval_gate_height,
-            bonded_amount: rules.citizenship_amount.clone(),
-        }],
-    )
-    .expect("canonical validation-fee admission PLAIN electorate snapshot")
+fn complete_parliament_body_for_authorization(
+    attempt: &mut ParliamentAttemptStateV1,
+    requirement: RequiredParliamentBodyV1,
+    election_attempt_id: BodyElectionAttemptId,
+    result_tag: u8,
+) {
+    let governance_attempt_id = attempt.attempt().id;
+    attempt
+        .begin_invitation_acceptance(governance_attempt_id, election_attempt_id, 20, 1)
+        .expect("open deterministic Parliament invitation window");
+    let members = attempt
+        .election(&election_attempt_id)
+        .expect("drawn Parliament election")
+        .primary_assignments()
+        .iter()
+        .map(|assignment| assignment.member.clone())
+        .collect::<Vec<_>>();
+    for member in &members {
+        attempt
+            .record_invitation_response(
+                governance_attempt_id,
+                election_attempt_id,
+                member,
+                true,
+                20,
+            )
+            .expect("accept deterministic Parliament invitation");
+    }
+    let body_instance_id = attempt
+        .seal_body_roster(governance_attempt_id, election_attempt_id, 21)
+        .expect("seal deterministic Parliament roster");
+    let mut phases = vec![
+        DeliberationPhaseV1::Orientation,
+        DeliberationPhaseV1::Evidence,
+        DeliberationPhaseV1::Questions,
+        DeliberationPhaseV1::Responses,
+        DeliberationPhaseV1::Deliberation,
+        DeliberationPhaseV1::Reflection,
+    ];
+    if requirement.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot {
+        phases.push(DeliberationPhaseV1::Vote);
+    }
+    for phase in phases {
+        attempt
+            .advance_body_phase(governance_attempt_id, body_instance_id, phase, 22, 1)
+            .expect("advance deterministic Parliament deliberation");
+    }
+    match requirement.decision_mode {
+        ParliamentDecisionModeV1::PublicFinding => {
+            let result_root = parliament_test_root(result_tag);
+            let mut finalized = false;
+            for member in &members {
+                finalized = attempt
+                    .endorse_public_finding(
+                        governance_attempt_id,
+                        body_instance_id,
+                        result_root,
+                        member,
+                        22,
+                    )
+                    .expect("endorse deterministic public finding");
+                if finalized {
+                    break;
+                }
+            }
+            assert!(
+                finalized,
+                "three seats must reach the two-thirds finding quorum"
+            );
+        }
+        ParliamentDecisionModeV1::HiddenBindingBallot => {
+            let ballot_attempt_id = BallotAttemptId::derive_v1(body_instance_id, 0);
+            let release_beacon_session_id = BeaconSessionId::new(parliament_test_root(0xD0));
+            let tle_key_session_id = TleKeySessionId::new(parliament_test_root(0xD1));
+            let release_height = 40;
+            let tle_session_id = TleSessionId::derive_v1(
+                ballot_attempt_id,
+                tle_key_session_id,
+                release_beacon_session_id,
+                release_height,
+            );
+            attempt
+                .register_ballot_attempt(
+                    governance_attempt_id,
+                    body_instance_id,
+                    ballot_attempt_id,
+                    0,
+                    tle_session_id,
+                    tle_key_session_id,
+                    release_beacon_session_id,
+                    30,
+                    ParliamentTimedOvn {
+                        registration_phase_blocks: 2,
+                        survivor_freeze_phase_blocks: 2,
+                        commitment_phase_blocks: 2,
+                        release_delay_blocks: 4,
+                        opening_phase_blocks: 2,
+                        max_ballot_retries: 2,
+                        max_corpus_entries: 1_000,
+                    },
+                    release_height,
+                )
+                .expect("register deterministic binding ballot");
+            let registration_root = parliament_test_root(0xD2);
+            let dropout_root = parliament_test_root(0xD3);
+            let survivor_root = parliament_test_root(0xD4);
+            let no_recovery_root = parliament_test_root(0xD5);
+            let corpus_root = parliament_test_root(0xD6);
+            let timed_commitment_root = parliament_test_root(0xD7);
+            attempt
+                .close_ballot_registration(
+                    governance_attempt_id,
+                    ballot_attempt_id,
+                    registration_root,
+                    3,
+                    32,
+                )
+                .expect("close deterministic ballot registration");
+            attempt
+                .freeze_ballot_survivors(
+                    governance_attempt_id,
+                    ballot_attempt_id,
+                    dropout_root,
+                    survivor_root,
+                    3,
+                    no_recovery_root,
+                    34,
+                )
+                .expect("freeze deterministic ballot survivors");
+            attempt
+                .freeze_timed_ovn_corpus(
+                    governance_attempt_id,
+                    ballot_attempt_id,
+                    corpus_root,
+                    survivor_root,
+                    3,
+                    timed_commitment_root,
+                    36,
+                )
+                .expect("freeze deterministic timed-OVN corpus");
+            attempt
+                .begin_ballot_opening_batch(
+                    governance_attempt_id,
+                    vec![ballot_attempt_id],
+                    release_beacon_session_id,
+                    release_height,
+                    release_height,
+                    BeaconPulseId::new(parliament_test_root(0xD8)),
+                )
+                .expect("open deterministic timed ballot");
+            let outcome = attempt
+                .finalize_opened_ballot(
+                    governance_attempt_id,
+                    ballot_attempt_id,
+                    corpus_root,
+                    no_recovery_root,
+                    tle_session_id,
+                    parliament_test_root(0xD9),
+                    3,
+                    ParliamentAggregateTallyV1 {
+                        original_seats: 3,
+                        accepted_ballots: 3,
+                        aye: 2,
+                        nay: 1,
+                        abstain: 0,
+                    },
+                    41,
+                )
+                .expect("finalize deterministic aggregate ballot");
+            assert_eq!(outcome, ParliamentAggregateOutcomeV1::Approved);
+        }
+    }
 }
 fn test_parliament_authorization(
-    proposal_id: [u8; 32],
-    policy_effective_height: u64,
-) -> ValidationFeeParliamentAuthorizationV1 {
-    let rules = plain_electorate_rules();
-    let enacted_at_height = policy_effective_height
-        .checked_sub(VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS)
-        .expect("test policy leaves the full activation delay");
-    let upper = enacted_at_height
-        .checked_sub(1)
-        .expect("test referendum finalizes before enactment");
-    let lower = upper
-        .checked_sub(rules.ballot_duration_blocks - 1)
-        .expect("test policy leaves the full referendum window");
-    let approval_gate_height = lower.checked_sub(1).expect("test approval gate");
-    let proposal_operator = account(1).0;
-    let electorate = test_plain_electorate_snapshot(
-        proposal_id,
-        &proposal_operator,
-        lower,
-        approval_gate_height,
-        &rules,
-    );
-    ValidationFeeParliamentAuthorizationV1 {
-        proposal_id,
-        proposal_fingerprint: proposal_id,
-        proposal_time_roster_root: test_roster_root(1),
-        plain_electorate_snapshot_root: electorate.roster_root,
-        plain_electorate_snapshot_member_count: electorate.member_count,
-        plain_electorate_snapshot_captured_at_height: electorate.captured_at_height,
-        plain_electorate_snapshot_approval_gate_height: electorate.approval_gate_height,
-        referendum_window: ValidationFeeGovernanceWindowV1 { lower, upper },
-        finalization: ValidationFeeFinalizationEvidenceV1 {
-            referendum_id: proposal_id,
-            finalized_at_height: upper,
-            mode: ValidationFeeGovernanceVotingModeV1::Plain,
-            approve: 1,
-            reject: 0,
-            abstain: 0,
-            min_turnout: 1,
-            approval_threshold_numerator: 1,
-            approval_threshold_denominator: 2,
-            approved: true,
+    state: &State,
+    proposal_kind: &ProposalKind,
+    enacted_at_height: u64,
+) -> (
+    ValidationFeeParliamentAuthorizationV1,
+    ParliamentAttemptStateV1,
+) {
+    let proposal_operator = match proposal_kind {
+        ProposalKind::ValidationFeePolicy(proposal) => proposal.proposal_operator.clone(),
+        ProposalKind::ValidationFeePayoutLifecycle(proposal) => proposal.proposal_operator.clone(),
+        _ => panic!("validation-fee fixture requires a validation-fee proposal"),
+    };
+    let proposal_fingerprint = proposal_kind.fingerprint();
+    let proposal_content_id = ProposalContentId::new(proposal_fingerprint);
+    let governance_attempt_id = GovernanceAttemptId::derive_v1(proposal_content_id, 0);
+    let requirements = validation_fee_parliament_requirements();
+    let expected_head = GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+        subject_id: proposal_kind
+            .governed_subject_id_v1()
+            .expect("derive exact validation-fee governed subject"),
+    });
+    let mut attempt = ParliamentAttemptStateV1::try_new(
+        GovernanceAttemptV1 {
+            id: governance_attempt_id,
+            proposal_content_id,
+            sequence: 0,
+            risk_tier: RiskTierV1::Constitutional,
+            stage: GovernanceStageV1::Qualification,
+            status: GovernanceAttemptStatusV1::Active,
         },
-        enacted_at_height,
+        TEST_PARLIAMENT_POLICY_VERSION,
+        proposal_kind.effect_preimage_hash_v1(),
+        expected_head,
+        requirements.clone(),
+    )
+    .expect("create exact validation-fee Parliament attempt");
+    attempt
+        .complete_qualification(governance_attempt_id)
+        .expect("complete deterministic qualification");
+    let candidates = parliament_test_candidates();
+    let candidate_count = u32::try_from(candidates.len()).expect("candidate count fits u32");
+    let sortition_session = BeaconSessionId::new(parliament_test_root(0xB0));
+    let mut request_ids = Vec::with_capacity(requirements.len());
+    for requirement in &requirements {
+        let election_attempt_id =
+            BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0);
+        let request = SortitionRequestV1::try_new_canonical(
+            governance_attempt_id,
+            election_attempt_id,
+            requirement.body,
+            parliament_candidate_root_v1(governance_attempt_id, requirement.body, &candidates),
+            candidate_count,
+            3,
+            10,
+            20,
+            sortition_session,
+            None,
+        )
+        .expect("construct deterministic sortition request");
+        request_ids.push(request.id);
+        attempt
+            .register_sortition_request(governance_attempt_id, 0, request, candidates.clone())
+            .expect("register deterministic sortition request");
     }
+    request_ids.sort_unstable();
+    let sortition_pulse_id = BeaconPulseId::new(parliament_test_root(0xB1));
+    attempt
+        .consume_sortition_pulse_batch(
+            governance_attempt_id,
+            request_ids,
+            sortition_session,
+            20,
+            sortition_pulse_id,
+            *sortition_pulse_id.as_bytes(),
+            state.network_id_ref(),
+            &parliament_test_governance(&requirements),
+        )
+        .expect("consume deterministic simultaneous Parliament draw");
+    for (index, requirement) in requirements.iter().copied().enumerate() {
+        complete_parliament_body_for_authorization(
+            &mut attempt,
+            requirement,
+            BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0),
+            0xC0_u8
+                .checked_add(u8::try_from(index).expect("body index fits u8"))
+                .expect("result tag does not overflow"),
+        );
+    }
+    assert_eq!(attempt.attempt().stage, GovernanceStageV1::Certification);
+    let governance_certificate = attempt
+        .construct_certificate(
+            governance_attempt_id,
+            enacted_at_height
+                .checked_sub(1)
+                .expect("enactment follows certification"),
+            enacted_at_height,
+        )
+        .expect("construct complete validation-fee Parliament certificate");
+    governance_certificate
+        .validate()
+        .expect("validation-fee Parliament certificate validates");
+    attempt
+        .mark_enacted(governance_attempt_id, enacted_at_height)
+        .expect("mark exact-due validation-fee attempt enacted");
+    attempt
+        .validate()
+        .expect("enacted validation-fee Parliament attempt validates");
+    let authorization = ValidationFeeParliamentAuthorizationV1 {
+        proposal_operator,
+        proposal_fingerprint,
+        governance_certificate_id: GovernanceCertificateId::derive_v1(&governance_certificate),
+        governance_certificate,
+        enacted_at_height,
+    };
+    assert_eq!(authorization.invariant_error(), None);
+    (authorization, attempt)
 }
 fn policy_treasury_account(policy: &ValidationFeePolicyV1) -> AccountId {
     policy.treasury_account_id.clone()
 }
 fn payout_lifecycle_proposal(policy: &ValidationFeePolicyV1) -> ProposalKind {
     ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+        proposal_operator: account(1).0,
         payout_binding: policy
             .treasury_payout_binding
             .clone()
             .expect("enabled policy must carry its exact payout binding"),
-        plain_electorate_rules: plain_electorate_rules(),
     })
 }
 fn payout_lifecycle_proposal_id(policy: &ValidationFeePolicyV1) -> [u8; 32] {
@@ -537,526 +735,216 @@ fn payout_lifecycle_proposal_id(policy: &ValidationFeePolicyV1) -> [u8; 32] {
 }
 fn policy_proposal(policy: &ValidationFeePolicyV1) -> ProposalKind {
     ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+        proposal_operator: account(1).0,
         policy: policy.clone(),
         payout_lifecycle_proposal_id: Some(payout_lifecycle_proposal_id(policy)),
-        plain_electorate_rules: plain_electorate_rules(),
     })
 }
-fn policy_registry(policy: &ValidationFeePolicyV1) -> ValidationFeePolicyRegistryV1 {
-    let lifecycle_id = payout_lifecycle_proposal_id(policy);
+fn canonical_policy_registry_state(
+    state: &State,
+    policy: &ValidationFeePolicyV1,
+) -> (
+    ValidationFeePolicyRegistryV1,
+    Vec<(ProposalKind, ParliamentAttemptStateV1)>,
+) {
+    let enacted_at_height = policy
+        .effective_from_height
+        .checked_sub(VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS)
+        .expect("test policy leaves the full activation delay");
+    let lifecycle_proposal = payout_lifecycle_proposal(policy);
     let lifecycle_seal = policy
         .treasury_payout_binding
         .as_ref()
         .expect("enabled policy must carry its exact payout binding")
         .lifecycle_seal()
         .expect("derive payout lifecycle seal");
-    let proposal = policy_proposal(policy);
-    let proposal_id = proposal.fingerprint();
+    let policy_proposal = policy_proposal(policy);
+    let (lifecycle_authorization, lifecycle_attempt) =
+        test_parliament_authorization(state, &lifecycle_proposal, enacted_at_height);
+    let (policy_authorization, policy_attempt) =
+        test_parliament_authorization(state, &policy_proposal, enacted_at_height);
     let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(
         policy.clone(),
-        plain_electorate_rules(),
-        test_parliament_authorization(proposal_id, policy.effective_from_height),
+        policy_authorization,
         Some(ValidationFeePayoutLifecycleReferenceV1 {
             lifecycle_seal,
-            parliament_authorization: test_parliament_authorization(
-                lifecycle_id,
-                policy.effective_from_height,
-            ),
-            plain_electorate_rules: plain_electorate_rules(),
+            parliament_authorization: lifecycle_authorization,
         }),
     )
     .expect("registry entry");
-    ValidationFeePolicyRegistryV1 {
+    let registry = ValidationFeePolicyRegistryV1 {
         registered_policies: vec![entry],
-    }
+    };
+    registry
+        .validate()
+        .expect("canonical validation-fee registry validates");
+    (
+        registry,
+        vec![
+            (lifecycle_proposal, lifecycle_attempt),
+            (policy_proposal, policy_attempt),
+        ],
+    )
 }
-fn seed_open_proposal(
+fn policy_registry(state: &State, policy: &ValidationFeePolicyV1) -> ValidationFeePolicyRegistryV1 {
+    canonical_policy_registry_state(state, policy).0
+}
+fn seed_canonical_enacted_proposal(
     kind: ProposalKind,
     proposer: &AccountId,
-    window: AtWindow,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> [u8; 32] {
     let proposal_id = kind.fingerprint();
-    let referendum_id = hex::encode(proposal_id);
-    let bodies = test_parliament_bodies(window.lower);
-    let rules = match &kind {
-        ProposalKind::ValidationFeePolicy(payload) => payload.plain_electorate_rules.clone(),
-        ProposalKind::ValidationFeePayoutLifecycle(payload) => {
-            payload.plain_electorate_rules.clone()
-        }
-        _ => panic!("validation-fee admission fixture requires a validation-fee proposal"),
-    };
-    let approval_gate_height = window
-        .lower
-        .checked_sub(1)
-        .expect("fixture referendum starts after its approval gate");
-    let electorate = test_plain_electorate_snapshot(
-        proposal_id,
-        proposer,
-        window.lower,
-        approval_gate_height,
-        &rules,
+    assert!(
+        matches!(
+            &kind,
+            ProposalKind::ValidationFeePolicy(_) | ProposalKind::ValidationFeePayoutLifecycle(_)
+        ),
+        "validation-fee admission fixture requires a validation-fee proposal"
     );
+    let selection_epoch = 1;
     state_transaction.world.governance_proposals_mut().insert(
         proposal_id,
         iroha_core::state::GovernanceProposalRecord {
             proposer: proposer.clone(),
             kind,
-            created_height: window.lower,
-            status: iroha_core::state::GovernanceProposalStatus::Proposed,
-            pipeline: iroha_core::state::GovernancePipeline::default(),
-            parliament_snapshot: iroha_core::state::GovernanceParliamentSnapshot {
-                selection_epoch: window.lower,
-                beacon: [0x44; 32],
-                roster_root: test_roster_root(window.lower),
-                bodies,
-            },
-            finalization_evidence: None,
-            enacted_at_height: None,
-        },
-    );
-    state_transaction.world.governance_referenda_mut().insert(
-        referendum_id.clone(),
-        iroha_core::state::GovernanceReferendumRecord {
-            h_start: window.lower,
-            h_end: window.upper,
-            status: iroha_core::state::GovernanceReferendumStatus::Open,
-            mode: iroha_core::state::GovernanceReferendumMode::Plain,
-        },
-    );
-    let mut approvals = iroha_core::state::GovernanceStageApprovals::default();
-    for body in [
-        ParliamentBody::RulesCommittee,
-        ParliamentBody::AgendaCouncil,
-        ParliamentBody::InterestPanel,
-        ParliamentBody::ReviewPanel,
-        ParliamentBody::PolicyJury,
-        ParliamentBody::OversightCommittee,
-        ParliamentBody::FmaCommittee,
-    ] {
-        approvals
-            .ensure_stage(body, window.lower, 1, 10_000)
-            .record(account(250).0);
-    }
-    approvals.approval_gate_height = Some(approval_gate_height);
-    approvals.validation_fee_plain_electorate_snapshot = Some(electorate);
-    state_transaction
-        .world
-        .governance_stage_approvals_mut()
-        .insert(referendum_id.clone(), approvals);
-    let custody = iroha_core::state::GovernanceLockCustody {
-        escrowed: true,
-        asset_definition_id: rules.voting_asset_id.clone(),
-        bond_escrow_account: rules.bond_escrow_account.clone(),
-        slash_receiver_account: rules.slash_receiver_account.clone(),
-    };
-    let voter = proposer.clone();
-    state_transaction.world.governance_locks_mut().insert(
-        referendum_id,
-        iroha_core::state::GovernanceLocksForReferendum {
-            locks: BTreeMap::from([(
-                voter.clone(),
-                iroha_core::state::GovernanceLockRecord {
-                    owner: voter,
-                    amount: rules.ballot_amount,
-                    slashed: Quantity::zero(),
-                    expiry_height: window.upper,
-                    direction: 0,
-                    duration_blocks: rules.ballot_duration_blocks,
-                    custody,
-                },
-            )]),
+            created_height: selection_epoch,
+            status: iroha_core::state::GovernanceProposalStatus::Enacted,
         },
     );
     proposal_id
 }
-fn install_validation_fee_policy(
+fn install_canonical_post_enactment_validation_fee_state(
     state: &State,
     authority: &AccountId,
     authority_key_pair: &KeyPair,
     policy: ValidationFeePolicyV1,
 ) {
-    let lifecycle_window = AtWindow {
-        lower: TEST_LIFECYCLE_WINDOW_START_HEIGHT,
-        upper: TEST_LIFECYCLE_WINDOW_END_HEIGHT,
-    };
-    let lifecycle_id = payout_lifecycle_proposal_id(&policy);
-    let policy_window = AtWindow {
-        lower: TEST_POLICY_WINDOW_START_HEIGHT,
-        upper: TEST_POLICY_WINDOW_END_HEIGHT,
-    };
-    let proposal_id = policy_proposal(&policy).fingerprint();
-    // At the exact referendum start, install the immutable payout runtime and
-    // persist an open 3,600-block lifecycle referendum. An enactment attempt
-    // before explicit finalization must fail closed.
-    {
-        let mut block = state.block(block_header(
-            TEST_LIFECYCLE_WINDOW_START_HEIGHT,
-            1_700_000_001_000,
-        ));
-        let mut stx = block.transaction();
-        let register_permission: iroha_data_model::permission::Permission =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
-                .into();
-        Grant::account_permission(register_permission, authority.clone())
-            .execute(authority, &mut stx)
-            .expect("grant payout-contract registration authority");
-        let enact_permission: iroha_data_model::permission::Permission =
-            iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
-        Grant::account_permission(enact_permission, authority.clone())
-            .execute(authority, &mut stx)
-            .expect("grant exact governance enactment authority");
-        let (contract_artifact, contract_manifest) = payout_contract_artifact();
-        let registered_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
-            authority,
-            contract_artifact,
-            &mut stx,
-        )
-        .expect("register payout-contract bytes");
-        iroha_core::smartcontracts::code::register_manifest(
-            authority,
-            contract_manifest.signed(authority_key_pair),
-            &mut stx,
-        )
-        .expect("register signed payout-contract manifest");
-        iroha_core::smartcontracts::code::activate_instance(
-            authority,
-            payout_contract_address(),
-            registered_code_hash,
-            &mut stx,
-        )
-        .expect("activate immutable payout-contract subject");
-        let (pool_artifact, pool_manifest) = pool_contract_artifact();
-        let pool_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
-            authority,
-            pool_artifact,
-            &mut stx,
-        )
-        .expect("register pool-contract bytes");
-        iroha_core::smartcontracts::code::register_manifest(
-            authority,
-            pool_manifest.signed(authority_key_pair),
-            &mut stx,
-        )
-        .expect("register signed pool-contract manifest");
-        iroha_core::smartcontracts::code::activate_instance(
-            authority,
-            pool_contract_address(),
-            pool_code_hash,
-            &mut stx,
-        )
-        .expect("activate pool contract");
-        assert_eq!(
-            seed_open_proposal(
-                payout_lifecycle_proposal(&policy),
-                authority,
-                lifecycle_window,
-                &mut stx,
+    let (registry, enacted_attempts) = canonical_policy_registry_state(state, &policy);
+    assert_eq!(
+        registry.registered_policies[0]
+            .parliament_authorization
+            .enacted_at_height,
+        TEST_POLICY_ENACTMENT_HEIGHT
+    );
+    let mut block = state.block(block_header(
+        TEST_POLICY_ENACTMENT_HEIGHT,
+        1_700_000_006_000,
+    ));
+    let mut state_transaction = block.transaction();
+
+    let register_permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+    Grant::account_permission(register_permission, authority.clone())
+        .execute(authority, &mut state_transaction)
+        .expect("grant payout-contract registration authority");
+    let (contract_artifact, contract_manifest) = payout_contract_artifact();
+    let registered_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
+        authority,
+        contract_artifact,
+        &mut state_transaction,
+    )
+    .expect("register payout-contract bytes");
+    iroha_core::smartcontracts::code::register_manifest(
+        authority,
+        contract_manifest.signed(authority_key_pair),
+        &mut state_transaction,
+    )
+    .expect("register signed payout-contract manifest");
+    iroha_core::smartcontracts::code::activate_instance(
+        authority,
+        payout_contract_address(),
+        registered_code_hash,
+        &mut state_transaction,
+    )
+    .expect("activate immutable payout-contract subject");
+
+    let (pool_artifact, pool_manifest) = pool_contract_artifact();
+    let pool_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
+        authority,
+        pool_artifact,
+        &mut state_transaction,
+    )
+    .expect("register pool-contract bytes");
+    iroha_core::smartcontracts::code::register_manifest(
+        authority,
+        pool_manifest.signed(authority_key_pair),
+        &mut state_transaction,
+    )
+    .expect("register signed pool-contract manifest");
+    iroha_core::smartcontracts::code::activate_instance(
+        authority,
+        pool_contract_address(),
+        pool_code_hash,
+        &mut state_transaction,
+    )
+    .expect("activate pool contract");
+
+    let payout_binding = policy
+        .treasury_payout_binding
+        .as_ref()
+        .expect("enabled policy carries its payout binding");
+    let wrapper_permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+            contract: payout_contract_address(),
+            entrypoint: "autonomous_validation_fee_tick".to_owned(),
+        }
+        .into();
+    let pool_permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+            contract: pool_contract_address(),
+            entrypoint: "swap_exact_in_quote_public".to_owned(),
+        }
+        .into();
+    let wrapper_ds_transfer_permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::asset::CanTransferAsset {
+            asset: AssetId::new(
+                policy.ds_asset_id.clone(),
+                policy.treasury_account_id.clone(),
             ),
-            lifecycle_id
-        );
-        let early_error = EnactReferendum {
-            referendum_id: lifecycle_id,
-            preimage_hash: lifecycle_id,
-            at_window: lifecycle_window,
         }
-        .execute(authority, &mut stx)
-        .expect_err("an open lifecycle referendum must not enact");
-        assert!(
-            early_error.to_string().contains("approved"),
-            "unexpected pre-finalization lifecycle error: {early_error}"
-        );
-        stx.apply();
-        block.commit().expect("commit open lifecycle referendum");
+        .into();
+    for (permission, holder) in [
+        (
+            wrapper_permission,
+            payout_binding.treasury_account_id.clone(),
+        ),
+        (pool_permission, payout_binding.treasury_account_id.clone()),
+        (
+            wrapper_ds_transfer_permission,
+            payout_binding.pool_vault_account_id.clone(),
+        ),
+    ] {
+        Grant::account_permission(permission, holder)
+            .execute(authority, &mut state_transaction)
+            .expect("grant exact enacted payout-lifecycle effect permission");
     }
-    {
-        let view = state.view();
-        let proposal = view
-            .world()
-            .governance_proposals()
-            .get(&lifecycle_id)
-            .expect("persisted lifecycle proposal");
+
+    for (proposal_kind, attempt) in enacted_attempts {
+        let proposal_id = proposal_kind.fingerprint();
         assert_eq!(
-            proposal.status,
-            iroha_core::state::GovernanceProposalStatus::Proposed
-        );
-        assert!(proposal.finalization_evidence.is_none());
-        let wrapper_permission: iroha_data_model::permission::Permission =
-            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-                contract: payout_contract_address(),
-                entrypoint: "autonomous_validation_fee_tick".to_owned(),
-            }
-            .into();
-        let pool_permission: iroha_data_model::permission::Permission =
-            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-                contract: pool_contract_address(),
-                entrypoint: "swap_exact_in_quote_public".to_owned(),
-            }
-            .into();
-        let derived_effect_permission: iroha_data_model::permission::Permission =
-            iroha_executor_data_model::permission::asset::CanTransferAsset {
-                asset: AssetId::new(
-                    policy.ds_asset_id.clone(),
-                    policy.treasury_account_id.clone(),
-                ),
-            }
-            .into();
-        for (permission, label) in [
-            (wrapper_permission, "wrapper selector"),
-            (pool_permission, "pool selector"),
-            (derived_effect_permission, "wrapper-owned DS effect"),
-        ] {
-            assert!(
-                view.world()
-                    .account_permissions()
-                    .iter()
-                    .all(|(_, permissions)| !permissions.contains(&permission)),
-                "{label} permission must not exist before protected lifecycle enactment"
-            );
-            assert!(
-                view.world()
-                    .roles()
-                    .iter()
-                    .all(|(_, role)| !role.permissions().any(|candidate| candidate == &permission)),
-                "{label} permission must not be role-owned before protected lifecycle enactment"
-            );
-        }
-        assert_eq!(
-            view.world()
-                .governance_referenda()
-                .get(&hex::encode(lifecycle_id))
-                .expect("persisted lifecycle referendum")
-                .status,
-            iroha_core::state::GovernanceReferendumStatus::Open
-        );
-    }
-    // Immediately after the inclusive referendum end, explicitly finalize the
-    // protected PLAIN referendum and enact only after that evidence exists.
-    {
-        let mut block = state.block(block_header(
-            TEST_LIFECYCLE_ENACTMENT_HEIGHT,
-            1_700_000_002_000,
-        ));
-        let mut stx = block.transaction();
-        FinalizeReferendum {
-            referendum_id: hex::encode(lifecycle_id),
-            proposal_id: lifecycle_id,
-        }
-        .execute(authority, &mut stx)
-        .expect("explicitly finalize validation-fee payout lifecycle");
-        let proposal = stx
-            .world
-            .governance_proposals()
-            .get(&lifecycle_id)
-            .cloned()
-            .expect("explicitly finalized lifecycle proposal");
-        assert_eq!(
-            proposal.status,
-            iroha_core::state::GovernanceProposalStatus::Approved
+            attempt.proposal_content_id(),
+            ProposalContentId::new(proposal_id)
         );
         assert_eq!(
-            proposal
-                .finalization_evidence
-                .as_ref()
-                .expect("genuine lifecycle finalization evidence")
-                .finalized_at_height,
-            TEST_LIFECYCLE_WINDOW_END_HEIGHT
-        );
-        EnactReferendum {
-            referendum_id: lifecycle_id,
-            preimage_hash: lifecycle_id,
-            at_window: lifecycle_window,
-        }
-        .execute(authority, &mut stx)
-        .expect("enact explicitly finalized validation-fee payout lifecycle");
-        stx.apply();
-        block.commit().expect("commit lifecycle enactment");
-    }
-    {
-        let view = state.view();
-        let proposal = view
-            .world()
-            .governance_proposals()
-            .get(&lifecycle_id)
-            .expect("persisted enacted lifecycle");
-        assert_eq!(
-            proposal.status,
-            iroha_core::state::GovernanceProposalStatus::Enacted
-        );
-        assert_eq!(
-            proposal.enacted_at_height,
-            Some(TEST_LIFECYCLE_ENACTMENT_HEIGHT)
-        );
-        let wrapper_permission: iroha_data_model::permission::Permission =
-            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-                contract: payout_contract_address(),
-                entrypoint: "autonomous_validation_fee_tick".to_owned(),
-            }
-            .into();
-        let pool_permission: iroha_data_model::permission::Permission =
-            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-                contract: pool_contract_address(),
-                entrypoint: "swap_exact_in_quote_public".to_owned(),
-            }
-            .into();
-        let derived_effect_permission: iroha_data_model::permission::Permission =
-            iroha_executor_data_model::permission::asset::CanTransferAsset {
-                asset: AssetId::new(
-                    policy.ds_asset_id.clone(),
-                    policy.treasury_account_id.clone(),
-                ),
-            }
-            .into();
-        let payout_binding = policy
-            .treasury_payout_binding
-            .as_ref()
-            .expect("payout binding");
-        for (permission, required_holder, label) in [
-            (
-                wrapper_permission,
-                &payout_binding.treasury_account_id,
-                "wrapper selector",
-            ),
-            (
-                pool_permission,
-                &payout_binding.treasury_account_id,
-                "pool selector",
-            ),
-            (
-                derived_effect_permission,
-                &payout_binding.pool_vault_account_id,
-                "wrapper-owned DS effect",
-            ),
-        ] {
-            let direct_holders = view
-                .world()
-                .account_permissions()
-                .iter()
-                .filter_map(|(account_id, permissions)| {
-                    permissions.contains(&permission).then_some(account_id)
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(
-                direct_holders,
-                vec![required_holder],
-                "protected lifecycle enactment must atomically derive the sole {label} grant"
-            );
-            assert!(
-                view.world()
-                    .roles()
-                    .iter()
-                    .all(|(_, role)| !role.permissions().any(|candidate| candidate == &permission)),
-                "the derived {label} grant must never be role-owned"
-            );
-        }
-    }
-    // Only after the lifecycle enactment is persisted, seed the exact
-    // 3,600-block policy referendum and prove that it cannot enact while open.
-    {
-        let mut block = state.block(block_header(
-            TEST_POLICY_WINDOW_START_HEIGHT,
-            1_700_000_003_000,
-        ));
-        let mut stx = block.transaction();
-        assert_eq!(
-            seed_open_proposal(policy_proposal(&policy), authority, policy_window, &mut stx,),
+            seed_canonical_enacted_proposal(proposal_kind, authority, &mut state_transaction),
             proposal_id
         );
-        let early_error = EnactReferendum {
-            referendum_id: proposal_id,
-            preimage_hash: proposal_id,
-            at_window: policy_window,
-        }
-        .execute(authority, &mut stx)
-        .expect_err("an open policy referendum must not enact");
-        assert!(
-            early_error.to_string().contains("approved"),
-            "unexpected pre-finalization policy error: {early_error}"
-        );
-        stx.apply();
-        block.commit().expect("commit open policy referendum");
+        let governance_attempt_id = attempt.attempt().id;
+        state_transaction
+            .world
+            .put_parliament_attempt_for_testing(governance_attempt_id, attempt)
+            .expect("persist validated enacted Parliament attempt");
     }
-    // The first height after the window explicitly persists the finalized approval.
-    {
-        let mut block = state.block(block_header(
-            TEST_POLICY_WINDOW_END_HEIGHT + 1,
-            1_700_000_004_000,
-        ));
-        let mut stx = block.transaction();
-        FinalizeReferendum {
-            referendum_id: hex::encode(proposal_id),
-            proposal_id,
-        }
-        .execute(authority, &mut stx)
-        .expect("explicitly finalize validation-fee policy");
-        stx.apply();
-        block.commit().expect("commit explicit policy finalization");
-    }
-    {
-        let view = state.view();
-        let proposal = view
-            .world()
-            .governance_proposals()
-            .get(&proposal_id)
-            .expect("persisted explicitly finalized policy");
-        assert_eq!(
-            proposal.status,
-            iroha_core::state::GovernanceProposalStatus::Approved
-        );
-        let evidence = proposal
-            .finalization_evidence
-            .as_ref()
-            .expect("genuine policy finalization evidence");
-        assert_eq!(evidence.finalized_at_height, TEST_POLICY_WINDOW_END_HEIGHT);
-        assert!(evidence.approved);
-    }
-    // The reviewed policy fixes effective=h_end+124,560. The exact 120,960-block
-    // activation equation therefore admits enactment only at h_end+3,600.
-    {
-        let mut early_block = state.block(block_header(
-            TEST_POLICY_ENACTMENT_HEIGHT - 1,
-            1_700_000_005_000,
-        ));
-        let mut early_stx = early_block.transaction();
-        let early_error = EnactReferendum {
-            referendum_id: proposal_id,
-            preimage_hash: proposal_id,
-            at_window: policy_window,
-        }
-        .execute(authority, &mut early_stx)
-        .expect_err("policy enactment one block early must fail");
-        let early_error_debug = format!("{early_error:?}");
-        assert!(
-            early_error_debug.contains("effective height must equal"),
-            "unexpected early policy-enactment error: {early_error_debug}"
-        );
-    }
-    {
-        let mut block = state.block(block_header(
-            TEST_POLICY_ENACTMENT_HEIGHT,
-            1_700_000_006_000,
-        ));
-        let mut stx = block.transaction();
-        EnactReferendum {
-            referendum_id: proposal_id,
-            preimage_hash: proposal_id,
-            at_window: policy_window,
-        }
-        .execute(authority, &mut stx)
-        .expect("enact policy at the exact scheduled height");
-        stx.apply();
-        block.commit().expect("commit validation-fee policy");
-    }
-    let view = state.view();
-    let proposal = view
-        .world()
-        .governance_proposals()
-        .get(&proposal_id)
-        .expect("persisted enacted policy");
-    assert_eq!(
-        proposal.enacted_at_height,
-        Some(TEST_POLICY_ENACTMENT_HEIGHT)
-    );
+    state_transaction
+        .world
+        .parameters_mut_for_testing()
+        .get_mut()
+        .set_parameter(Parameter::Custom(registry.into_custom_parameter()));
+    state_transaction.apply();
+    block
+        .commit()
+        .expect("commit canonical post-enactment validation-fee state");
 }
 fn metadata_for_policy(policy: &ValidationFeePolicyV1, fee_instruction_index: usize) -> Metadata {
     let mut metadata = Metadata::default();
@@ -1378,9 +1266,13 @@ fn asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
 #[test]
 fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
-    install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
+    install_canonical_post_enactment_validation_fee_state(
+        &state,
+        &user,
+        &user_key_pair,
+        policy.clone(),
+    );
     let missing_fee_error = validate_in_block(
         &state,
         TEST_POLICY_EFFECTIVE_HEIGHT,
@@ -1416,9 +1308,8 @@ fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {
 #[test]
 fn validation_fee_registry_cannot_be_installed_through_generic_parameter_path() {
     let (state, user, _, _, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset, treasury);
-    let custom = policy_registry(&policy).into_custom_parameter();
+    let custom = policy_registry(&state, &policy).into_custom_parameter();
     let mut block = state.block(block_header(
         TEST_POLICY_ENACTMENT_HEIGHT,
         1_700_000_001_000,
@@ -1434,11 +1325,15 @@ fn validation_fee_registry_cannot_be_installed_through_generic_parameter_path() 
     );
 }
 #[test]
-fn active_registry_rejects_stored_governance_enactment_height_mismatch() {
+fn active_registry_rejects_missing_enacted_parliament_attempt() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
-    install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
+    install_canonical_post_enactment_validation_fee_state(
+        &state,
+        &user,
+        &user_key_pair,
+        policy.clone(),
+    );
     let proposal_id = policy_proposal(&policy).fingerprint();
     {
         let mut block = state.block(block_header(
@@ -1446,20 +1341,17 @@ fn active_registry_rejects_stored_governance_enactment_height_mismatch() {
             1_700_000_007_000,
         ));
         let mut stx = block.transaction();
-        let mut proposal = stx
-            .world
-            .governance_proposals()
-            .get(&proposal_id)
-            .cloned()
-            .expect("enacted policy proposal");
-        proposal.enacted_at_height = Some(TEST_POLICY_ENACTMENT_HEIGHT + 1);
-        stx.world
-            .governance_proposals_mut()
-            .insert(proposal_id, proposal);
+        let attempt_id = GovernanceAttemptId::derive_v1(ProposalContentId::new(proposal_id), 0);
+        assert!(
+            stx.world
+                .remove_parliament_attempt_for_testing(&attempt_id)
+                .is_some(),
+            "canonical fixture must retain the enacted Parliament attempt"
+        );
         stx.apply();
         block
             .commit()
-            .expect("commit adversarial stored-height mismatch");
+            .expect("commit adversarial missing-attempt state");
     }
     let error = validate_in_block(
         &state,
@@ -1475,18 +1367,15 @@ fn active_registry_rejects_stored_governance_enactment_height_mismatch() {
         ),
     );
     assert!(
-        error.contains(
-            "authorized governance proposal payload, status, or enactment height differs from the registry"
-        ),
-        "stored enactment-height mismatch must fail closed: {error}"
+        error.contains("authorized Parliament attempt is missing"),
+        "missing enacted Parliament attempt must fail closed: {error}"
     );
 }
 #[test]
 fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset, treasury.clone());
-    install_validation_fee_policy(&state, &user, &user_key_pair, policy);
+    install_canonical_post_enactment_validation_fee_state(&state, &user, &user_key_pair, policy);
     let wrapper_permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
             contract: payout_contract_address(),
@@ -1542,9 +1431,13 @@ fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
 #[test]
 fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone());
-    install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
+    install_canonical_post_enactment_validation_fee_state(
+        &state,
+        &user,
+        &user_key_pair,
+        policy.clone(),
+    );
     let principal = || {
         InstructionBox::from(Transfer::asset_quantity(
             AssetId::new(fee_asset.clone(), user.clone()),
@@ -1594,9 +1487,13 @@ fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
 #[test]
 fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone());
-    install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
+    install_canonical_post_enactment_validation_fee_state(
+        &state,
+        &user,
+        &user_key_pair,
+        policy.clone(),
+    );
     let recipient_asset = AssetId::new(fee_asset.clone(), recipient.clone());
     let treasury_asset = AssetId::new(fee_asset.clone(), treasury.clone());
     let missing_fee_tx = signed_transfer(
@@ -1772,9 +1669,13 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
 #[test]
 fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
-    install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
+    install_canonical_post_enactment_validation_fee_state(
+        &state,
+        &user,
+        &user_key_pair,
+        policy.clone(),
+    );
     let mut exact_fee_tx = signed_transfer(
         &state,
         &user,

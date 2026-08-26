@@ -333,7 +333,7 @@ public final class ConnectEnvelopeCodec {
           final long algorithmLength = decoder.readLength(compactLen);
           final byte[] algorithmBytes = decoder.readBytes((int) algorithmLength);
           final NoritoDecoder algorithmDecoder =
-              new NoritoDecoder(algorithmBytes, decoder.flags(), decoder.flagsHint());
+              new NoritoDecoder(algorithmBytes, decoder.flags());
           final int algorithm = UINT32.decode(algorithmDecoder).intValue();
           if (algorithmDecoder.remaining() != 0) {
             throw new IllegalArgumentException(
@@ -343,7 +343,7 @@ public final class ConnectEnvelopeCodec {
           final long signatureLength = decoder.readLength(compactLen);
           final byte[] signatureBytes = decoder.readBytes((int) signatureLength);
           final NoritoDecoder signatureDecoder =
-              new NoritoDecoder(signatureBytes, decoder.flags(), decoder.flagsHint());
+              new NoritoDecoder(signatureBytes, decoder.flags());
           final byte[] signature = BYTE_VECTOR.decode(signatureDecoder);
           if (signatureDecoder.remaining() != 0) {
             throw new IllegalArgumentException(
@@ -582,7 +582,7 @@ public final class ConnectEnvelopeCodec {
       throw new IllegalArgumentException(fieldName + " field too large: " + fieldLength);
     }
     final byte[] fieldBytes = decoder.readBytes((int) fieldLength);
-    final NoritoDecoder child = new NoritoDecoder(fieldBytes, decoder.flags(), decoder.flagsHint());
+    final NoritoDecoder child = new NoritoDecoder(fieldBytes, decoder.flags());
     final T value = adapter.decode(child);
     if (child.remaining() != 0) {
       throw new IllegalArgumentException(

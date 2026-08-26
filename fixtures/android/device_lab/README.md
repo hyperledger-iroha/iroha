@@ -21,7 +21,7 @@ python3 scripts/check_android_device_lab_slot.py \
 ```
 
 Production slots live under `artifacts/android/device_lab/<slot-id>/` and must
-also contain the candidate-bound V2 `slot.json` schema, native-bridge ABI 22
+also contain the candidate-bound V2 `slot.json` schema, native-bridge ABI 23
 Kagemusha candidate-lab results, StrongBox/KeyMint evidence, exact lifecycle
 transcripts (the Kagemusha protocol envelope remains ABI 21/V4),
 the clean candidate and exact ordered eight KRV4 artifacts, the lab native

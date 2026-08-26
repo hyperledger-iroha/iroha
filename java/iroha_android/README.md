@@ -408,7 +408,7 @@ network prefix stay aligned with `specs/sns/address_display_guidelines.md`.
 ABI V1 exposes no generic shield, shielded-transfer, or unshield instruction or
 native signer method; confidential movement uses the typed Kagemusha lifecycle.
 The Android/JVM offline surface has exactly two current pieces. `KagemushaRecursiveSpendProver`
-requires native bridge ABI 22, streams the eight authenticated V4 proof artifacts into an atomic
+requires native bridge ABI 23, streams the eight authenticated V4 proof artifacts into an atomic
 generation install, and exposes typed `initSpendV4`, `appendSpendV4`, `verifySpendV4`, and
 `buildRedeemV4` calls over the fixed native exports. `KagemushaScaledAmount` converts decimal input to positive
 `u128` atomic units exactly at the authoritative asset scale and never rounds. The standalone
@@ -437,8 +437,9 @@ See [`specs/offline_cash_device_bridge_v1.md`](../../specs/offline_cash_device_b
 for exact frame offsets, feature bits, and optional native entry points.
 
 Artifact installation requires the canonical candidate-bound promotion record through
-`ReleaseAuthentication`, in addition to the trusted policy, attestation, benchmark evidence, and
-cryptographic review. An authenticated-but-unpromoted release cannot become active.
+`ReleaseAuthentication`, in addition to the trusted policy, attestation, runner-signed
+internal-validation receipt, benchmark evidence, and cryptographic review. The receipt and review
+are each limited to 1 MiB. An authenticated-but-unpromoted release cannot become active.
 
 `newToriiClient(...)` requires an exact genesis-derived `LocalSigningContext` and exposes the
 query-free, asset-neutral `getOfflineCapability`, `getRecipientRegistrationLineage`, `submitTopUp`,
@@ -450,7 +451,7 @@ request directly with `application/x-norito` and the signed lowercase operation 
 bodies are limited to 512 KiB and redemption bodies to 48 MiB, exposed as
 `MAX_TORII_TOP_UP_REQUEST_BYTES_V4` and `MAX_TORII_REDEEM_REQUEST_BYTES_V4`.
 `getOfflineCapability` takes no selector and accepts only the four-field
-`cash_handoff_v1` response: bridge ABI 22, maximum hop count 8, and
+`cash_handoff_v1` response: bridge ABI 23, maximum hop count 8, and
 `ready=true`. Asset scale, committed snapshot, verifier identities, and
 release bindings are supplied through the exact command and proof types that
 consume them. `prepareTopUp` accepts Torii's authoritative

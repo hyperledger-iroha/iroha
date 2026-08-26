@@ -1,7 +1,6 @@
 //! Support types for SM2/SM3/SM4 primitives.
 #[cfg(feature = "sm-ffi-openssl")]
 pub use self::openssl_sm::{OpenSslSmBackend, OpenSslSmError};
-#[cfg(not(feature = "ffi_import"))]
 use crate::Algorithm;
 use crate::{
     Error, ParseError,
@@ -289,16 +288,16 @@ impl Sm2PublicKey {
     /// # Errors
     /// Returns [`ParseError`] when the public key payload cannot be encoded into
     /// the canonical SM2 multihash form.
-    #[cfg(not(feature = "ffi_import"))]
     pub fn try_to_prefixed_string(&self) -> Result<String, ParseError> {
         let sec1 = self.to_sec1_bytes(false);
         let payload = encode_sm2_public_key_payload(self.distid(), &sec1)?;
-        crate::multihash::encode_public_key_prefixed(Algorithm::Sm2, &payload)
-            .map_err(|err| ParseError(err.to_string()))
+        Ok(crate::multihash::encode_public_key_prefixed(
+            Algorithm::Sm2,
+            &payload,
+        ))
     }
     /// Format as an algorithm-prefixed multihash string (e.g., `sm2:...`),
     /// embedding the distinguishing identifier alongside the SEC1 payload.
-    #[cfg(not(feature = "ffi_import"))]
     #[must_use]
     pub fn to_prefixed_string(&self) -> String {
         self.try_to_prefixed_string().unwrap_or_else(|_| {
@@ -2771,12 +2770,9 @@ pub mod openssl_sm {
 mod tests {
     use super::{sm_accel, *};
     use hex::decode as hex_decode;
-    use rand_core::{TryCryptoRng, TryRngCore};
+    use rand_core::{OsRng, TryCryptoRng, TryRngCore};
     use signature::hazmat::PrehashVerifier;
-    use sm2::elliptic_curve::{
-        rand_core::OsRng,
-        sec1::{Coordinates, ToEncodedPoint},
-    };
+    use sm2::elliptic_curve::sec1::{Coordinates, ToEncodedPoint};
     use sm3::Sm3;
     use std::str::FromStr;
     const ANNEX_SIG_HEX: &str = "40F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D16FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7";
@@ -3492,7 +3488,6 @@ mod tests {
         let distid = "a".repeat(8192);
         assert!(Sm2PrivateKey::try_random(distid, &mut rng).is_err());
     }
-    #[cfg(not(feature = "ffi_import"))]
     #[test]
     fn sm2_public_key_prefixed_string_matches_public_key_helper() {
         use crate::{Algorithm, PublicKey};

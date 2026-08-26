@@ -55,6 +55,9 @@ enum Command {
     /// Validate an emitted exact-12 instruction set and its digest inventory.
     #[command(name = "validate-taira-v1")]
     ValidateTairaV1(ValidateTairaV1Args),
+    /// Validate a reviewed Taira NEVO unsigned genesis without creating release artifacts.
+    #[command(name = "validate-taira-nevo-review-v1")]
+    ValidateTairaNevoReviewV1(release::ValidateTairaNevoReviewV1Args),
     /// Compose a complete secret-free Taira release plan, config, and genesis.
     #[command(name = "render-taira-release-v1")]
     RenderTairaReleaseV1(Box<release::RenderTairaReleaseV1Args>),
@@ -126,6 +129,9 @@ impl<T: Write> RunArgs<T> for Args {
                     "instruction_count": (PrivacyProtocolIdV1::COUNT as u64),
                 });
                 writeln!(writer, "{}", norito::json::to_json(&status)?)?;
+            }
+            Command::ValidateTairaNevoReviewV1(args) => {
+                release::validate_taira_nevo_review_v1(&args, writer)?;
             }
             Command::RenderTairaReleaseV1(args) => {
                 release::render_taira_release_v1(&args, writer)?;
@@ -820,8 +826,10 @@ mod tests {
     #[test]
     fn lifecycle_and_compiled_digest_substitutions_are_rejected() {
         let expected = fixture_artifacts();
-        let other = *privacy_activation_at_v1(&expected.instructions[1], 1)
-            .expect("second exact activation");
+        let expected_activation = *privacy_activation_at_v1(&expected.instructions[0], 0)
+            .expect("first exact activation");
+        let other = *privacy_activation_at_v1(&expected.instructions[2], 2)
+            .expect("third exact activation");
         for mutation in 0_u8..=10 {
             let mut instructions = expected.instructions.clone();
             replace_activation(&mut instructions, 0, |activation| match mutation {
@@ -860,6 +868,12 @@ mod tests {
                         });
                 }
             });
+            let mutated_activation =
+                privacy_activation_at_v1(&instructions[0], 0).expect("mutated first activation");
+            assert_ne!(
+                mutated_activation, &expected_activation,
+                "mutation {mutation} must not be a no-op"
+            );
             let mutated = rerender_with_instructions(&expected, instructions);
             let error = validate_artifacts_against_v1(
                 &mutated.instructions_json,

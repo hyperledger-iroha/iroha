@@ -153,6 +153,10 @@ const REPLICATION_ORDER_V1_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   "sorafs_manifest::capacity::ReplicationOrderV1",
 );
 const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
+const SORAFS_REPLICATION_ORDER_CHUNKER_HANDLES_V1 = /* @__PURE__ */ new Set([
+  "sorafs.sf1@1.0.0",
+  "sorafs.sf2@1.0.0",
+]);
 const INSTRUCTION_BOX_SCHEMA_HASH = Buffer.from(
   "862a7d77075d4d23ff6c1261db027811",
   HEX_ENCODING,
@@ -286,8 +290,6 @@ const REPORT_KAIGI_RELAY_HEALTH_WIRE_ID = "iroha_data_model::isi::kaigi::ReportK
 const PROPOSE_DEPLOY_CONTRACT_WIRE_ID = "iroha_data_model::isi::governance::ProposeDeployContract";
 const CAST_ZK_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastZkBallot";
 const CAST_PLAIN_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastPlainBallot";
-const ENACT_REFERENDUM_WIRE_ID = "iroha_data_model::isi::governance::EnactReferendum";
-const FINALIZE_REFERENDUM_WIRE_ID = "iroha_data_model::isi::governance::FinalizeReferendum";
 const PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID = "iroha_data_model::isi::governance::PersistCouncilForEpoch";
 const CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID = "iroha_data_model::isi::social::ClaimTwitterFollowReward";
 const SEND_TO_TWITTER_WIRE_ID = "iroha_data_model::isi::social::SendToTwitter";
@@ -324,8 +326,6 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   [PROPOSE_DEPLOY_CONTRACT_WIRE_ID]: PROPOSE_DEPLOY_CONTRACT_WIRE_ID,
   [CAST_ZK_BALLOT_WIRE_ID]: CAST_ZK_BALLOT_WIRE_ID,
   [CAST_PLAIN_BALLOT_WIRE_ID]: CAST_PLAIN_BALLOT_WIRE_ID,
-  [ENACT_REFERENDUM_WIRE_ID]: ENACT_REFERENDUM_WIRE_ID,
-  [FINALIZE_REFERENDUM_WIRE_ID]: FINALIZE_REFERENDUM_WIRE_ID,
   [PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID]: PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID,
   [CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID]: CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID,
   [SEND_TO_TWITTER_WIRE_ID]: SEND_TO_TWITTER_WIRE_ID,
@@ -534,7 +534,6 @@ const {
       decodeManifestProvenanceValue(...args),
     encodeManifestProvenanceValue: (...args) =>
       encodeManifestProvenanceValue(...args),
-    encodeVotingModeValue,
     isPlainObject,
   });
 
@@ -2821,8 +2820,6 @@ function encodePureJsInstructionPayload(instruction) {
     instruction.ProposeDeployContract ||
     instruction.CastZkBallot ||
     instruction.CastPlainBallot ||
-    instruction.EnactReferendum ||
-    instruction.FinalizeReferendum ||
     instruction.PersistCouncilForEpoch
   ) {
     return encodeGovernanceInstruction(instruction);
@@ -2890,8 +2887,6 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case PROPOSE_DEPLOY_CONTRACT_WIRE_ID:
     case CAST_ZK_BALLOT_WIRE_ID:
     case CAST_PLAIN_BALLOT_WIRE_ID:
-    case ENACT_REFERENDUM_WIRE_ID:
-    case FINALIZE_REFERENDUM_WIRE_ID:
     case PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID:
       return decodeGovernanceInstructionPayload(wireId, payload);
     case CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID:
@@ -3611,11 +3606,9 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
     case PROPOSE_DEPLOY_CONTRACT_WIRE_ID: {
       const fields = decodeStructFields(payload, "ProposeDeployContract", [
         "contract_address",
-        "code_hash_hex",
-        "abi_hash_hex",
+        "code_hash",
+        "abi_hash",
         "abi_version",
-        "window",
-        "mode",
         "manifest_provenance",
       ]);
       const decoded = {
@@ -3623,23 +3616,24 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
           fields.contract_address,
           "ProposeDeployContract.contract_address",
         ),
-        code_hash_hex: decodeStringValue(fields.code_hash_hex, "ProposeDeployContract.code_hash_hex"),
-        abi_hash_hex: decodeStringValue(fields.abi_hash_hex, "ProposeDeployContract.abi_hash_hex"),
-        abi_version: decodeStringValue(fields.abi_version, "ProposeDeployContract.abi_version"),
+        code_hash: decodeGovernanceHash32Value(
+          fields.code_hash,
+          "ProposeDeployContract.code_hash",
+        ),
+        abi_hash: decodeGovernanceHash32Value(
+          fields.abi_hash,
+          "ProposeDeployContract.abi_hash",
+        ),
+        abi_version: decodeGovernanceAbiVersionValue(
+          fields.abi_version,
+          "ProposeDeployContract.abi_version",
+        ),
       };
-      const window = decodeOptionValue(fields.window, decodeAtWindowValue, "ProposeDeployContract.window");
-      const mode = decodeOptionValue(fields.mode, decodeVotingModeValue, "ProposeDeployContract.mode");
       const manifestProvenance = decodeOptionValue(
         fields.manifest_provenance,
         decodeManifestProvenanceValue,
         "ProposeDeployContract.manifest_provenance",
       );
-      if (window !== null) {
-        decoded.window = window;
-      }
-      if (mode !== null) {
-        decoded.mode = mode;
-      }
       if (manifestProvenance !== null) {
         decoded.manifest_provenance = manifestProvenance;
       }
@@ -3680,38 +3674,6 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
             "CastPlainBallot.duration_blocks",
           ),
           direction: decodeU8Value(fields.direction, "CastPlainBallot.direction"),
-        },
-      };
-    }
-    case ENACT_REFERENDUM_WIRE_ID: {
-      const fields = decodeStructFields(payload, "EnactReferendum", [
-        "referendum_id",
-        "preimage_hash",
-        "at_window",
-      ]);
-      return {
-        EnactReferendum: {
-          referendum_id: Array.from(
-            decodeFixedBytesValue(fields.referendum_id, 32, "EnactReferendum.referendum_id"),
-          ),
-          preimage_hash: Array.from(
-            decodeFixedBytesValue(fields.preimage_hash, 32, "EnactReferendum.preimage_hash"),
-          ),
-          at_window: decodeAtWindowValue(fields.at_window, "EnactReferendum.at_window"),
-        },
-      };
-    }
-    case FINALIZE_REFERENDUM_WIRE_ID: {
-      const fields = decodeStructFields(payload, "FinalizeReferendum", [
-        "referendum_id",
-        "proposal_id",
-      ]);
-      return {
-        FinalizeReferendum: {
-          referendum_id: decodeStringValue(fields.referendum_id, "FinalizeReferendum.referendum_id"),
-          proposal_id: Array.from(
-            decodeFixedBytesValue(fields.proposal_id, 32, "FinalizeReferendum.proposal_id"),
-          ),
         },
       };
     }
@@ -5281,7 +5243,7 @@ function decodeProviderIngestFinalizedAnchorValue(payload, context) {
   };
 }
 
-function decodeReplicationAssignmentProvider(payload, context) {
+function decodeReplicationAssignmentValue(payload, context) {
   const fields = decodeStructFields(payload, context, [
     "provider_id",
     "slice_gib",
@@ -5295,15 +5257,87 @@ function decodeReplicationAssignmentProvider(payload, context) {
   if (providerId.every((byte) => byte === 0)) {
     throw new TypeError(`${context}.provider_id must not be zero`);
   }
-  if (decodeU64Value(fields.slice_gib, `${context}.slice_gib`) === "0") {
+  const sliceGib = decodeU64Value(fields.slice_gib, `${context}.slice_gib`);
+  if (sliceGib === "0") {
     throw new TypeError(`${context}.slice_gib must be greater than zero`);
   }
-  decodeOptionValue(
+  const lane = decodeOptionValue(
     fields.lane,
     decodeStringValue,
     `${context}.lane`,
   );
-  return providerId;
+  if (
+    lane !== null &&
+    (lane.length === 0 ||
+      Buffer.byteLength(lane, UTF8_ENCODING) > 64 ||
+      !/^[a-z0-9._-]+$/u.test(lane))
+  ) {
+    throw new TypeError(`${context}.lane must be a canonical lane label`);
+  }
+  return {
+    providerIdHex: providerId.toString(HEX_ENCODING),
+    sliceGiB: sliceGib,
+    lane,
+  };
+}
+
+function decodeReplicationOrderSlaValue(payload, context) {
+  const fields = decodeStructFields(payload, context, [
+    "ingest_deadline_secs",
+    "min_availability_percent_milli",
+    "min_por_success_percent_milli",
+  ]);
+  const ingestDeadlineSecs = decodeU32Value(
+    fields.ingest_deadline_secs,
+    `${context}.ingest_deadline_secs`,
+  );
+  const minAvailabilityPercentMilli = decodeU32Value(
+    fields.min_availability_percent_milli,
+    `${context}.min_availability_percent_milli`,
+  );
+  const minPorSuccessPercentMilli = decodeU32Value(
+    fields.min_por_success_percent_milli,
+    `${context}.min_por_success_percent_milli`,
+  );
+  if (ingestDeadlineSecs === 0) {
+    throw new TypeError(`${context}.ingest_deadline_secs must be greater than zero`);
+  }
+  if (
+    minAvailabilityPercentMilli === 0 ||
+    minAvailabilityPercentMilli > 100_000 ||
+    minPorSuccessPercentMilli === 0 ||
+    minPorSuccessPercentMilli > 100_000
+  ) {
+    throw new TypeError(`${context} percentage thresholds must be in 1..=100000`);
+  }
+  return {
+    ingestDeadlineSecs,
+    minAvailabilityPercentMilli,
+    minPorSuccessPercentMilli,
+  };
+}
+
+function decodeReplicationOrderMetadataValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["key", "value"]);
+  const key = decodeStringValue(fields.key, `${context}.key`);
+  const value = decodeStringValue(fields.value, `${context}.value`);
+  if (
+    key.length === 0 ||
+    key.trim() !== key ||
+    Buffer.byteLength(key, UTF8_ENCODING) > 128 ||
+    !/^[a-z0-9._-]+$/u.test(key)
+  ) {
+    throw new TypeError(`${context}.key must be a canonical metadata key`);
+  }
+  if (
+    value.length === 0 ||
+    value.trim() !== value ||
+    Buffer.byteLength(value, UTF8_ENCODING) > 4096 ||
+    /\p{Cc}/u.test(value)
+  ) {
+    throw new TypeError(`${context}.value must be canonical and at most 4096 bytes`);
+  }
+  return { key, value };
 }
 
 /**
@@ -5312,7 +5346,7 @@ function decodeReplicationAssignmentProvider(payload, context) {
  *
  * @param {ArrayBufferView | ArrayBuffer | Buffer} value
  * @param {string | null} [expectedOrderId]
- * @returns {{orderId: string, targetReplicas: number, providerIds: string[], issuedAt: string, deadlineAt: string}}
+ * @returns {{orderId: string, manifestCidBase64: string, manifestDigestHex: string, chunkingProfile: string, targetReplicas: number, assignments: Array<{providerIdHex: string, sliceGiB: string, lane: string | null}>, providerIds: string[], issuedAt: string, deadlineAt: string, sla: {ingestDeadlineSecs: number, minAvailabilityPercentMilli: number, minPorSuccessPercentMilli: number}, metadata: Array<{key: string, value: string}>}}
  */
 export function validateSorafsReplicationOrderPayloadV1(
   value,
@@ -5381,6 +5415,37 @@ export function validateSorafsReplicationOrderPayloadV1(
       }
     }
 
+    const manifestCid = decodeByteVecValue(
+      fields.manifest_cid,
+      "ReplicationOrderV1.manifest_cid",
+      36,
+    );
+    if (
+      manifestCid.length !== 36 ||
+      manifestCid[0] !== 1 ||
+      manifestCid[1] !== 0x71 ||
+      manifestCid[2] !== 0x1f ||
+      manifestCid[3] !== 32 ||
+      manifestCid.subarray(4).every((byte) => byte === 0)
+    ) {
+      throw new TypeError(
+        "ReplicationOrderV1.manifest_cid must be canonical CIDv1/dag-cbor/BLAKE3-256 bytes",
+      );
+    }
+    const manifestDigestHex = decodeNonzeroFixedBytesHex(
+      fields.manifest_digest,
+      "ReplicationOrderV1.manifest_digest",
+    );
+    const chunkingProfile = decodeStringValue(
+      fields.chunking_profile,
+      "ReplicationOrderV1.chunking_profile",
+    );
+    if (!SORAFS_REPLICATION_ORDER_CHUNKER_HANDLES_V1.has(chunkingProfile)) {
+      throw new TypeError(
+        "ReplicationOrderV1.chunking_profile must be a canonical registered handle",
+      );
+    }
+
     const targetReplicas = decodeU16Value(
       fields.target_replicas,
       "ReplicationOrderV1.target_replicas",
@@ -5388,26 +5453,26 @@ export function validateSorafsReplicationOrderPayloadV1(
     if (targetReplicas === 0) {
       throw new TypeError("ReplicationOrderV1.target_replicas must be greater than zero");
     }
-    const providers = decodeNoritoVec(
+    const assignments = decodeNoritoVec(
       fields.assignments,
       (entry, index) =>
-        decodeReplicationAssignmentProvider(
+        decodeReplicationAssignmentValue(
           entry,
           `ReplicationOrderV1.assignments[${index}]`,
         ),
       "ReplicationOrderV1.assignments",
     );
     if (
-      providers.length === 0 ||
-      providers.length > 1024 ||
-      targetReplicas > providers.length
+      assignments.length === 0 ||
+      assignments.length > 1024 ||
+      targetReplicas > assignments.length
     ) {
       throw new TypeError(
         "ReplicationOrderV1 assignments must contain 1..1024 entries and cover target_replicas",
       );
     }
-    for (let index = 1; index < providers.length; index += 1) {
-      if (Buffer.compare(providers[index - 1], providers[index]) >= 0) {
+    for (let index = 1; index < assignments.length; index += 1) {
+      if (assignments[index - 1].providerIdHex >= assignments[index].providerIdHex) {
         throw new TypeError(
           "ReplicationOrderV1 assignments must use unique, strictly increasing provider_id values",
         );
@@ -5427,12 +5492,51 @@ export function validateSorafsReplicationOrderPayloadV1(
         "ReplicationOrderV1.deadline_at must be greater than issued_at",
       );
     }
+    const sla = decodeReplicationOrderSlaValue(
+      fields.sla,
+      "ReplicationOrderV1.sla",
+    );
+    if (BigInt(sla.ingestDeadlineSecs) > BigInt(deadlineAt) - BigInt(issuedAt)) {
+      throw new TypeError(
+        "ReplicationOrderV1.sla.ingest_deadline_secs exceeds the order window",
+      );
+    }
+    const metadata = decodeNoritoVec(
+      fields.metadata,
+      (entry, index) =>
+        decodeReplicationOrderMetadataValue(
+          entry,
+          `ReplicationOrderV1.metadata[${index}]`,
+        ),
+      "ReplicationOrderV1.metadata",
+      64,
+    );
+    const metadataKeys = new Set();
+    let metadataBytes = 0;
+    for (const entry of metadata) {
+      if (metadataKeys.has(entry.key)) {
+        throw new TypeError("ReplicationOrderV1.metadata contains a duplicate key");
+      }
+      metadataKeys.add(entry.key);
+      metadataBytes +=
+        Buffer.byteLength(entry.key, UTF8_ENCODING) +
+        Buffer.byteLength(entry.value, UTF8_ENCODING);
+    }
+    if (metadataBytes > 64 * 1024) {
+      throw new TypeError("ReplicationOrderV1.metadata exceeds the 65536-byte limit");
+    }
     return {
       orderId,
+      manifestCidBase64: manifestCid.toString(BASE64_ENCODING),
+      manifestDigestHex,
+      chunkingProfile,
       targetReplicas,
-      providerIds: providers.map((provider) => provider.toString(HEX_ENCODING)),
+      assignments,
+      providerIds: assignments.map((assignment) => assignment.providerIdHex),
       issuedAt,
       deadlineAt,
+      sla,
+      metadata,
     };
   });
 }
@@ -5714,18 +5818,6 @@ function encodeGovernanceInstruction(instruction) {
       encodeCastPlainBallotPayload(instruction.CastPlainBallot),
     );
   }
-  if (isPlainObject(instruction.EnactReferendum)) {
-    return encodeInstructionEnvelope(
-      ENACT_REFERENDUM_WIRE_ID,
-      encodeEnactReferendumPayload(instruction.EnactReferendum),
-    );
-  }
-  if (isPlainObject(instruction.FinalizeReferendum)) {
-    return encodeInstructionEnvelope(
-      FINALIZE_REFERENDUM_WIRE_ID,
-      encodeFinalizeReferendumPayload(instruction.FinalizeReferendum),
-    );
-  }
   if (isPlainObject(instruction.PersistCouncilForEpoch)) {
     return encodeInstructionEnvelope(
       PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID,
@@ -5953,15 +6045,62 @@ function encodeSmartContractInstructionCompact(instruction) {
   );
 }
 
+const GOVERNANCE_HASH32_WIRE_VERSION_V1 = 1;
+const GOVERNANCE_HASH32_LENGTH = 32;
+
+function encodeGovernanceHash32Value(value, context) {
+  const bytes = Buffer.from(assertExactNonEmptyString(value, context), HEX_ENCODING);
+  if (
+    value.length !== GOVERNANCE_HASH32_LENGTH * 2 ||
+    value !== value.toLowerCase() ||
+    !/^[0-9a-f]{64}$/u.test(value)
+  ) {
+    throw new TypeError(`${context} must be exactly 32 bytes of lowercase hexadecimal`);
+  }
+  return encodeStructValue([
+    [encodeU16Value(GOVERNANCE_HASH32_WIRE_VERSION_V1, `${context}.version`)],
+    [encodeU16Value(GOVERNANCE_HASH32_LENGTH, `${context}.declared_len`)],
+    [encodeFixedBytesValue(bytes, GOVERNANCE_HASH32_LENGTH, `${context}.bytes`)],
+  ]);
+}
+
+function decodeGovernanceHash32Value(payload, context) {
+  const fields = decodeStructFields(payload, context, [
+    "version",
+    "declared_len",
+    "bytes",
+  ]);
+  const version = decodeU16Value(fields.version, `${context}.version`);
+  if (version !== GOVERNANCE_HASH32_WIRE_VERSION_V1) {
+    throw new Error(`${context}.version must be ${GOVERNANCE_HASH32_WIRE_VERSION_V1}`);
+  }
+  const declaredLength = decodeU16Value(fields.declared_len, `${context}.declared_len`);
+  if (declaredLength !== GOVERNANCE_HASH32_LENGTH) {
+    throw new Error(`${context}.declared_len must be ${GOVERNANCE_HASH32_LENGTH}`);
+  }
+  return decodeFixedBytesValue(
+    fields.bytes,
+    GOVERNANCE_HASH32_LENGTH,
+    `${context}.bytes`,
+  ).toString(HEX_ENCODING);
+}
+
+function encodeGovernanceAbiVersionValue(value, context) {
+  return encodeStructValue([[encodeU16Value(value, `${context}.value`)]]);
+}
+
+function decodeGovernanceAbiVersionValue(payload, context) {
+  const fields = decodeTupleFields(payload, context, ["value"]);
+  return decodeU16Value(fields.value, `${context}.value`);
+}
+
 function encodeProposeDeployContractPayload(value) {
   validateProposeDeployContractPayload(value);
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.contract_address, "ProposeDeployContract.contract_address"))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.code_hash_hex, "ProposeDeployContract.code_hash_hex"))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.abi_hash_hex, "ProposeDeployContract.abi_hash_hex"))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.abi_version, "ProposeDeployContract.abi_version"))],
-    [encodeOptionValue(value.window ?? null, encodeAtWindowValue, "ProposeDeployContract.window")],
-    [encodeOptionValue(value.mode ?? null, encodeVotingModeValue, "ProposeDeployContract.mode")],
+    [encodeGovernanceHash32Value(value.code_hash, "ProposeDeployContract.code_hash")],
+    [encodeGovernanceHash32Value(value.abi_hash, "ProposeDeployContract.abi_hash")],
+    [encodeGovernanceAbiVersionValue(value.abi_version, "ProposeDeployContract.abi_version")],
     [encodeOptionValue(
       value.manifest_provenance ?? null,
       encodeManifestProvenanceValue,
@@ -5994,24 +6133,6 @@ function encodeCastPlainBallotPayload(value) {
   ]);
 }
 
-function encodeEnactReferendumPayload(value) {
-  return encodeStructValue([
-    [encodeFixedBytesValue(value.referendum_id, 32, "EnactReferendum.referendum_id")],
-    [encodeFixedBytesValue(value.preimage_hash, 32, "EnactReferendum.preimage_hash")],
-    [encodeAtWindowValue(value.at_window ?? { lower: 0, upper: 0 }, "EnactReferendum.at_window")],
-  ]);
-}
-
-function encodeFinalizeReferendumPayload(value) {
-  return encodeStructValue([
-    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
-      value.referendum_id,
-      "FinalizeReferendum.referendum_id",
-    ))],
-    [encodeFixedBytesValue(value.proposal_id, 32, "FinalizeReferendum.proposal_id")],
-  ]);
-}
-
 function encodePersistCouncilForEpochPayload(value) {
   return encodeStructValue([
     [encodeU64NumberValue(value.epoch, "PersistCouncilForEpoch.epoch")],
@@ -6022,21 +6143,6 @@ function encodePersistCouncilForEpochPayload(value) {
       encodeAccountIdValue(member, `PersistCouncilForEpoch.alternates[${index}]`),
     )],
   ]);
-}
-
-function encodeAtWindowValue(value, context) {
-  return encodeStructValue([
-    [encodeU64NumberValue(value.lower ?? 0, `${context}.lower`)],
-    [encodeU64NumberValue(value.upper ?? 0, `${context}.upper`)],
-  ]);
-}
-
-function decodeAtWindowValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["lower", "upper"]);
-  return {
-    lower: decodeU64Value(fields.lower, `${context}.lower`),
-    upper: decodeU64Value(fields.upper, `${context}.upper`),
-  };
 }
 
 function encodeKaigiInstruction(instruction) {
@@ -7313,8 +7419,7 @@ function decodeNumericSpecValue(payload, context) {
 }
 
 function encodeMintableValue(value, context) {
-  const normalized =
-    typeof value === JS_TYPE_STRING ? parseMintableLabel(value, context) : parseMintableObject(value, context);
+  const normalized = parseMintableLabel(value, context);
   switch (normalized.kind) {
     case "Infinitely":
       return encodeEnumTagValue(0);
@@ -7363,33 +7468,11 @@ function parseMintableLabel(value, context) {
   throw new Error(`${context} must be Infinitely, Once, Not, or Limited(n)`);
 }
 
-function parseMintableObject(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be a string or object`);
-  }
-  const kind = assertNonEmptyString(value.kind, `${context}.kind`);
-  if (kind === "Infinitely" || kind === "Once" || kind === "Not") {
-    return { kind };
-  }
-  if (kind === "Limited") {
-    return {
-      kind,
-      tokens: parseMintabilityTokens(value.tokens ?? value.value, `${context}.tokens`),
-    };
-  }
-  throw new Error(`${context}.kind must be Infinitely, Once, Not, or Limited`);
-}
-
 function parseMintabilityTokens(value, context) {
-  let normalized;
-  if (typeof value === JS_TYPE_STRING) {
-    if (!/^\d+$/.test(value)) {
-      throw new TypeError(`${context} must be a positive unsigned 32-bit integer`);
-    }
-    normalized = Number(value);
-  } else {
-    normalized = Number(value);
+  if (typeof value !== JS_TYPE_STRING || !/^\d+$/.test(value)) {
+    throw new TypeError(`${context} must be a positive unsigned 32-bit integer`);
   }
+  const normalized = Number(value);
   if (!Number.isInteger(normalized) || normalized <= 0 || normalized > 0xffff_ffff) {
     throw new TypeError(`${context} must be a positive unsigned 32-bit integer`);
   }
@@ -7453,30 +7536,6 @@ function decodeSorafsUriValue(payload, context) {
 function encodeEnumTagValue(index, encodePayload) {
   const payload = encodePayload ? encodeNoritoField(encodePayload()) : Buffer.alloc(0);
   return Buffer.concat([u32ToLittleEndianBuffer(index), payload]);
-}
-
-function encodeVotingModeValue(value, context) {
-  if (value === "Zk") {
-    return encodeEnumTagValue(0);
-  }
-  if (value === "Plain") {
-    return encodeEnumTagValue(1);
-  }
-  throw new Error(`${context} must be Zk or Plain`);
-}
-
-function decodeVotingModeValue(payload, context) {
-  const reader = new BufferReader(payload, context);
-  const tag = reader.readU32LE("tag");
-  reader.assertEof();
-  switch (tag) {
-    case 0:
-      return "Zk";
-    case 1:
-      return "Plain";
-    default:
-      throw new Error(`${context} uses unsupported voting mode ${tag}`);
-  }
 }
 
 function encodeKaigiPrivacyModeValue(value, context) {

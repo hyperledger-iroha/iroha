@@ -345,8 +345,13 @@ impl Kura {
         {
             let block_data = self.block_data.lock();
             self.ensure_prune_recovery_not_required()?;
+            let complete_entries = block_data.dense_entries().ok_or(
+                Error::EmergencyFastAuxiliaryUnavailable {
+                    subsystem: "canonical mutation",
+                },
+            )?;
             Self::validate_next_or_existing_block(
-                block_data.as_slice(),
+                complete_entries,
                 actual_height,
                 actual_height_usize,
                 block_hash,
@@ -419,8 +424,13 @@ impl Kura {
         let write_guard = self.lock_block_store_for_write();
         let mut block_data = self.block_data.lock();
         self.ensure_prune_recovery_not_required()?;
+        let complete_entries = block_data.dense_entries().ok_or(
+            Error::EmergencyFastAuxiliaryUnavailable {
+                subsystem: "canonical mutation",
+            },
+        )?;
         Self::validate_next_or_existing_block(
-            block_data.as_slice(),
+            complete_entries,
             actual_height,
             actual_height_usize,
             block_hash,

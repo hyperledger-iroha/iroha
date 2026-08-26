@@ -146,18 +146,24 @@ class HttpClientTransport(
                     failed.completeExceptionally(cause)
                     return@handle failed
                 }
+                val statusCode = response.statusCode
+                if (statusCode != 202) {
+                    val error = RuntimeException(
+                        "transaction entrypoint submit request failed with status $statusCode",
+                    )
+                    notifyFailure(request, error)
+                    return@handle CompletableFuture<ClientResponse>().also {
+                        it.completeExceptionally(error)
+                    }
+                }
                 val clientResponse = ClientResponse(
-                    response.statusCode,
+                    statusCode,
                     response.body,
                     response.message,
                     extractEntrypointHash(response),
                     extractRejectCode(response),
                 )
-                if (clientResponse.statusCode < 200 || clientResponse.statusCode >= 300) {
-                    notifyFailure(request, RuntimeException("Torii request failed with status ${clientResponse.statusCode}"))
-                } else {
-                    notifyResponse(request, clientResponse)
-                }
+                notifyResponse(request, clientResponse)
                 CompletableFuture.completedFuture(clientResponse)
             }.thenCompose { it }
         }
@@ -998,7 +1004,11 @@ class HttpClientTransport(
 
     override fun proposeMultisig(request: MultisigProposeRequest): CompletableFuture<MultisigResponse> {
         val body = encodeJsonBody(buildMultisigProposePayload(request))
-        return fetchJson(buildJsonPostRequest("/v1/multisig/propose", body), ContractJsonParser::parseMultisigResponse, "multisig propose")
+        return fetchJson(
+            buildJsonPostRequest("/v1/multisig/propose", body),
+            ContractJsonParser::parseMultisigResponse,
+            "multisig propose",
+        ).thenApply { response -> validateMultisigResponse(response, request) }
     }
 
     fun getGovernanceContract(contractAddress: String, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<GovernanceContractResponse> {
@@ -1007,6 +1017,133 @@ class HttpClientTransport(
             buildVpnRequest("GET", "/v1/gov/contracts/${encodePathSegment(normalizedAddress)}", null, canonicalAuth),
             ContractJsonParser::parseGovernanceContractResponse,
             "governance contract"
+        )
+    }
+
+    /** Draft one typed Parliament attempt for local transaction signing. */
+    fun draftParliamentAttemptV1(
+        proposal: ParliamentApiV1.Proposal,
+        attemptSequence: Long,
+        expectedProposalContentId: String,
+        expectedGovernanceAttemptId: String,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ParliamentAttemptDraftResponseV1> {
+        val body = ParliamentApiV1.attemptDraftRequestJson(proposal, attemptSequence)
+        return fetchJson(
+            buildVpnRequest(
+                "POST",
+                ParliamentApiV1.ATTEMPT_DRAFT_PATH,
+                body,
+                canonicalAuth,
+                1024L * 1024L,
+            ),
+            Function { response ->
+                ParliamentApiV1.parseAttemptDraftResponse(
+                    response,
+                    expectedProposalContentId,
+                    expectedGovernanceAttemptId,
+                )
+            },
+            "Parliament attempt draft",
+            200,
+        )
+    }
+
+    /** Read and strictly validate one authenticated typed Parliament attempt. */
+    fun getParliamentAttemptV1(
+        governanceAttemptId: String,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ParliamentAttemptReadResponseV1> = fetchJson(
+        buildVpnRequest(
+            "GET",
+            ParliamentApiV1.attemptReadPath(governanceAttemptId),
+            null,
+            canonicalAuth,
+            2L * ParliamentApiV1.MAX_STATE_BYTES + 2L * 1024L * 1024L,
+        ),
+        Function { response ->
+            ParliamentApiV1.parseAttemptReadResponse(response, governanceAttemptId)
+        },
+        "Parliament attempt read",
+        200,
+    )
+
+    /** Draft one closed public Parliament transition for local transaction signing. */
+    fun draftParliamentTransitionV1(
+        governanceAttemptId: String,
+        transitionJson: ByteArray,
+        expectedTransitionKind: String,
+        expectedTransitionDigest: ByteArray,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ParliamentTransitionDraftResponseV1> {
+        val body = ParliamentApiV1.transitionDraftRequestJson(governanceAttemptId, transitionJson)
+        return fetchJson(
+            buildVpnRequest(
+                "POST",
+                ParliamentApiV1.TRANSITION_DRAFT_PATH,
+                body,
+                canonicalAuth,
+                1024L * 1024L,
+            ),
+            Function { response ->
+                ParliamentApiV1.parseTransitionDraftResponse(
+                    response,
+                    governanceAttemptId,
+                    expectedTransitionKind,
+                    expectedTransitionDigest,
+                )
+            },
+            "Parliament transition draft",
+            200,
+        )
+    }
+
+    /** Fetch the complete public transcript for one currently authorized TLE release. */
+    fun getParliamentTleReleaseContextV1(
+        ballotAttemptId: String,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ParliamentTleReleaseContextResponseV1> = fetchJson(
+        buildVpnRequest(
+            "GET",
+            ParliamentApiV1.tleReleaseContextReadPath(ballotAttemptId),
+            null,
+            canonicalAuth,
+            1024L * 1024L,
+        ),
+        Function { response ->
+            ParliamentApiV1.parseTleReleaseContextResponse(response, ballotAttemptId)
+        },
+        "Parliament TLE release context",
+        200,
+    )
+
+    /** Request one node-local proof-carrying partial bound to an admitted release context. */
+    fun requestParliamentTlePartialReleaseV1(
+        ballotAttemptId: String,
+        context: ParliamentTleReleaseContextResponseV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ParliamentTlePartialReleaseShareV1> {
+        require(context.ballotAttemptId == ballotAttemptId) {
+            "release context ballot id differs from the partial-release request"
+        }
+        return fetchJson(
+            buildVpnRequest(
+                "POST",
+                ParliamentApiV1.tlePartialReleasePath(ballotAttemptId),
+                null,
+                canonicalAuth,
+                16L * 1024L,
+            ),
+            Function { response ->
+                ParliamentApiV1.parseTlePartialReleaseResponse(
+                    response,
+                    context.keySession.keySessionId,
+                    context.identityDigest,
+                    context.keySession.committeeSize,
+                )
+            },
+            "Parliament TLE partial release",
+            200,
         )
     }
 
@@ -1045,6 +1182,8 @@ class HttpClientTransport(
                     val error = AmbiguousTransactionSubmissionException(
                         hashHex,
                         null,
+                        null,
+                        null,
                         cause,
                     )
                     notifyFailure(request, error)
@@ -1052,17 +1191,15 @@ class HttpClientTransport(
                         it.completeExceptionally(error)
                     }
                 }
-                val clientResponse = ClientResponse(
-                    response.statusCode,
-                    response.body,
-                    response.message,
-                    extractEntrypointHash(response) ?: hashHex,
-                    extractRejectCode(response),
-                )
-                if (submissionOutcomeIsAmbiguous(clientResponse.statusCode)) {
+                val statusCode = response.statusCode
+                val rejectCode = extractRejectCode(response)
+                val responseBody = HttpErrorMessageExtractor.extractMessage(response.body)
+                if (submissionOutcomeIsAmbiguous(statusCode)) {
                     val error = AmbiguousTransactionSubmissionException(
                         hashHex,
-                        clientResponse.statusCode,
+                        statusCode,
+                        rejectCode,
+                        responseBody,
                         null,
                     )
                     notifyFailure(request, error)
@@ -1070,6 +1207,25 @@ class HttpClientTransport(
                         it.completeExceptionally(error)
                     }
                 }
+                if (statusCode != 202) {
+                    val error = TransactionSubmissionHttpException(
+                        hashHex,
+                        statusCode,
+                        rejectCode,
+                        responseBody,
+                    )
+                    notifyFailure(request, error)
+                    return@handle CompletableFuture<ClientResponse>().also {
+                        it.completeExceptionally(error)
+                    }
+                }
+                val clientResponse = ClientResponse(
+                    statusCode,
+                    response.body,
+                    response.message,
+                    extractEntrypointHash(response) ?: hashHex,
+                    rejectCode,
+                )
                 notifyResponse(request, clientResponse)
                 CompletableFuture.completedFuture(clientResponse)
             }.thenCompose { it }
@@ -1079,6 +1235,7 @@ class HttpClientTransport(
     private fun submissionOutcomeIsAmbiguous(statusCode: Int): Boolean =
         statusCode in 300..399 ||
             statusCode == 408 ||
+            statusCode == 409 ||
             statusCode == 425 ||
             statusCode == 429 ||
             statusCode >= 500
@@ -1312,6 +1469,7 @@ class HttpClientTransport(
         if (body != null) {
             builder.setBody(body).addHeader("Content-Type", "application/json")
         }
+        if (maximumResponseBytes != null) builder.setMaximumResponseBytes(maximumResponseBytes)
         for ((k, v) in config.defaultHeaders()) builder.addHeader(k, v)
         val canonicalHeaders = buildCanonicalHeaders(method, target, body, canonicalAuth)
         for ((k, v) in canonicalHeaders) builder.addHeader(k, v)
@@ -1948,6 +2106,22 @@ class HttpClientTransport(
                 Base64.getEncoder().encodeToString(instruction)
             }
             return payload
+        }
+
+        /** Reject a multisig response that changes a signature-bound request field. */
+        @JvmStatic internal fun validateMultisigResponse(
+            response: MultisigResponse,
+            request: MultisigProposeRequest,
+        ): MultisigResponse {
+            check(request.feePayment.hasSamePayerAndGasBound(response.feePayment)) {
+                "multisig response fee_payment changed the requested payer, sponsor revision, or gas bound"
+            }
+            request.creationTimeMs?.let { expected ->
+                check(response.creationTimeMs == expected) {
+                    "multisig response creation_time_ms is not bound to the request"
+                }
+            }
+            return response
         }
 
         @JvmStatic internal fun putValidationFeePolicyMetadata(

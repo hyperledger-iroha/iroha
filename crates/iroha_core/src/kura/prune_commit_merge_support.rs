@@ -40,8 +40,223 @@ impl Drop for PruneInProgressGuard<'_> {
         self.flag.store(false, Ordering::Release);
     }
 }
-type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
-type BlockHeightIndex = BTreeMap<HashOf<BlockHeader>, NonZeroUsize>;
+type BlockDataEntry = (HashOf<BlockHeader>, Option<Arc<SignedBlock>>);
+
+/// Canonical block identities and the bounded body cache.
+///
+/// Strict startup materializes every hash so it can audit and index the complete
+/// history. Emergency Fast startup deliberately keeps only the durable height
+/// and populates sparse entries when a caller reads a particular block. This
+/// makes Fast startup memory and CPU independent of chain height.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum BlockData {
+    Dense(Vec<BlockDataEntry>),
+    Deferred {
+        len: usize,
+        entries: BTreeMap<usize, BlockDataEntry>,
+    },
+}
+
+impl Default for BlockData {
+    fn default() -> Self {
+        Self::Dense(Vec::new())
+    }
+}
+
+impl FromIterator<BlockDataEntry> for BlockData {
+    fn from_iter<T: IntoIterator<Item = BlockDataEntry>>(iter: T) -> Self {
+        Self::Dense(iter.into_iter().collect())
+    }
+}
+
+#[cfg(test)]
+impl std::ops::Index<usize> for BlockData {
+    type Output = BlockDataEntry;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.get(index)
+            .expect("test requested an uncached deferred Kura block entry")
+    }
+}
+
+#[cfg(test)]
+impl std::ops::IndexMut<usize> for BlockData {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        self.get_mut(index)
+            .expect("test requested an uncached deferred Kura block entry")
+    }
+}
+
+impl BlockData {
+    fn deferred(len: usize) -> Self {
+        Self::Deferred {
+            len,
+            entries: BTreeMap::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Dense(entries) => entries.len(),
+            Self::Deferred { len, .. } => *len,
+        }
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn get(&self, index: usize) -> Option<&BlockDataEntry> {
+        match self {
+            Self::Dense(entries) => entries.get(index),
+            Self::Deferred { len, entries } => {
+                (*len > index).then(|| entries.get(&index)).flatten()
+            }
+        }
+    }
+
+    fn get_mut(&mut self, index: usize) -> Option<&mut BlockDataEntry> {
+        match self {
+            Self::Dense(entries) => entries.get_mut(index),
+            Self::Deferred { len, entries } => {
+                (*len > index).then(|| entries.get_mut(&index)).flatten()
+            }
+        }
+    }
+
+    fn known_hash(&self, index: usize) -> Option<HashOf<BlockHeader>> {
+        self.get(index).map(|(hash, _)| *hash)
+    }
+
+    fn cached_body(&self, index: usize) -> Option<Arc<SignedBlock>> {
+        self.get(index)
+            .and_then(|(_, body)| body.as_ref().map(Arc::clone))
+    }
+
+    fn cache_hash(&mut self, index: usize, hash: HashOf<BlockHeader>) {
+        match self {
+            Self::Dense(entries) => {
+                debug_assert_eq!(entries.get(index).map(|(known, _)| *known), Some(hash));
+            }
+            Self::Deferred { len, entries } if index < *len => {
+                entries
+                    .entry(index)
+                    .and_modify(|(known, _)| debug_assert_eq!(*known, hash))
+                    .or_insert((hash, None));
+            }
+            Self::Deferred { .. } => {}
+        }
+    }
+
+    fn cache_body_if_hash(
+        &mut self,
+        index: usize,
+        hash: HashOf<BlockHeader>,
+        body: Arc<SignedBlock>,
+    ) -> bool {
+        match self {
+            Self::Dense(entries) => {
+                let Some((known, cached)) = entries.get_mut(index) else {
+                    return false;
+                };
+                if *known != hash {
+                    return false;
+                }
+                *cached = Some(body);
+                true
+            }
+            Self::Deferred { len, entries } => {
+                if index >= *len {
+                    return false;
+                }
+                match entries.entry(index) {
+                    std::collections::btree_map::Entry::Vacant(slot) => {
+                        slot.insert((hash, Some(body)));
+                        true
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut slot) => {
+                        if slot.get().0 != hash {
+                            return false;
+                        }
+                        slot.get_mut().1 = Some(body);
+                        true
+                    }
+                }
+            }
+        }
+    }
+
+    /// Borrow the complete canonical history when Strict startup materialized it.
+    fn dense_entries(&self) -> Option<&[BlockDataEntry]> {
+        match self {
+            Self::Dense(entries) => Some(entries.as_slice()),
+            Self::Deferred { .. } => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn as_slice(&self) -> &[BlockDataEntry] {
+        self.dense_entries()
+            .expect("test requested a dense slice from deferred Fast history")
+    }
+
+    #[cfg(test)]
+    fn first(&self) -> Option<&BlockDataEntry> {
+        self.get(0)
+    }
+
+    fn last(&self) -> Option<&BlockDataEntry> {
+        self.len().checked_sub(1).and_then(|index| self.get(index))
+    }
+
+    fn last_mut(&mut self) -> Option<&mut BlockDataEntry> {
+        self.len()
+            .checked_sub(1)
+            .and_then(|index| self.get_mut(index))
+    }
+
+    fn push(&mut self, entry: BlockDataEntry) {
+        match self {
+            Self::Dense(entries) => entries.push(entry),
+            Self::Deferred { len, entries } => {
+                entries.insert(*len, entry);
+                *len = len.saturating_add(1);
+            }
+        }
+    }
+
+    fn truncate(&mut self, len: usize) {
+        match self {
+            Self::Dense(entries) => entries.truncate(len),
+            Self::Deferred {
+                len: logical_len,
+                entries,
+            } => {
+                *logical_len = (*logical_len).min(len);
+                entries.retain(|index, _| *index < *logical_len);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn clear(&mut self) {
+        match self {
+            Self::Dense(entries) => entries.clear(),
+            Self::Deferred { len, entries } => {
+                *len = 0;
+                entries.clear();
+            }
+        }
+    }
+
+    fn extend<T: IntoIterator<Item = BlockDataEntry>>(&mut self, entries: T) {
+        for entry in entries {
+            self.push(entry);
+        }
+    }
+}
+type BlockHeightIndex = HashMap<HashOf<BlockHeader>, NonZeroUsize>;
 type TransactionEntrypointHeights = BTreeMap<HashOf<TransactionEntrypoint>, BTreeSet<NonZeroUsize>>;
 type OfflineOperationHeights = BTreeMap<(AccountId, [u8; 32]), BTreeSet<NonZeroUsize>>;
 type TransactionAuthorityHeights = BTreeMap<AccountId, BTreeSet<NonZeroUsize>>;
@@ -275,6 +490,8 @@ pub enum FastpqProofEnqueueResult {
     },
     /// A canonical prune is active or prune recovery requires a process restart.
     RejectedPruneRecovery,
+    /// Shutdown began before the snapshot's queue insertion was committed.
+    RejectedShutdown,
 }
 /// Proof that Kura durably associated a canonical block with a v2 finality artifact.
 ///
@@ -525,8 +742,8 @@ struct StagedKagemushaTopUpFinalitySidecar {
     post_state_root: Hash,
     leaves: Vec<KagemushaTopUpFinalityLeaf>,
 }
-/// Immutable Kura proof that one block's receiver snapshot synthetic write is
-/// included in the ordinary-write root authenticated by its exact finality artifact.
+/// Immutable Kura proofs for one block's fixed receiver, validation-fee, and
+/// Parliament casting writes, authenticated by its exact finality artifact.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct KagemushaActiveReceiverFinalitySidecarV1 {
     /// Sidecar version.
@@ -545,6 +762,10 @@ pub struct KagemushaActiveReceiverFinalitySidecarV1 {
     pub witness_proof: KagemushaActiveReceiverWitnessProofV1,
     /// Fixed-key sparse-SMT proof and exact encoded validation-fee commitment.
     pub validation_fee_policy_witness: ValidationFeePolicyWitnessProofV1,
+    /// Fixed-key sparse-SMT proof and exact encoded Parliament casting commitment.
+    pub parliament_timed_ovn_casting_witness: ParliamentTimedOvnCastingWitnessProofV1,
+    /// Exact bounded compact leaves needed to build historical membership proofs.
+    pub parliament_timed_ovn_casting_bindings: Vec<ParliamentTimedOvnCastingContextBindingV1>,
 }
 impl KagemushaActiveReceiverFinalitySidecarV1 {
     /// Current sidecar version.
@@ -559,6 +780,8 @@ struct StagedKagemushaActiveReceiverFinalitySidecarV1 {
     post_state_root: Hash,
     witness_proof: KagemushaActiveReceiverWitnessProofV1,
     validation_fee_policy_witness: ValidationFeePolicyWitnessProofV1,
+    parliament_timed_ovn_casting_witness: ParliamentTimedOvnCastingWitnessProofV1,
+    parliament_timed_ovn_casting_bindings: Vec<ParliamentTimedOvnCastingContextBindingV1>,
 }
 impl CommitManifest {
     /// Construct a manifest for a committed height.
@@ -841,6 +1064,8 @@ struct CommitManifestReconciliation {
 }
 #[derive(Debug)]
 struct MergeLedgerLog {
+    /// Fast mode deliberately leaves the durable log opaque until a Strict restart.
+    history_deferred: bool,
     file: Option<FileWrap>,
     entries: Vec<MergeLedgerEntry>,
     cache_capacity: usize,

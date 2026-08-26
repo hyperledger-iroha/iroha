@@ -13,8 +13,9 @@ summary: Checklist and runbook for enabling the Torii pipeline endpoints inside 
 
 The first-release SDK always submits to `/v1/pipeline/transactions` and reads status from
 `/v1/pipeline/transactions/status` with exact `scope=global`. There is no endpoint-mode,
-status-scope, success-policy, or failure-policy selector. Status reads accept only HTTP 200
-with the closed response body or HTTP 404 for an absent observation.
+status-scope, success-policy, or failure-policy selector. Submission requires one canonical V1
+versioned signed transaction and accepts only HTTP 202. Status reads accept only HTTP 200 with
+the closed response body or HTTP 404 for an absent observation.
 
 # 3. One-shot Submission Semantics
 

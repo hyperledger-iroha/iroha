@@ -61,7 +61,8 @@ fn wire_payload_matches_current_strict_timeout_recovery_round(
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
         | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_) => return false,
+        | wire::ConsensusMessageV2Payload::VrfReveal(_)
+        | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return false,
     };
     round.context_id == context.id() && round.height == tag.height() && round.view == tag.view()
 }
@@ -80,7 +81,8 @@ fn network_command_class(payload: &wire::ConsensusMessageV2Payload) -> Option<Co
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
         | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
+        | wire::ConsensusMessageV2Payload::VrfReveal(_)
+        | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => None,
     }
 }
 fn classify_reducer_network_ingress(

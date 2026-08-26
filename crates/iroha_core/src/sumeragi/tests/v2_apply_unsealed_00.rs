@@ -2272,7 +2272,12 @@ fn reserve_autonomous_crash_batch(
     let network_id = fixture.context.network_id;
     let epoch = {
         let world = fixture.state.world_view();
-        crate::sumeragi::epoch_for_height_from_world(&world, proposal.descriptor.proposal_height)
+        crate::sumeragi::epoch_for_height_from_world(
+            &world,
+            proposal.descriptor.proposal_height,
+            fixture.context.mode,
+        )
+        .expect("fixture has a valid committed epoch schedule")
     };
     let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
         network_id,

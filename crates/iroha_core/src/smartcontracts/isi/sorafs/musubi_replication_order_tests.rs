@@ -20,7 +20,12 @@ fn issue_replication_order_atomically_installs_musubi_archive_binding() {
     ];
     seed_provider_owners(&mut stx, &providers, &alice());
     let order = replication_order_struct(order_id, default_digest(), &providers, 3);
-    IssueReplicationOrder::new(order_id, encode_replication_order(&order), 12, 32)
+    IssueReplicationOrder::new(
+        order_id,
+        encode_replication_order_for_epoch_window(order, 12, 32),
+        12,
+        32,
+    )
         .for_musubi_archive(archive_id)
         .execute(&alice(), &mut stx)
         .expect("issue archive-bound replication order");

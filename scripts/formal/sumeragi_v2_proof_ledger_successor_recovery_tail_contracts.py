@@ -2,1834 +2,6 @@
 
 
 
-def _async_historical_recovery_source_fidelity_errors(
-    formal_dir: Path,
-) -> list[str]:
-    """Pin the exact all-responsive historical-recovery proof boundary."""
-
-    path = formal_dir / "SumeragiV2AsyncHistoricalRecoveryLivenessProofs.tla"
-    if not path.is_file():
-        return [f"{path}: missing Async historical-recovery liveness child"]
-
-    raw_source = path.read_text(encoding="utf-8")
-    source = strip_tla_comments(raw_source, preserve_string_contents=True)
-    errors: list[str] = []
-
-    extends = re.search(r"(?m)^EXTENDS\s+([^\n]+)$", source)
-    exact_extends = "SumeragiV2AsyncTimeoutOwnershipProofs, TLAPS"
-    if extends is None or " ".join(extends.group(1).split()) != exact_extends:
-        errors.append(
-            f"{path}: Async historical-recovery child must extend exactly "
-            f"{exact_extends!r}"
-        )
-
-    operator_contracts = {
-        "HistoricalRecoveryTargetDecisionProgressProperty": (
-            "specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalRecoveryTarget(node)) "
-            "~> NodeHasDecision(node)"
-        ),
-        "ResponsiveDecisionApplicationProgressProperty": (
-            "specification => \\A node \\in Responsive: "
-            "(gst /\\ NodeHasDecision(node)) "
-            "~> NodeHasApplication(node)"
-        ),
-        "HistoricalRecoveryAsyncTemporalPrerequisites": (
-            "/\\ HistoricalRecoveryTargetDecisionProgressProperty(specification) "
-            "/\\ ResponsiveDecisionApplicationProgressProperty(specification)"
-        ),
-        "HistoricalProtectedCandidateOwned": (
-            "/\\ candidate.node \\in Responsive "
-            "/\\ HistoricalRecoveryTarget(candidate.node) "
-            "/\\ ProtectedCandidateOwned(candidate)"
-        ),
-        "HistoricalProtectedOwnedAtServiceRank": (
-            "/\\ gst /\\ HistoricalProtectedCandidateOwned(candidate) "
-            "/\\ CandidateServiceRank(candidate) = rank"
-        ),
-        "HistoricalProtectedServiceOwnershipExit": (
-            "~HistoricalProtectedCandidateOwned(candidate)"
-        ),
-        "HistoricalProtectedServiceRankProgressProperty": (
-            "specification => \\A candidate \\in AsyncCandidateSet, "
-            "rank \\in OwnedServiceRankCarrier: "
-            "HistoricalProtectedOwnedAtServiceRank(candidate, rank) "
-            "~> (HistoricalProtectedServiceOwnershipExit(candidate) "
-            "\\/ \\E lower \\in SetLessThan( rank, "
-            "OwnedServiceRankOrdering, OwnedServiceRankCarrier): "
-            "HistoricalProtectedOwnedAtServiceRank(candidate, lower))"
-        ),
-        "HistoricalProtectedStageRankProgressProperty": (
-            "specification => \\A candidate \\in AsyncCandidateSet, "
-            "position \\in Nat: (gst "
-            "/\\ HistoricalProtectedCandidateOwned(candidate) "
-            "/\\ CandidateServiceRank(candidate) = <<stage, position>>) "
-            "~> (HistoricalProtectedServiceOwnershipExit(candidate) "
-            "\\/ \\E lower \\in SetLessThan( <<stage, position>>, "
-            "OwnedServiceRankOrdering, OwnedServiceRankCarrier): "
-            "HistoricalProtectedOwnedAtServiceRank(candidate, lower))"
-        ),
-        "HistoricalProtectedStage2RankProgressProperty": (
-            "HistoricalProtectedStageRankProgressProperty(specification, 2)"
-        ),
-        "HistoricalProtectedStage3RankProgressProperty": (
-            "HistoricalProtectedStageRankProgressProperty(specification, 3)"
-        ),
-        "HistoricalProtectedStage4RankProgressProperty": (
-            "HistoricalProtectedStageRankProgressProperty(specification, 4)"
-        ),
-        "HistoricalProtectedStage5RankProgressProperty": (
-            "HistoricalProtectedStageRankProgressProperty(specification, 5)"
-        ),
-        "HistoricalProtectedStage6RankProgressProperty": (
-            "HistoricalProtectedStageRankProgressProperty(specification, 6)"
-        ),
-        "HistoricalProtectedServiceRankLeafProperties": (
-            "/\\ HistoricalProtectedStage2RankProgressProperty(specification) "
-            "/\\ HistoricalProtectedStage3RankProgressProperty(specification) "
-            "/\\ HistoricalProtectedStage4RankProgressProperty(specification) "
-            "/\\ HistoricalProtectedStage5RankProgressProperty(specification) "
-            "/\\ HistoricalProtectedStage6RankProgressProperty(specification)"
-        ),
-        "HistoricalProtectedCandidateStarvationProperty": (
-            "specification => \\A candidate \\in AsyncCandidateSet: "
-            "(gst /\\ HistoricalProtectedCandidateOwned(candidate)) "
-            "~> HistoricalProtectedServiceOwnershipExit(candidate)"
-        ),
-        "HistoricalCommitCertificateDiscoveryPending": (
-            "/\\ AsyncStrongTypeInvariant /\\ gst "
-            "/\\ HistoricalCommitCertificateDiscoveryDue(node)"
-        ),
-        "HistoricalCommitCertificateDiscoveryOutcome": (
-            "\\/ NodeHasDecision(node) "
-            "\\/ /\\ HistoricalRecoveryTarget(node) "
-            "/\\ ActiveCommitCertificateRequests(node) # {}"
-        ),
-        "HistoricalCommitCertificateDiscoveryPersistenceObligation": (
-            "\\A node \\in Responsive: "
-            "HistoricalCommitCertificateDiscoveryPending(node) "
-            "/\\ [AsyncNext]_AsyncAllVars "
-            "=> HistoricalCommitCertificateDiscoveryPending(node)' "
-            "\\/ HistoricalCommitCertificateDiscoveryOutcome(node)'"
-        ),
-        "HistoricalCommitCertificateDiscoveryPersistenceUnless": (
-            "[][HistoricalCommitCertificateDiscoveryPending(node) "
-            "/\\ ~HistoricalCommitCertificateDiscoveryOutcome(node) "
-            "=> HistoricalCommitCertificateDiscoveryPending(node)' "
-            "\\/ HistoricalCommitCertificateDiscoveryOutcome(node)']_AsyncAllVars"
-        ),
-        "HistoricalCommitCertificateDiscoveryPersistenceProperty": (
-            "specification => \\A node \\in Responsive: "
-            "HistoricalCommitCertificateDiscoveryPersistenceUnless(node)"
-        ),
-        "HistoricalRecoveryTargetRemoteServerInvariant": (
-            "\\A node \\in Responsive: HistoricalRecoveryTarget(node) "
-            "=> CommitCertificateRequestOutbox(node) # {}"
-        ),
-        "HistoricalRecoveryTargetRemoteServerProperty": (
-            "specification => []HistoricalRecoveryTargetRemoteServerInvariant"
-        ),
-        "HistoricalCommitCertificateDiscoveryClockProgressProperty": (
-            "specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalRecoveryTarget(node)) "
-            "~> (NodeHasDecision(node) "
-            "\\/ /\\ HistoricalRecoveryTarget(node) "
-            "/\\ \\/ ActiveCommitCertificateRequests(node) # {} "
-            "\\/ asyncNow >= AsyncRoundTimeout)"
-        ),
-        "HistoricalCommitCertificateRequestScheduled": (
-            "/\\ HistoricalRecoveryTarget(node) "
-            "/\\ \\E request \\in ActiveCommitCertificateRequests(node): "
-            "ItemScheduled(request)"
-        ),
-        "HistoricalCommitCertificateResponseScheduled": (
-            "/\\ HistoricalRecoveryTarget(node) "
-            "/\\ \\E response \\in AsyncNetworkItems: "
-            "/\\ response.kind = \"CommitCertificateResponse\" "
-            "/\\ response.envelope.recipient = node "
-            "/\\ CommitCertificateResponseAuthorized(response) "
-            "/\\ ItemScheduled(response)"
-        ),
-        "HistoricalCommitDecisionDirectEvidence": (
-            "/\\ candidate.evidence \\in asyncSentItems "
-            '/\\ candidate.evidence.kind = "CommitQC" '
-            "/\\ candidate.evidence.envelope = "
-            "QcEnvelope(candidate.node, qc) "
-            "/\\ candidate.causalOrigin = "
-            "AsyncDeliveryCandidateCausalOriginAt("
-            "candidate.evidence, context)"
-        ),
-        "HistoricalCommitDecisionResponseEvidence": (
-            "/\\ candidate.evidence \\in asyncSentItems "
-            '/\\ candidate.evidence.kind = "CommitCertificateResponse" '
-            "/\\ candidate.evidence.source = "
-            "candidate.evidence.envelope.request.envelope.recipient "
-            "/\\ candidate.evidence.envelope.recipient = candidate.node "
-            "/\\ candidate.evidence.envelope.qc = qc "
-            "/\\ CommitCertificateRequestAuthorized( "
-            "candidate.evidence.envelope.request) "
-            "/\\ candidate.causalOrigin = "
-            "AsyncCommitCertificateResponseCandidateCausalOriginAt( "
-            "candidate.evidence, context)"
-        ),
-        "HistoricalCommitDecisionCandidateOwned": (
-            "\\E candidate \\in AsyncCandidateSet, qc \\in commitQCs: "
-            "/\\ candidate.node = node /\\ candidate.kind = kind "
-            '/\\ kind \\in {"DeliverQC", "BeginDecision", '
-            '"PersistDecision"} '
-            "/\\ qc.context = context /\\ qc.phase = \"Commit\" "
-            "/\\ candidate.consumerContext = context "
-            "/\\ candidate.view = qc.view "
-            "/\\ candidate.subject = qc.subject "
-            "/\\ HistoricalProtectedCandidateOwned(candidate) "
-            "/\\ \\/ HistoricalCommitDecisionDirectEvidence(candidate, qc) "
-            "\\/ HistoricalCommitDecisionResponseEvidence(candidate, qc) "
-            '/\\ IF kind = "DeliverQC" THEN candidate.item = '
-            'IF candidate.evidence.kind = "CommitQC" '
-            "THEN candidate.evidence "
-            "ELSE DiscoveredCommitQcItem(candidate.evidence) "
-            "ELSE candidate.item = NoAsyncItem"
-        ),
-        "HistoricalActiveRequestRetransmissionProgressLeaf": (
-            "specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalRecoveryTarget(node) "
-            "/\\ ActiveCommitCertificateRequests(node) # {}) "
-            "~> (NodeHasDecision(node) "
-            "\\/ HistoricalCommitCertificateRequestScheduled(node))"
-        ),
-        "HistoricalCommitRequestServeProgressLeaf": (
-            "StarvationFreedomProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalCommitCertificateRequestScheduled(node)) "
-            "~> (NodeHasDecision(node) "
-            "\\/ HistoricalCommitCertificateResponseScheduled(node)))"
-        ),
-        "HistoricalCommitResponseAdmissionProgressLeaf": (
-            "specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalCommitCertificateResponseScheduled(node)) "
-            "~> (NodeHasDecision(node) "
-            "\\/ HistoricalCommitDecisionCandidateOwned( "
-            "node, \"DeliverQC\"))"
-        ),
-        "HistoricalCommitDeliveryProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalCommitDecisionCandidateOwned(node, \"DeliverQC\")) "
-            "~> (NodeHasDecision(node) "
-            "\\/ HistoricalCommitDecisionCandidateOwned( "
-            "node, \"BeginDecision\")))"
-        ),
-        "HistoricalBeginDecisionProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalCommitDecisionCandidateOwned( "
-            "node, \"BeginDecision\")) "
-            "~> (NodeHasDecision(node) "
-            "\\/ HistoricalCommitDecisionCandidateOwned( "
-            "node, \"PersistDecision\")))"
-        ),
-        "HistoricalPersistDecisionProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalCommitDecisionCandidateOwned( "
-            "node, \"PersistDecision\")) ~> NodeHasDecision(node))"
-        ),
-        "HistoricalCommitCertificateConcreteLeafProperties": (
-            "/\\ HistoricalActiveRequestRetransmissionProgressLeaf(specification) "
-            "/\\ HistoricalCommitRequestServeProgressLeaf(specification) "
-            "/\\ HistoricalCommitResponseAdmissionProgressLeaf(specification) "
-            "/\\ HistoricalCommitDeliveryProgressLeaf(specification) "
-            "/\\ HistoricalBeginDecisionProgressLeaf(specification) "
-            "/\\ HistoricalPersistDecisionProgressLeaf(specification)"
-        ),
-        "HistoricalDecisionRecordMatches": (
-            "/\\ decision \\in decisions /\\ decision.node = node "
-            "/\\ decision.qc.context = context "
-            "/\\ decision.qc.phase = \"Commit\""
-        ),
-        "HistoricalDecisionPipelineKindOwned": (
-            "/\\ HistoricalRecoveryTarget(node) "
-            "/\\ \\E decision \\in decisions: "
-            "/\\ HistoricalDecisionRecordMatches(node, decision) "
-            "/\\ DecisionPipelineKindOwned(node, decision.qc, kind)"
-        ),
-        "HistoricalDecisionCertifiedRequestActive": (
-            "/\\ HistoricalRecoveryTarget(node) "
-            "/\\ \\E decision \\in decisions: "
-            "/\\ HistoricalDecisionRecordMatches(node, decision) "
-            "/\\ DecisionCertifiedRequestActive(node, decision.qc)"
-        ),
-        "HistoricalDecisionRecoveryFrontier": (
-            "\\/ NodeHasApplication(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned(node, \"FetchBody\") "
-            "\\/ HistoricalDecisionPipelineKindOwned("
-            "node, \"RequestCertifiedBody\") "
-            "\\/ HistoricalDecisionCertifiedRequestActive(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned("
-            "node, \"FetchCertifiedBody\") "
-            "\\/ HistoricalDecisionPipelineKindOwned(node, \"StoreBody\") "
-            "\\/ HistoricalDecisionPipelineKindOwned(node, \"ValidateBody\") "
-            "\\/ HistoricalDecisionPipelineKindOwned(node, \"Apply\")"
-        ),
-        "HistoricalDecisionFrontierAvailabilityProperty": (
-            "specification => []\\A node \\in Responsive: "
-            "(gst /\\ HistoricalRecoveryTarget(node) "
-            "/\\ NodeHasDecision(node)) "
-            "=> HistoricalDecisionRecoveryFrontier(node)"
-        ),
-        "HistoricalDecisionFetchProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalDecisionPipelineKindOwned(node, \"FetchBody\")) "
-            "~> (NodeHasApplication(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned( "
-            "node, \"RequestCertifiedBody\") "
-            "\\/ HistoricalDecisionCertifiedRequestActive(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned( "
-            "node, \"ValidateBody\")))"
-        ),
-        "HistoricalDecisionRequestBodyProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalDecisionPipelineKindOwned( "
-            "node, \"RequestCertifiedBody\")) "
-            "~> (NodeHasApplication(node) "
-            "\\/ HistoricalDecisionCertifiedRequestActive(node)))"
-        ),
-        "HistoricalDecisionCertifiedResponseProgressLeaf": (
-            "(/\\ StarvationFreedomProperty(specification) "
-            "/\\ HistoricalProtectedCandidateStarvationProperty(specification)) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalDecisionCertifiedRequestActive(node)) "
-            "~> (NodeHasApplication(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned( "
-            "node, \"FetchCertifiedBody\")))"
-        ),
-        "HistoricalDecisionFetchCertifiedProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalDecisionPipelineKindOwned( "
-            "node, \"FetchCertifiedBody\")) "
-            "~> (NodeHasApplication(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned( "
-            "node, \"StoreBody\")))"
-        ),
-        "HistoricalDecisionStoreProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalDecisionPipelineKindOwned(node, \"StoreBody\")) "
-            "~> (NodeHasApplication(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned( "
-            "node, \"ValidateBody\")))"
-        ),
-        "HistoricalDecisionValidateProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalDecisionPipelineKindOwned("
-            "node, \"ValidateBody\")) "
-            "~> (NodeHasApplication(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned(node, \"Apply\")))"
-        ),
-        "HistoricalDecisionApplyProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalDecisionPipelineKindOwned(node, \"Apply\")) "
-            "~> NodeHasApplication(node))"
-        ),
-        "HistoricalDecisionConcreteLeafProperties": (
-            "/\\ HistoricalDecisionFetchProgressLeaf(specification) "
-            "/\\ HistoricalDecisionRequestBodyProgressLeaf(specification) "
-            "/\\ HistoricalDecisionCertifiedResponseProgressLeaf(specification) "
-            "/\\ HistoricalDecisionFetchCertifiedProgressLeaf(specification) "
-            "/\\ HistoricalDecisionStoreProgressLeaf(specification) "
-            "/\\ HistoricalDecisionValidateProgressLeaf(specification) "
-            "/\\ HistoricalDecisionApplyProgressLeaf(specification)"
-        ),
-        "ResponsiveDecisionServiceOwnershipInvariant": (
-            "\\A node \\in Responsive: "
-            "(gst /\\ NodeHasDecision(node) /\\ ~NodeHasApplication(node)) "
-            "=> \\/ node \\in AsyncCurrentResponsiveVoters "
-            "\\/ HistoricalRecoveryTarget(node)"
-        ),
-        "ResponsiveDecisionServiceOwnershipProperty": (
-            "specification => []ResponsiveDecisionServiceOwnershipInvariant"
-        ),
-        "HistoricalRecoveryAsyncTemporalClosurePremises": (
-            "/\\ HistoricalCommitCertificateDiscoveryPersistenceProperty(specification) "
-            "/\\ HistoricalRecoveryTargetRemoteServerProperty(specification) "
-            "/\\ HistoricalCommitCertificateDiscoveryClockProgressProperty(specification) "
-            "/\\ HistoricalProtectedServiceRankLeafProperties(specification) "
-            "/\\ HistoricalCommitCertificateConcreteLeafProperties(specification) "
-            "/\\ HistoricalDecisionFrontierAvailabilityProperty(specification) "
-            "/\\ HistoricalDecisionConcreteLeafProperties(specification) "
-            "/\\ ResponsiveDecisionServiceOwnershipProperty(specification) "
-            "/\\ ApplicationCompletionProgressProperty(specification)"
-        ),
-        "HistoricalRecoveryAsyncRemainingCorridorPremises": (
-            "/\\ HistoricalCommitCertificateDiscoveryClockProgressProperty(specification) "
-            "/\\ HistoricalProtectedServiceRankLeafProperties(specification) "
-            "/\\ HistoricalCommitCertificateConcreteLeafProperties(specification) "
-            "/\\ HistoricalDecisionFrontierAvailabilityProperty(specification) "
-            "/\\ HistoricalDecisionConcreteLeafProperties(specification) "
-            "/\\ ApplicationCompletionProgressProperty(specification)"
-        ),
-        "HistoricalLockedBodyRecoveryOutcome": (
-            "\\/ HistoricalLockedBodySourceRetired(node, qc) "
-            "\\/ HistoricalLockedBodyRecoveryTerminal(node, qc)"
-        ),
-        "HistoricalLockedCommitCarrierRecoveryProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedCommitRecoveryWitness(node, qc) "
-            "/\\ ~HistoricalLockedBodyValidated(node, qc)) "
-            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
-            "\\/ HistoricalLockedBodyRestartAuthority(node, qc) "
-            "\\/ HistoricalLockedBodyFetchOwned(node, qc) "
-            "\\/ HistoricalLockedCertifiedRequestActive(node, qc) "
-            "\\/ HistoricalLockedBodyValidateOwned(node, qc))"
-        ),
-        "HistoricalLockedRestartRecoveryProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedBodyRestartAuthority(node, qc)) "
-            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
-            "\\/ HistoricalLockedBodyFetchOwned(node, qc))"
-        ),
-        "HistoricalLockedFetchRecoveryProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedBodyFetchOwned(node, qc)) "
-            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
-            "\\/ HistoricalLockedCertifiedRequestActive(node, qc) "
-            "\\/ HistoricalLockedBodyValidateOwned(node, qc))"
-        ),
-        "HistoricalLockedRequestCandidateProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedBodyRequestOwned(node, qc)) "
-            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
-            "\\/ HistoricalLockedCertifiedRequestActive(node, qc))"
-        ),
-        "HistoricalLockedActiveRequestProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedCertifiedRequestActive(node, qc)) "
-            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
-            "\\/ HistoricalLockedBodyCertifiedFetchOwned(node, qc))"
-        ),
-        "HistoricalLockedCertifiedFetchProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedBodyCertifiedFetchOwned(node, qc)) "
-            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
-            "\\/ HistoricalLockedBodyStoreOwned(node, qc))"
-        ),
-        "HistoricalLockedStoreRecoveryProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedBodyStoreOwned(node, qc)) "
-            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
-            "\\/ HistoricalLockedBodyValidateOwned(node, qc))"
-        ),
-        "HistoricalLockedValidateRecoveryProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedBodyValidateOwned(node, qc)) "
-            "~> HistoricalLockedBodyRecoveryOutcome(node, qc)"
-        ),
-        "HistoricalLockedBodyRecoveryConeLeafProperties": (
-            "/\\ HistoricalLockedCommitCarrierRecoveryProgressLeaf(specification) "
-            "/\\ HistoricalLockedRestartRecoveryProgressLeaf(specification) "
-            "/\\ HistoricalLockedFetchRecoveryProgressLeaf(specification) "
-            "/\\ HistoricalLockedRequestCandidateProgressLeaf(specification) "
-            "/\\ HistoricalLockedActiveRequestProgressLeaf(specification) "
-            "/\\ HistoricalLockedCertifiedFetchProgressLeaf(specification) "
-            "/\\ HistoricalLockedStoreRecoveryProgressLeaf(specification) "
-            "/\\ HistoricalLockedValidateRecoveryProgressLeaf(specification)"
-        ),
-        "HistoricalLockedBodyRecoveryConeProperty": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(gst /\\ HistoricalLockedPrepareSource(node, qc)) "
-            "~> HistoricalLockedBodyRecoveryOutcome(node, qc)"
-        ),
-    }
-    for symbol, exact_body in operator_contracts.items():
-        extracted = _top_level_operator_body(
-            raw_source, symbol, preserve_string_contents=True
-        )
-        if extracted is None:
-            errors.append(f"{path}: missing Async historical operator {symbol}")
-            continue
-        body, line = extracted
-        normalized = " ".join(body.split())
-        if normalized != exact_body:
-            errors.append(
-                f"{path}:{line}: {symbol} must equal only "
-                f"{exact_body!r}; found {normalized!r}"
-            )
-
-    endpoint_symbols = (
-        "HistoricalRecoveryTargetDecisionProgressProperty",
-        "ResponsiveDecisionApplicationProgressProperty",
-        "HistoricalRecoveryAsyncTemporalPrerequisites",
-    )
-    for symbol in endpoint_symbols:
-        if _symbol_exists(source, symbol, theorem_only=True):
-            errors.append(
-                f"{path}: {symbol} must remain an operator property until its "
-                "exact corridor is proved without extra premises"
-            )
-
-    if re.search(r"(?m)^CONSTANTS?\b", source):
-        errors.append(
-            f"{path}: Async historical-recovery child may not replace exact "
-            "temporal predicates with unconstrained constants"
-        )
-    if re.search(r"\bResponsiveProtectedCandidateOwned\b", source):
-        errors.append(
-            f"{path}: historical rank may not reuse the current-voter-only "
-            "ResponsiveProtectedCandidateOwned predicate"
-        )
-
-    theorem_contracts = {
-        "HistoricalProtectedServiceRankProgressFromStageLeaves": (
-            "\\A specification: "
-            "HistoricalProtectedServiceRankLeafProperties(specification) "
-            "=> HistoricalProtectedServiceRankProgressProperty(specification)",
-            (
-                "HistoricalProtectedStage2RankProgressProperty",
-                "HistoricalProtectedStage3RankProgressProperty",
-                "HistoricalProtectedStage4RankProgressProperty",
-                "HistoricalProtectedStage5RankProgressProperty",
-                "HistoricalProtectedStage6RankProgressProperty",
-                "HistoricalProtectedStageRankProgressProperty",
-            ),
-        ),
-        "HistoricalProtectedCandidateHasServiceRank": (
-            "\\A candidate: /\\ AsyncTypeInvariant /\\ gst "
-            "/\\ HistoricalProtectedCandidateOwned(candidate) "
-            "=> \\E rank \\in OwnedServiceRankCarrier: "
-            "HistoricalProtectedOwnedAtServiceRank(candidate, rank)",
-            (
-                "ScheduledCandidateServiceRankInCarrier",
-                "HistoricalProtectedOwnedAtServiceRank",
-            ),
-        ),
-        "HistoricalProtectedServiceRankProgressImpliesStarvation": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ HistoricalProtectedServiceRankProgressProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "=> HistoricalProtectedCandidateStarvationProperty( "
-            "AsyncSpecAt(initialContext))",
-            (
-                "OwnedServiceRankOrderingWellFounded",
-                "WellFoundedLeadsTo",
-                "HistoricalProtectedCandidateHasServiceRank",
-            ),
-        ),
-        "HistoricalCommitCertificateDiscoveryReadinessFromClock": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ HistoricalRecoveryTargetRemoteServerProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalCommitCertificateDiscoveryClockProgressProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "=> \\A node \\in Responsive: "
-            "(gst /\\ HistoricalRecoveryTarget(node)) "
-            "~> (HistoricalCommitCertificateDiscoveryPending(node) "
-            "\\/ HistoricalCommitCertificateDiscoveryOutcome(node))",
-            (
-                "DEF HistoricalRecoveryTargetRemoteServerProperty",
-                "DEF HistoricalCommitCertificateDiscoveryClockProgressProperty",
-                "HistoricalRecoveryTargetRemoteServerInvariant",
-                "HistoricalCommitCertificateDiscoveryPending",
-                "HistoricalCommitCertificateDiscoveryOutcome",
-            ),
-        ),
-        "DirectHistoricalCommitCertificateDiscoveryPublishes": (
-            "\\A node \\in ValidatorIds: "
-            "DirectHistoricalCommitCertificateDiscoveryStep(node) "
-            "=> /\\ HistoricalRecoveryTarget(node)' "
-            "/\\ ActiveCommitCertificateRequests(node)' # {}",
-            (
-                "CommitCertificateDiscoveryStepWork",
-                "PublishCommitCertificateRequests",
-                "ActiveCommitCertificateRequests",
-            ),
-        ),
-        "HistoricalCommitCertificateDiscoveryPrefixIsEnabled": (
-            "\\A node \\in ValidatorIds: "
-            "HistoricalCommitCertificateDiscoveryDue(node) "
-            "=> ENABLED DirectHistoricalCommitCertificateDiscoveryStep(node)",
-            (
-                "ExpandENABLED",
-                "DirectHistoricalCommitCertificateDiscoveryStep",
-            ),
-        ),
-        "HistoricalCommitCertificateDiscoveryPendingEnablesFairPrefix": (
-            "\\A node \\in Responsive: "
-            "HistoricalCommitCertificateDiscoveryPending(node) "
-            "=> ENABLED "
-            "<<PostGstHistoricalCommitCertificateDiscovery(node)>>_AsyncAllVars",
-            (
-                "HistoricalRecoveryTargetsAreValidators",
-                "HistoricalCommitCertificateDiscoveryPrefixIsEnabled",
-                "DirectHistoricalCommitCertificateDiscoveryPublishes",
-                "ENABLEDaxioms",
-            ),
-        ),
-        "HistoricalCommitCertificateDiscoveryFairStepPublishes": (
-            "\\A node \\in Responsive: "
-            "/\\ HistoricalCommitCertificateDiscoveryPending(node) "
-            "/\\ <<PostGstHistoricalCommitCertificateDiscovery(node)>>_AsyncAllVars "
-            "=> HistoricalCommitCertificateDiscoveryOutcome(node)'",
-            (
-                "DirectHistoricalCommitCertificateDiscoveryPublishes",
-                "HistoricalCommitCertificateDiscoveryOutcome",
-            ),
-        ),
-        "FairHistoricalCommitCertificateDiscoveryFromPersistence": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ HistoricalCommitCertificateDiscoveryPersistenceProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "=> \\A node \\in Responsive: "
-            "HistoricalCommitCertificateDiscoveryPending(node) "
-            "~> HistoricalCommitCertificateDiscoveryOutcome(node)",
-            (
-                "HistoricalCommitCertificateDiscoveryPendingEnablesFairPrefix",
-                "HistoricalCommitCertificateDiscoveryFairStepPublishes",
-                "HistoricalCommitCertificateDiscoveryPersistenceUnless",
-                "HistoricalCommitCertificateDiscoveryPersistenceProperty",
-                "WF_AsyncAllVars(",
-                "PostGstHistoricalCommitCertificateDiscovery(node)",
-            ),
-        ),
-        "HistoricalActiveCommitCertificateRequestReachesDecision": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalProtectedServiceRankLeafProperties( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalCommitCertificateConcreteLeafProperties( "
-            "AsyncSpecAt(initialContext)) "
-            "=> \\A node \\in Responsive: "
-            "(gst /\\ HistoricalRecoveryTarget(node) "
-            "/\\ ActiveCommitCertificateRequests(node) # {}) "
-            "~> NodeHasDecision(node)",
-            (
-                "HistoricalProtectedServiceRankProgressFromStageLeaves",
-                "HistoricalProtectedServiceRankProgressImpliesStarvation",
-                "StarvationFreedomObligation",
-                "HistoricalActiveRequestRetransmissionProgressLeaf",
-                "HistoricalCommitRequestServeProgressLeaf",
-                "HistoricalCommitResponseAdmissionProgressLeaf",
-                "HistoricalCommitDeliveryProgressLeaf",
-                "HistoricalBeginDecisionProgressLeaf",
-                "HistoricalPersistDecisionProgressLeaf",
-            ),
-        ),
-        "HistoricalTargetDecisionReachesApplicationFromConcreteLeaves": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalProtectedServiceRankLeafProperties( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalDecisionFrontierAvailabilityProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalDecisionConcreteLeafProperties( "
-            "AsyncSpecAt(initialContext)) "
-            "=> \\A node \\in Responsive: "
-            "(gst /\\ HistoricalRecoveryTarget(node) "
-            "/\\ NodeHasDecision(node)) ~> NodeHasApplication(node)",
-            (
-                "HistoricalProtectedServiceRankProgressFromStageLeaves",
-                "HistoricalProtectedServiceRankProgressImpliesStarvation",
-                "StarvationFreedomObligation",
-                "HistoricalDecisionFrontierAvailabilityProperty",
-                "HistoricalDecisionFetchProgressLeaf",
-                "HistoricalDecisionRequestBodyProgressLeaf",
-                "HistoricalDecisionCertifiedResponseProgressLeaf",
-                "HistoricalDecisionFetchCertifiedProgressLeaf",
-                "HistoricalDecisionStoreProgressLeaf",
-                "HistoricalDecisionValidateProgressLeaf",
-                "HistoricalDecisionApplyProgressLeaf",
-            ),
-        ),
-        "HistoricalRecoveryTargetDecisionFromExactCorridor": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalRecoveryAsyncTemporalClosurePremises( "
-            "AsyncSpecAt(initialContext)) "
-            "=> HistoricalRecoveryTargetDecisionProgressProperty( "
-            "AsyncSpecAt(initialContext))",
-            (
-                "FairHistoricalCommitCertificateDiscoveryFromPersistence",
-                "HistoricalCommitCertificateDiscoveryReadinessFromClock",
-                "HistoricalActiveCommitCertificateRequestReachesDecision",
-                "HistoricalCommitCertificateDiscoveryOutcome",
-            ),
-        ),
-        "ResponsiveDecisionApplicationFromExactCorridor": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalRecoveryAsyncTemporalClosurePremises( "
-            "AsyncSpecAt(initialContext)) "
-            "=> ResponsiveDecisionApplicationProgressProperty( "
-            "AsyncSpecAt(initialContext))",
-            (
-                "HistoricalTargetDecisionReachesApplicationFromConcreteLeaves",
-                "ApplicationCompletionProgressProperty",
-                "ResponsiveDecisionServiceOwnershipProperty",
-                "AsyncSpecAlwaysUsesFixedResponsiveVoters",
-            ),
-        ),
-        "HistoricalRecoveryAsyncTemporalPrerequisitesFromExactCorridor": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalRecoveryAsyncTemporalClosurePremises( "
-            "AsyncSpecAt(initialContext)) "
-            "=> HistoricalRecoveryAsyncTemporalPrerequisites( "
-            "AsyncSpecAt(initialContext))",
-            (
-                "HistoricalRecoveryTargetDecisionFromExactCorridor",
-                "ResponsiveDecisionApplicationFromExactCorridor",
-            ),
-        ),
-        "HistoricalLockedBodyRecoveryConeComposesFromExactLeaves": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ HistoricalLockedBodyRecoveryConeLeafProperties( "
-            "AsyncSpecAt(initialContext)) "
-            "=> HistoricalLockedBodyRecoveryConeProperty( "
-            "AsyncSpecAt(initialContext))",
-            (
-                "AsyncSpecAlwaysHistoricalLockedBodyRecoveryStage",
-                "HistoricalLockedCommitCarrierRecoveryProgressLeaf",
-                "HistoricalLockedRestartRecoveryProgressLeaf",
-                "HistoricalLockedFetchRecoveryProgressLeaf",
-                "HistoricalLockedRequestCandidateProgressLeaf",
-                "HistoricalLockedActiveRequestProgressLeaf",
-                "HistoricalLockedCertifiedFetchProgressLeaf",
-                "HistoricalLockedStoreRecoveryProgressLeaf",
-                "HistoricalLockedValidateRecoveryProgressLeaf",
-                "HistoricalLockedBodyRecoveryStageInvariant",
-                "HistoricalLockedBodyRecoveryOutcome",
-                "PTL",
-            ),
-        ),
-    }
-
-    for symbol, (exact_statement, proof_tokens) in theorem_contracts.items():
-        extracted = _top_level_theorem_body(
-            raw_source, symbol, preserve_string_contents=True
-        )
-        if extracted is None:
-            errors.append(f"{path}: missing Async historical theorem {symbol}")
-            continue
-        body, line = extracted
-        parts = re.split(
-            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
-        )
-        statement = " ".join(parts[0].split())
-        if statement != exact_statement:
-            errors.append(
-                f"{path}:{line}: {symbol} must state only "
-                f"{exact_statement!r}; found {statement!r}"
-            )
-        proof = parts[1] if len(parts) == 2 else ""
-        missing = tuple(
-            token
-            for token in proof_tokens
-            if not _tla_dependency_present(proof, token)
-        )
-        vacuous = re.search(
-            r"(?:\bASSUME\s+FALSE\b|\bPROVE\s+TRUE\b|\bBY\s+TRUE\b)",
-            proof,
-        )
-        if len(parts) != 2 or missing or vacuous is not None:
-            errors.append(
-                f"{path}:{line}: {symbol} proof must retain exact historical "
-                "dependencies without a vacuous proof; "
-                f"missing={missing!r}, vacuous={vacuous is not None}, "
-                f"has_proof={len(parts) == 2}"
-            )
-
-    return errors
-
-
-def _check_successor_snapshot_authority(
-    recovery_path: Path,
-    recovery_source: str,
-    region: Any,
-    require_tokens: Any,
-    require_order: Any,
-) -> None:
-    """Bind snapshot and complete-tip successor activation authority."""
-
-    snapshot_authority = region(
-        recovery_path,
-        recovery_source,
-        "SnapshotSuccessorActivationAuthority::new",
-        "fn new(record: &wire::SnapshotV2BootstrapRecord) -> Self",
-        "\n    /// Imported snapshot height which anchors the first executable context.",
-    )
-    require_tokens(
-        recovery_path,
-        "SnapshotSuccessorActivationAuthority::new",
-        snapshot_authority,
-        (
-            "record.context.snapshot_bootstrap.as_ref()",
-            "expect(\"verified snapshot activation authority retains its anchor\")",
-            "record_hash: HashOf::new(record), snapshot_height: anchor.snapshot_height, snapshot_block_hash: anchor.snapshot_block_hash, successor_context_id: record.context.id(),",
-        ),
-    )
-    recovery = region(
-        recovery_path,
-        recovery_source,
-        "recover_active_height_with_plan",
-        "pub(crate) fn recover_active_height_with_plan(",
-        "\nfn verify_state_kura_prefix(",
-    )
-    require_tokens(
-        recovery_path,
-        "recover_active_height_with_plan snapshot authority",
-        recovery,
-        (
-            "authenticate_v2_snapshot_replay_boundary(kura, state, &replay_plan)?;",
-            "if record.context() != &bootstrap.context || record.proofs_of_possession() != bootstrap.validator_set_pops",
-            "let verified_context = VerifiedHeightContext::snapshot_bootstrap(bootstrap)?;",
-            "RecoveredSuccessorActivationAuthority::SnapshotBootstrap( SnapshotSuccessorActivationAuthority::new(bootstrap), )",
-        ),
-    )
-    require_order(
-        recovery_path,
-        "recover_active_height_with_plan snapshot authority",
-        recovery,
-        (
-            "authenticate_v2_snapshot_replay_boundary(",
-            "is_entirely_audited_snapshot_import()",
-            "authenticated_snapshot_v2_bootstrap()",
-            "record.context() != &bootstrap.context",
-            "VerifiedHeightContext::snapshot_bootstrap(bootstrap)",
-            "SnapshotSuccessorActivationAuthority::new(bootstrap)",
-        ),
-    )
-    require_tokens(
-        recovery_path,
-        "recover_active_height_with_plan complete-tip authority",
-        recovery,
-        (
-            "kura.v2_finality_artifact_with_receipt(durable_height)?",
-            "let predecessor_record = context_store.load(durable_height)?",
-            "let verified_predecessor = verify_persisted_height( kura, state, &context_store, predecessor_record, durable_height, )?;",
-            "let predecessor_signature_policy = if durable_height == 1 { BlockSignaturePolicy::GenesisAuthority(genesis_public_key.clone()) } else { BlockSignaturePolicy::RotatingLeader };",
-            "build_verified_successor(state, &context_store, &parent_artifact, &parent_receipt)?;",
-            "let (verified_context, activation) = successor.into_parts();",
-            "RecoveredCompleteTipActivationAuthority::authenticate( parent_artifact, parent_receipt, verified_predecessor, predecessor_signature_policy, &verified_context, activation, kura, )?;",
-            "RecoveredSuccessorActivationAuthority::CompleteTip( complete_tip_activation, )",
-        ),
-    )
-    require_order(
-        recovery_path,
-        "recover_active_height_with_plan complete-tip authority",
-        recovery,
-        (
-            "verify_persisted_height(",
-            "build_verified_successor(",
-            "successor.into_parts()",
-            "RecoveredCompleteTipActivationAuthority::authenticate(",
-            "RecoveredSuccessorActivationAuthority::CompleteTip(",
-        ),
-    )
-    verified_successor = region(
-        recovery_path,
-        recovery_source,
-        "build_verified_successor",
-        "pub(crate) fn build_verified_successor(",
-        "\nfn verify_persisted_height(",
-    )
-    require_tokens(
-        recovery_path,
-        "build_verified_successor",
-        verified_successor,
-        (
-            "DurableV2PredecessorIdentity::authenticate(parent_artifact, parent_receipt)?;",
-            "if state_height != parent_height || state_block_hash != Some(predecessor.block_hash)",
-            "if parent_record.context() != &parent_artifact.height_context",
-            "VerifiedHeightContext::successor( expected, proofs, parent_artifact, parent_receipt, parent_record.proofs_of_possession(), )?;",
-            "DurableSuccessorActivationAuthority { predecessor, successor_context_id: verified.context().id(), }",
-            "DurableSuccessorActivationAuthority { predecessor, successor_context_id: verified_context.context().id(), }",
-        ),
-    )
-    require_order(
-        recovery_path,
-        "build_verified_successor",
-        verified_successor,
-        (
-            "DurableV2PredecessorIdentity::authenticate(",
-            "state_height != parent_height",
-            "parent_record.context() != &parent_artifact.height_context",
-            "VerifiedHeightContext::successor(",
-            "DurableSuccessorActivationAuthority",
-        ),
-    )
-
-
-def _persistent_recovery_cut_source_fidelity_errors(
-    repo_root: Path = ROOT_DIR,
-) -> list[str]:
-    """Bind crash-safe producer and live leader-wire recovery cuts to Rust."""
-
-    base = repo_root / "crates" / "iroha_core" / "src" / "sumeragi"
-    paths = {
-        "adapter": base / "v2.rs",
-        "runtime": base / "v2_runtime.rs",
-        "effects": base / "v2_effects.rs",
-        "store": base / "serviced_candidate_store.rs",
-        "ingress": base / "mod.rs",
-        "worker": base / "v2_worker.rs",
-        "formal": repo_root
-        / "formal"
-        / "sumeragi_v2"
-        / "SumeragiV2AsyncNetwork.tla",
-    }
-    errors: list[str] = []
-    for path in paths.values():
-        if not path.is_file() or path.is_symlink():
-            errors.append(
-                f"{path}: persistent recovery-cut source must be a regular file"
-            )
-    if errors:
-        return errors
-
-    sources: dict[str, str] = {}
-    for name, path in tuple(paths.items()):
-        if path.suffix == ".rs":
-            loaded_path, source = _read_reviewed_rust_source(
-                repo_root,
-                path.relative_to(repo_root).as_posix(),
-                errors,
-                f"persistent recovery-cut {name} source",
-            )
-            paths[name] = loaded_path
-            sources[name] = source
-        else:
-            sources[name] = path.read_text(encoding="utf-8")
-    if errors:
-        return errors
-
-    def require_context_item(
-        source_name: str,
-        item_name: str,
-        context: tuple[tuple[str, ...], ...],
-        description: str,
-    ) -> RustItem | None:
-        path = paths[source_name]
-        matches = [
-            item
-            for item in rust_items(sources[source_name], item_name)
-            if item.brace_context == context
-        ]
-        if len(matches) != 1:
-            errors.append(
-                f"{path}: require exactly one {description} item {item_name} "
-                f"in context {context!r}; found {len(matches)}"
-            )
-            return None
-        return matches[0]
-
-    adapter_context = (("impl", "SumeragiV2Adapter"),)
-    runtime_context = (
-        ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
-    )
-    executor_context = (
-        (
-            "impl",
-            "<",
-            "R",
-            ":",
-            "EffectRuntime",
-            ">",
-            "V2EffectExecutor",
-            "<",
-            "R",
-            ">",
-        ),
-    )
-    store_context = (("impl", "LeaderWireLifecycleStoreGate"),)
-    ingress_context = (("impl", "FairV2Ingress"),)
-    worker_services_context = (
-        ("impl", "V2EffectServices", "for", "ProductionV2Services"),
-    )
-
-    persist_release = require_context_item(
-        "adapter",
-        "persist_unrecorded_producer_releases",
-        adapter_context,
-        "atomic persistent producer release",
-    )
-    for sequence, description in (
-        (
-            """
-if self.ensure_canonical_reclaimed_producer_state_after_decision()? {
-    return Ok(());
-}
-""",
-            "producer release must not resurrect an epoch reclaimed by durable Decision",
-        ),
-        (
-            """
-if !addresses.insert(token.address) {
-    return Err(self.fail_serviced_candidate_store(
-        "one producer address had multiple simultaneous release authorities"
-            .to_owned(),
-    ));
-}
-""",
-            "producer release must reject duplicate durable addresses",
-        ),
-        (
-            """
-if current.status() != ProducerContinuationStatus::Reserved
-    || current.identity().address() != token.address
-    || self.durable_producer_continuations.get(&token.address) != Some(current)
-    || self.pending_producer_handoffs.contains_key(&token.address)
-{
-""",
-            "producer release must exact-match process and durable aliases before mutation",
-        ),
-        (
-            """
-let process_previous = self.producer_continuations.clone();
-let durable_previous = self.durable_producer_continuations.clone();
-let dormant_previous = self.restored_dormant_producer_continuations.clone();
-let handoffs_previous = self.pending_producer_handoffs.clone();
-""",
-            "producer release must retain one complete rollback image",
-        ),
-        (
-            """
-if let Err(reason) = self
-    .serviced_candidate_store
-    .persist_with_producer_continuations(
-        &self.durable_serviced_candidates,
-        &self.durable_producer_continuations,
-        self.serviced_candidates_decision_reclaimed,
-    )
-{
-    self.producer_continuations = process_previous;
-    self.durable_producer_continuations = durable_previous;
-    self.restored_dormant_producer_continuations = dormant_previous;
-    self.pending_producer_handoffs = handoffs_previous;
-""",
-            "failed producer persistence must roll every alias back",
-        ),
-    ):
-        _require_rust_token_sequence(
-            paths["adapter"], persist_release, sequence, description, errors
-        )
-
-    deferred_release = require_context_item(
-        "adapter",
-        "release_deferred_producer_continuations_before_owner_removal",
-        adapter_context,
-        "persist-before-remove Busy producer release",
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        deferred_release,
-        """
-let active = self.all_deferred_admission_ordinals();
-if !retiring.is_subset(&active)
-    || !self
-        .deferred_producer_continuations
-        .keys()
-        .all(|ordinal| active.contains(ordinal))
-{
-""",
-        "deferred release must retain one exact Busy owner for every producer",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        deferred_release,
-        """
-self.persist_unrecorded_producer_releases(&tokens)?;
-for ordinal in retiring {
-    self.deferred_producer_continuations.remove(ordinal);
-}
-""",
-        "deferred release must persist the batch before dropping ownership aliases",
-        errors,
-    )
-
-    retire_deferred_body = require_context_item(
-        "adapter",
-        "retire_deferred_body_available",
-        adapter_context,
-        "exact deferred BodyAvailable retirement",
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        retire_deferred_body,
-        """
-self.release_deferred_producer_continuations_before_owner_removal(&retiring)?;
-let before = self.deferred_completions.len();
-self.deferred_completions.retain(|input| !matches(input));
-""",
-        "deferred BodyAvailable retirement must persist before queue removal",
-        errors,
-    )
-
-    retire_deferred_pipeline = require_context_item(
-        "adapter",
-        "retire_deferred_body_pipeline_completions",
-        adapter_context,
-        "transactional deferred body-pipeline retirement",
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        retire_deferred_pipeline,
-        """
-if retiring.len() != retirements.len() {
-    return Err(self.fail_serviced_candidate_store(
-        "one deferred body occurrence occupied multiple serialized queues".to_owned(),
-    ));
-}
-self.release_deferred_producer_continuations_before_owner_removal(&retiring)?;
-""",
-        "pipeline retirement must reject duplicate owners before persistent release",
-        errors,
-    )
-
-    frontier = require_context_item(
-        "adapter",
-        "reconcile_restored_reserved_producer_frontier",
-        adapter_context,
-        "restart-only Reserved producer frontier reconciliation",
-    )
-    for sequence, description in (
-        (
-            """
-if self.reducer.durable_state().decision().is_some() {
-    return Ok(());
-}
-let current_view = self.reducer.current_tag().view();
-let protected = self.reducer.durable_state().locked().map(|certificate| {
-""",
-            "restart reconciliation must derive its cut from replayed WAL state",
-        ),
-        (
-            """
-if candidate.source_view() > current_view {
-    return Err(self.fail_serviced_candidate_store(
-        "restored producer originated beyond the replayed durable view".to_owned(),
-    ));
-}
-if candidate.source_view() == current_view {
-    continue;
-}
-""",
-            "restart reconciliation must reject the future and retain current-view producers",
-        ),
-        (
-            """
-let protects_body_pipeline = protected.is_some_and(|(view, subject)| {
-    candidate.source_view() == view
-        && candidate.target() == Some(subject)
-        && matches!(
-            stage,
-            ServicedCandidateStage::LocalProposalReady
-                | ServicedCandidateStage::BodyAvailable
-                | ServicedCandidateStage::BodyStored
-                | ServicedCandidateStage::ValidationCompleted
-        )
-});
-if !protects_body_pipeline {
-    retiring.push(address);
-}
-""",
-            "only the exact protected-lock body pipeline may survive an older restart frontier",
-        ),
-        (
-            """
-if let Err(reason) = self
-    .serviced_candidate_store
-    .persist_with_producer_continuations(
-        &self.durable_serviced_candidates,
-        &self.durable_producer_continuations,
-        self.serviced_candidates_decision_reclaimed,
-    )
-{
-    self.producer_continuations = process_previous;
-    self.durable_producer_continuations = durable_previous;
-    self.restored_dormant_producer_continuations = dormant_previous;
-""",
-            "restart frontier pruning must roll back all aliases on persistence failure",
-        ),
-    ):
-        _require_rust_token_sequence(
-            paths["adapter"], frontier, sequence, description, errors
-        )
-
-    adapter_open = require_context_item(
-        "adapter",
-        "open_with_aggregator_and_publication_with_capacity",
-        adapter_context,
-        "capacity-bound restart constructor",
-    )
-    _require_rust_item_context(
-        paths["adapter"],
-        adapter_open,
-        adapter_context,
-        "capacity-bound restart constructor",
-        errors,
-        expected_attributes=("#[allow(clippy::too_many_arguments)]",),
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        adapter_open,
-        """
-adapter.reconcile_restored_reserved_producer_frontier()?;
-adapter.reclaim_serviced_candidates()?;
-let replay_tag = adapter.reducer.current_tag();
-""",
-        "restart frontier pruning must precede runtime replay and dormant capacity installation",
-        errors,
-    )
-
-    persistent_deferred = require_context_item(
-        "adapter",
-        "deferred_body_available_has_persistent_producer",
-        adapter_context,
-        "Busy-deferred persistent body-owner classifier",
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        persistent_deferred,
-        """
-if record.status() != ProducerContinuationStatus::Reserved
-    || record.source_class() != ProducerContinuationSourceClass::VolatileBody
-    || record.identity().address() != address
-    || record.identity().stage() != ServicedCandidateStage::BodyAvailable as u8
-    || self.durable_producer_continuations.get(&address) != Some(record)
-""",
-        "persistent deferred body classification must exact-match the stage-7 durable root",
-        errors,
-    )
-
-    persistent_body = require_context_item(
-        "runtime",
-        "body_available_has_persistent_producer",
-        runtime_context,
-        "serialized persistent body-owner classifier",
-    )
-    _require_rust_token_sequence(
-        paths["runtime"],
-        persistent_body,
-        """
-if ingress && deferred {
-    self.latch_fail_closed("one body completion retained two persistent producer carriers");
-    return Err(
-        "Sumeragi v2 body completion has duplicate persistent producer ownership"
-            .to_owned(),
-    );
-}
-Ok(ingress || deferred)
-""",
-        "one serialized body owner may have at most one persistent producer carrier",
-        errors,
-    )
-
-    rebind_body = require_context_item(
-        "runtime",
-        "rebind_body_available",
-        runtime_context,
-        "persistent-root-preserving body rebind",
-    )
-    for sequence, description in (
-        (
-            """
-let source_persistent =
-    self.body_available_has_persistent_producer(previous, manifest)?;
-let destination_persistent =
-    self.body_available_has_persistent_producer(rebound, manifest)?;
-if source_persistent && destination_persistent {
-""",
-            "rebind must classify both persistent roots before mutation",
-        ),
-        (
-            """
-if source_persistent {
-    if !self.retire_body_available(rebound, manifest)? {
-""",
-            "a sole persistent source must retire the ordinary destination",
-        ),
-        (
-            """
-let ingress = self
-    .ingress
-    .rebind_canonical_body_available(previous, rebound, manifest);
-let deferred = self
-    .driver
-    .rebind_deferred_body_available(previous, rebound, manifest);
-ingress.saturating_add(deferred)
-} else {
-""",
-            "a sole persistent source must be retagged rather than retired",
-        ),
-        (
-            """
-let deferred = match self
-    .driver
-    .retire_deferred_body_available(previous, manifest)
-{
-""",
-            "a nonpersistent source must persist deferred release before coalescence",
-        ),
-    ):
-        _require_rust_token_sequence(
-            paths["runtime"], rebind_body, sequence, description, errors
-        )
-
-    retire_fetch_parent = require_context_item(
-        "runtime",
-        "retire_restored_body_fetch_parent",
-        runtime_context,
-        "pre-BodyAvailable restored Fetch retirement",
-    )
-    _require_rust_token_sequence(
-        paths["runtime"],
-        retire_fetch_parent,
-        """
-let AdapterEffect::FetchBody {
-    round,
-    subject,
-    manifest,
-    ..
-} = effect
-else {
-""",
-        "restored Fetch retirement must extract only exact FetchBody coordinates",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["runtime"],
-        retire_fetch_parent,
-        """
-if !ownership.exactly_binds_adapter_effect(effect) {
-    self.latch_fail_closed(
-        "restored body-fetch retirement changed its exact effect binding",
-    );
-""",
-        "restored Fetch retirement must exact-match the bound Fetch effect",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["runtime"],
-        retire_fetch_parent,
-        """
-match self.driver.retire_restored_body_fetch_parent(
-    *round,
-    *subject,
-    manifest.as_ref()
-) {
-""",
-        "restored Fetch retirement must delegate durable parent lookup to the adapter",
-        errors,
-    )
-
-    adapter_fetch_parent = require_context_item(
-        "adapter",
-        "retire_restored_body_fetch_parent",
-        adapter_context,
-        "durable coordinate-bound Fetch-parent retirement",
-    )
-    for sequence, description in (
-        (
-            """
-if self.selected_producer_lifecycle.is_some()
-    || round.context_id != self.wire_context.id()
-    || round.height != self.wire_context.height
-{
-""",
-            "Fetch-parent retirement must retain immutable height geometry",
-        ),
-        (
-            """
-manifest.validate(&self.wire_context)?;
-if manifest.round != round || manifest.subject != subject {
-    return Err(AdapterError::DurableBodyMismatch);
-}
-""",
-            "a supplied Fetch manifest must exact-match its round and subject",
-        ),
-        (
-            """
-let [(address, record)] = coordinate_matches.as_slice() else {
-    return match coordinate_matches.len() {
-        0 => Ok(false),
-        _ => Err(self.fail_serviced_candidate_store(
-""",
-            "manifest-less Fetch-parent lookup must select at most one dormant stage-7 record",
-        ),
-        (
-            """
-if expected_candidate.is_some_and(|expected| record.identity().candidate() != expected) {
-    return Err(self.fail_serviced_candidate_store(
-        "restored body-fetch manifest changed its persisted producer identity".to_owned(),
-    ));
-}
-self.persist_restored_body_producer_retirement(*address, record)?;
-""",
-            "Fetch-parent retirement must bind full manifest identity before persistence",
-        ),
-    ):
-        _require_rust_token_sequence(
-            paths["adapter"], adapter_fetch_parent, sequence, description, errors
-        )
-
-    commit_fetch_retirement = require_context_item(
-        "effects",
-        "commit_pending_fetch_retirement",
-        executor_context,
-        "terminal pending-Fetch retirement",
-    )
-    _require_rust_token_sequence(
-        paths["effects"],
-        commit_fetch_retirement,
-        """
-if !retired_completion {
-    let effect = plan.pending.task.adapter_effect();
-    self.runtime
-        .retire_restored_body_fetch_parent(&effect, plan.pending.task.ownership())
-        .map_err(EffectExecutorError::Runtime)?;
-}
-let work_id = plan.pending.task.id();
-let removed = self.pending_fetches.remove(&work_id);
-""",
-        "a terminal Fetch without a token must retire its restored parent before P/Q ownership",
-        errors,
-    )
-
-    production_fetch_parent_retirement = require_context_item(
-        "effects",
-        "retire_restored_body_fetch_parent",
-        (("impl", "EffectRuntime", "for", "SerializedV2Runtime"),),
-        "production restored Fetch-parent retirement delegate",
-    )
-    _require_rust_token_sequence(
-        paths["effects"],
-        production_fetch_parent_retirement,
-        """
-SerializedV2Runtime::retire_restored_body_fetch_parent(self, effect, ownership)
-""",
-        "production EffectRuntime must not use the ordinary no-op Fetch-parent default",
-        errors,
-    )
-
-    authority_advance = _require_rust_item(
-        paths["store"], sources["store"], "advance_view", errors
-    )
-    _require_rust_item_context(
-        paths["store"],
-        authority_advance,
-        (("impl", "LeaderWireRecoveryAuthority"),),
-        "monotone leader-wire view authority",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        authority_advance,
-        """
-if durable_view < self.durable_view {
-    return Err("leader-wire recovery authority regressed its durable view".to_owned());
-}
-""",
-        "leader-wire view authority must reject regression",
-        errors,
-    )
-
-    store_cut = require_context_item(
-        "store",
-        "advance_recovery_cut",
-        store_context,
-        "durable leader-wire live recovery cut",
-    )
-    for sequence, description in (
-        (
-            """
-if !next.matches_geometry(self.context_id, self.height, self.owner) {
-    return Err("leader-wire recovery cut changed immutable geometry".to_owned());
-}
-""",
-            "leader-wire cut must retain frozen geometry",
-        ),
-        (
-            """
-if !next.monotonically_extends(state.recovery_authority) {
-    return Err("leader-wire recovery cut is not monotone".to_owned());
-}
-""",
-            "leader-wire cut must monotonically extend the WAL authority",
-        ),
-        (
-            """
-if retiring != *expected_dormant_slots || !retiring.is_subset(&state.replay_dormant) {
-""",
-            "durable and mirrored obsolete Dormant sets must be exactly equal",
-        ),
-        (
-            """
-let previous = state.clone();
-state.recovery_authority = next;
-for slot in &retiring {
-""",
-            "leader-wire cut must retain one complete rollback image before removal",
-        ),
-        (
-            """
-if !retiring.is_empty()
-    && let Err(error) = self.persist_locked(&state)
-{
-    *state = previous;
-    return Err(error);
-}
-""",
-            "failed leader-wire persistence must restore authority and records",
-        ),
-    ):
-        _require_rust_token_sequence(
-            paths["store"], store_cut, sequence, description, errors
-        )
-
-    admit_ingress = require_context_item(
-        "store",
-        "admit_ingress",
-        store_context,
-        "durable leader-wire ingress admission",
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        admit_ingress,
-        """
-if state.recovery_authority.obsoletes(&token) {
-    return Err(
-        "leader-wire admission is obsolete under the durable recovery cut".to_owned(),
-    );
-}
-""",
-        "durable admission must reject an obsolete identity before lookup or mutation",
-        errors,
-    )
-
-    fair_admission = _require_rust_item(
-        paths["ingress"],
-        sources["ingress"],
-        "fair_v2_ingress_admit_leader_wire",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["ingress"],
-        fair_admission,
-        """
-if gate
-    .identity_is_obsolete(&identity)
-    .map_err(|_| FairV2IngressLeaderWireAdmissionError::Exhausted)?
-{
-    return Err(FairV2IngressLeaderWireAdmissionError::Rejected);
-}
-let durable_exact = gate
-    .lookup_exact(&identity, &slot)
-""",
-        "fair ingress must reject below-cut wire before durable exact lookup",
-        errors,
-    )
-
-    fair_cut = require_context_item(
-        "ingress",
-        "advance_leader_wire_recovery_cut",
-        ingress_context,
-        "gate-first fair-ingress recovery cut",
-    )
-    _require_rust_token_sequence(
-        paths["ingress"],
-        fair_cut,
-        """
-gate.advance_recovery_cut(next, &retiring)?;
-for slot in &retiring {
-    let removed = state
-        .leader_wire_lifecycles
-        .remove(slot)
-""",
-        "persistent gate publication must precede mirror pruning",
-        errors,
-    )
-
-    entered_view = require_context_item(
-        "worker",
-        "entered_view",
-        worker_services_context,
-        "production certified-view recovery cut",
-    )
-    _require_rust_token_sequence(
-        paths["worker"],
-        entered_view,
-        """
-let next_recovery_authority = self
-    .leader_wire_recovery_authority
-    .advance_view(tag.view())?;
-self.leader_wire_ingress
-    .advance_leader_wire_recovery_cut(next_recovery_authority)?;
-self.leader_wire_recovery_authority = next_recovery_authority;
-""",
-        "certified EnterView must publish the gate cut before exposing its authority",
-        errors,
-    )
-
-    finish_runtime_step = require_context_item(
-        "worker",
-        "finish_runtime_step_reconciliation",
-        worker_services_context,
-        "production durable-Decision recovery cut",
-    )
-    _require_rust_token_sequence(
-        paths["worker"],
-        finish_runtime_step,
-        """
-if decided_subject.is_some() {
-    let next = self.leader_wire_recovery_authority.with_durable_decision();
-    self.leader_wire_ingress
-        .advance_leader_wire_recovery_cut(next)?;
-    self.leader_wire_recovery_authority = next;
-}
-""",
-        "durable Decision must publish the all-wire gate cut during runtime-step reconciliation",
-        errors,
-    )
-
-    regression_contracts = (
-        (
-            "adapter",
-            "failed_busy_parent_retirement_retains_queue_and_durable_owner",
-            "restores the exact queue and durable producer after injected failure",
-        ),
-        (
-            "adapter",
-            "strict_view_advance_retains_live_producer_admission_until_owner_release",
-            "distinguishes live handoff retention from restart-only frontier pruning",
-        ),
-        (
-            "adapter",
-            "restart_frontier_retains_all_three_stages_of_the_protected_body_pipeline",
-            "retains every exact protected-lock body-pipeline stage",
-        ),
-        (
-            "adapter",
-            "restart_frontier_rejects_reserved_producer_beyond_the_durable_view",
-            "rejects a future-view producer during replay reconciliation",
-        ),
-        (
-            "adapter",
-            "durable_decision_release_does_not_restore_stale_process_only_predecessor",
-            "keeps the canonical empty producer epoch after durable Decision",
-        ),
-        (
-            "adapter",
-            "body_rebind_coalescence_preserves_the_only_persistent_producer",
-            "keeps the sole persistent rebind root across a second restart",
-        ),
-        (
-            "runtime",
-            "body_available_rebind_coalesces_exact_busy_deferred_destination_owner",
-            "retains a persistent destination while retiring an ordinary source",
-        ),
-        (
-            "runtime",
-            "body_available_rejects_second_persistent_lifecycle_before_mutation",
-            "rejects a second durable producer lifecycle before the original owner changes",
-        ),
-        (
-            "runtime",
-            "body_available_rebind_rejects_busy_source_and_restored_ingress_destination_before_mutation",
-            "rejects Busy and restored-ingress durable roots before either carrier changes",
-        ),
-        (
-            "store",
-            "leader_wire_live_recovery_cut_retires_only_dormant_records_and_is_monotone",
-            "checks live Dormant-only cut, rollback, and high-water retention",
-        ),
-        (
-            "worker",
-            "entered_view_advances_live_leader_wire_recovery_cut",
-            "rejects stale wire after live EnterView",
-        ),
-        (
-            "worker",
-            "durable_decision_advances_live_leader_wire_recovery_cut",
-            "rejects every wire after durable Decision",
-        ),
-    )
-    for source_name, item_name, _description in regression_contracts:
-        _require_rust_item(
-            paths[source_name], sources[source_name], item_name, errors
-        )
-
-    live_cut_regression = _require_rust_item(
-        paths["store"],
-        sources["store"],
-        "leader_wire_live_recovery_cut_retires_only_dormant_records_and_is_monotone",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        live_cut_regression,
-        """
-assert!(restored.records().is_empty(), "{label}");
-assert_eq!(restored.last_admission_ordinal(), 11, "{label}");
-assert_eq!(restored.scheduler_ordinal_high_watermark(), 73, "{label}");
-assert!(
-    gate.identity_is_obsolete(&token.identity)
-        .expect("inspect live recovery cut"),
-""",
-        "live leader-wire regression must retain both high-waters and reject the retired identity",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        live_cut_regression,
-        """
-assert!(
-    gate.advance_recovery_cut(regressed, &BTreeSet::new())
-        .is_err(),
-    "{label} cannot regress durable view/Decision authority"
-);
-""",
-        "live leader-wire regression must reject view and Decision regression",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        live_cut_regression,
-        """
-for retained_status in [
-    LeaderWireLifecycleStatus::Ingress,
-    LeaderWireLifecycleStatus::Runtime,
-] {
-""",
-        "live leader-wire regression must retain active Ingress and Runtime owners",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        live_cut_regression,
-        """
-std::fs::create_dir(&gate.path).expect("block recovery-cut publication");
-assert!(
-    gate.advance_recovery_cut(
-""",
-        "live leader-wire regression must inject and observe persistent-cut rollback",
-        errors,
-    )
-
-    stage_seven_regression = _require_rust_item(
-        paths["adapter"],
-        sources["adapter"],
-        "restored_body_available_terminal_retirement_is_persistent_before_token_release",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        stage_seven_regression,
-        """
-assert_restored_stage_seven_retirement_does_not_resurrect(0xBB, false, false, false);
-assert_restored_stage_seven_retirement_does_not_resurrect(0xBD, false, false, false);
-""",
-        "stage-7 regression must cover manifest-bound and manifest-less terminal Fetch retirement before reservation",
-        errors,
-    )
-
-    formal_source = sources["formal"]
-    formal_contracts = {
-        "AsyncLeaderWireRecoveryCutObsoletesItem": (
-            "DeliveryView(item) < nodeView[item.envelope.recipient]",
-            "NodeHasDecision(item.envelope.recipient)",
-        ),
-        "AsyncLeaderWireAtomicAdmissionAllows": (
-            "~AsyncLeaderWireRecoveryCutObsoletesItem(item)",
-        ),
-        "AsyncLeaderWireLifecycleRecoveryCutObsolete": (
-            "AsyncLeaderWireLifecycleDormant(record)",
-            "record.view < nodeView[record.recipient]",
-            "NodeHasDecision(record.recipient)",
-        ),
-        "AsyncLeaderWireLifecycleCanTerminal": (
-            "AsyncLeaderWireLifecycleRecoveryCutObsolete(record)",
-        ),
-        "RetireLeaderWireLifecycleSlot": (
-            "IF AsyncLeaderWireLifecycleRecoveryCutObsolete(record)",
-            "THEN asyncLeaderWireLifecycles \\ {record}",
-        ),
-    }
-    for operator, required in formal_contracts.items():
-        extracted = _top_level_operator_body(
-            formal_source, operator, preserve_string_contents=True
-        )
-        if extracted is None:
-            errors.append(
-                f"{paths['formal']}: missing persistent recovery-cut operator {operator}"
-            )
-            continue
-        body, line = extracted
-        for token in required:
-            if token not in body:
-                errors.append(
-                    f"{paths['formal']}:{line}: {operator} must retain "
-                    f"persistent recovery-cut token {token!r}"
-                )
-
-    highwater_theorem = _top_level_theorem_body(
-        formal_source,
-        "LeaderWireRecoveryCutRetainsOrdinalHighwaters",
-        preserve_string_contents=True,
-    )
-    if highwater_theorem is None:
-        errors.append(
-            f"{paths['formal']}: missing leader-wire recovery-cut high-water theorem"
-        )
-    else:
-        body, line = highwater_theorem
-        for token in (
-            "RetireLeaderWireLifecycleSlot(slot)",
-            "AsyncLeaderWireLifecycleRecoveryCutObsolete(record)",
-            "AsyncNextIngressPhysicalOrdinal(node)' =",
-            "AsyncNextCandidateLifecycleOrdinal(node)' =",
-        ):
-            if token not in body:
-                errors.append(
-                    f"{paths['formal']}:{line}: leader-wire recovery-cut "
-                    f"high-water theorem must retain token {token!r}"
-                )
-
-    return errors
 
 
 def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
@@ -1894,6 +66,18 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
         (
             "scheduler",
             "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+        ),
+        (
+            "registry_output",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_output.rs",
+        ),
+        (
+            "concrete_admission",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_concrete_admission.rs",
+        ),
+        (
+            "effects_settlement",
+            "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
         ),
         (
             "registry",
@@ -1966,6 +150,22 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
         sources[name] = source
     if any(not source for source in sources.values()):
         return errors
+
+    runtime_tokens = rust_code_tokens(sources["runtime"])
+    for retired in (
+        "step_recovery",
+        "step_recovery_and_take_scheduler_ownership_for_test",
+        "RecoveryAfterClocksArmed",
+        "RecoveryFifo",
+        "RecoveryFifoRetryRetained",
+        "RecoveryIdle",
+    ):
+        if runtime_tokens.count(retired) != 0:
+            errors.append(
+                f"{paths['runtime']}: retired generic Runtime recovery symbol "
+                f"{retired} must remain absent; interrupted-tip recovery is owned "
+                "only by the PendingKura lifecycle corridor"
+            )
 
     for source_name, child_path, declaration in (
         (
@@ -2042,6 +242,35 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
         return _require_rust_item(
             paths[source_name], sources[source_name], name, errors
         )
+
+    def qualified_item(
+        source_name: str,
+        name: str,
+        brace_context: tuple[str, ...],
+        label: str,
+    ) -> RustItem | None:
+        expected_context = (brace_context,)
+        matching = [
+            rust_item
+            for rust_item in rust_items(sources[source_name], name)
+            if rust_item.brace_context == expected_context
+        ]
+        if len(matching) != 1:
+            errors.append(
+                f"{paths[source_name]}: require exactly one real Rust/Verus "
+                f"function item named {name} in {brace_context!r}; "
+                f"found {len(matching)}"
+            )
+            return None
+        rust_item = matching[0]
+        _require_rust_item_context(
+            paths[source_name],
+            rust_item,
+            expected_context,
+            label,
+            errors,
+        )
+        return rust_item
 
     def require_tokens(
         source_name: str,
@@ -2561,7 +790,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         shutdown_behavior,
         "production lifecycle clean-shutdown behavior",
         (
-            ".with_runner_setup(&mut setup_runner",
+            ".with_runner_setup(&mut setup_runner, |executor, services|",
             "launch_non_pending_lifecycle_height_and_shutdown_for_test(",
             ".into_clean_shutdown(&mut runner)",
         ),
@@ -2666,12 +895,17 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
                 f"forbidden token {forbidden!r}"
             )
 
-    def launched_completion_item(name: str, description: str):
+    def launched_completion_item(
+        name: str,
+        description: str,
+        *,
+        expected_attributes: tuple[str, ...] = (),
+    ):
+        expected_context = (("impl", "LaunchedProductionLifecycleV1"),)
         matches = [
             rust_item
             for rust_item in rust_items(sources["driver"], name)
-            if rust_item.brace_context
-            == (("impl", "LaunchedProductionLifecycleV1"),)
+            if rust_item.brace_context == expected_context
         ]
         if len(matches) != 1:
             errors.append(
@@ -2679,7 +913,16 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
                 f"found {len(matches)}"
             )
             return None
-        return matches[0]
+        target = matches[0]
+        _require_rust_item_context(
+            paths["driver"],
+            target,
+            expected_context,
+            description,
+            errors,
+            expected_attributes=expected_attributes,
+        )
+        return target
 
     completion_pre_gate = launched_completion_item(
         "drive_completion_pre_gate",
@@ -2690,9 +933,15 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         "lifecycle Completion fresh Ready dispatcher",
     )
     completion = launched_completion_item(
-        "drive_completion_turn",
-        "composed lifecycle Completion turn driver",
+        "drive_completion_turn_for_test",
+        "test-only composed lifecycle Completion turn driver",
+        expected_attributes=("#[cfg(test)]",),
     )
+    if rust_items(sources["driver"], "drive_completion_turn"):
+        errors.append(
+            f"{paths['driver']}: superseded production Completion composition "
+            "drive_completion_turn must be absent"
+        )
     require_order(
         "driver",
         completion_pre_gate,
@@ -2713,16 +962,31 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "LifecycleCompletionTakeV1::CertifiedServe(completion)",
         ),
     )
+    require_order(
+        "driver",
+        completion_pre_gate,
+        "lifecycle Completion unchanged-Validate-fence ordinary bypass",
+        (
+            "current_validate_fence_wait",
+            "self.executor.lifecycle_reducer_fence_observation()",
+            "fence.source() == wait.source()",
+            "fence.generation() <= wait.observed_generation()",
+            "prepare_ordinary_completion_behind_validate_fence()",
+            "Ok(true)",
+            "ProductionLifecycleCompletionPreGateV1::Ordinary(runner)",
+        ),
+    )
     if completion_pre_gate is not None:
         ordinary_returns = _token_sequence_count(
             rust_code_tokens(completion_pre_gate.source),
             rust_code_tokens("ProductionLifecycleCompletionPreGateV1::Ordinary(runner)"),
         )
-        if ordinary_returns != 2:
+        if ordinary_returns != 3:
             errors.append(
                 f"{paths['driver']}:{completion_pre_gate.line}: lifecycle Completion "
-                "pre-gate must return the exact ordinary cursor for both a foreign "
-                f"runner rank and an ordinary physical head; found {ordinary_returns} sites"
+                "pre-gate must return the exact ordinary cursor for a foreign runner "
+                "rank, the unchanged-Validate-fence ordinary bypass, and an ordinary "
+                f"physical head; found {ordinary_returns} sites"
             )
     require_order(
         "driver",
@@ -2741,7 +1005,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
     require_order(
         "driver",
         completion,
-        "composed lifecycle Completion pre-gate and Ready order",
+        "test-only composed lifecycle Completion pre-gate and Ready order",
         (
             "self.drive_completion_pre_gate(runner, lane_work)",
             "ProductionLifecycleCompletionPreGateV1::Selected(selected)",
@@ -3074,8 +1338,11 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "for ordinal in schedulable",
             "record.work_class != LifecycleWorkClass::Broadcast",
             "self.attest_schedulable_completion_broadcast_carrier(*ordinal, fence)",
-            "SchedulableCompletionBroadcastCarrierV1::RetainedDirectOutput(_) | SchedulableCompletionBroadcastCarrierV1::RetainedRecoveredOutput(_)",
+            "SchedulableCompletionBroadcastCarrierV1::RetainedDirectOutput(_)",
+            "retained_outputs.insert(*ordinal)",
             "retained_direct_outputs.insert(*ordinal)",
+            "SchedulableCompletionBroadcastCarrierV1::RetainedRecoveredOutput(_)",
+            "retained_outputs.insert(*ordinal)",
             "SchedulableCompletionBroadcastCarrierV1::RecoveredRefanout",
             "classes.push(record.work_class)",
             "oldest_is_retained_direct_output",
@@ -3099,15 +1366,84 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         ),
     )
 
-    capture = item("ingress", "capture_next_ingress_turn_cut")
+    ordinary_capture = item("ingress", "capture_next_ingress_turn_cut")
+    require_tokens(
+        "ingress",
+        ordinary_capture,
+        "ordinary queue-owned fair winner capture wrapper",
+        (
+            """
+self.capture_next_ingress_turn_cut_at(
+    None,
+    FairIngressTurnSelectionPolicy::OrdinaryRetireObsolete,
+    predicate,
+)
+""",
+        ),
+    )
+
+    bounded_capture = item("ingress", "capture_next_ingress_turn_cut_before")
+    require_tokens(
+        "ingress",
+        bounded_capture,
+        "explicit-cut exact-predicate fair winner capture wrapper",
+        (
+            """
+self.capture_next_ingress_turn_cut_at(
+    Some(physical_cut),
+    FairIngressTurnSelectionPolicy::PredicateOnly,
+    predicate,
+)
+""",
+        ),
+    )
+
+    retiring_bounded_capture = item(
+        "ingress",
+        "capture_next_ingress_turn_cut_before_with_obsolete_retirement",
+    )
+    require_tokens(
+        "ingress",
+        retiring_bounded_capture,
+        "explicit-cut obsolete-predecessor retirement capture wrapper",
+        (
+            """
+self.capture_next_ingress_turn_cut_at(
+    Some(physical_cut),
+    FairIngressTurnSelectionPolicy::OrdinaryRetireObsolete,
+    predicate,
+)
+""",
+        ),
+    )
+
+    capture = item("ingress", "capture_next_ingress_turn_cut_at")
     require_tokens(
         "ingress",
         capture,
-        "queue-owned fair winner capture",
+        "shared queue-owned fair winner capture",
         (
             "let service_guard = self.service_lock.lock()",
             "let mut state = self.state.lock()",
+            """
+let live_physical_cut = u128::from(state.last_admission_ordinal)
+    .checked_add(1)
+    .ok_or(FairIngressQueueCutError::PositionOverflow)?;
+let physical_cut = requested_physical_cut.unwrap_or(live_physical_cut);
+if physical_cut == 0 || physical_cut > live_physical_cut {
+    return Err(FairIngressQueueCutError::InvalidPhysicalCut);
+}
+""",
+            """
+FairIngressTurnSelectionPolicy::PredicateOnly => !selector_occurrences.is_empty(),
+""",
             "select_fair_v2_ingress_candidate(",
+            """
+matches!(
+    selection_policy,
+    FairIngressTurnSelectionPolicy::OrdinaryRetireObsolete
+) && occurrence.is_obsolete()
+""",
             "Ok(Some(FairIngressTurnCut {",
             "_service_guard: service_guard",
         ),
@@ -3115,7 +1451,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
     if capture is not None:
         capture_tokens = rust_code_tokens(capture.source)
         for token, count in (
-            ("selected_physical_ordinal", 3),
+            ("selected_physical_ordinal", 4),
             ("selected_disposition", 2),
         ):
             observed = _token_sequence_count(capture_tokens, rust_code_tokens(token))
@@ -3128,15 +1464,33 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
     require_order(
         "ingress",
         capture,
-        "queue-owned fair winner lock and selection order",
+        "shared queue-owned fair winner lock, cut, and selection order",
         (
             "self.service_lock.lock()",
             "self.state.lock()",
+            "let live_physical_cut = u128::from(state.last_admission_ordinal)",
+            "let physical_cut = requested_physical_cut.unwrap_or(live_physical_cut)",
+            "if physical_cut == 0 || physical_cut > live_physical_cut",
+            "fair_v2_ingress_leader_wire_selector_projection(&state, true, Some(physical_cut))",
             "freeze_live_geometry(",
             "drop(state)",
             "validate_frozen_ownership_outside_state(",
             "select_fair_v2_ingress_candidate(",
             "FairIngressTurnCut {",
+        ),
+    )
+
+    frozen_geometry = item("ingress", "freeze_live_geometry")
+    require_order(
+        "ingress",
+        frozen_geometry,
+        "fair-ingress geometry strictly excludes the supplied physical cut",
+        (
+            "physical_cut: u128",
+            "for (index, entry) in lane.entries.iter().enumerate()",
+            "if u128::from(entry.admission_ordinal) >= physical_cut",
+            "continue",
+            "freeze_geometry(&ready_prefix, lanes, physical_cut)",
         ),
     )
 
@@ -3157,12 +1511,12 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         widen,
         "exact current-context cut widening",
         (
-            "let Self { queue, _service_guard, physical_cut, bound_context, geometry, selector_occurrences, pending_identities: _, leader_wire_projection, selected_identity, selected_positions, selected_disposition, } = self",
+            "let Self { queue, _service_guard, producer_publication_guard, physical_cut, bound_context, geometry, selector_occurrences, pending_identities: _, leader_wire_projection, selected_identity, selected_positions, selected_disposition, } = self",
             "let selected_physical_ordinal = selected_identity.physical_admission_ordinal",
             "source_for_frozen_ordinal(&geometry, selected_physical_ordinal)",
             ".position(|source| source == selected_source)",
             "FairIngressTurnCut {",
-            "queue, _service_guard, physical_cut, geometry, selector_occurrences, leader_wire_projection",
+            "queue, _service_guard, producer_publication_guard, physical_cut, geometry, selector_occurrences, leader_wire_projection",
             "bound_context: Some(bound_context)",
             "selected_source_index, selected_physical_ordinal, selected_positions, selected_disposition",
         ),
@@ -3801,10 +2155,10 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "released auxiliary capacity must admit exact Serve",
         "released certified Serve must enter lifecycle dispatch directly",
         "ProductionPreparedCertifiedServeTestSettlementV1::Rejected(reason)",
-        "current Serve completion requires lifecycle restart",
+        "terminal Serve replay completion requires lifecycle restart",
         "completed Serve must release one adjacent ProducerTurn",
         "drain_lifecycle_v2_ingress(",
-        "drain one exact lifecycle-owned ordinary batch",
+        "consume the exact ordinary runner handoff",
     ):
         if token not in startup_source:
             errors.append(
@@ -3990,6 +2344,42 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "prepare_exact(",
         ),
     )
+    blocked_selector = item(
+        "runner", "select_blocked_ordinary_lane_local_ingress"
+    )
+    require_order(
+        "runner",
+        blocked_selector,
+        "blocked ordinary ingress selects only lane-local fair ingress",
+        (
+            "receiver.try_recv_lifecycle_lane_local_checked(permit)",
+            ".map_err(V2RunnerError::Service)",
+        ),
+    )
+    reject_tokens(
+        "runner",
+        blocked_selector,
+        "blocked ordinary lane-local selection owns no global or Apply authority",
+        (
+            "try_recv_if_checked(",
+            "drain_decided_lane_recovery_ingress(",
+            "CertifiedBodyRequest",
+            "KuraReplicaAdvert",
+        ),
+    )
+    blocked_drain = item("runner", "drain_blocked_ordinary_lane_local_ingress")
+    require_order(
+        "runner",
+        blocked_drain,
+        "blocked ordinary ingress verifies and commits exactly one lane-local occurrence",
+        (
+            "select_blocked_ordinary_lane_local_ingress(receiver, permit)?",
+            "inbound.message().is_lane_local()",
+            "return Err(V2RunnerError::Service(",
+            "lane_work.accept_lane_message_with_ingress_ownership(inbound, active_view)",
+            "Ok(true)",
+        ),
+    )
     decided_commit = item("runner", "commit_decided_lane_recovery_drain")
     require_order(
         "runner",
@@ -4167,11 +2557,11 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         apply_yield_barrier = None
     else:
         apply_yield_barrier = apply_yield_barriers[0]
-    reject_tokens(
+    require_tokens(
         "height_driver",
         apply_yield_barrier,
         "durable post-Apply rollover barrier does not force a completion yield",
-        ("Self::ApplyTerminalSettled",),
+        ("!matches!(self, Self::Eligible | Self::ApplyTerminalSettled)",),
     )
     apply_runtime_barrier = item("height_driver", "blocks_runtime")
     require_tokens(
@@ -4195,6 +2585,607 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         decided_lane_recovery_projection,
         "decided Apply barrier recovery ingress authority",
         ("Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled",),
+    )
+    expected_blocked_lane_local_height_items = {
+        "LifecycleBlockedOrdinaryLaneLocalIngressPermitV1",
+        "blocked_ordinary_lane_local_ingress_permit",
+    }
+    observed_blocked_lane_local_height_items = set(
+        _PRODUCTION_BLOCKED_ORDINARY_LANE_LOCAL_HEIGHT_ITEM_SHA256
+    )
+    if observed_blocked_lane_local_height_items != expected_blocked_lane_local_height_items:
+        errors.append(
+            "blocked ordinary lane-local height source-seal inventory must be exact; "
+            f"missing={sorted(expected_blocked_lane_local_height_items - observed_blocked_lane_local_height_items)}, "
+            f"extra={sorted(observed_blocked_lane_local_height_items - expected_blocked_lane_local_height_items)}"
+        )
+    permit_structs = rust_struct_items(
+        sources["height_driver"], "LifecycleBlockedOrdinaryLaneLocalIngressPermitV1"
+    )
+    if len(permit_structs) != 1:
+        errors.append(
+            f"{paths['height_driver']}: blocked ordinary lane-local permit must have "
+            f"exactly one struct declaration; found {len(permit_structs)}"
+        )
+        blocked_lane_local_permit = None
+    else:
+        blocked_lane_local_permit = permit_structs[0]
+    _require_rust_item_token_sha256(
+        paths["height_driver"],
+        blocked_lane_local_permit,
+        _PRODUCTION_BLOCKED_ORDINARY_LANE_LOCAL_HEIGHT_ITEM_SHA256[
+            "LifecycleBlockedOrdinaryLaneLocalIngressPermitV1"
+        ],
+        "sealed blocked ordinary lane-local ingress permit",
+        errors,
+    )
+    blocked_lane_local_permit_mint = item(
+        "height_driver", "blocked_ordinary_lane_local_ingress_permit"
+    )
+    _require_rust_item_context(
+        paths["height_driver"],
+        blocked_lane_local_permit_mint,
+        (("impl", "LifecycleProducerClaimDispositionV1"),),
+        "blocked ordinary lane-local ingress permit mint",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        paths["height_driver"],
+        blocked_lane_local_permit_mint,
+        _PRODUCTION_BLOCKED_ORDINARY_LANE_LOCAL_HEIGHT_ITEM_SHA256[
+            "blocked_ordinary_lane_local_ingress_permit"
+        ],
+        "blocked ordinary lane-local ingress permit mint",
+        errors,
+    )
+    require_order(
+        "height_driver",
+        blocked_lane_local_permit_mint,
+        "only a non-Apply ordinary-ingress blocker may mint lane-local authority",
+        (
+            "self.blocks_ingress()",
+            "!self.permits_decided_lane_recovery_ingress()",
+            "Some(LifecycleBlockedOrdinaryLaneLocalIngressPermitV1",
+            "None",
+        ),
+    )
+    expected_apply_terminal_ready_broadcast_items = {
+        "height::LifecycleApplyTerminalReadyBroadcastPermitV1",
+        "height::apply_terminal_ready_broadcast_permit",
+        "height::completion_selection_retries_before_runtime",
+        "driver::classify_apply_terminal_ready_work",
+        "driver::LaunchedProductionLifecycleV1::drive_apply_terminal_ready_broadcast_turn",
+        "driver::ActivatedProductionLifecycleV1::drive_apply_terminal_ready_broadcast_turn",
+        "scheduler::ProductionLifecycleOwnerV1::prepare_apply_terminal_direct_broadcast",
+        "scheduler::ProductionLifecycleOwnerV1::wake_apply_terminal_direct_broadcast_if_fenced",
+        "registry::PreparedApplyTerminalDirectBroadcastV1",
+        "registry::ConcreteLifecycleWorkRegistry::prepare_apply_terminal_direct_broadcast",
+        "registry::ConcreteLifecycleWorkRegistry::apply_terminal_direct_broadcast_pending_is_exact",
+        "admission::ProductionLifecycleOwnerV1::settle_apply_terminal_direct_broadcast",
+        "effects::V2EffectExecutor::settle_apply_terminal_direct_broadcast",
+    }
+    observed_apply_terminal_ready_broadcast_items = set(
+        _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256
+    )
+    if (
+        observed_apply_terminal_ready_broadcast_items
+        != expected_apply_terminal_ready_broadcast_items
+    ):
+        errors.append(
+            "post-Apply Ready Broadcast source-seal inventory must be exact; "
+            f"missing={sorted(expected_apply_terminal_ready_broadcast_items - observed_apply_terminal_ready_broadcast_items)}, "
+            f"extra={sorted(observed_apply_terminal_ready_broadcast_items - expected_apply_terminal_ready_broadcast_items)}"
+        )
+    apply_terminal_ready_permit_structs = rust_struct_items(
+        sources["height_driver"], "LifecycleApplyTerminalReadyBroadcastPermitV1"
+    )
+    if len(apply_terminal_ready_permit_structs) != 1:
+        errors.append(
+            f"{paths['height_driver']}: post-Apply Ready Broadcast permit must have "
+            f"exactly one struct declaration; found {len(apply_terminal_ready_permit_structs)}"
+        )
+        apply_terminal_ready_permit = None
+    else:
+        apply_terminal_ready_permit = apply_terminal_ready_permit_structs[0]
+    _require_rust_item_token_sha256(
+        paths["height_driver"],
+        apply_terminal_ready_permit,
+        _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256[
+            "height::LifecycleApplyTerminalReadyBroadcastPermitV1"
+        ],
+        "sealed post-Apply Ready Broadcast permit",
+        errors,
+    )
+    apply_terminal_ready_permit_mint = item(
+        "height_driver", "apply_terminal_ready_broadcast_permit"
+    )
+    _require_rust_item_context(
+        paths["height_driver"],
+        apply_terminal_ready_permit_mint,
+        (("impl", "LifecycleProducerClaimDispositionV1"),),
+        "post-Apply Ready Broadcast permit mint",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        paths["height_driver"],
+        apply_terminal_ready_permit_mint,
+        _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256[
+            "height::apply_terminal_ready_broadcast_permit"
+        ],
+        "post-Apply Ready Broadcast permit mint",
+        errors,
+    )
+    require_order(
+        "height_driver",
+        apply_terminal_ready_permit_mint,
+        "only the exact terminal Apply disposition may mint Ready Broadcast authority",
+        (
+            "self.apply_terminal_settled()",
+            "Some(LifecycleApplyTerminalReadyBroadcastPermitV1",
+            "None",
+        ),
+    )
+    apply_terminal_completion_retry = item(
+        "height_driver", "completion_selection_retries_before_runtime"
+    )
+    _require_rust_item_token_sha256(
+        paths["height_driver"],
+        apply_terminal_completion_retry,
+        _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256[
+            "height::completion_selection_retries_before_runtime"
+        ],
+        "post-Apply direct Broadcast Completion re-entry",
+        errors,
+    )
+    require_order(
+        "height_driver",
+        apply_terminal_completion_retry,
+        "both direct Broadcast outcomes must re-enter Completion before Runtime",
+        (
+            "LifecycleValidatePublished",
+            "LifecycleValidateSidecarWoken",
+            "ApplyTerminalDirectBroadcastCompleted",
+            "ApplyTerminalDirectBroadcastDeferred",
+        ),
+    )
+    apply_terminal_ready_classifier = item(
+        "driver", "classify_apply_terminal_ready_work"
+    )
+    _require_rust_item_context(
+        paths["driver"],
+        apply_terminal_ready_classifier,
+        (),
+        "closed post-Apply Ready-work classifier",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        paths["driver"],
+        apply_terminal_ready_classifier,
+        _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256[
+            "driver::classify_apply_terminal_ready_work"
+        ],
+        "closed post-Apply Ready-work classifier",
+        errors,
+    )
+    require_order(
+        "driver",
+        apply_terminal_ready_classifier,
+        "post-Apply Ready work admits only attested direct or recovered Broadcast mutation",
+        (
+            "ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast",
+            "ProductionApplyTerminalReadyWorkV1::RecoveredLifecycleBroadcast",
+            "ProductionCompletionReadyWorkV1::RetainedDirectOutput",
+            "ProductionApplyTerminalReadyWorkV1::RetainedDirectOutput",
+            "ProductionCompletionReadyWorkV1::Invalid",
+            "ProductionApplyTerminalReadyWorkV1::RestartRequired",
+            "ProductionCompletionReadyWorkV1::None",
+            "ProductionCompletionReadyWorkV1::PassThrough",
+            "ProductionCompletionReadyWorkV1::CompletionIo",
+            "ProductionApplyTerminalReadyWorkV1::PassThrough",
+        ),
+    )
+    apply_terminal_direct_wake = _require_qualified_rust_item(
+        paths["scheduler"],
+        sources["scheduler"],
+        "ProductionLifecycleOwnerV1",
+        "wake_apply_terminal_direct_broadcast_if_fenced",
+        errors,
+        "post-Apply direct Broadcast reducer-fence wake",
+    )
+    _require_rust_item_token_sha256(
+        paths["scheduler"],
+        apply_terminal_direct_wake,
+        _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256[
+            "scheduler::ProductionLifecycleOwnerV1::wake_apply_terminal_direct_broadcast_if_fenced"
+        ],
+        "post-Apply direct Broadcast reducer-fence wake",
+        errors,
+    )
+    require_order(
+        "scheduler",
+        apply_terminal_direct_wake,
+        "post-Apply fence wake must authenticate every collateral shared-source wake before publication",
+        (
+            "if let Some(fault) = self.coordinator.fault",
+            "if let Some(lease) = self.coordinator.active_lease.as_ref()",
+            "let exact_ready = self.coordinator.records.iter()",
+            "if exact_ready != self.coordinator.ready_index",
+            "let reducer_fence_wakes = self.coordinator.records.iter()",
+            "let mut schedulable = exact_ready",
+            "schedulable.extend(reducer_fence_wakes.iter().copied())",
+            "let Some(ordinal) = schedulable.first().copied()",
+            "if !reducer_fence_wakes.contains(&ordinal)",
+            "self.classify_schedulable_completion_work(&schedulable, Some(fence))",
+            "ProductionCompletionReadyWorkV1::RetainedDirectOutput",
+            "for wake_ordinal in reducer_fence_wakes",
+            "attest_schedulable_lifecycle_broadcast_carrier(",
+            "attestation.matches_schedulable_record(record)",
+            "advance_observed_generation(fence.source(), fence.generation())",
+            "let exact_ready_after_wake = self.coordinator.records.iter()",
+            "exact_ready_after_wake != self.coordinator.ready_index",
+            "self.coordinator.ready_index.first().copied() != Some(ordinal)",
+            "Ok(true)",
+        ),
+    )
+    reject_tokens(
+        "scheduler",
+        apply_terminal_direct_wake,
+        "post-Apply direct Broadcast wake may not claim general scheduler or output authority",
+        (
+            "plan_turn(",
+            "settle_pending_lifecycle_output_admissions",
+        ),
+    )
+    apply_terminal_direct_prepare = _require_qualified_rust_item(
+        paths["scheduler"],
+        sources["scheduler"],
+        "ProductionLifecycleOwnerV1",
+        "prepare_apply_terminal_direct_broadcast",
+        errors,
+        "post-Apply direct Broadcast global-minimum authority mint",
+    )
+    _require_rust_item_token_sha256(
+        paths["scheduler"],
+        apply_terminal_direct_prepare,
+        _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256[
+            "scheduler::ProductionLifecycleOwnerV1::prepare_apply_terminal_direct_broadcast"
+        ],
+        "post-Apply direct Broadcast global-minimum authority mint",
+        errors,
+    )
+    require_order(
+        "scheduler",
+        apply_terminal_direct_prepare,
+        "post-Apply direct Broadcast authority must seal only an already-Ready exact minimum",
+        (
+            "let exact_ready = self.coordinator.records.iter()",
+            "if exact_ready != self.coordinator.ready_index",
+            "let ordinal = self.coordinator.ready_index.first().copied()?",
+            "self.registry.registry().prepare_apply_terminal_direct_broadcast(&self.coordinator, ordinal)",
+        ),
+    )
+    reject_tokens(
+        "scheduler",
+        apply_terminal_direct_prepare,
+        "post-Apply direct Broadcast authority mint may not combine fence wake and service selection",
+        ("wake_apply_terminal_direct_broadcast_if_fenced", "advance_observed_generation"),
+    )
+    prepared_direct_structs = rust_struct_items(
+        sources["registry_output"], "PreparedApplyTerminalDirectBroadcastV1"
+    )
+    if len(prepared_direct_structs) != 1:
+        errors.append(
+            f"{paths['registry_output']}: post-Apply direct Broadcast authority must "
+            f"have exactly one struct declaration; found {len(prepared_direct_structs)}"
+        )
+        prepared_direct = None
+    else:
+        prepared_direct = prepared_direct_structs[0]
+    _require_rust_item_context(
+        paths["registry_output"],
+        prepared_direct,
+        (),
+        "move-only post-Apply direct Broadcast authority",
+        errors,
+        expected_attributes=(
+            '#[must_use = "the attested direct Broadcast must be settled or failed closed"]',
+        ),
+    )
+    _require_rust_item_token_sha256(
+        paths["registry_output"],
+        prepared_direct,
+        _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256[
+            "registry::PreparedApplyTerminalDirectBroadcastV1"
+        ],
+        "move-only post-Apply direct Broadcast authority",
+        errors,
+    )
+    require_tokens(
+        "registry_output",
+        prepared_direct,
+        "post-Apply direct Broadcast authority exact identity",
+        (
+            "address: ConcreteWorkAddress",
+            "digest: LifecycleDigest",
+            "pending_key: LifecycleOutputAdmissionKeyV1",
+            "_linearity: ApplyTerminalDirectBroadcastLinearityV1",
+        ),
+    )
+    _require_rust_source_token_sequence(
+        paths["registry_output"],
+        sources["registry_output"],
+        """
+struct ApplyTerminalDirectBroadcastLinearityV1;
+impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
+    fn drop(&mut self) {}
+}
+""",
+        "post-Apply direct Broadcast authority must remain move-only",
+        errors,
+    )
+    registry_direct_prepare = _require_qualified_rust_item(
+        paths["registry_output"],
+        sources["registry_output"],
+        "ConcreteLifecycleWorkRegistry",
+        "prepare_apply_terminal_direct_broadcast",
+        errors,
+        "registry post-Apply direct Broadcast authority mint",
+    )
+    _require_rust_item_token_sha256(
+        paths["registry_output"],
+        registry_direct_prepare,
+        _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256[
+            "registry::ConcreteLifecycleWorkRegistry::prepare_apply_terminal_direct_broadcast"
+        ],
+        "registry post-Apply direct Broadcast authority mint",
+        errors,
+    )
+    require_order(
+        "registry_output",
+        registry_direct_prepare,
+        "registry authority must bind one Ready direct Broadcast and its installed pending key",
+        (
+            "SchedulableLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation)",
+            "attest_schedulable_lifecycle_broadcast_carrier(coordinator, ordinal, None)?",
+            "record.state != super::LifecycleState::Ready",
+            "coordinator.ready_index.first().copied() != Some(ordinal)",
+            "!attestation.matches_schedulable_record(record)",
+            "ConcreteLifecycleWorkKind::PendingAdapter",
+            "!matches!(effect, AdapterEffect::Broadcast(_))",
+            "work.digest != attestation.digest",
+            "!lifecycle_output_row_matches(",
+            "Ok(PreparedApplyTerminalDirectBroadcastV1",
+            "address: attestation.address",
+            "digest: attestation.digest",
+            "causal_lifecycle_key: *pending.causal_lifecycle_key().as_ref()",
+            "effect_identity: *pending.exact_effect_identity().as_ref()",
+            "_linearity: ApplyTerminalDirectBroadcastLinearityV1",
+        ),
+    )
+    registry_direct_rejoin = _require_qualified_rust_item(
+        paths["registry_output"],
+        sources["registry_output"],
+        "ConcreteLifecycleWorkRegistry",
+        "apply_terminal_direct_broadcast_pending_is_exact",
+        errors,
+        "registry post-Apply direct Broadcast exact-pending rejoin",
+    )
+    _require_rust_item_token_sha256(
+        paths["registry_output"],
+        registry_direct_rejoin,
+        _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256[
+            "registry::ConcreteLifecycleWorkRegistry::apply_terminal_direct_broadcast_pending_is_exact"
+        ],
+        "registry post-Apply direct Broadcast exact-pending rejoin",
+        errors,
+    )
+    require_order(
+        "registry_output",
+        registry_direct_rejoin,
+        "registry rejoin must preserve the complete Ready address/digest/key/Broadcast identity",
+        (
+            "record.state == super::LifecycleState::Ready",
+            "coordinator.active_lease.is_none()",
+            "coordinator.ready_index.first().copied() == Some(prepared.address.ordinal)",
+            "work.digest == prepared.digest",
+            "pending.key() == prepared.pending_key",
+            "matches!(&pending.effect, AdapterEffect::Broadcast(_))",
+            "lifecycle_output_row_matches(",
+        ),
+    )
+    owner_direct_settler = _require_qualified_rust_item(
+        paths["concrete_admission"],
+        sources["concrete_admission"],
+        "ProductionLifecycleOwnerV1",
+        "settle_apply_terminal_direct_broadcast",
+        errors,
+        "lifecycle-owner post-Apply direct Broadcast exact settler",
+        expected_attributes=("#[allow(clippy::result_large_err)]",),
+    )
+    _require_rust_item_token_sha256(
+        paths["concrete_admission"],
+        owner_direct_settler,
+        _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256[
+            "admission::ProductionLifecycleOwnerV1::settle_apply_terminal_direct_broadcast"
+        ],
+        "lifecycle-owner post-Apply direct Broadcast exact settler",
+        errors,
+    )
+    require_order(
+        "concrete_admission",
+        owner_direct_settler,
+        "post-Apply owner settlement must attest before service and publish only after fsync",
+        (
+            "apply_terminal_direct_broadcast_pending_is_exact(",
+            "LifecycleOutputRegistryFailureV1::ApplyTerminalAttestation",
+            "let execution = pending.into_existing_execution()",
+            "join_lifecycle_output(&self.coordinator, &execution)",
+            "LifecycleOutputRegistryJoinV1::Ready(retirement)",
+            "LifecycleOutputRegistryFailureV1::ApplyTerminalAttestation",
+            "execution.execute_with(execute)",
+            "LifecycleOutputServiceDispositionV1::Accepted",
+            "LifecycleOutputServiceDispositionV1::SourceRetained",
+            "ProductionLifecycleOutputAdmissionSettlementV1::Deferred",
+            "let mut staged = self.coordinator.stage_durable_transaction()",
+            "finish_terminal(retirement.ordinal(), super::TerminalOutcome::Advanced)",
+            "lifecycle_output_terminal_is_exact(",
+            "persist_exact_staged_successor(&staged)",
+            "publish_lifecycle_output_terminal_after_fsync(retirement)",
+            "self.coordinator = staged",
+            "ProductionLifecycleOutputAdmissionSettlementV1::Completed",
+        ),
+    )
+    reject_tokens(
+        "concrete_admission",
+        owner_direct_settler,
+        "post-Apply owner settlement may not borrow generic output admission",
+        ("settle_lifecycle_output_admission",),
+    )
+    executor_direct_context = (
+        ("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),
+    )
+    executor_direct_candidates = [
+        candidate
+        for candidate in rust_items(
+            sources["effects_settlement"], "settle_apply_terminal_direct_broadcast"
+        )
+        if candidate.brace_context == executor_direct_context
+    ]
+    if len(executor_direct_candidates) != 1:
+        errors.append(
+            f"{paths['effects_settlement']}: require exactly one exact executor "
+            "post-Apply direct Broadcast settler; "
+            f"found {len(executor_direct_candidates)}"
+        )
+        executor_direct_settler = None
+    else:
+        executor_direct_settler = executor_direct_candidates[0]
+    _require_rust_item_context(
+        paths["effects_settlement"],
+        executor_direct_settler,
+        executor_direct_context,
+        "executor post-Apply direct Broadcast exact-key settler",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        paths["effects_settlement"],
+        executor_direct_settler,
+        _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256[
+            "effects::V2EffectExecutor::settle_apply_terminal_direct_broadcast"
+        ],
+        "executor post-Apply direct Broadcast exact-key settler",
+        errors,
+    )
+    require_order(
+        "effects_settlement",
+        executor_direct_settler,
+        "executor settlement must remove and restore only the prepared pending-map key",
+        (
+            "self.ensure_open()?",
+            "let key = prepared.pending_key()",
+            "self.pending_lifecycle_output_admissions.remove(&key)",
+            "return Err(self.close(error, services))",
+            "owner.settle_apply_terminal_direct_broadcast(",
+            "ProductionLifecycleOutputAdmissionSettlementV1::Completed",
+            "ProductionLifecycleOutputAdmissionSettlementV1::Deferred(pending)",
+            "pending.key() != key",
+            "pending_lifecycle_output_admissions.insert(key, pending)",
+            "ProductionApplyTerminalDirectBroadcastSettlementV1::SourceRetained",
+            "ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted",
+            "Err(self.close(error, services))",
+            "ProductionLifecycleOutputAdmissionSettlementV1::Failed",
+            "let pending_key = pending.key()",
+            "pending_key != key",
+            "pending_lifecycle_output_admissions.insert(key, pending)",
+            "Err(self.close(error, services))",
+        ),
+    )
+    reject_tokens(
+        "effects_settlement",
+        executor_direct_settler,
+        "executor post-Apply settlement may not enumerate or broadly drain pending outputs",
+        (
+            "self.pending_lifecycle_output_admissions.keys()",
+            "for key in keys",
+            "settle_pending_lifecycle_output_admissions",
+        ),
+    )
+    launched_apply_terminal_ready_driver = _require_qualified_rust_item(
+        paths["driver"],
+        sources["driver"],
+        "LaunchedProductionLifecycleV1",
+        "drive_apply_terminal_ready_broadcast_turn",
+        errors,
+        "launched post-Apply Ready Broadcast driver",
+    )
+    _require_rust_item_token_sha256(
+        paths["driver"],
+        launched_apply_terminal_ready_driver,
+        _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256[
+            "driver::LaunchedProductionLifecycleV1::drive_apply_terminal_ready_broadcast_turn"
+        ],
+        "launched post-Apply Ready Broadcast driver",
+        errors,
+    )
+    require_order(
+        "driver",
+        launched_apply_terminal_ready_driver,
+        "post-Apply Ready driver admits only exact direct or recovered Broadcast settlement",
+        (
+            "classify_apply_terminal_ready_work(",
+            "self.owner.classify_completion_ready_work(fence)",
+            "ProductionApplyTerminalReadyWorkV1::PassThrough",
+            "return ProductionLifecycleCompletionTurnV1::PassThrough(runner)",
+            "ProductionApplyTerminalReadyWorkV1::RestartRequired",
+            "self.close_output_for_restart()",
+            "ProductionApplyTerminalReadyWorkV1::RetainedDirectOutput",
+            "self.owner.prepare_apply_terminal_direct_broadcast()",
+            "executor.settle_apply_terminal_direct_broadcast(owner, services, prepared)",
+            "ProductionApplyTerminalDirectBroadcastSettlementV1::Completed",
+            "ProductionLifecycleCompletionSelectionV1::ApplyTerminalDirectBroadcastCompleted",
+            "ProductionApplyTerminalDirectBroadcastSettlementV1::SourceRetained",
+            "ProductionLifecycleCompletionSelectionV1::ApplyTerminalDirectBroadcastDeferred",
+            "ProductionApplyTerminalReadyWorkV1::RecoveredLifecycleBroadcast",
+            "refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
+        ),
+    )
+    if launched_apply_terminal_ready_driver is not None:
+        for forbidden in (
+            "dispatch_completion_with_runner_debt",
+            "dispatch_completion_requiring_ready_ordinal",
+            "settle_pending_lifecycle_output_admissions",
+        ):
+            if forbidden in launched_apply_terminal_ready_driver.source:
+                errors.append(
+                    f"{paths['driver']}:{launched_apply_terminal_ready_driver.line}: "
+                    "post-Apply Ready Broadcast driver exposes forbidden general "
+                    f"Completion dispatcher {forbidden!r}"
+                )
+    activated_apply_terminal_ready_driver = _require_qualified_rust_item(
+        paths["driver"],
+        sources["driver"],
+        "ActivatedProductionLifecycleV1",
+        "drive_apply_terminal_ready_broadcast_turn",
+        errors,
+        "activated post-Apply Ready Broadcast forwarding driver",
+    )
+    _require_rust_item_token_sha256(
+        paths["driver"],
+        activated_apply_terminal_ready_driver,
+        _PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256[
+            "driver::ActivatedProductionLifecycleV1::drive_apply_terminal_ready_broadcast_turn"
+        ],
+        "activated post-Apply Ready Broadcast forwarding driver",
+        errors,
+    )
+    require_order(
+        "driver",
+        activated_apply_terminal_ready_driver,
+        "activated post-Apply Ready Broadcast forwarding driver",
+        (
+            "self.launched",
+            "drive_apply_terminal_ready_broadcast_turn(ready, permit)",
+        ),
     )
     apply_barrier_transition = item("height_driver", "observe_completion")
     require_tokens(
@@ -4233,7 +3224,91 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ("self.terminal_settlement_stops_runtime",),
     )
 
+    pre_timeout_ingress_results = rust_enum_items(
+        sources["driver"], "ProductionPreTimeoutLockedPrepareQcIngressTurnV1"
+    )
+    if len(pre_timeout_ingress_results) != 1:
+        errors.append(
+            f"{paths['driver']}: fixed-cut pre-timeout ingress result must have "
+            "exactly one enum declaration; found "
+            f"{len(pre_timeout_ingress_results)}"
+        )
+        pre_timeout_ingress_result = None
+    else:
+        pre_timeout_ingress_result = pre_timeout_ingress_results[0]
+    require_tokens(
+        "driver",
+        pre_timeout_ingress_result,
+        "closed fixed-cut pre-timeout ingress result",
+        (
+            "Empty",
+            "ObsoletePredecessor(ProductionPreparedOrdinaryIngressTurnV1)",
+            "ExactPrepareQc(ProductionPreparedOrdinaryIngressTurnV1)",
+            "RestartRequired",
+        ),
+    )
+    launched_pre_timeout_ingress = _require_qualified_rust_item(
+        paths["driver"],
+        sources["driver"],
+        "LaunchedProductionLifecycleV1",
+        "prepare_pre_timeout_locked_prepare_qc_ingress_turn",
+        errors,
+        "launched fixed-cut pre-timeout PrepareQC fair-ingress preparation",
+    )
+    require_order(
+        "driver",
+        launched_pre_timeout_ingress,
+        "fixed-cut pre-timeout ingress preserves exact preview, ordinary gate, and dequeue tail",
+        (
+            "self.executor.lifecycle_terminal_subject()",
+            "Arc::clone(&self.leader_wire_ingress_binding.ingress)",
+            "capture_next_ingress_turn_cut_before_with_obsolete_retirement(",
+            "cut.physical_cut()",
+            "BlockMessage::V2(message)",
+            "ConsensusMessageV2Payload::QuorumCertificate(_)",
+            "executor.wire_previews_pre_timeout_locked_prepare_qc(",
+            "captured.selected_disposition() == FairV2IngressDequeueDisposition::RetireObsolete",
+            "prepare_ordinary_ingress_dequeue(",
+            "PreparedOrdinaryIngressDequeueV1::Prepared(turn) if obsolete",
+            "ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ObsoletePredecessor(turn)",
+            "PreparedOrdinaryIngressDequeueV1::Prepared(turn)",
+            "ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ExactPrepareQc(turn)",
+            "PreparedOrdinaryIngressDequeueV1::RestartRequired",
+            "ProductionPreTimeoutLockedPrepareQcIngressTurnV1::RestartRequired",
+        ),
+    )
+    activated_pre_timeout_ingress = _require_qualified_rust_item(
+        paths["driver"],
+        sources["driver"],
+        "ActivatedProductionLifecycleV1",
+        "prepare_pre_timeout_locked_prepare_qc_ingress_turn",
+        errors,
+        "activated fixed-cut pre-timeout PrepareQC forwarding preparation",
+    )
+    require_tokens(
+        "driver",
+        activated_pre_timeout_ingress,
+        "activated fixed-cut pre-timeout forwarding remains sealed",
+        (
+            "self.launched.prepare_pre_timeout_locked_prepare_qc_ingress_turn(cut)",
+        ),
+    )
+
     lifecycle_height_driver = item("height_driver", "drain_lifecycle_v2_ingress")
+    require_order(
+        "height_driver",
+        lifecycle_height_driver,
+        "terminal Apply must publish a lower direct-output fence wake before cold-output service",
+        (
+            "if producer_claim.apply_terminal_settled()",
+            "let fence = executor.lifecycle_reducer_fence_observation()",
+            "owner.wake_apply_terminal_direct_broadcast_if_fenced(fence)",
+            "if direct_output_woken",
+            "LifecycleV2IngressDrainDispositionV1::retry_before_producer",
+            "settle_one_recovered_lifecycle_output(",
+            "settled_apply_output_drain_disposition(settlement, producer_claim)",
+        ),
+    )
     settled_apply_output_drain = item(
         "height_driver", "settled_apply_output_drain_disposition"
     )
@@ -4244,11 +3319,25 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         (
             "debug_assert!(producer_claim.apply_terminal_settled())",
             "RecoveredLifecycleOutputSettlementV1::SourceRetained",
-            "LifecycleV2IngressDrainDispositionV1::retry_before_producer(producer_claim)",
+            "LifecycleV2IngressDrainDispositionV1::retry_before_producer",
+            "RecoveredLifecycleOutputSettlementV1::Completed",
+            "LifecycleV2IngressDrainDispositionV1::after_terminal_settlement",
             "RecoveredLifecycleOutputSettlementV1::Empty",
             "RecoveredLifecycleOutputSettlementV1::Deferred",
-            "RecoveredLifecycleOutputSettlementV1::Completed",
+            "None",
+        ),
+    )
+    blocked_runtime_disposition = item(
+        "height_driver", "blocked_runtime_drain_disposition"
+    )
+    require_order(
+        "height_driver",
+        blocked_runtime_disposition,
+        "terminal Apply keeps the runtime fenced after Ready Broadcast handoff",
+        (
+            "producer_claim.apply_terminal_settled()",
             "LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(producer_claim)",
+            "LifecycleV2IngressDrainDispositionV1::ready(producer_claim)",
         ),
     )
     require_order(
@@ -4262,6 +3351,396 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "let (context_id, height, output_guard)",
         ),
     )
+
+    pre_timeout_target = item("adapter", "pre_timeout_locked_prepare_qc_target")
+    require_order(
+        "adapter",
+        pre_timeout_target,
+        "unchanged-lock pre-timeout target is current, durable, validated, and unfenced",
+        (
+            "let current_tag = self.reducer.current_tag()",
+            "let current_round = reducer::Round::new(current_tag.height(), current_tag.view())",
+            "let durable = self.reducer.durable_state()",
+            "let locked = durable.locked()?",
+            "self.fail_closed",
+            "!self.replay_complete",
+            "durable.decision().is_some()",
+            "locked.round().view() >= current_round.view()",
+            "durable.timeout_intent(current_round).is_some()",
+            "durable.commit_intent(current_round).is_some()",
+            "self.reducer.local_validator().is_none()",
+            "self.reducer.pending_persistence_record().is_some()",
+            "self.reducer.awaiting_signature().is_some()",
+            "self.reducer.body_state(current_round, locked.subject())",
+            "reducer::BodyState::Validated",
+            "let subject = self.registry.subject(locked.subject()).ok()?",
+            "execution_commitment(locked.round(), locked.subject())",
+            "execution_commitment(current_round, locked.subject())",
+            "(locked_commitment == current_commitment).then_some(",
+            "PreTimeoutLockedPrepareQcTargetV1 {",
+            "round: self.registry.round_to_wire(current_round)",
+            "subject",
+            "execution_commitment: current_commitment",
+        ),
+    )
+    pre_timeout_preview = item(
+        "adapter", "pre_timeout_locked_prepare_qc_stages_lock_and_commit"
+    )
+    require_order(
+        "adapter",
+        pre_timeout_preview,
+        "pre-timeout PrepareQC preview uses the ordinary conversion and one cloned LockAndCommit",
+        (
+            "certificate.phase != wire::GlobalPhase::Prepare",
+            "certificate.round != target.round",
+            "certificate.proposal_round != target.round",
+            "certificate.subject != target.subject",
+            "certificate.execution_commitment != target.execution_commitment",
+            "self.pre_timeout_locked_prepare_qc_target() != Some(target)",
+            "let mut registry = self.registry.clone()",
+            "registry.qc_to_core(certificate, &self.wire_context)",
+            "let mut reducer = self.reducer.clone()",
+            "reducer.step(reducer::Event::QuorumCertificateReceived {",
+            "tag: reducer.current_tag()",
+            "certificate: core_certificate.clone()",
+            "let [reducer::Effect::Persist { entry, .. }] = outcome.effects()",
+            "reducer::WalRecord::LockAndCommit { prepare, vote }",
+            "prepare == &core_certificate",
+            "vote.phase() == reducer::Phase::Commit",
+            "vote.subject() == core_certificate.subject()",
+        ),
+    )
+
+    runtime_driver_context = (
+        "impl",
+        "RuntimeDriver",
+        "for",
+        "SumeragiV2Adapter",
+    )
+    runtime_target_binding = qualified_item(
+        "runtime",
+        "pre_timeout_locked_prepare_qc_target",
+        runtime_driver_context,
+        "production runtime pre-timeout target binding",
+    )
+    require_tokens(
+        "runtime",
+        runtime_target_binding,
+        "production runtime target delegates to the adapter",
+        ("SumeragiV2Adapter::pre_timeout_locked_prepare_qc_target(self)",),
+    )
+    runtime_wire_preview_binding = qualified_item(
+        "runtime",
+        "wire_previews_pre_timeout_locked_prepare_qc",
+        runtime_driver_context,
+        "production runtime wire preview binding",
+    )
+    require_tokens(
+        "runtime",
+        runtime_wire_preview_binding,
+        "production runtime wire preview delegates to cloned LockAndCommit",
+        (
+            "self.pre_timeout_locked_prepare_qc_stages_lock_and_commit(certificate, target)",
+        ),
+    )
+    runtime_command_preview_binding = qualified_item(
+        "runtime",
+        "command_previews_pre_timeout_locked_prepare_qc",
+        runtime_driver_context,
+        "production runtime authenticated-command preview binding",
+    )
+    require_order(
+        "runtime",
+        runtime_command_preview_binding,
+        "runtime command preview admits only an authenticated QC with cloned LockAndCommit",
+        (
+            "AdapterCommand::Authenticated(authenticated)",
+            "authenticated.payload()",
+            "wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)",
+            "self.pre_timeout_locked_prepare_qc_stages_lock_and_commit(",
+            "certificate",
+            "target",
+        ),
+    )
+
+    runtime_generic_context = (
+        "impl",
+        "<",
+        "D",
+        ":",
+        "RuntimeDriver",
+        ">",
+        "SerializedV2Runtime",
+        "<",
+        "D",
+        ">",
+    )
+    freeze_pre_timeout_cut = qualified_item(
+        "runtime",
+        "freeze_pre_timeout_locked_prepare_qc_cut",
+        runtime_generic_context,
+        "serialized runtime fixed pre-timeout cut mint",
+    )
+    require_order(
+        "runtime",
+        freeze_pre_timeout_cut,
+        "fixed pre-timeout cut freezes the due timeout owner before target mint",
+        (
+            "self.last_scheduler_ownership.is_some()",
+            "self.pending_effect_ownership.is_some()",
+            "!self.pending_leader_wire_terminals.is_empty()",
+            "self.freeze_due_clock_owners(now)",
+            "self.scheduler_arbitration_inputs(now)",
+            "if !arbitration.timeout_due",
+            "self.driver.pre_timeout_locked_prepare_qc_target()",
+            "self.timeout_owner.clone()",
+            "self.timeout_owner_physical_cut",
+            "target.validate_exact(self.round_tag)",
+            "physical_cut > self.ingress_physical_cut",
+            "PreTimeoutLockedPrepareQcCutV1 {",
+            "tag: self.round_tag",
+            "physical_cut",
+            "timeout_owner",
+            "target",
+        ),
+    )
+    current_pre_timeout_cut = qualified_item(
+        "runtime",
+        "pre_timeout_locked_prepare_qc_cut_is_current",
+        runtime_generic_context,
+        "serialized runtime fixed-cut revalidation",
+    )
+    require_tokens(
+        "runtime",
+        current_pre_timeout_cut,
+        "every pre-timeout use revalidates tag, timeout owner, cut, and target",
+        (
+            "!self.timeout_emitted",
+            "cut.tag == self.round_tag",
+            "cut.physical_cut <= self.ingress_physical_cut",
+            "self.timeout_owner.as_ref() == Some(&cut.timeout_owner)",
+            "self.timeout_owner_physical_cut == Some(cut.physical_cut)",
+            "cut.target.validate_exact(cut.tag)",
+            "self.driver.pre_timeout_locked_prepare_qc_target() == Some(cut.target)",
+        ),
+    )
+    runtime_wire_preview = qualified_item(
+        "runtime",
+        "wire_previews_pre_timeout_locked_prepare_qc",
+        runtime_generic_context,
+        "serialized runtime fair-ingress wire preview",
+    )
+    require_order(
+        "runtime",
+        runtime_wire_preview,
+        "fair-ingress preview is current-cut and exact-QC only",
+        (
+            "self.pre_timeout_locked_prepare_qc_cut_is_current(cut)",
+            "wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)",
+            "self.driver.wire_previews_pre_timeout_locked_prepare_qc(",
+            "certificate",
+            "cut.target",
+        ),
+    )
+    runtime_pre_timeout_step = qualified_item(
+        "runtime",
+        "try_step_pre_timeout_locked_prepare_qc",
+        runtime_generic_context,
+        "serialized runtime exact pre-timeout dispatch",
+    )
+    require_order(
+        "runtime",
+        runtime_pre_timeout_step,
+        "pre-timeout dispatch is authenticated Progress, strictly pre-cut, and nonretrying",
+        (
+            "self.reconcile_fence_retry_blocked_fifo_owners()",
+            "self.pre_timeout_locked_prepare_qc_cut_is_current(cut)",
+            "self.scheduler_arbitration_inputs(now)",
+            "if !timeout_due",
+            "self.ingress.pop_pacemaker_progress_with_ownership(",
+            "queued.class == CommandClass::Progress",
+            "queued.identity.kind == RuntimeCommandKind::Authenticated",
+            "queued.ingress_ownership.is_some()",
+            "u128::from(physical.source_ordinal) < physical_cut",
+            "driver.command_previews_pre_timeout_locked_prepare_qc(",
+            "|_| false",
+            "Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc)",
+            "candidate.selection_seal.kind",
+            "RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc",
+            "command.lifecycle_owner()",
+            "owner.causal_origin().root_class == SERVICE_CLASS_PROGRESS",
+            "self.driver.dispatch(command)",
+            "RuntimeDispatchIngress::DirectAuthenticated",
+            "if retry_unadmitted || retained_deferred_ingress",
+            "if !arbitration.timeout_due",
+            "arbitration.periodic_timer_due = false",
+            "arbitration.fifo_ready = false",
+            "arbitration.completion_ready = false",
+            "arbitration.progress_ready = false",
+            "arbitration.normal_ready = false",
+            "arbitration.pre_timeout_locked_prepare_qc_physical_cut = Some(physical_cut)",
+            "RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc",
+            "RuntimeSelectedCandidateOwnership::Exact(candidate)",
+            "self.finish_dispatched_step(",
+        ),
+    )
+
+    scheduler_evidence = qualified_item(
+        "runtime",
+        "validate_exact",
+        ("impl", "RuntimeSchedulerOwnershipEvidence"),
+        "pre-timeout scheduler evidence validator",
+    )
+    require_order(
+        "runtime",
+        scheduler_evidence,
+        "scheduler evidence binds the due timeout to one exact authenticated pre-cut owner",
+        (
+            "self.pre_timeout_locked_prepare_qc_physical_cut",
+            "self.selected == RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc",
+            "RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc",
+            "RuntimeSelectedCandidateOwnership::Exact(candidate)",
+            "let candidate_is_pre_cut",
+            "u128::from(physical.source_ordinal) < physical_cut",
+            "self.clocks_armed",
+            "self.timeout_due",
+            "!self.periodic_timer_due",
+            "!self.fifo_ready",
+            "!self.completion_ready",
+            "!self.progress_ready",
+            "!self.normal_ready",
+            "candidate.kind == RuntimeCommandKind::Authenticated",
+            "candidate.class == SERVICE_CLASS_PROGRESS",
+            "candidate_is_pre_cut",
+            "RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc",
+        ),
+    )
+
+    effect_runtime_context = (
+        "impl",
+        "EffectRuntime",
+        "for",
+        "SerializedV2Runtime",
+    )
+    effect_runtime_freeze = qualified_item(
+        "effects",
+        "freeze_pre_timeout_locked_prepare_qc_cut",
+        effect_runtime_context,
+        "effect-runtime fixed-cut forwarding",
+    )
+    require_tokens(
+        "effects",
+        effect_runtime_freeze,
+        "effect runtime forwards the exact due-timeout cut mint",
+        ("SerializedV2Runtime::freeze_pre_timeout_locked_prepare_qc_cut(self, now)",),
+    )
+    effect_runtime_preview = qualified_item(
+        "effects",
+        "wire_previews_pre_timeout_locked_prepare_qc",
+        effect_runtime_context,
+        "effect-runtime wire-preview forwarding",
+    )
+    require_tokens(
+        "effects",
+        effect_runtime_preview,
+        "effect runtime forwards the exact fixed-cut wire preview",
+        (
+            "SerializedV2Runtime::wire_previews_pre_timeout_locked_prepare_qc(self, cut, payload)",
+        ),
+    )
+    effect_runtime_step = qualified_item(
+        "effects",
+        "step_pre_timeout_locked_prepare_qc_effects",
+        effect_runtime_context,
+        "effect-runtime special-step forwarding",
+    )
+    require_order(
+        "effects",
+        effect_runtime_step,
+        "effect runtime forwards only the exact special scheduler step",
+        (
+            "self.try_step_pre_timeout_locked_prepare_qc(now, cut)",
+            ".map_err(|error| error.to_string())",
+        ),
+    )
+
+    effect_executor_context = (
+        "impl",
+        "<",
+        "R",
+        ":",
+        "EffectRuntime",
+        ">",
+        "V2EffectExecutor",
+        "<",
+        "R",
+        ">",
+    )
+    executor_pre_timeout_freeze = qualified_item(
+        "effects",
+        "freeze_pre_timeout_locked_prepare_qc_cut",
+        effect_executor_context,
+        "effect executor fixed-cut mint",
+    )
+    require_order(
+        "effects",
+        executor_pre_timeout_freeze,
+        "executor publishes owners and receiver cut before freezing timeout authority",
+        (
+            "self.ensure_open()?",
+            "self.retained_effect_batch.is_some()",
+            "self.parked_effect_batch.is_some()",
+            "self.pending_runner_decision_cleanup.is_some()",
+            "self.publish_external_lifecycle_owners()?",
+            "self.runtime.set_ingress_physical_cut(physical_cut)",
+            "self.runtime.freeze_pre_timeout_locked_prepare_qc_cut(now)",
+        ),
+    )
+    executor_pre_timeout_preview = qualified_item(
+        "effects",
+        "wire_previews_pre_timeout_locked_prepare_qc",
+        effect_executor_context,
+        "effect executor fixed-cut wire preview",
+    )
+    require_tokens(
+        "effects",
+        executor_pre_timeout_preview,
+        "executor wire preview is a read-only runtime forwarding",
+        ("self.runtime.wire_previews_pre_timeout_locked_prepare_qc(cut, payload)",),
+    )
+    executor_pre_timeout_step = qualified_item(
+        "effects",
+        "step_pre_timeout_locked_prepare_qc_once",
+        effect_executor_context,
+        "effect executor special pre-timeout turn",
+    )
+    require_order(
+        "effects",
+        executor_pre_timeout_step,
+        "special executor turn owns WAL, scheduler evidence, reconciliation, and effects",
+        (
+            "self.ensure_open()?",
+            "self.retained_effect_batch.is_some()",
+            "self.parked_effect_batch.is_some()",
+            "self.pending_runner_decision_cleanup.is_some()",
+            "self.publish_external_lifecycle_owners()",
+            "let decision_before_step",
+            "self.output_guard.begin_fail_stop_operation()",
+            "self.runtime.step_pre_timeout_locked_prepare_qc_effects(now, cut)",
+            "if step.is_some()",
+            "self.runtime.take_scheduler_ownership()",
+            "wal_step.complete()",
+            "self.finish_runtime_step_reconciliation(services)",
+            "let decision_after_step",
+            "self.plan_runner_decision_cleanup(decision_before_step, decision_after_step)",
+            "None | Some(RuntimeStep::Idle)",
+            "self.publish_external_lifecycle_owners()",
+            "self.publish_status(services)",
+            "Some(RuntimeStep::Advanced(effects))",
+            "self.consume_pacemaker_effects_with_runner_decision_cleanup(",
+        ),
+    )
+
     require_order(
         "height_driver",
         lifecycle_height_driver,
@@ -4276,6 +3755,9 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "PreGate::Ordinary(ordinary_turn)",
             "drain_one_ordinary_completion_after_lifecycle_pass_through",
             "PreGate::Selected(selected)",
+            "PreGate::Ready(ready) if producer_claim.apply_terminal_settled()",
+            "apply_terminal_ready_broadcast_permit()",
+            "drive_apply_terminal_ready_broadcast_turn(ready, permit)",
             "PreGate::Ready(ready) if producer_claim.permits_ready_completion()",
             "producer_claim.required_ready_ordinal()",
             "drive_ready_completion_turn_requiring_ordinal(ready, ordinal)",
@@ -4284,11 +3766,39 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(",
             "LifecycleRunnerRankTarget::Runtime",
             "if producer_claim.blocks_runtime()",
-            "LifecycleV2IngressDrainDispositionV1::ready(producer_claim)",
+            "blocked_runtime_drain_disposition(producer_claim)",
             "advance_executor(",
             "LifecycleRunnerRankTarget::Ingress",
             "activated.drive_ingress_turn(current_turn)",
             "activated.consume_prepared_ordinary_ingress_turn(",
+        ),
+    )
+    require_order(
+        "height_driver",
+        lifecycle_height_driver,
+        "bounded exact PrepareQC service precedes the owned timeout in one Runtime turn",
+        (
+            "LifecycleRunnerRankTarget::Runtime =>",
+            "if producer_claim.blocks_runtime()",
+            "executor.freeze_pre_timeout_locked_prepare_qc_cut(",
+            "receiver.next_physical_admission_ordinal()",
+            "executor.step_pre_timeout_locked_prepare_qc_once(now, &cut, services)",
+            "if pre_timeout_advanced",
+            "if let Some(pre_timeout_cut) = pre_timeout_cut",
+            "prepare_pre_timeout_locked_prepare_qc_ingress_turn(&pre_timeout_cut)",
+            "PreTimeoutIngress::Empty => {}",
+            "PreTimeoutIngress::RestartRequired",
+            "PreTimeoutIngress::ObsoletePredecessor(prepared)",
+            "activated.consume_prepared_ordinary_ingress_turn(",
+            "ProductionPreparedOrdinaryIngressConsumptionV1::Continue",
+            "LifecycleV2IngressDrainDispositionV1::retry_before_producer(",
+            "PreTimeoutIngress::ExactPrepareQc(prepared)",
+            "activated.consume_prepared_ordinary_ingress_turn(",
+            "ProductionPreparedOrdinaryIngressConsumptionV1::Continue",
+            "executor.step_pre_timeout_locked_prepare_qc_once(",
+            "if advanced",
+            "LifecycleV2IngressDrainDispositionV1::retry_before_producer(",
+            "advance_executor(receiver, owner, executor, services, 1)",
         ),
     )
     executor_advance = item("runner", "advance_executor")
@@ -4353,8 +3863,6 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         (
             "ProductionLifecycleCompletionPreGateV1 as PreGate",
             "ProductionLifecycleCompletionTurnV1 as CompletionTurn",
-            "CompletionTurn::PassThrough(empty_turn)",
-            "CompletionTurn::Selected(selected)",
             "selected.restart_required()",
             "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCapacityPending",
             "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry",
@@ -4369,6 +3877,21 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "ProductionLifecycleIngressSelectionV1::RestartRequired",
         ),
     )
+    if lifecycle_height_driver is not None:
+        height_driver_tokens = rust_code_tokens(lifecycle_height_driver.source)
+        for token in (
+            "CompletionTurn::PassThrough(empty_turn)",
+            "CompletionTurn::Selected(selected)",
+        ):
+            observed = _token_sequence_count(
+                height_driver_tokens, rust_code_tokens(token)
+            )
+            if observed != 2:
+                errors.append(
+                    f"{paths['height_driver']}:{lifecycle_height_driver.line}: "
+                    "the post-Apply and ordinary Ready branches must each retain "
+                    f"{token!r}; found {observed} total occurrence(s)"
+                )
     if lifecycle_height_driver is not None:
         height_driver_tokens = rust_code_tokens(lifecycle_height_driver.source)
         for forbidden in (
@@ -4401,7 +3924,12 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "if lane_only_completion_barrier",
             "if producer_claim.permits_decided_lane_recovery_ingress()",
             "drain_decided_lane_recovery_ingress(",
+            "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
+            "drain_blocked_ordinary_lane_local_ingress(",
             "drain_lane_relay_ingress(",
+            "drive_merge_sidecar_recovery(",
+            "service_historical_recovery_tick(",
+            "lane_work.schedule_autonomous_new_view_timeouts(",
             "lane_work.schedule_retransmission()",
             "dispatch_lane_work_effects(",
             "else",
@@ -4410,6 +3938,21 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "block_sync_request.is_some()",
             "retry_exact_output_and_apply_sidecar_admissions(",
             "drain_lifecycle_v2_ingress(",
+        ),
+    )
+    require_order(
+        "lifecycle_run_inner",
+        lifecycle_live_loop,
+        "post-reconciliation blocked ordinary lane-local progress",
+        (
+            "let discovery_was_outstanding = if lane_only_completion_barrier",
+            "let directive = reconcile_executor_locked_body(executor, services)?",
+            "local_proposal.state.reconcile(LocalProposalOwner::from(directive))",
+            "lane_work.retain_merge_sidecars_for_global_view(",
+            "executor.acknowledge_runner_decision_cleanup(",
+            "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
+            "drain_blocked_ordinary_lane_local_ingress(",
+            "services.replay_buffered_chunks(executor)",
         ),
     )
     if lifecycle_live_loop is not None:
@@ -4425,7 +3968,12 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         barrier_tokens = rust_code_tokens(barrier_source)
         for required in (
             "drain_decided_lane_recovery_ingress(",
+            "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
+            "drain_blocked_ordinary_lane_local_ingress(",
             "drain_lane_relay_ingress(",
+            "drive_merge_sidecar_recovery(",
+            "service_historical_recovery_tick(",
+            "lane_work.schedule_autonomous_new_view_timeouts(",
             "lane_work.schedule_retransmission()",
             "dispatch_lane_work_effects(",
         ):
@@ -4436,18 +3984,28 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                     "lane-transport-only barrier must retain exactly "
                     f"one {required!r} seam; found {count}"
                 )
+        for required in (
+            "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
+            "drain_blocked_ordinary_lane_local_ingress(",
+        ):
+            count = _token_sequence_count(
+                rust_code_tokens(lifecycle_live_loop.source), rust_code_tokens(required)
+            )
+            if count != 2:
+                errors.append(
+                    f"{paths['lifecycle_run_inner']}:{lifecycle_live_loop.line}: "
+                    "blocked ordinary lane-local progress must retain exactly two "
+                    f"{required!r} seams; found {count}"
+                )
         forbidden = tuple(
             token
             for token in (
                 "reconcile_executor_locked_body(",
                 "advance_executor(",
-                "drive_merge_sidecar_recovery(",
                 "retry_exact_output_and_apply_sidecar_admissions(",
                 "replay_buffered_chunks(",
                 "broadcast_npos_vrf_messages(",
                 "service_kura_replica_advert_refresh_turn(",
-                "schedule_autonomous_new_view_timeouts(",
-                "service_historical_recovery_tick(",
                 "schedule_local_proposal(",
             )
             if _token_sequence_count(barrier_tokens, rust_code_tokens(token))
@@ -4467,10 +4025,15 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "if drain_disposition.requires_yield()",
             "if drain_disposition.terminal_settlement_stops_runtime()",
             "executor.ready_to_finish()",
-            "false",
+            "AdvanceExecutorSliceOutcomeV1::Idle",
             "else",
             "retry_exact_output_and_apply_sidecar_admissions(",
-            "advance_executor(",
+            "let executor_slice = advance_executor(",
+            "if let AdvanceExecutorSliceOutcomeV1::Yielded(_) = executor_slice",
+            "retry_exact_output_and_apply_sidecar_admissions(",
+            "let directive = reconcile_executor_locked_body(executor, services)",
+            "match executor_slice",
+            "AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary => {}",
             "let apply_terminal_settled = producer_claim.apply_terminal_settled()",
             "if apply_terminal_settled && !ready_to_finish",
             "close_admission_for_restart()",
@@ -4902,7 +4465,7 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
         lifecycle_active,
         "coordinator ProducerTurn claim, attempt, and durable settlement",
         (
-            "let (ready_to_finish, lifecycle_yield) = if drain_disposition.terminal_settlement_stops_runtime()",
+            "let (ready_to_finish, executor_slice) = if drain_disposition.terminal_settlement_stops_runtime()",
             "let apply_terminal_settled = producer_claim.apply_terminal_settled()",
             "if apply_terminal_settled && !ready_to_finish",
             "let producer_turn = if apply_terminal_settled",
@@ -5538,6 +5101,11 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
         pending_owner,
         "storage-only pending-Kura replay attachment",
         (
+            "self.registry.registry().exact_recovered_decision_apply_ready_ordinal(&self.coordinator)",
+            ".ok_or(",
+            "RecoveredPendingKuraApplyCarrierPermitV1 {",
+            "lifecycle_ordinal,",
+            "replay.bind_recovered_apply_carrier(apply_carrier)",
             "self.adapter_startup.take()",
             "self.adapter_startup = Some(startup.with_pending_kura_apply_replay(replay))",
             "self",
@@ -5948,6 +5516,14 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
         ),
     )
     pending_apply_turn = item("pending_lifecycle", "drive_apply_recovery_turn")
+    _require_rust_item_context(
+        paths["pending_lifecycle"],
+        pending_apply_turn,
+        (("impl", "PendingKuraProductionLifecycleV1"),),
+        "unconditional lifecycle-owned pending-Kura Apply recovery turn",
+        errors,
+        expected_attributes=("#[allow(dead_code, clippy::result_large_err)]",),
+    )
     require_order(
         "pending_lifecycle",
         pending_apply_turn,
@@ -6099,201 +5675,7 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
             "self.executor.arm_live_clocks(clock_activation, now)",
         ),
     )
-    pending_runner = item("pending_runner", "run_pending_kura_lifecycle_height")
-    require_order(
-        "pending_runner",
-        pending_runner,
-        "sealed pending-Kura lifecycle startup and ordinary successor handoff",
-        (
-            "close_ingress_for_rollover(&ingress_ready, &block_rx)",
-            "V2BodyStore::open_with_policy(",
-            ".into_quarantined_recovered_startup()",
-            "SumeragiV2Adapter::open_recovered_startup_with_capacity_geometry(",
-            ".bind_pending_kura_apply(pending_kura_apply)",
-            ".authenticate_final_wal_startup_authority()?",
-            "bind_production_lifecycle_owner_factory_inputs_v1(",
-            "open_production_lifecycle_owner_v1(",
-            "let launched = owner.launch(launch_inputs)?",
-            "ProductionLifecyclePendingKuraRunnerActivationV1::mint_for_recovered_runner(",
-            "launched.install_pending_kura_apply(&mut setup_runner)?",
-            "pending.drive_apply_recovery_turn(&mut setup_runner, control_queue_capacity)?",
-            "reconcile_pending_lane_startup(",
-            "pending.prepare_lane_recovery(",
-            "prepared.activate_no_clock(activation)?",
-            "run_pending_active_height(",
-            "super::lifecycle_run_inner::run_non_pending_lifecycle_loop(",
-        ),
+    _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
+        paths, errors, item, require_order, reject_tokens, require_tokens
     )
-    reject_tokens(
-        "pending_runner",
-        pending_runner,
-        "sealed pending-Kura lifecycle startup and ordinary successor handoff",
-        (
-            "arm_live_clocks(",
-            "schedule_local_proposal(",
-            "V2NposVrfLifecycle::new(",
-            "V2BlockSyncDiscovery::new(",
-            "drain_lifecycle_v2_ingress(",
-            "step_pacemaker_once(",
-        ),
-    )
-    pending_live = item("pending_runner", "run_pending_active_height")
-    require_order(
-        "pending_runner",
-        pending_live,
-        "restricted pending-Kura live recovery and finalization",
-        (
-            "settle_certified_serve_completion_for_no_clock_recovery(&mut active_runner)",
-            "claim_producer_turn_for_no_clock_recovery(&mut active_runner)",
-            "retry_exact_output_and_apply_sidecar_admissions(",
-            "services.service_kura_replica_advert_refresh_turn(Instant::now())",
-            "services.drain_completions(executor)?",
-            "retry_exact_output_and_apply_sidecar_admissions(",
-            "reconcile_executor_locked_body(executor, services)?",
-            "drain_decided_lane_recovery_ingress(",
-            "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?",
-            "claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner))",
-            "settle_producer_turn_after_no_clock_recovery(&mut active_runner, attempted)",
-            "activated.into_finalized_rollover(&mut active_runner)?",
-            "finalized.finality()",
-            "into_parts_with_lifecycle_storage_authority(",
-            "finalized.rollover_outputs(",
-            "post_output.retire_lifecycle_stores()?",
-            "cleanup_ready.finish_cleanup(Duration::ZERO, cleanup_supervisor)",
-        ),
-    )
-    reject_tokens(
-        "pending_runner",
-        pending_live,
-        "restricted pending-Kura live recovery and finalization",
-        (
-            "arm_live_clocks(",
-            "schedule_local_proposal(",
-            "drain_lifecycle_v2_ingress(",
-            "step_pacemaker_once(",
-        ),
-    )
-    pending_crash_hook = item("apply_tests", "fail_after_kura_store_for_test")
-    require_tokens(
-        "apply_tests",
-        pending_crash_hook,
-        "production pending-Kura Kura-first crash hook",
-        (
-            "self.test_failures.kura_store.store(true, std::sync::atomic::Ordering::Relaxed)",
-        ),
-    )
-    pending_lane_fixture = item("lane_work", "pending_kura_lifecycle_fixture_for_test")
-    require_order(
-        "lane_work",
-        pending_lane_fixture,
-        "unactivated affine pending-Kura lane fixture",
-        (
-            "Self::new_with_output_guard_and_transport_for_test(",
-            "None",
-            "Some(expected)",
-            "output_guard",
-            "exact_output_handoff_owner",
-        ),
-    )
-    reject_tokens(
-        "lane_work",
-        pending_lane_fixture,
-        "unactivated affine pending-Kura lane fixture",
-        (
-            "activate_for_test_without_lane_drain_queue(",
-            "activate_after_lane_drain_queue_install(",
-        ),
-    )
-    pending_lifecycle_behavior = item(
-        "startup_test", "exercise_pending_kura_production_lifecycle"
-    )
-    require_order(
-        "startup_test",
-        pending_lifecycle_behavior,
-        "executable pending-Kura lifecycle shutdown and finalization",
-        (
-            "owner.launch(launch_inputs)",
-            ".install_pending_kura_apply(&mut setup_runner)",
-            "reconcile_executor_locked_body_for_pending_kura_test(",
-            "use super::super::v2_effects::PendingKuraApplyRecoveryStage as Stage",
-            "loop",
-            ".drive_apply_recovery_turn(&mut setup_runner, 64)",
-            "ProductionPendingKuraApplyRecoveryProgressV1::Completed",
-            "recovery_stages.ends_with(&[Stage::ApplicationDispatched, Stage::Completed])",
-            ".prepare_lane_recovery(",
-            "pending_kura_lifecycle_fixture_for_test(",
-            ".activate_no_clock(activation)",
-            "executor.lifecycle_live_clocks_are_unarmed()",
-            "if !finalize",
-            ".into_clean_shutdown(&mut active_runner)",
-            ".into_finalized_rollover(&mut active_runner)",
-            ".rollover_outputs(&mut active_runner, lane_work, &successor, 64)",
-            ".retire_lifecycle_stores()",
-            "cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor)",
-        ),
-    )
-    if pending_lifecycle_behavior is not None:
-        unarmed_count = _token_sequence_count(
-            rust_code_tokens(pending_lifecycle_behavior.source),
-            rust_code_tokens("executor.lifecycle_live_clocks_are_unarmed()"),
-        )
-        if unarmed_count != 2:
-            errors.append(
-                f"{paths['startup_test']}:{pending_lifecycle_behavior.line}: executable "
-                "pending-Kura lifecycle must assert unarmed clocks before and after "
-                f"activation; found {unarmed_count} assertions"
-            )
-    pending_lifecycle_fixture = item(
-        "startup_test",
-        "production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
-    )
-    require_order(
-        "startup_test",
-        pending_lifecycle_fixture,
-        "production Kura-first pending-Kura lifecycle fixture",
-        (
-            "(0xB5_u8, true, false, false, Some(false))",
-            "(0xB6_u8, true, false, false, Some(true))",
-            "semantic_probe.fail_after_kura_store_for_test()",
-            "V2ApplyError::InjectedCrashAfterKuraStore",
-            "drop(body_store)",
-            ".into_quarantined_recovered_startup()",
-            ".bind_pending_kura_apply(expected)",
-            ".authenticate_final_wal_startup_authority()",
-            ".open_production_lifecycle_owner_v1(",
-            "exercise_pending_kura_production_lifecycle(",
-        ),
-    )
-    pending_behavior = item(
-        "wal_test",
-        "recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources",
-    )
-    require_order(
-        "wal_test",
-        pending_behavior,
-        "pending-Kura bridge behavior",
-        (
-            "PendingKuraApply::for_test( context.id(), context.height, decision.subject.block_hash, )",
-            ".bind_pending_kura_apply(expected_pending)",
-            ".authenticate_final_wal_startup_authority()",
-            "pending.is_storage_only_for_test()",
-            "pending.expected_for_test()",
-            "mismatched_pending",
-            "AdapterError::RecoveredPendingKuraApplyMismatch",
-            "pending.into_runtime_startup_for_test()",
-            "let Err(empty_error) = empty_pending",
-            "let Err((error, retained)) = foreign_startup.bind_pending_kura_apply(foreign_pending)",
-        ),
-    )
-    if pending_behavior is not None:
-        for message in (
-            "a same-height foreign Kura block must fail before owner launch",
-            "pending Kura startup without a Decision Fetch must fail closed",
-            "a foreign pending Kura height must not bind recovered startup",
-        ):
-            if message not in pending_behavior.source:
-                errors.append(
-                    f"{paths['wal_test']}:{pending_behavior.line}: pending-Kura bridge "
-                    f"behavior omits exact fail-closed assertion {message!r}"
-                )
     return errors

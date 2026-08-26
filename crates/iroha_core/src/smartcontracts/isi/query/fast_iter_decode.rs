@@ -25,13 +25,6 @@ pub(super) fn decode_exact_in_scope<T>(bytes: &[u8]) -> Result<T, Error>
 where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
-    // `decode_adaptive` pads undersized archives in an owned buffer. Reject
-    // before that branch so every allocation belongs to the measured scope.
-    if bytes.len() < norito::core::archived_payload_size::<T>() {
-        return Err(Error::Conversion(
-            "iterable query component is shorter than its archived layout".to_owned(),
-        ));
-    }
     let value = norito::codec::decode_adaptive::<T>(bytes)
         .map_err(|_| Error::Conversion("failed to decode iterable query component".to_owned()))?;
     let mut writer = ExactBareWriter {
@@ -120,14 +113,25 @@ impl FastIterComponentDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::query::domain::prelude::FindDomains;
+    use iroha_data_model::{
+        peer::PeerId,
+        query::{domain::prelude::FindDomains, dsl::CompoundPredicate},
+    };
     #[test]
-    fn exact_decode_accepts_canonical_unit_and_rejects_trailing_or_short_layouts() {
+    fn exact_decode_accepts_canonical_unit_and_rejects_trailing_or_incomplete_values() {
         let bytes = norito::codec::Encode::encode(&FindDomains);
         assert!(decode_exact_in_scope::<FindDomains>(&bytes).is_ok());
         let mut trailing = bytes.clone();
         trailing.push(0);
         assert!(decode_exact_in_scope::<FindDomains>(&trailing).is_err());
         assert!(decode_exact_in_scope::<u64>(&[]).is_err());
+    }
+    #[test]
+    fn component_decoder_accepts_compact_values_shorter_than_their_archived_layout() {
+        let bytes = norito::codec::Encode::encode(&CompoundPredicate::<PeerId>::PASS);
+        assert!(bytes.len() < norito::core::archived_payload_size::<CompoundPredicate<PeerId>>());
+        let mut decoder = FastIterComponentDecoder::new(QueryLimits::default(), [&bytes, &[], &[]])
+            .expect("compact components fit the default query limits");
+        assert!(decoder.decode::<CompoundPredicate<PeerId>>(&bytes).is_ok());
     }
 }

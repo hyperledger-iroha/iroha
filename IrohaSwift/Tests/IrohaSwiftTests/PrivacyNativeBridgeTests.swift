@@ -15,7 +15,7 @@ final class PrivacyNativeBridgeTests: XCTestCase {
     private var expected: [String] { protocolRows.map { $0[2] } }
 
     func testExactClosedRegistryIsStable() throws {
-        XCTAssertEqual(PrivacyNativeBridge.requiredBridgeABIVersion, 22)
+        XCTAssertEqual(PrivacyNativeBridge.requiredBridgeABIVersion, 23)
         XCTAssertEqual(PrivacyNativeBridge.protocolsV1.map(\.rawValue), expected)
         XCTAssertEqual(PrivacyNativeBridge.protocolsV1.count, 12)
         XCTAssertEqual(
@@ -211,7 +211,7 @@ final class PrivacyNativeBridgeTests: XCTestCase {
     func testCompiledProfileCatalogRoundTripsAndRejectsAdversarialBytes() throws {
         XCTAssertTrue(
             PrivacyNativeBridge.isNativeAvailable,
-            "ABI-22 NoritoBridge with compiled-profile catalog symbols is required."
+            "ABI-23 NoritoBridge with compiled-profile catalog symbols is required."
         )
         let canonical = try PrivacyNativeBridge.compiledProfileCatalogV1()
         XCTAssertFalse(canonical.isEmpty)
@@ -274,7 +274,7 @@ final class PrivacyNativeBridgeTests: XCTestCase {
     func testExact12FixtureBundleRoundTripsAndRejectsAdversarialBytes() throws {
         XCTAssertTrue(
             PrivacyNativeBridge.isNativeAvailable,
-            "ABI-22 NoritoBridge with exact-12 fixture symbols is required."
+            "ABI-23 NoritoBridge with exact-12 fixture symbols is required."
         )
 
         let canonical = try PrivacyNativeBridge.exact12FixtureBundleV1()

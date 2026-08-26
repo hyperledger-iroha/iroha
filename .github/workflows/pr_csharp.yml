@@ -79,6 +79,7 @@ jobs:
 
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
+          cache: "false"
           target: ${{ matrix.target }}
 
       - name: Build native C# bridge on its matching release host
@@ -96,7 +97,7 @@ jobs:
           fi
           cargo build --locked --release -p connect_norito_bridge --target "$target"
 
-      - name: Authenticate and stage exact ABI-22 C# native bridge
+      - name: Authenticate and stage exact ABI-23 C# native bridge
         shell: bash
         run: |
           target="${{ matrix.target }}"
@@ -129,10 +130,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
-      LD_LIBRARY_PATH: ${{ runner.temp }}/csharp-native-package/runtimes/linux-x64/native
-      IrohaNativePackageRoot: ${{ runner.temp }}/csharp-native-package
       IrohaNativePackagePython: python3
-      CSHARP_SDK_PACKAGE_CONSUMER_NATIVE_PACKAGE_ROOT: ${{ runner.temp }}/csharp-native-package
       CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER: linux-x64
     defaults:
       run:
@@ -147,6 +145,16 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
+
+      - name: Bind authenticated target-native package paths
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          {
+            printf 'LD_LIBRARY_PATH=%s\n' "$RUNNER_TEMP/csharp-native-package/runtimes/linux-x64/native"
+            printf 'IrohaNativePackageRoot=%s\n' "$RUNNER_TEMP/csharp-native-package"
+            printf 'CSHARP_SDK_PACKAGE_CONSUMER_NATIVE_PACKAGE_ROOT=%s\n' "$RUNNER_TEMP/csharp-native-package"
+          } >> "$GITHUB_ENV"
 
       - name: Download all authenticated target-native inputs
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093

@@ -7,7 +7,6 @@ use core::{
 };
 use iroha_config::{
     base::WithOrigin,
-    kura::InitMode,
     parameters::actual::{DaManifestPolicy, Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
 };
 #[cfg(feature = "sm")]
@@ -22,10 +21,13 @@ use iroha_data_model::proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecor
 use iroha_data_model::soracloud::{
     SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1, SORA_APP_INFRA_MANIFEST_VERSION_V1,
     SORA_APP_INFRA_SERVICE_REF_VERSION_V1, SORA_APP_INFRA_STATE_VERSION_V1,
-    SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1, SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
-    SoraAppInfraActionV1, SoraAppInfraManifestV1, SoraAppInfraServiceRefV1, SoraInrouGuestIsaV1,
-    SoraInrouReplicaHostAvailabilityV1, SoraInrouReplicaPlacementV1, SoraServiceHealthStatusV1,
-    SoraServiceLeaseClockV1, SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1,
+    SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1, SORA_RUNTIME_RECEIPT_VERSION_V1,
+    SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1, SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
+    SoraAppInfraActionV1, SoraAppInfraManifestV1, SoraAppInfraServiceRefV1,
+    SoraCertifiedResponsePolicyV1, SoraInrouGuestIsaV1, SoraInrouReplicaHostAvailabilityV1,
+    SoraInrouReplicaPlacementV1, SoraRuntimeDeterministicValidatorHostV1, SoraRuntimeReceiptV1,
+    SoraServiceHandlerClassV1, SoraServiceHealthStatusV1, SoraServiceLeaseClockV1,
+    SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1, SoraServiceMailboxMessageV1,
 };
 use iroha_data_model::zk::BackendTag;
 use iroha_data_model::{
@@ -87,7 +89,10 @@ use iroha_data_model::{
         escrow::prelude::FindAssetEscrowsByStatus,
         proof::prelude::{FindProofRecords, FindProofRecordsByStatus},
     },
-    sorafs::pin_registry::{ManifestDigest, ReplicationOrderId},
+    sorafs::pin_registry::{
+        ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinManifestRecord, PinPolicy,
+        ReplicationOrderId, StorageClass,
+    },
     transaction::ExecutionStep,
 };
 use iroha_primitives::{
@@ -119,6 +124,23 @@ macro_rules! state_test {
         #[test]
         fn $name() -> Result<()> { $($body)* }
     };
+    (large_stack $name:ident $($body:tt)*) => {
+        #[test]
+        fn $name() {
+            run_state_test_on_large_stack(stringify!($name), || { $($body)* });
+        }
+    };
+}
+
+fn run_state_test_on_large_stack(name: &'static str, test: impl FnOnce() + Send + 'static) {
+    let handle = std::thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(test)
+        .expect("spawn state test with an explicit stack budget");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
 }
 
 #[path = "da_hydration_test_cases.rs"]
@@ -1077,7 +1099,7 @@ state_test! { sync merge_write_set_encoder_mentions_every_persisted_world_block_
     let source = include_str!("../state.rs");
     let_row! { struct_start = source .find("pub struct WorldBlock<'world> {") .expect("WorldBlock declaration must remain discoverable") };
     let struct_tail = &source[struct_start..];
-    let_row! { struct_end = struct_tail .find("\n}\n\nimpl<'world> WorldBlock") .expect("WorldBlock declaration terminator must remain discoverable") };
+    let_row! { struct_end = struct_tail .find("\n}\n\nimpl WorldBlock<'_>") .expect("WorldBlock declaration terminator must remain discoverable") };
     let struct_body = &struct_tail[..struct_end];
     let_row! { encoder_start = source .find("fn merge_execution_write_set_bytes(&self)") .expect("merge write-set encoder must exist") };
     let encoder_tail = &source[encoder_start..];
@@ -1117,8 +1139,8 @@ state_test! { sync world_and_world_block_keep_snapshot_skip_annotations_in_sync
         annotations
     }
     let source = include_str!("../state.rs");
-    let_row! { world = source .split_once("pub struct World {") .and_then(|(_, tail)| tail.split_once("\n}\n\n/// Struct for block's aggregated changes")) .map(|(body, _)| body) .expect("World declaration must remain discoverable") };
-    let_row! { world_block = source .split_once("pub struct WorldBlock<'world> {") .and_then(|(_, tail)| tail.split_once("\n}\n\nimpl<'world> WorldBlock")) .map(|(body, _)| body) .expect("WorldBlock declaration must remain discoverable") };
+    let_row! { world = source .split_once("pub struct World {") .and_then(|(_, tail)| tail.split_once("\n}\n/// Struct for block's aggregated changes")) .map(|(body, _)| body) .expect("World declaration must remain discoverable") };
+    let_row! { world_block = source .split_once("pub struct WorldBlock<'world> {") .and_then(|(_, tail)| tail.split_once("\n}\n#[cfg(test)]\nimpl<'world> WorldBlock")) .map(|(body, _)| body) .expect("WorldBlock declaration must remain discoverable") };
     let world_annotations = snapshot_skip_annotations(world);
     let block_annotations = snapshot_skip_annotations(world_block);
     assert_eq!(
@@ -1145,6 +1167,11 @@ state_test! { sync world_and_world_block_keep_snapshot_skip_annotations_in_sync
         world_annotations.get("axt_handle_budget_ledger"),
         Some(&false),
         "security-authoritative AXT family consumption must be part of canonical snapshots"
+    );
+    assert_eq!(
+        world_annotations.get("pin_manifests"),
+        Some(&false),
+        "the authoritative SoraFS pin registry must be part of canonical snapshots"
     );
     for (field, world_skips) in &world_annotations {
         if *field == "external_event_buf" {
@@ -3973,7 +4000,7 @@ use crate::{
 };
 fn strict_kura_config_for_testing(store_root: std::path::PathBuf) -> KuraConfig {
     KuraConfig {
-        init_mode: InitMode::Strict,
+        init_mode: iroha_config::kura::InitMode::Strict,
         store_dir: WithOrigin::inline(store_root),
         max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
@@ -7292,7 +7319,7 @@ state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee
     assert_eq!(body.final_frontier.lane_block_height, 0);
     assert!(body.final_frontier.lane_block_descriptor_hash.is_none());
     let certificate = autoscale_drain_certificate_for_test(body, &keypairs);
-    let_row! { candidate = state .merge_drain_candidate_for_next_carrier(&parent_header, 7, certificate.clone()) .expect("valid exact drain certificate produces a cert-only candidate") };
+    let_row! { candidate = state .merge_drain_candidate_for_next_carrier(&parent_header, 7, certificate.clone(), ConsensusMode::Permissioned) .expect("valid exact drain certificate produces a cert-only candidate") };
     assert!(candidate.lane_snapshots.is_empty());
     assert!(candidate.execution_batch.is_none());
     assert_eq!(candidate.lane_drain_certificates, vec![certificate.clone()]);
@@ -7304,36 +7331,50 @@ state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee
         state.validate_merge_candidate_for_global_round(
             &unsupported_candidate,
             &parent_header,
-            7
+            7,
+            ConsensusMode::Permissioned,
         ),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(ref message))
             if message.contains("unsupported merge ledger candidate version")
     ));
     let_row! { empty_candidate = crate::merge::MergeLedgerCandidate { lane_drain_certificates: Vec::new(), ..candidate.clone() } };
     assert!(matches!(
-        state.validate_merge_candidate_for_global_round(&empty_candidate, &parent_header, 7),
+        state.validate_merge_candidate_for_global_round(
+            &empty_candidate,
+            &parent_header,
+            7,
+            ConsensusMode::Permissioned,
+        ),
         Err(MergeLedgerCommitError::EmptyEntry)
     ));
     let mut mixed_candidate = candidate.clone();
     mixed_candidate.lane_snapshots = merge_candidate_with_lanes(1, 1).lane_snapshots;
     assert!(matches!(
-        state.validate_merge_candidate_for_global_round(&mixed_candidate, &parent_header, 7),
+        state.validate_merge_candidate_for_global_round(
+            &mixed_candidate,
+            &parent_header,
+            7,
+            ConsensusMode::Permissioned,
+        ),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(_))
     ));
     let qc = merge_qc_for_candidate(&state, &candidate, &unrelated_keypairs, &[0, 1, 2]);
     let entry = merge_entry_from_candidate(candidate.clone(), qc);
     state
-        .validate_certified_merge_entry_for_global_order(&entry)
+        .validate_certified_merge_entry_for_global_order(&entry, ConsensusMode::Permissioned)
         .expect("certificate-only drain entry is globally admissible");
     let mut unsupported_entry = entry.clone();
     unsupported_entry.version = MergeLedgerEntry::VERSION + 1;
     assert!(matches!(
-        state.validate_certified_merge_entry_for_global_order(&unsupported_entry),
+        state.validate_certified_merge_entry_for_global_order(
+            &unsupported_entry,
+            ConsensusMode::Permissioned,
+        ),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(ref message))
             if message.contains("unsupported merge ledger entry version")
     ));
     let_row! { carrier_header = BlockHeader::new( nonzero!(2_u64), Some(parent_header.hash()), None, None, 101, 7, ) };
-    let_row! { carrier = state .block_with_certified_merge_entry(carrier_header, &entry) .expect("exact global carrier stages a certificate-only drain") };
+    let_row! { carrier = state .block_with_certified_merge_entry(carrier_header, &entry, ConsensusMode::Permissioned) .expect("exact global carrier stages a certificate-only drain") };
     let_row! { staged_lane = carrier .nexus .lane_catalog .lanes() .iter() .find(|lane| lane.id == lane_id) .expect("staged drain lane remains in the catalog") };
     let_row! { staged_drain = decode_autoscale_lane_drain_state(staged_lane) .expect("staged drain metadata is canonical") .expect("staged drain metadata remains present") };
     let_row! { staged_commitment = staged_drain .commitment .expect("certificate-only carrier stages the drain commitment") };
@@ -7352,7 +7393,12 @@ state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee
     wrong_order.validator_set.swap(0, 1);
     assert!(
         state
-            .merge_drain_candidate_for_next_carrier(&parent_header, 7, wrong_order)
+            .merge_drain_candidate_for_next_carrier(
+                &parent_header,
+                7,
+                wrong_order,
+                ConsensusMode::Permissioned,
+            )
             .is_err(),
         "certificate validator order must equal the embedded intent order"
     );
@@ -7373,14 +7419,24 @@ state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee
         "an unrepaired exact-incarnation application marker must block drain"
     );
     assert!(matches!(
-        state.merge_drain_candidate_for_next_carrier(&parent_header, 7, certificate.clone()),
+        state.merge_drain_candidate_for_next_carrier(
+            &parent_header,
+            7,
+            certificate.clone(),
+            ConsensusMode::Permissioned,
+        ),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(_))
     ));
     let mut duplicated = candidate;
     duplicated.lane_drain_certificates.push(certificate);
     assert!(
         state
-            .validate_merge_candidate_for_global_round(&duplicated, &parent_header, 7)
+            .validate_merge_candidate_for_global_round(
+                &duplicated,
+                &parent_header,
+                7,
+                ConsensusMode::Permissioned,
+            )
             .is_err(),
         "a merge candidate may carry at most one drain certificate"
     );
@@ -15272,7 +15328,7 @@ state_test! { sync apply_lane_geometry_updates_relabels_kura_storage
     let_row! { initial_catalog = LaneCatalog::new( lane_count, vec![LaneConfig { alias: "Alpha Lane".to_string(), ..LaneConfig::default() }], ) .expect("initial catalog") };
     let initial_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
     let_row! { lane_entry = initial_config .entry(LaneId::SINGLE) .expect("lane entry exists") };
-    let_row! { kura_cfg = KuraConfig { init_mode: InitMode::Strict, store_dir: WithOrigin::inline(store_root.clone()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
+    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.clone()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &initial_config).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
@@ -20853,7 +20909,7 @@ state_test! { sync canonical_reset_filters_same_incarnation_certified_lane_block
         Some(stale_lane_block_height)
     );
     assert!(
-        !state.has_pending_merge_execution_sources(),
+        !state.has_pending_merge_execution_sources(ConsensusMode::Permissioned),
         "a certified height beyond the exact frontier successor must not keep execution readiness asserted"
     );
     state
@@ -20875,13 +20931,18 @@ state_test! { sync canonical_reset_filters_same_incarnation_certified_lane_block
         state.unapplied_certified_lane_block_height(lane_id, DataSpaceId::UNIVERSAL),
         None
     );
-    assert!(!state.has_pending_merge_execution_sources());
-    assert!(state.canonical_merge_execution_sources().is_none());
+    assert!(!state.has_pending_merge_execution_sources(ConsensusMode::Permissioned));
+    assert!(
+        state
+            .canonical_merge_execution_sources(ConsensusMode::Permissioned)
+            .is_none()
+    );
     assert!(
         state
             .build_merge_execution_batch(
                 1,
                 BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0),
+                ConsensusMode::Permissioned,
             )
             .is_none()
     );
@@ -20928,11 +20989,13 @@ state_test! { sync canonical_reset_filters_same_incarnation_certified_lane_block
         Some(fresh_lane_block_height)
     );
     assert!(
-        !state.has_pending_merge_execution_sources(),
+        !state.has_pending_merge_execution_sources(ConsensusMode::Permissioned),
         "a fresh certificate without its independently durable autonomous payload and execution input is not merge-ready"
     );
     assert!(
-        state.canonical_merge_execution_sources().is_none(),
+        state
+            .canonical_merge_execution_sources(ConsensusMode::Permissioned)
+            .is_none(),
         "test-only source collection must require the same complete durable source"
     );
 }
@@ -27836,7 +27899,7 @@ state_test! { sync missing_insert_block_does_not_hydrate_staged_verified_lane_re
 fn state_journal_test_kura(store_root: &std::path::Path) -> Arc<Kura> {
     let_row! { catalog = LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-    let_row! { kura_cfg = KuraConfig { init_mode: InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
+    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
     Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
         .expect("initialize journal test Kura")
         .0
@@ -32547,100 +32610,120 @@ fn indexed_validation_fee_proposal(created_height: u64) -> GovernanceProposalRec
         governance::types::{ProposalKind, ValidationFeePolicyProposal},
         validation_fee::{
             VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            ValidationFeeChargingMode, ValidationFeePlainElectorateEligibilityRuleV1,
-            ValidationFeePlainElectorateRulesV1, ValidationFeePolicyV1,
+            ValidationFeeChargingMode, ValidationFeePolicyV1,
         },
     };
     let proposer = (*ALICE_ID).clone();
     let_row! { fee_asset = AssetDefinitionId::derive_from_components( DomainId::try_new("validation-fee", "universal").expect("validation-fee domain"), "xor".parse().expect("validation-fee asset name"), ) };
-    let_row! { rules = ValidationFeePlainElectorateRulesV1 { voting_asset_id: fee_asset.clone(), bond_escrow_account: proposer.clone(), slash_receiver_account: (*BOB_ID).clone(), ballot_amount: Quantity::from(1_u32), ballot_duration_blocks: 1, citizenship_amount: Quantity::from(1_u32), max_members: 1, conviction_step_blocks: 1, max_conviction: 1, min_turnout: 1, approval_threshold_numerator: 1, approval_threshold_denominator: 1, eligibility_rule: ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate, } };
     let_row! { policy = ValidationFeePolicyV1 { schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION, network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked( Hash::prehashed([0xA5; 32]), )), policy_version: 1, previous_policy_hash: None, ds_asset_id: fee_asset, ds_scale: VALIDATION_FEE_DS_SCALE, fee: Quantity::zero(), treasury_account_id: proposer.clone(), charging_mode: ValidationFeeChargingMode::Disabled, effective_from_height: 1, expires_after_height: None, exemption_classes: Vec::new(), treasury_payout_binding: None, } };
     GovernanceProposalRecord {
         proposer: proposer.clone(),
         kind: ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+            proposal_operator: proposer,
             policy,
             payout_lifecycle_proposal_id: None,
-            plain_electorate_rules: rules,
         }),
         created_height,
         status: GovernanceProposalStatus::Proposed,
-        pipeline: GovernancePipeline::default(),
-        parliament_snapshot: governance_parliament_snapshot_for_tests(&proposer, created_height),
-        finalization_evidence: None,
-        enacted_at_height: None,
     }
 }
-state_test! { sync governance_proposal_snapshot_is_mandatory_on_json_and_wire
-    use norito::codec::DecodeAll as _;
+fn indexed_deploy_contract_proposal(created_height: u64) -> GovernanceProposalRecord {
+    use iroha_data_model::governance::types::{
+        AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
+    };
 
+    let proposer = (*ALICE_ID).clone();
+    GovernanceProposalRecord {
+        proposer: proposer.clone(),
+        kind: ProposalKind::DeployContract(DeployContractProposal {
+            contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                .parse()
+                .expect("canonical contract address"),
+            code_hash: ContractCodeHash::new([0x31; 32]),
+            abi_hash: ContractAbiHash::new([0x41; 32]),
+            abi_version: AbiVersion::new(1),
+            manifest_provenance: None,
+        }),
+        created_height,
+        status: GovernanceProposalStatus::Proposed,
+    }
+}
+state_test! { sync governance_proposal_first_release_shape_is_strict
     let record = indexed_validation_fee_proposal(7);
     let mut value = norito::json::to_value(&record).expect("serialize governance proposal");
+    value
+        .as_object_mut()
+        .expect("governance proposal JSON object")
+        .insert("enacted_at_height".to_owned(), norito::json!(11_u64));
+    let json_error = norito::json::from_value::<GovernanceProposalRecord>(value.clone())
+        .expect_err("legacy governance proposal fields must fail closed");
     assert!(
-        value
-            .as_object_mut()
-            .expect("governance proposal JSON object")
-            .remove("parliament_snapshot")
-            .is_some(),
-        "canonical proposal JSON must carry its Parliament snapshot"
+        json_error.to_string().contains("enacted_at_height"),
+        "unexpected legacy-field JSON error: {json_error}"
     );
+    value
+        .as_object_mut()
+        .expect("governance proposal JSON object")
+        .remove("enacted_at_height");
+    value
+        .as_object_mut()
+        .expect("governance proposal JSON object")
+        .remove("status");
     let json_error = norito::json::from_value::<GovernanceProposalRecord>(value)
-        .expect_err("proposal JSON without a Parliament snapshot must fail closed");
+        .expect_err("missing canonical governance proposal fields must fail closed");
     assert!(
-        json_error.to_string().contains("parliament_snapshot"),
-        "unexpected missing-snapshot JSON error: {json_error}"
+        json_error.to_string().contains("status"),
+        "unexpected missing-field JSON error: {json_error}"
     );
-
-    #[derive(Encode)]
-    struct SnapshotlessGovernanceProposalRecord {
-        proposer: AccountId,
-        kind: ProposalKind,
-        created_height: u64,
-        status: GovernanceProposalStatus,
-        pipeline: GovernancePipeline,
-        finalization_evidence:
-            Option<iroha_data_model::governance::types::GovernanceFinalizationEvidence>,
-        enacted_at_height: Option<u64>,
-    }
-    let legacy = SnapshotlessGovernanceProposalRecord {
-        proposer: record.proposer,
-        kind: record.kind,
-        created_height: record.created_height,
-        status: record.status,
-        pipeline: record.pipeline,
-        finalization_evidence: record.finalization_evidence,
-        enacted_at_height: record.enacted_at_height,
-    };
-    let encoded = legacy.encode();
-    let mut bytes = encoded.as_slice();
-    GovernanceProposalRecord::decode_all(&mut bytes)
-        .expect_err("snapshotless governance proposal wire bytes must fail closed");
-}
-state_test! { sync governance_proposal_snapshot_validation_rejects_tampering
-    let record = indexed_validation_fee_proposal(11);
-    record.validate_v1().expect("canonical fixture snapshot");
-
-    let mut bad_commitment = record.clone();
-    bad_commitment.parliament_snapshot.roster_root[0] ^= 0xFF;
+    let mut value = norito::json::to_value(&record).expect("serialize governance proposal");
+    value
+        .as_object_mut()
+        .expect("governance proposal JSON object")
+        .insert(
+            "created_height".to_owned(),
+            norito::json!(
+                iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64 + 1
+            ),
+        );
+    let json_error = norito::json::from_value::<GovernanceProposalRecord>(value)
+        .expect_err("inexact governance proposal creation height must fail at JSON decode");
     assert!(
-        bad_commitment
-            .validate_v1()
-            .expect_err("tampered roster commitment must fail")
-            .contains("commitment")
-    );
-
-    let mut wrong_epoch = record;
-    wrong_epoch.created_height += 1;
-    assert!(
-        wrong_epoch
-            .validate_v1()
-            .expect_err("proposal/snapshot epoch mismatch must fail")
-            .contains("creation height")
+        json_error.to_string().contains("exact JSON integer maximum"),
+        "unexpected creation-height JSON error: {json_error}"
     );
 }
-state_test! { sync state_restore_rejects_malformed_governance_proposal_snapshot
-    let proposal_id = [0xA7; 32];
-    let mut proposal = indexed_validation_fee_proposal(11);
-    proposal.parliament_snapshot.roster_root[0] ^= 0xFF;
+state_test! { sync governance_proposal_storage_rejects_inexact_json_numbers_before_mutation
+    let maximum = iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
+    let state = blank_test_state();
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    let canonical = indexed_deploy_contract_proposal(maximum);
+    let proposal_id = canonical.kind.fingerprint();
+    transaction
+        .world
+        .put_governance_proposal(proposal_id, canonical.clone())
+        .expect("the exact JSON integer maximum is admissible");
+    let mut hostile = canonical.clone();
+    hostile.created_height = maximum + 1;
+    let error = transaction
+        .world
+        .put_governance_proposal(proposal_id, hostile)
+        .expect_err("one above the exact JSON integer maximum must reject");
+    assert!(error.contains("creation height"), "unexpected invariant: {error}");
+    assert_eq!(
+        transaction
+            .world
+            .governance_proposals
+            .get(&proposal_id)
+            .expect("canonical record remains after rejected replacement")
+            .created_height,
+        maximum,
+    );
+}
+state_test! { sync state_restore_accepts_canonical_certificate_only_deploy_proposal
+    let proposal = indexed_deploy_contract_proposal(0);
+    let proposal_id = proposal.kind.fingerprint();
     let mut world = World::default();
     world.governance_proposals.insert(proposal_id, proposal);
     let state = State::new(
@@ -32648,13 +32731,135 @@ state_test! { sync state_restore_rejects_malformed_governance_proposal_snapshot
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let snapshot = norito::json::to_value(&state).expect("serialize malformed state fixture");
+    let snapshot = norito::json::to_value(&state).expect("serialize canonical state fixture");
+    deserialize_state_snapshot_value(snapshot)
+        .expect("canonical certificate-only deploy proposal must restore");
+}
+state_test! { sync state_restore_rejects_inexact_governance_proposal_creation_height
+    let maximum = iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
+    let proposal = indexed_deploy_contract_proposal(maximum + 1);
+    let proposal_id = proposal.kind.fingerprint();
+    let mut world = World::default();
+    world.governance_proposals.insert(proposal_id, proposal);
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize inexact proposal fixture");
     let error = deserialize_state_snapshot_value(snapshot)
         .err()
-        .expect("state restore must reject a malformed proposal snapshot");
+        .expect("an inexact proposal creation height must fail closed");
     assert!(
-        error.to_string().contains("invalid V1 Parliament snapshot"),
-        "unexpected malformed-proposal snapshot error: {error}"
+        error.to_string().contains("exact JSON integer maximum"),
+        "unexpected inexact proposal error: {error}"
+    );
+}
+state_test! { sync state_restore_rejects_inexact_nested_proposal_number
+    use iroha_data_model::governance::types::{ProposalKind, RuntimeUpgradeProposal};
+    let maximum = iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
+    let proposal = GovernanceProposalRecord {
+        proposer: ALICE_ID.clone(),
+        kind: ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+            manifest: iroha_data_model::runtime::RuntimeUpgradeManifest {
+                name: "hostile restore".to_owned(),
+                description: "inexact runtime height".to_owned(),
+                abi_version: 1,
+                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+                added_syscalls: Vec::new(),
+                added_pointer_types: Vec::new(),
+                start_height: maximum + 1,
+                end_height: maximum + 2,
+                sbom_digests: Vec::new(),
+                slsa_attestation: Vec::new(),
+                provenance: Vec::new(),
+            },
+        }),
+        created_height: 0,
+        status: GovernanceProposalStatus::Proposed,
+    };
+    let proposal_id = proposal.kind.fingerprint();
+    let mut world = World::default();
+    world.governance_proposals.insert(proposal_id, proposal);
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize inexact nested proposal");
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("an inexact nested proposal number must fail closed");
+    assert!(
+        error.to_string().contains("runtime-upgrade proposal start height"),
+        "unexpected nested proposal error: {error}"
+    );
+}
+state_test! { sync state_restore_rejects_governance_proposal_created_after_committed_height
+    let proposal = indexed_deploy_contract_proposal(1);
+    let proposal_id = proposal.kind.fingerprint();
+    let mut world = World::default();
+    world.governance_proposals.insert(proposal_id, proposal);
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize future proposal fixture");
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("a proposal from beyond the committed ledger must fail closed");
+    assert!(
+        error.to_string().contains("created at future height 1"),
+        "unexpected future proposal error: {error}"
+    );
+}
+state_test! { sync state_restore_rejects_noncanonical_governance_proposal_key
+    let proposal = indexed_deploy_contract_proposal(0);
+    assert_ne!([0xA7; 32], proposal.kind.fingerprint());
+    let mut world = World::default();
+    world.governance_proposals.insert([0xA7; 32], proposal);
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize miskeyed state fixture");
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("a noncanonical governance proposal key must fail closed");
+    assert!(
+        error.to_string().contains("exact typed fingerprint"),
+        "unexpected proposal-key error: {error}"
+    );
+}
+state_test! { sync state_restore_rejects_proposal_backed_legacy_referendum_state
+    let proposal = indexed_deploy_contract_proposal(0);
+    let proposal_id = proposal.kind.fingerprint();
+    let referendum_id = hex::encode(proposal_id);
+    let mut world = World::default();
+    world.governance_proposals.insert(proposal_id, proposal);
+    world.governance_referenda.insert(
+        referendum_id,
+        GovernanceReferendumRecord {
+            h_start: 1,
+            h_end: 20,
+            status: GovernanceReferendumStatus::Proposed,
+            mode: GovernanceReferendumMode::Zk,
+        },
+    );
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize legacy referendum fixture");
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("proposal-backed legacy referendum state must fail closed");
+    assert!(
+        error.to_string().contains("certificate-only governance proposals"),
+        "unexpected legacy-referendum error: {error}"
     );
 }
 state_test! { sync first_release_governance_state_fields_are_required
@@ -32665,13 +32870,13 @@ state_test! { sync first_release_governance_state_fields_are_required
         "ministry_agenda_proposals",
         "governance_proposals",
         "governance_referenda",
-        "governance_stage_approvals",
         "governance_locks",
         "governance_slashes",
         "governance_last_unlock_sweep_height",
         "governance_unlock_stats",
         "council",
         "parliament_bodies",
+        "parliament_attempts",
         "vrf_epochs",
     ] {
         let mut snapshot = norito::json::to_value(&state).expect("serialize state snapshot");
@@ -32701,9 +32906,18 @@ state_test! { sync first_release_inrou_reachable_state_fields_are_required
         "soracloud_model_weight_audit_events",
         "soracloud_model_artifact_audit_events",
         "soracloud_hf_shared_lease_audit_events",
-        "soracloud_model_host_violation_evidence",
         "soracloud_agent_apartment_audit_events",
         "soracloud_service_state_entries",
+        "soracloud_decryption_request_records",
+        "soracloud_agent_apartments",
+        "soracloud_training_jobs",
+        "soracloud_model_registries",
+        "soracloud_model_weight_versions",
+        "soracloud_model_artifacts",
+        "soracloud_uploaded_model_bundles",
+        "soracloud_hf_sources",
+        "soracloud_hf_shared_lease_pools",
+        "soracloud_hf_shared_lease_members",
         "soracloud_mailbox_messages",
         "soracloud_runtime_receipts",
         "soracloud_inrou_replica_runtime",
@@ -32737,9 +32951,6 @@ fn sample_snapshot_service_runtime(
         health_status: SoraServiceHealthStatusV1::Healthy,
         load_factor_bps,
         materialized_bundle_hash: Hash::new(b"snapshot-service-runtime-bundle"),
-        rollout_handle: None,
-        pending_mailbox_message_count: 0,
-        last_receipt_id: None,
     }
 }
 fn sample_snapshot_inrou_replica_runtime(service_name: Name) -> SoraInrouReplicaRuntimeStateV1 {
@@ -32757,8 +32968,6 @@ fn sample_snapshot_inrou_replica_runtime(service_name: Name) -> SoraInrouReplica
         materialized_bundle_hash: Hash::new(b"snapshot-inrou-replica-bundle"),
         reporting_epoch: 1,
         accounted_egress_bytes: 0,
-        pending_mailbox_message_count: 0,
-        last_receipt_id: None,
         updated_at_ms: 1_000,
         last_error: None,
     }
@@ -32786,28 +32995,6 @@ fn sample_snapshot_training_job_audit_event(
         signer: ALICE_KEYPAIR.public_key().clone(),
     }
 }
-fn sample_snapshot_model_host_violation(
-    sequence: u64,
-) -> iroha_data_model::soracloud::SoraModelHostViolationEvidenceRecordV1 {
-    iroha_data_model::soracloud::SoraModelHostViolationEvidenceRecordV1 {
-        schema_version:
-            iroha_data_model::soracloud::SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1,
-        evidence_id: Hash::new(b"snapshot-model-host-violation"),
-        sequence,
-        validator_account_id: ALICE_ID.clone(),
-        kind: iroha_data_model::soracloud::SoraModelHostViolationKindV1::AdvertContradiction,
-        placement_id: None,
-        pool_id: None,
-        source_id: None,
-        window_started_at_ms: None,
-        observed_at_ms: 1_000,
-        detail: Some("snapshot contradiction".to_owned()),
-        strike_count: 0,
-        penalty_applied: false,
-        host_evicted: false,
-        slash_id: None,
-    }
-}
 fn sample_snapshot_service_bundle() -> SoraDeploymentBundleV1 {
     let bundle: SoraDeploymentBundleV1 = norito::json::from_str(include_str!(
         "../../../../fixtures/soracloud/sora_deployment_bundle_v1.json"
@@ -32817,6 +33004,71 @@ fn sample_snapshot_service_bundle() -> SoraDeploymentBundleV1 {
         .validate_for_admission()
         .expect("deployment-bundle fixture remains canonical");
     bundle
+}
+fn sample_snapshot_mailbox_message(bundle: &SoraDeploymentBundleV1) -> SoraServiceMailboxMessageV1 {
+    let payload_bytes = b"snapshot-mailbox-payload".to_vec();
+    let enqueue_sequence = 2;
+    let enqueue_height = 2;
+    let delivery_delay_blocks = 1;
+    let retention_blocks = bundle
+        .service
+        .handlers
+        .iter()
+        .find(|handler| handler.handler_name.as_ref() == "update")
+        .and_then(|handler| handler.mailbox.as_ref())
+        .expect("snapshot update mailbox contract")
+        .retention_blocks
+        .get();
+    let mut message = SoraServiceMailboxMessageV1 {
+        schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+        message_id: Hash::prehashed([0; Hash::LENGTH]),
+        from_service: bundle.service.service_name.clone(),
+        from_service_version: bundle.service.service_version.clone(),
+        from_handler: "update".parse().expect("valid source handler"),
+        to_service: bundle.service.service_name.clone(),
+        to_service_version: bundle.service.service_version.clone(),
+        to_handler: "update".parse().expect("valid destination handler"),
+        payload_commitment: Hash::new(&payload_bytes),
+        payload_bytes,
+        delivery_delay_blocks,
+        enqueue_sequence,
+        enqueue_height,
+        available_after_height: enqueue_height + u64::from(delivery_delay_blocks),
+        expires_at_height: enqueue_height + u64::from(retention_blocks),
+    };
+    message.message_id =
+        iroha_data_model::soracloud::derive_soracloud_mailbox_message_id_v1(&message);
+    message
+}
+fn sample_snapshot_mailbox_receipt(
+    bundle: &SoraDeploymentBundleV1,
+    message: &SoraServiceMailboxMessageV1,
+    receipt_id_seed: &[u8],
+    emitted_sequence: u64,
+) -> SoraRuntimeReceiptV1 {
+    let mut receipt = SoraRuntimeReceiptV1 {
+        schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
+        receipt_id: Hash::new(receipt_id_seed),
+        service_name: bundle.service.service_name.clone(),
+        service_version: bundle.service.service_version.clone(),
+        handler_name: "update".parse().expect("valid receipt handler"),
+        handler_class: SoraServiceHandlerClassV1::Update,
+        request_commitment: message.payload_commitment,
+        result_commitment: Hash::new(receipt_id_seed),
+        certified_by: SoraCertifiedResponsePolicyV1::None,
+        emitted_sequence,
+        execution_host: Some(SoraRuntimeDeterministicValidatorHostV1 {
+            lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+            validator_account_id: ALICE_ID.clone(),
+            peer_id: PeerId::from(ALICE_KEYPAIR.public_key().clone()).to_string(),
+        }),
+        mailbox_message_id: Some(message.message_id),
+        journal_artifact_hash: None,
+        checkpoint_artifact_hash: None,
+    };
+    receipt.receipt_id = crate::soracloud_runtime::ordered_mailbox_runtime_receipt_id(&receipt)
+        .expect("snapshot mailbox receipt carries its source message");
+    receipt
 }
 fn sample_snapshot_service_deployment(
     bundle: &SoraDeploymentBundleV1,
@@ -32839,6 +33091,366 @@ fn sample_snapshot_service_deployment(
         last_rollout: None,
         service_lease: None,
         lease_volume_states: Vec::new(),
+    }
+}
+fn sample_snapshot_inrou_published_artifact()
+-> iroha_data_model::soracloud::SoraPublishedInrouGuestImageArtifactV1 {
+    iroha_data_model::soracloud::SoraPublishedInrouGuestImageArtifactV1 {
+        manifest_digest_hex: "31".repeat(32),
+        content_cid: "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge".to_owned(),
+    }
+}
+fn sample_snapshot_hosted_service_bundle() -> SoraDeploymentBundleV1 {
+    let mut bundle = sample_snapshot_service_bundle();
+    bundle.container.runtime = iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou;
+    bundle.container.entrypoint = "/app/main".to_owned();
+    bundle.container.inrou = Some(iroha_data_model::soracloud::SoraInrouManifestV1 {
+        schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
+        guest_images: BTreeMap::from([
+            (
+                iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
+                iroha_data_model::soracloud::SoraInrouGuestImageV1 {
+                    kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
+                    rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
+                    initrd_image_path: None,
+                    published_artifact: sample_snapshot_inrou_published_artifact(),
+                },
+            ),
+            (
+                iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64,
+                iroha_data_model::soracloud::SoraInrouGuestImageV1 {
+                    kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
+                    rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
+                    initrd_image_path: None,
+                    published_artifact: sample_snapshot_inrou_published_artifact(),
+                },
+            ),
+        ]),
+    });
+    bundle.service.execution_plane =
+        iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+    bundle.service.lease_volumes = vec![
+        iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
+            volume_name: "root_disk".parse().expect("valid root volume name"),
+            kind: iroha_data_model::soracloud::SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+            mount_path: "/".to_owned(),
+            max_total_bytes: NonZeroU64::new(8 * 1024 * 1024 * 1024)
+                .expect("non-zero root volume size"),
+        },
+        iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
+            volume_name: "service_state".parse().expect("valid service volume name"),
+            kind: iroha_data_model::soracloud::SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+            mount_path: "/var/lib/sora".to_owned(),
+            max_total_bytes: NonZeroU64::new(1024 * 1024).expect("non-zero service volume size"),
+        },
+    ];
+    bundle.service.state_bindings.clear();
+    bundle.service.handlers.clear();
+    for artifact in &mut bundle.service.artifacts {
+        artifact.handler_name = None;
+    }
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+    bundle
+        .validate_for_admission()
+        .expect("hosted-service restore fixture remains admissible");
+    bundle
+}
+fn sample_snapshot_hosted_service_deployment(
+    bundle: &SoraDeploymentBundleV1,
+) -> SoraServiceDeploymentStateV1 {
+    let mut deployment = sample_snapshot_service_deployment(bundle);
+    let lease_started_height = 1;
+    let lease_expires_height =
+        lease_started_height + bundle.service.economics.lease_duration_blocks.get();
+    deployment.service_lease = Some(iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
+        schema_version: iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
+        economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+        status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
+        quota_class: bundle.service.economics.quota_class.clone(),
+        replica_count: bundle.service.replicas,
+        deployment_deposit: bundle.service.economics.deployment_deposit.clone(),
+        prepaid_runtime_balance: bundle.service.economics.prepaid_runtime_balance.clone(),
+        runtime_price_per_block: bundle.service.economics.runtime_price_per_block.clone(),
+        storage_price_per_gib_block: bundle.service.economics.storage_price_per_gib_block.clone(),
+        egress_price_per_mib: bundle.service.economics.egress_price_per_mib.clone(),
+        lease_started_height,
+        lease_expires_height,
+        reporting_epoch: 1,
+        settled_egress_bytes: 0,
+        egress_reporter_checkpoints: Vec::new(),
+        accounted_egress_bytes: 0,
+        last_status_reason: None,
+    });
+    deployment.lease_volume_states = bundle
+        .service
+        .lease_volumes
+        .iter()
+        .map(
+            |volume| iroha_data_model::soracloud::SoraServiceLeaseVolumeStateV1 {
+                schema_version:
+                    iroha_data_model::soracloud::SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1,
+                economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+                volume_name: volume.volume_name.clone(),
+                kind: volume.kind,
+                storage_class: volume.storage_class,
+                mount_path: volume.mount_path.clone(),
+                max_total_bytes: volume.max_total_bytes.get(),
+                lease_started_height,
+                lease_expires_height,
+                authoritative_generation: 1,
+            },
+        )
+        .collect();
+    deployment
+        .validate()
+        .expect("hosted-service deployment restore fixture remains valid");
+    deployment
+}
+fn sample_snapshot_private_pin(digest: ManifestDigest, content_length: u64) -> PinManifestRecord {
+    let manifest: sorafs_manifest::ManifestV1 = norito::decode_from_bytes(include_bytes!(
+        "../../../../fixtures/sorafs_gateway/1.0.0/manifest_v1.to"
+    ))
+    .expect("decode canonical SoraFS manifest fixture");
+    let root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid)
+        .expect("fixture manifest root CID remains canonical");
+    let mut record = PinManifestRecord::new(
+        digest,
+        root_cid,
+        ChunkerProfileHandle {
+            profile_id: 1,
+            namespace: "sorafs".to_owned(),
+            name: "sf1".to_owned(),
+            semver: "1.0.0".to_owned(),
+            multihash_code: 0x1e,
+        },
+        manifest.chunk_digest_sha3_256,
+        manifest.por_root,
+        content_length,
+        PinPolicy {
+            min_replicas: 1,
+            storage_class: StorageClass::Warm,
+            retention_epoch: u64::MAX,
+        },
+        ALICE_ID.clone(),
+        1,
+        None,
+        None,
+        Metadata::default(),
+    );
+    record.approve(1, None);
+    record
+}
+fn seed_snapshot_auto_replication_capacity(
+    world: &mut World,
+    pin: &PinManifestRecord,
+    order: &ReplicationOrderRecord,
+) {
+    let completion = order
+        .provider_completions
+        .first()
+        .expect("completed snapshot automatic order has a provider");
+    let provider_id = completion.provider_id;
+    let owner_literal = completion.completed_by.to_string();
+    let storage_class = match pin.policy.storage_class {
+        StorageClass::Hot => "hot",
+        StorageClass::Warm => "warm",
+        StorageClass::Cold => "cold",
+    };
+    let declaration = sorafs_manifest::capacity::CapacityDeclarationV1 {
+        version: sorafs_manifest::capacity::CAPACITY_DECLARATION_VERSION_V1,
+        provider_id: *provider_id.as_bytes(),
+        stake: sorafs_manifest::provider_advert::StakePointer {
+            pool_id: [0xD9; 32],
+            stake_amount: "1".parse().expect("canonical positive XOR stake"),
+        },
+        committed_capacity_gib: 1_024,
+        chunker_commitments: vec![sorafs_manifest::capacity::ChunkerCommitmentV1 {
+            profile_id: pin.chunker.to_handle(),
+            profile_aliases: None,
+            committed_gib: 1_024,
+            capability_refs: Vec::new(),
+        }],
+        lane_commitments: Vec::new(),
+        pricing: None,
+        valid_from: order.issued_epoch,
+        valid_until: order.deadline_epoch,
+        metadata: vec![
+            sorafs_manifest::capacity::CapacityMetadataEntry {
+                key: "sorafs.owner_account_id".to_owned(),
+                value: owner_literal.clone(),
+            },
+            sorafs_manifest::capacity::CapacityMetadataEntry {
+                key: "sorafs.storage_class".to_owned(),
+                value: storage_class.to_owned(),
+            },
+        ],
+    };
+    declaration
+        .validate()
+        .expect("canonical automatic replication capacity declaration");
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        "sorafs.owner_account_id"
+            .parse()
+            .expect("static owner metadata key"),
+        Json::new(owner_literal),
+    );
+    metadata.insert(
+        "sorafs.storage_class"
+            .parse()
+            .expect("static storage-class metadata key"),
+        Json::new(storage_class),
+    );
+    world
+        .provider_owners
+        .insert(provider_id, completion.completed_by.clone());
+    world
+        .provider_ingest_completion_authorities
+        .insert(provider_id, completion.completion_authority.clone());
+    world.capacity_declarations.insert(
+        provider_id,
+        CapacityDeclarationRecord::new(
+            provider_id,
+            norito::encode_canonical(&declaration)
+                .expect("canonical automatic replication capacity payload"),
+            declaration.committed_capacity_gib,
+            order.issued_epoch,
+            declaration.valid_from,
+            declaration.valid_until,
+            metadata,
+        ),
+    );
+}
+fn sample_snapshot_approved_pin_world() -> (World, ManifestDigest, ReplicationOrderId) {
+    let digest = ManifestDigest::new([0xD5; 32]);
+    let pin = sample_snapshot_private_pin(digest, 128);
+    let order = crate::smartcontracts::isi::sorafs::completed_auto_replication_order_for_test(
+        &pin, &ALICE_ID,
+    )
+    .expect("canonical completed automatic replication order");
+    let order_id = order.order_id;
+    let mut world = World::default();
+    seed_snapshot_auto_replication_capacity(&mut world, &pin, &order);
+    world.pin_manifests.insert(digest, pin);
+    world.replication_orders.insert(order_id, order);
+    (world, digest, order_id)
+}
+fn sample_snapshot_capacity_declaration_world() -> (World, ProviderId, CapacityDeclarationRecord) {
+    let provider_id = ProviderId::new([0xC5; 32]);
+    let owner_literal = ALICE_ID.to_string();
+    let declaration = sorafs_manifest::capacity::CapacityDeclarationV1 {
+        version: sorafs_manifest::capacity::CAPACITY_DECLARATION_VERSION_V1,
+        provider_id: *provider_id.as_bytes(),
+        stake: sorafs_manifest::provider_advert::StakePointer {
+            pool_id: [0xC6; 32],
+            stake_amount: "1".parse().expect("canonical positive XOR stake"),
+        },
+        committed_capacity_gib: 1,
+        chunker_commitments: vec![sorafs_manifest::capacity::ChunkerCommitmentV1 {
+            profile_id: "sorafs.sf1@1.0.0".to_owned(),
+            profile_aliases: None,
+            committed_gib: 1,
+            capability_refs: vec![sorafs_manifest::provider_advert::CapabilityType::ToriiGateway],
+        }],
+        lane_commitments: Vec::new(),
+        pricing: None,
+        valid_from: 10,
+        valid_until: 100,
+        metadata: vec![
+            sorafs_manifest::capacity::CapacityMetadataEntry {
+                key: "sorafs.owner_account_id".to_owned(),
+                value: owner_literal.clone(),
+            },
+            sorafs_manifest::capacity::CapacityMetadataEntry {
+                key: "sorafs.storage_class".to_owned(),
+                value: "hot".to_owned(),
+            },
+        ],
+    };
+    declaration
+        .validate()
+        .expect("canonical snapshot capacity declaration");
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        "sorafs.owner_account_id"
+            .parse()
+            .expect("static owner metadata key"),
+        Json::new(owner_literal),
+    );
+    metadata.insert(
+        "sorafs.storage_class"
+            .parse()
+            .expect("static storage-class metadata key"),
+        Json::new("hot"),
+    );
+    let record = CapacityDeclarationRecord::new(
+        provider_id,
+        norito::encode_canonical(&declaration).expect("canonical capacity declaration payload"),
+        declaration.committed_capacity_gib,
+        20,
+        declaration.valid_from,
+        declaration.valid_until,
+        metadata,
+    );
+    let mut world = World::default();
+    world.provider_owners.insert(provider_id, ALICE_ID.clone());
+    world
+        .capacity_declarations
+        .insert(provider_id, record.clone());
+    (world, provider_id, record)
+}
+fn sample_snapshot_service_audit_event(
+    bundle: &SoraDeploymentBundleV1,
+    sequence: u64,
+) -> iroha_data_model::soracloud::SoraServiceAuditEventV1 {
+    iroha_data_model::soracloud::SoraServiceAuditEventV1 {
+        schema_version: iroha_data_model::soracloud::SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
+        sequence,
+        block_height: sequence,
+        block_timestamp_ms: sequence.saturating_mul(1_000),
+        action: iroha_data_model::soracloud::SoraServiceLifecycleActionV1::Deploy,
+        service_name: bundle.service.service_name.clone(),
+        from_version: None,
+        to_version: bundle.service.service_version.clone(),
+        service_manifest_hash: bundle.service_manifest_hash(),
+        container_manifest_hash: bundle.container_manifest_hash(),
+        process_generation: 1,
+        config_generation: 0,
+        secret_generation: 0,
+        config_snapshot_hash:
+            iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                &BTreeMap::new(),
+            ),
+        secret_snapshot_hash:
+            iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                &BTreeMap::new(),
+            ),
+        governance_tx_hash: None,
+        binding_name: None,
+        state_key: None,
+        config_mutations: Vec::new(),
+        secret_mutations: Vec::new(),
+        rollout_state: None,
+        policy_name: None,
+        policy_snapshot_hash: None,
+        jurisdiction_tag: None,
+        consent_evidence_hash: None,
+        break_glass: None,
+        break_glass_reason: None,
+        lease_usage: None,
+        service_lease_commitment: bundle.container.runtime.is_http_service_runtime().then(|| {
+            let deployment = sample_snapshot_hosted_service_deployment(bundle);
+            iroha_data_model::soracloud::derive_soracloud_service_lease_commitment_v1(
+                deployment
+                    .service_lease
+                    .as_ref()
+                    .expect("hosted-service deployment fixture lease"),
+            )
+        }),
+        lease_reporting_epoch_rollover: None,
+        signer: ALICE_KEYPAIR.public_key().clone(),
     }
 }
 fn sample_snapshot_inrou_placement(
@@ -32866,15 +33478,171 @@ fn sample_snapshot_inrou_placement(
         last_error: None,
     }
 }
-fn snapshot_state_from_world(world: World) -> State {
-    State::new(
+fn sample_snapshot_hf_registry_world() -> (World, Hash, Hash) {
+    let repo_id = "openai/snapshot-hosted-model";
+    let revision = "1123456789abcdef0123456789abcdef01234567";
+    let source_id = iroha_data_model::soracloud::derive_hf_source_id_v1(repo_id, revision)
+        .expect("canonical snapshot HF source ID");
+    let storage_class = iroha_data_model::sorafs::pin_registry::StorageClass::Warm;
+    let lease_term_ms = 60_000;
+    let pool_id = iroha_data_model::soracloud::derive_hf_shared_lease_pool_id_v1(
+        source_id,
+        storage_class,
+        lease_term_ms,
+    )
+    .expect("canonical snapshot HF pool ID");
+    let settlement_asset = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("snapshot_hf", "universal").expect("valid settlement domain"),
+        "xor".parse().expect("valid settlement asset name"),
+    );
+    let mut world = World::default();
+    world.soracloud_hf_sources.insert(
+        source_id,
+        iroha_data_model::soracloud::SoraHfSourceRecordV1 {
+            schema_version: iroha_data_model::soracloud::SORA_HF_SOURCE_RECORD_VERSION_V1,
+            source_id,
+            repo_id: repo_id.to_owned(),
+            resolved_revision: revision.to_owned(),
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        },
+    );
+    world.soracloud_hf_shared_lease_pools.insert(
+        pool_id,
+        iroha_data_model::soracloud::SoraHfSharedLeasePoolV1 {
+            schema_version: iroha_data_model::soracloud::SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+            pool_id,
+            source_id,
+            storage_class,
+            lease_asset_definition_id: settlement_asset,
+            base_fee: "0.00001".parse().expect("base fee"),
+            lease_term_ms,
+            window_started_at_ms: 1,
+            window_expires_at_ms: 60_001,
+            active_member_count: 1,
+            status: iroha_data_model::soracloud::SoraHfSharedLeaseStatusV1::Active,
+            queued_next_window: None,
+        },
+    );
+    world.soracloud_hf_shared_lease_members.insert(
+        (pool_id.to_string(), ALICE_ID.to_string()),
+        iroha_data_model::soracloud::SoraHfSharedLeaseMemberV1 {
+            schema_version: iroha_data_model::soracloud::SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+            pool_id,
+            source_id,
+            account_id: ALICE_ID.clone(),
+            status: iroha_data_model::soracloud::SoraHfSharedLeaseMemberStatusV1::Active,
+            joined_at_ms: 1,
+            updated_at_ms: 1,
+            total_paid: "0.00001".parse().expect("storage payment"),
+            total_refunded: Quantity::zero(),
+            last_charge: "0.00001".parse().expect("last storage charge"),
+            service_bindings: BTreeSet::new(),
+            apartment_bindings: BTreeSet::new(),
+        },
+    );
+    (world, source_id, pool_id)
+}
+fn snapshot_state_from_world(mut world: World) -> State {
+    // Snapshot fixtures intentionally exercise independently pruned Soracloud
+    // projections.  An exhausted watermark is a valid persisted state and keeps
+    // each fixture focused on the projection invariant under test instead of
+    // synthesizing every historical sequence owner that has already been pruned.
+    let committed_hashes = {
+        let replication_orders = world.replication_orders.view();
+        let mut hashes = Vec::<Option<[u8; 32]>>::new();
+        for (_, order) in replication_orders.iter() {
+            for completion in &order.provider_completions {
+                let index = usize::try_from(completion.finalized_anchor.height)
+                    .ok()
+                    .and_then(|height| height.checked_sub(1))
+                    .expect("snapshot fixture completion anchor uses a one-based height");
+                if hashes.len() <= index {
+                    hashes.resize(index + 1, None);
+                }
+                match hashes[index] {
+                    Some(existing) => assert_eq!(
+                        existing, completion.finalized_anchor.block_hash,
+                        "snapshot fixture completions at one height must commit the same block"
+                    ),
+                    None => hashes[index] = Some(completion.finalized_anchor.block_hash),
+                }
+            }
+        }
+        drop(replication_orders);
+        hashes
+            .into_iter()
+            .enumerate()
+            .map(|(index, hash)| {
+                let hash = hash.unwrap_or_else(|| {
+                    let mut filler = [0xA9; 32];
+                    filler[..8].copy_from_slice(
+                        &u64::try_from(index + 1)
+                            .expect("snapshot fixture height fits u64")
+                            .to_le_bytes(),
+                    );
+                    filler
+                });
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(hash))
+            })
+            .collect::<Vec<_>>()
+    };
+    if let Some(genesis_hash) = committed_hashes.first() {
+        let revision = MusubiResolverIndexRevisionV1::new(1)
+            .expect("default snapshot resolver revision is one");
+        world.musubi_resolver_index_checkpoints.insert(
+            revision,
+            MusubiRegistrySnapshotV1 {
+                finalized_height: 1,
+                finalized_block_hash: *genesis_hash.as_ref(),
+                index_revision: 1,
+            },
+        );
+    }
+    let mut block = world.block();
+    *block.soracloud_sequence_watermark.get_mut() = u64::MAX;
+    block.commit();
+    let mut state = State::new(
         world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-    )
+    );
+    state.block_hashes = BlockHashes::new(committed_hashes);
+    seed_autoscale_sample_history_for_snapshot_test(&state);
+    state
 }
 state_test! { sync inrou_reachable_restore_rejects_invalid_and_miskeyed_runtime_records
     let service_name: Name = "snapshot_runtime".parse().expect("valid service name");
+
+    let mut mismatched_capability_world = World::default();
+    mismatched_capability_world.soracloud_inrou_host_capabilities.insert(
+        ALICE_ID.clone(),
+        iroha_data_model::soracloud::SoraInrouHostCapabilityRecordV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+            validator_account_id: ALICE_ID.clone(),
+            peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()).to_string(),
+            supported_guest_isas: BTreeSet::from([SoraInrouGuestIsaV1::Aarch64]),
+            trusted_guest_artifact: sample_snapshot_inrou_published_artifact(),
+            max_hosted_replica_capacity:
+                iroha_data_model::soracloud::SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
+            max_cpu_millis: 1_000,
+            max_memory_bytes: 1_024,
+            max_storage_bytes: 1_024,
+            advertised_at_ms: 1,
+            heartbeat_expires_at_ms: 2,
+        },
+    );
+    let mismatched_capability =
+        norito::json::to_value(&snapshot_state_from_world(mismatched_capability_world))
+            .expect("serialize canonical peer attributed to another validator account");
+    let error = deserialize_state_snapshot_value(mismatched_capability)
+        .err()
+        .expect("restore must reject account/peer-inconsistent Inrou capability state");
+    assert!(
+        error.to_string().contains("derived from the validator account"),
+        "unexpected mismatched Inrou capability error: {error}"
+    );
 
     let mut malformed_world = World::default();
     malformed_world.soracloud_service_runtime.insert(
@@ -32949,6 +33717,25 @@ state_test! { sync service_deployment_restore_requires_exact_admitted_revision_b
     deserialize_state_snapshot_value(canonical)
         .expect("an exact deployment-to-admitted-revision binding must restore");
 
+    let mut orphan_revision_world = World::default();
+    orphan_revision_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    let orphan_revision =
+        norito::json::to_value(&snapshot_state_from_world(orphan_revision_world))
+            .expect("serialize orphan admitted revision snapshot");
+    let error = deserialize_state_snapshot_value(orphan_revision)
+        .err()
+        .expect("every admitted revision must belong to an authoritative deployment");
+    assert!(
+        error.to_string().contains("no authoritative deployment"),
+        "unexpected orphan-revision error: {error}"
+    );
+
     let mut missing_revision_world = World::default();
     let mut foreign_bundle = bundle.clone();
     foreign_bundle.service.service_version = "foreign-version".to_owned();
@@ -33020,6 +33807,110 @@ state_test! { sync service_deployment_restore_requires_exact_admitted_revision_b
         "unexpected deployment-count error: {error}"
     );
 
+    let mut exact_volume_world = World::default();
+    exact_volume_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    let mut exact_volume_mismatch = sample_snapshot_service_deployment(&bundle);
+    let lease = iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
+        schema_version: iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
+        economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+        status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
+        quota_class: "restore-test".to_owned(),
+        replica_count: bundle.service.replicas,
+        deployment_deposit: "1".parse().expect("deposit"),
+        prepaid_runtime_balance: "10".parse().expect("balance"),
+        runtime_price_per_block: "0.001".parse().expect("runtime price"),
+        storage_price_per_gib_block: "0.001".parse().expect("storage price"),
+        egress_price_per_mib: "0.001".parse().expect("egress price"),
+        lease_started_height: 1,
+        lease_expires_height: 100,
+        reporting_epoch: 1,
+        settled_egress_bytes: 0,
+        egress_reporter_checkpoints: Vec::new(),
+        accounted_egress_bytes: 0,
+        last_status_reason: None,
+    };
+    exact_volume_mismatch.service_lease = Some(lease);
+    exact_volume_mismatch.lease_volume_states = vec![
+        iroha_data_model::soracloud::SoraServiceLeaseVolumeStateV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1,
+            economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+            volume_name: "unadmitted".parse().expect("volume name"),
+            kind: iroha_data_model::soracloud::SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+            mount_path: "/var/lib/unadmitted".to_owned(),
+            max_total_bytes: 1_024,
+            lease_started_height: 1,
+            lease_expires_height: 100,
+            authoritative_generation: 1,
+        },
+    ];
+    exact_volume_mismatch
+        .validate()
+        .expect("corrupt cross-record fixture remains individually valid");
+    exact_volume_world.soracloud_service_deployments.insert(
+        exact_volume_mismatch.service_name.clone(),
+        exact_volume_mismatch,
+    );
+    let exact_volume = norito::json::to_value(&snapshot_state_from_world(exact_volume_world))
+        .expect("serialize exact-volume mismatch snapshot");
+    let error = deserialize_state_snapshot_value(exact_volume)
+        .err()
+        .expect("restore must reject lease-volume rows absent from the admitted manifest");
+    assert!(
+        error.to_string().contains("exact 1:1"),
+        "unexpected exact-volume restore error: {error}"
+    );
+
+    let mut retained_identity_world = World::default();
+    retained_identity_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    let mut incompatible_revision = bundle.clone();
+    incompatible_revision.service.service_version = "retained-incompatible".to_owned();
+    incompatible_revision
+        .service
+        .route
+        .as_mut()
+        .expect("fixture route")
+        .host = "restored-foreign-route.example".to_owned();
+    incompatible_revision
+        .validate_for_admission()
+        .expect("retained revision is individually valid");
+    retained_identity_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            incompatible_revision.service.service_version.clone(),
+        ),
+        incompatible_revision,
+    );
+    let mut retained_identity_deployment = sample_snapshot_service_deployment(&bundle);
+    retained_identity_deployment.revision_count = 2;
+    retained_identity_world.soracloud_service_deployments.insert(
+        retained_identity_deployment.service_name.clone(),
+        retained_identity_deployment,
+    );
+    let retained_identity =
+        norito::json::to_value(&snapshot_state_from_world(retained_identity_world))
+            .expect("serialize retained identity mismatch snapshot");
+    let error = deserialize_state_snapshot_value(retained_identity)
+        .err()
+        .expect("restore must reject retained revisions with a distinct immutable identity");
+    assert!(
+        error.to_string().contains("cannot change route identity"),
+        "unexpected retained-identity restore error: {error}"
+    );
+
     let mut rollout_revision_world = World::default();
     rollout_revision_world.soracloud_service_revisions.insert(
         (
@@ -33034,7 +33925,7 @@ state_test! { sync service_deployment_restore_requires_exact_admitted_revision_b
             schema_version:
                 iroha_data_model::soracloud::SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
             rollout_handle: "snapshot-rollout".to_owned(),
-            baseline_version: Some(rollout_revision.current_service_version.clone()),
+            baseline_version: rollout_revision.current_service_version.clone(),
             candidate_version: "missing-candidate".to_owned(),
             canary_percent: 20,
             traffic_percent: 0,
@@ -33106,6 +33997,1064 @@ state_test! { sync service_deployment_restore_rejects_lease_state_for_determinis
         "unexpected execution-plane binding error: {error}"
     );
 }
+state_test! { sync service_state_restore_requires_exact_revision_audit_and_binding_quota
+    let mut bundle = sample_snapshot_service_bundle();
+    let binding = bundle
+        .service
+        .state_bindings
+        .iter_mut()
+        .find(|binding| binding.binding_name.as_ref() == "session_store")
+        .expect("snapshot session binding");
+    binding.max_item_bytes = NonZeroU64::new(4).expect("non-zero item quota");
+    binding.max_total_bytes = NonZeroU64::new(4).expect("non-zero total quota");
+    bundle
+        .validate_for_admission()
+        .expect("reduced snapshot binding remains admissible");
+    let governance_tx_hash = Hash::new(b"snapshot-state-governance");
+    let make_entry = |sequence: u64, state_key: &str, payload: Vec<u8>| {
+        iroha_data_model::soracloud::SoraServiceStateEntryV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+            service_name: bundle.service.service_name.clone(),
+            service_version: bundle.service.service_version.clone(),
+            binding_name: "session_store".parse().expect("valid binding name"),
+            state_key: state_key.to_owned(),
+            encryption: iroha_data_model::soracloud::SoraStateEncryptionV1::ClientCiphertext,
+            payload_bytes: NonZeroU64::new(
+                u64::try_from(payload.len()).expect("snapshot payload length"),
+            )
+            .expect("non-empty snapshot payload"),
+            payload_commitment: Hash::new(&payload),
+            payload,
+            fhe_public_key_digest: None,
+            fhe_residual_multiple_bound: None,
+            fhe_bound_mode: None,
+            last_update_sequence: sequence,
+            governance_tx_hash,
+            source_action:
+                iroha_data_model::soracloud::SoraServiceLifecycleActionV1::StateMutation,
+        }
+    };
+    let make_event = |sequence: u64, state_key: &str, governance_tx_hash: Hash| {
+        iroha_data_model::soracloud::SoraServiceAuditEventV1 {
+            schema_version: iroha_data_model::soracloud::SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
+            sequence,
+            block_height: sequence,
+            block_timestamp_ms: sequence.saturating_mul(1_000),
+            action: iroha_data_model::soracloud::SoraServiceLifecycleActionV1::StateMutation,
+            service_name: bundle.service.service_name.clone(),
+            from_version: None,
+            to_version: bundle.service.service_version.clone(),
+            service_manifest_hash: bundle.service_manifest_hash(),
+            container_manifest_hash: bundle.container_manifest_hash(),
+            process_generation: 1,
+            config_generation: 0,
+            secret_generation: 0,
+            config_snapshot_hash:
+                iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                    &BTreeMap::new(),
+                ),
+            secret_snapshot_hash:
+                iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                    &BTreeMap::new(),
+                ),
+            governance_tx_hash: Some(governance_tx_hash),
+            binding_name: Some("session_store".parse().expect("valid binding name")),
+            state_key: Some(state_key.to_owned()),
+            config_mutations: Vec::new(),
+            secret_mutations: Vec::new(),
+            rollout_state: None,
+            policy_name: None,
+            policy_snapshot_hash: None,
+            jurisdiction_tag: None,
+            consent_evidence_hash: None,
+            break_glass: None,
+            break_glass_reason: None,
+            lease_usage: None,
+            service_lease_commitment: None,
+            lease_reporting_epoch_rollover: None,
+            signer: ALICE_KEYPAIR.public_key().clone(),
+        }
+    };
+    let world_with_rows = |rows: Vec<(
+        iroha_data_model::soracloud::SoraServiceStateEntryV1,
+        iroha_data_model::soracloud::SoraServiceAuditEventV1,
+    )>| {
+        let mut world = World::default();
+        world.soracloud_service_revisions.insert(
+            (
+                bundle.service.service_name.as_ref().to_owned(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        world.soracloud_service_deployments.insert(
+            bundle.service.service_name.clone(),
+            sample_snapshot_service_deployment(&bundle),
+        );
+        world
+            .soracloud_service_audit_events
+            .insert(1, sample_snapshot_service_audit_event(&bundle, 1));
+        for (entry, event) in rows {
+            world.soracloud_service_audit_events.insert(event.sequence, event);
+            world.soracloud_service_state_entries.insert(
+                (
+                    entry.service_name.as_ref().to_owned(),
+                    entry.binding_name.as_ref().to_owned(),
+                    entry.state_key.clone(),
+                ),
+                entry,
+            );
+        }
+        world
+    };
+
+    let state_key = "/state/session/a";
+    let canonical_entry = make_entry(2, state_key, vec![1, 2, 3]);
+    let canonical_event = make_event(2, state_key, governance_tx_hash);
+    let canonical = norito::json::to_value(&snapshot_state_from_world(world_with_rows(vec![
+        (canonical_entry.clone(), canonical_event),
+    ])))
+    .expect("serialize canonical service-state row");
+    deserialize_state_snapshot_value(canonical)
+        .expect("service-state row with exact revision, binding, audit, and quota must restore");
+
+    let mismatched_audit = norito::json::to_value(&snapshot_state_from_world(world_with_rows(
+        vec![(
+            canonical_entry,
+            make_event(2, state_key, Hash::new(b"foreign-state-governance")),
+        )],
+    )))
+    .expect("serialize service-state row with substituted audit linkage");
+    let error = deserialize_state_snapshot_value(mismatched_audit)
+        .err()
+        .expect("service-state row must bind its exact producing audit event");
+    assert!(
+        error
+            .to_string()
+            .contains("must exactly match its producing service audit event"),
+        "unexpected service-state audit error: {error}"
+    );
+
+    let aggregate_overflow = norito::json::to_value(&snapshot_state_from_world(world_with_rows(
+        vec![
+            (
+                make_entry(2, "/state/session/a", vec![1, 2, 3]),
+                make_event(2, "/state/session/a", governance_tx_hash),
+            ),
+            (
+                make_entry(3, "/state/session/b", vec![4, 5, 6]),
+                make_event(3, "/state/session/b", governance_tx_hash),
+            ),
+        ],
+    )))
+    .expect("serialize service-state rows exceeding binding aggregate quota");
+    let error = deserialize_state_snapshot_value(aggregate_overflow)
+        .err()
+        .expect("service-state aggregate quota must fail closed during restore");
+    assert!(
+        error
+            .to_string()
+            .contains("aggregate payload size exceeds its admitted maximum"),
+        "unexpected service-state aggregate error: {error}"
+    );
+}
+state_test! { sync sorafs_pin_manifests_are_required_in_state_snapshot
+    let state = blank_state();
+    let mut snapshot = norito::json::to_value(&state).expect("serialize state pin registry");
+    let_row! { norito::json::Value::Object(root) = &mut snapshot else { panic!("state snapshot must be an object"); } };
+    let_row! { norito::json::Value::Object(world) = root .get_mut("world") .expect("state snapshot world") else { panic!("world snapshot must be an object"); } };
+    assert!(world.remove("pin_manifests").is_some());
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("a snapshot that erases the authoritative pin registry must fail closed");
+    assert!(
+        error.to_string().contains("pin_manifests"),
+        "unexpected missing pin-registry error: {error}"
+    );
+}
+state_test! { sync capacity_declarations_are_required_validated_and_restored_in_state_snapshot
+    let (canonical_world, provider_id, record) =
+        sample_snapshot_capacity_declaration_world();
+    let canonical = norito::json::to_value(&snapshot_state_from_world(canonical_world))
+        .expect("serialize canonical capacity declaration snapshot");
+    let restored = deserialize_state_snapshot_value(canonical)
+        .expect("canonical capacity declaration must restore");
+    assert_eq!(
+        restored.world.capacity_declarations.view().get(&provider_id),
+        Some(&record),
+        "capacity declaration must survive snapshot restore"
+    );
+
+    let state = blank_state();
+    let mut missing =
+        norito::json::to_value(&state).expect("serialize state capacity declarations");
+    let_row! { norito::json::Value::Object(root) = &mut missing else { panic!("state snapshot must be an object"); } };
+    let_row! { norito::json::Value::Object(world) = root .get_mut("world") .expect("state snapshot world") else { panic!("world snapshot must be an object"); } };
+    assert!(world.remove("capacity_declarations").is_some());
+    let error = deserialize_state_snapshot_value(missing)
+        .err()
+        .expect("a snapshot that erases capacity declarations must fail closed");
+    assert!(
+        error.to_string().contains("capacity_declarations"),
+        "unexpected missing capacity-declaration error: {error}"
+    );
+
+    let (mut mismatched_summary_world, provider_id, mut record) =
+        sample_snapshot_capacity_declaration_world();
+    record.committed_capacity_gib += 1;
+    mismatched_summary_world
+        .capacity_declarations
+        .insert(provider_id, record);
+    let mismatched_summary =
+        norito::json::to_value(&snapshot_state_from_world(mismatched_summary_world))
+            .expect("serialize mismatched capacity summary");
+    let error = deserialize_state_snapshot_value(mismatched_summary)
+        .err()
+        .expect("a capacity declaration with a mismatched projection must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("capacity does not match the stored capacity summary"),
+        "unexpected capacity-summary error: {error}"
+    );
+
+    let (mut mismatched_key_world, provider_id, record) =
+        sample_snapshot_capacity_declaration_world();
+    assert_eq!(record.provider_id, provider_id);
+    mismatched_key_world.capacity_declarations =
+        [(ProviderId::new([0xC7; 32]), record)].into_iter().collect();
+    let mismatched_key = norito::json::to_value(&snapshot_state_from_world(mismatched_key_world))
+        .expect("serialize capacity declaration under a different provider key");
+    let error = deserialize_state_snapshot_value(mismatched_key)
+        .err()
+        .expect("a capacity declaration under a different provider key must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("does not match its stored provider"),
+        "unexpected capacity-key error: {error}"
+    );
+
+    let (mut owner_mismatch_world, provider_id, _) =
+        sample_snapshot_capacity_declaration_world();
+    owner_mismatch_world
+        .provider_owners
+        .insert(provider_id, BOB_ID.clone());
+    let owner_mismatch = norito::json::to_value(&snapshot_state_from_world(owner_mismatch_world))
+        .expect("serialize owner-mismatched capacity declaration");
+    let error = deserialize_state_snapshot_value(owner_mismatch)
+        .err()
+        .expect("a capacity declaration with a different governed owner must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("does not exactly match its governance-established provider owner"),
+        "unexpected capacity-owner error: {error}"
+    );
+}
+state_test! { sync sorafs_replication_orders_are_required_in_state_snapshot
+    let state = blank_state();
+    let mut snapshot = norito::json::to_value(&state).expect("serialize state replication orders");
+    let_row! { norito::json::Value::Object(root) = &mut snapshot else { panic!("state snapshot must be an object"); } };
+    let_row! { norito::json::Value::Object(world) = root .get_mut("world") .expect("state snapshot world") else { panic!("world snapshot must be an object"); } };
+    assert!(world.remove("replication_orders").is_some());
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("a snapshot that erases replication orders must fail closed");
+    assert!(
+        error.to_string().contains("replication_orders"),
+        "unexpected missing replication-order error: {error}"
+    );
+}
+state_test! { sync approved_pin_snapshot_requires_its_exact_automatic_replication_order
+    let (canonical_world, _, _) = sample_snapshot_approved_pin_world();
+    let canonical = norito::json::to_value(&snapshot_state_from_world(canonical_world))
+        .expect("serialize canonical approved-pin snapshot");
+    deserialize_state_snapshot_value(canonical)
+        .expect("approved pin with its exact automatic replication order must restore");
+
+    let (mut mismatched_history_world, digest, _) = sample_snapshot_approved_pin_world();
+    let pins = mismatched_history_world.pin_manifests.view();
+    let mut mismatched_history = pins
+        .get(&digest)
+        .cloned()
+        .expect("snapshot approved pin");
+    drop(pins);
+    mismatched_history.approved_epoch = Some(2);
+    mismatched_history_world
+        .pin_manifests
+        .insert(digest, mismatched_history);
+    let mismatched_history =
+        norito::json::to_value(&snapshot_state_from_world(mismatched_history_world))
+            .expect("serialize pin with substituted approval history");
+    let error = deserialize_state_snapshot_value(mismatched_history)
+        .err()
+        .expect("approval history must exactly match the pin lifecycle");
+    assert!(
+        error.to_string().contains("immutable approval epoch"),
+        "unexpected approval-history error: {error}"
+    );
+
+    let (mut retired_missing_world, digest, _) = sample_snapshot_approved_pin_world();
+    let pins = retired_missing_world.pin_manifests.view();
+    let mut retired_pin = pins
+        .get(&digest)
+        .cloned()
+        .expect("snapshot approved pin");
+    drop(pins);
+    retired_pin.retire(u64::MAX, Some("retained history".to_owned()));
+    retired_missing_world.pin_manifests.insert(digest, retired_pin);
+    retired_missing_world.replication_orders = Storage::default();
+    let retired_missing =
+        norito::json::to_value(&snapshot_state_from_world(retired_missing_world))
+            .expect("serialize formerly approved retired pin without its automatic order");
+    let error = deserialize_state_snapshot_value(retired_missing)
+        .err()
+        .expect("retired approval history still requires its automatic order");
+    assert!(
+        error
+            .to_string()
+            .contains("missing its mandatory automatic replication order"),
+        "unexpected retired automatic-order error: {error}"
+    );
+
+    let (mut never_approved_world, digest, _) = sample_snapshot_approved_pin_world();
+    let pins = never_approved_world.pin_manifests.view();
+    let mut never_approved_pin = pins
+        .get(&digest)
+        .cloned()
+        .expect("snapshot approved pin");
+    drop(pins);
+    never_approved_pin.retire(u64::MAX, Some("withdrawn before approval".to_owned()));
+    never_approved_pin.approved_epoch = None;
+    never_approved_world
+        .pin_manifests
+        .insert(digest, never_approved_pin);
+    let never_approved =
+        norito::json::to_value(&snapshot_state_from_world(never_approved_world))
+            .expect("serialize never-approved retired pin with a forged automatic order");
+    let error = deserialize_state_snapshot_value(never_approved)
+        .err()
+        .expect("a never-approved pin cannot retain an automatic order");
+    assert!(
+        error.to_string().contains("targets a pin that was never approved"),
+        "unexpected never-approved automatic-order error: {error}"
+    );
+
+    let (mut mismatched_order_world, _, order_id) = sample_snapshot_approved_pin_world();
+    let replication_orders = mismatched_order_world.replication_orders.view();
+    let mut mismatched_order = replication_orders
+        .get(&order_id)
+        .cloned()
+        .expect("snapshot automatic replication order");
+    drop(replication_orders);
+    mismatched_order.assignment_revision = 2;
+    for completion in &mut mismatched_order.provider_completions {
+        completion.assignment_revision = 2;
+    }
+    mismatched_order_world
+        .replication_orders
+        .insert(order_id, mismatched_order);
+    let mismatched_order =
+        norito::json::to_value(&snapshot_state_from_world(mismatched_order_world))
+            .expect("serialize mismatched automatic replication order");
+    let error = deserialize_state_snapshot_value(mismatched_order)
+        .err()
+        .expect("a non-derived automatic replication order must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("does not exactly match its derived first-release"),
+        "unexpected mismatched automatic-order error: {error}"
+    );
+
+    let (mut missing_order_world, _, order_id) = sample_snapshot_approved_pin_world();
+    assert!(
+        missing_order_world
+            .replication_orders
+            .view()
+            .get(&order_id)
+            .is_some()
+    );
+    missing_order_world.replication_orders = Storage::default();
+    let missing_order = norito::json::to_value(&snapshot_state_from_world(missing_order_world))
+        .expect("serialize approved pin without its automatic order");
+    let error = deserialize_state_snapshot_value(missing_order)
+        .err()
+        .expect("approved pin without its automatic order must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("missing its mandatory automatic replication order"),
+        "unexpected missing automatic-order error: {error}"
+    );
+
+    let (mut orphan_order_world, digest, _) = sample_snapshot_approved_pin_world();
+    assert!(orphan_order_world.pin_manifests.view().get(&digest).is_some());
+    orphan_order_world.pin_manifests = Storage::default();
+    let orphan_order = norito::json::to_value(&snapshot_state_from_world(orphan_order_world))
+        .expect("serialize orphan automatic replication order");
+    let error = deserialize_state_snapshot_value(orphan_order)
+        .err()
+        .expect("automatic order targeting a missing pin must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("replication order targets a missing pin manifest"),
+        "unexpected orphan automatic-order error: {error}"
+    );
+}
+state_test! { sync replication_order_completion_snapshot_anchors_match_committed_prefix
+    let (wrong_hash_world, _, order_id) = sample_snapshot_approved_pin_world();
+    let mut wrong_hash_state = snapshot_state_from_world(wrong_hash_world);
+    let replication_orders = wrong_hash_state.world.replication_orders.view();
+    let mut wrong_hash_order = replication_orders
+        .get(&order_id)
+        .cloned()
+        .expect("snapshot completed replication order");
+    drop(replication_orders);
+    wrong_hash_order.provider_completions[0]
+        .finalized_anchor
+        .block_hash = [0xE8; 32];
+    wrong_hash_state
+        .world
+        .replication_orders
+        .insert(order_id, wrong_hash_order);
+    let wrong_hash = norito::json::to_value(&wrong_hash_state)
+        .expect("serialize wrong-hash completion anchor snapshot");
+    let error = deserialize_state_snapshot_value(wrong_hash)
+        .err()
+        .expect("a completion anchor with the wrong committed hash must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("finalized anchor hash does not match committed block height"),
+        "unexpected completion-anchor hash error: {error}"
+    );
+
+    let (out_of_range_world, _, order_id) = sample_snapshot_approved_pin_world();
+    let mut out_of_range_state = snapshot_state_from_world(out_of_range_world);
+    let replication_orders = out_of_range_state.world.replication_orders.view();
+    let mut out_of_range_order = replication_orders
+        .get(&order_id)
+        .cloned()
+        .expect("snapshot completed replication order");
+    drop(replication_orders);
+    out_of_range_order.provider_completions[0]
+        .finalized_anchor
+        .height = 2;
+    out_of_range_state
+        .world
+        .replication_orders
+        .insert(order_id, out_of_range_order);
+    let out_of_range = norito::json::to_value(&out_of_range_state)
+        .expect("serialize out-of-range completion anchor snapshot");
+    let error = deserialize_state_snapshot_value(out_of_range)
+        .err()
+        .expect("a completion anchor beyond the committed prefix must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("anchors unavailable committed height 2"),
+        "unexpected completion-anchor height error: {error}"
+    );
+}
+state_test! { sync emergency_fast_manifest_constructor_binds_boundary_and_maps_hashes
+    let temp_dir = tempfile::tempdir().expect("temporary Kura root");
+    let lane_catalog = LaneCatalog::default();
+    let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
+    let mut kura_config = strict_kura_config_for_testing(temp_dir.path().join("kura"));
+    let (strict_kura, _) = Kura::new_with_configured_lane_catalog(
+        &kura_config,
+        &lane_config,
+        &lane_catalog,
+    )
+    .expect("open configured Strict Kura fixture");
+    let block = new_dummy_block_with_payload(|header| {
+        header.set_height(nonzero!(1_u64));
+    });
+    let committed_hash = block.as_ref().hash();
+    strict_kura
+        .store_block(block)
+        .expect("persist committed Fast-boundary block");
+    let lane_incarnation = derive_static_lane_incarnations(&lane_catalog)[&LaneId::SINGLE];
+    let configured_catalog_hash = strict_kura
+        .configured_lane_catalog_baseline()
+        .expect("read configured lane catalog baseline")
+        .expect("configured test catalog baseline");
+    strict_kura
+        .establish_or_verify_configured_primary_geometry_anchor(
+            lane_config.primary(),
+            lane_incarnation,
+            configured_catalog_hash,
+        )
+        .expect("authenticate the Fast-boundary lane geometry");
+    drop(strict_kura);
+
+    kura_config.init_mode = iroha_config::kura::InitMode::Fast;
+    let (fast_kura, _) = Kura::open_test_kura_with_configured_lane_config(
+        &kura_config,
+        &lane_config,
+    )
+    .expect("reopen Fast Kura fixture");
+    let seed = || deserialize::KuraSeed {
+        kura: Arc::clone(&fast_kura),
+        query_handle: LiveQueryStore::start_test(),
+        #[cfg(feature = "telemetry")]
+        telemetry: crate::telemetry::StateTelemetry::default(),
+    };
+    let chain_id = ChainId::from("fast-manifest-test");
+    let network_id = *DEFAULT_TEST_NETWORK_ID;
+    let height_error = seed()
+        .into_state_from_emergency_fast_manifest(
+            chain_id.clone(),
+            network_id,
+            0,
+            None,
+            [0xA5; 32],
+        )
+        .err()
+        .expect("a stale signed height must fail the exact Kura binding");
+    assert!(
+        height_error.to_string().contains("differs from durable Kura"),
+        "unexpected manifest height error: {height_error}"
+    );
+
+    let wrong_tip = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB6; 32]));
+    let tip_error = seed()
+        .into_state_from_emergency_fast_manifest(
+            chain_id.clone(),
+            network_id,
+            1,
+            Some(wrong_tip),
+            [0xA5; 32],
+        )
+        .err()
+        .expect("a forged signed tip must fail the exact Kura binding");
+    assert!(
+        tip_error.to_string().contains("differs from durable Kura"),
+        "unexpected manifest tip error: {tip_error}"
+    );
+
+    let signed_sccp_policy_hash = [0xC7; 32];
+    let restored = seed()
+        .into_state_from_emergency_fast_manifest(
+            chain_id.clone(),
+            network_id,
+            1,
+            Some(committed_hash),
+            signed_sccp_policy_hash,
+        )
+        .expect("the exact signed manifest boundary must restore");
+    assert_eq!(restored.chain_id, chain_id);
+    assert_eq!(restored.network_id, network_id);
+    assert_eq!(restored.committed_height(), 1);
+    assert_eq!(restored.latest_block_hash_fast(), Some(committed_hash));
+    assert_eq!(
+        restored.sccp_policy_hash_snapshot(),
+        signed_sccp_policy_hash,
+        "Fast capability matching must use the signed compact policy commitment"
+    );
+    assert_ne!(
+        restored.sccp_registry_snapshot().policy_hash(),
+        signed_sccp_policy_hash,
+        "the compact constructor must not synthesize or decode a registry preimage"
+    );
+    assert!(restored.world.accounts.view().iter().next().is_none());
+    assert!(
+        !restored.nexus_runtime_restored_from_snapshot(),
+        "the compact manifest does not authenticate dynamic Nexus runtime state"
+    );
+}
+state_test! { sync sccp_policy_hash_snapshot_uses_validated_registry_in_strict_mode
+    let state = blank_state();
+    let registry = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 {
+        version: 1,
+        lanes: vec![eth_test_lane_for_testing()],
+    })
+    .expect("valid non-empty SCCP registry fixture");
+    let expected = registry.policy_hash();
+    state.set_sccp_registry_for_testing(registry);
+    assert_eq!(
+        state.sccp_policy_hash_snapshot(),
+        expected,
+        "Strict mode must derive its policy identity from the validated registry"
+    );
+}
+state_test! { sync automatic_replication_snapshot_rejects_oversubscribed_capacity
+    let (mut world, _, _) = sample_snapshot_approved_pin_world();
+    let second_digest = ManifestDigest::new([0xD4; 32]);
+    let second_pin = sample_snapshot_private_pin(second_digest, 128);
+    let second_order =
+        crate::smartcontracts::isi::sorafs::completed_auto_replication_order_for_test(
+            &second_pin,
+            &ALICE_ID,
+        )
+        .expect("canonical second automatic replication order");
+    world.pin_manifests.insert(second_digest, second_pin);
+    world
+        .replication_orders
+        .insert(second_order.order_id, second_order);
+
+    let provider_id = ProviderId::new([0xD5; 32]);
+    let declarations = world.capacity_declarations.view();
+    let mut capacity_record = declarations
+        .get(&provider_id)
+        .cloned()
+        .expect("snapshot automatic provider capacity");
+    drop(declarations);
+    let mut declaration: sorafs_manifest::capacity::CapacityDeclarationV1 =
+        norito::decode_from_bytes(&capacity_record.declaration)
+            .expect("decode snapshot automatic provider capacity");
+    declaration.committed_capacity_gib = 1;
+    declaration.chunker_commitments[0].committed_gib = 1;
+    declaration
+        .validate()
+        .expect("reduced provider capacity remains canonical");
+    capacity_record.committed_capacity_gib = 1;
+    capacity_record.declaration = norito::encode_canonical(&declaration)
+        .expect("encode reduced automatic provider capacity");
+    world
+        .capacity_declarations
+        .insert(provider_id, capacity_record);
+
+    let oversubscribed = norito::json::to_value(&snapshot_state_from_world(world))
+        .expect("serialize oversubscribed automatic replication capacity");
+    let error = deserialize_state_snapshot_value(oversubscribed)
+        .err()
+        .expect("automatic allocations beyond retained capacity must fail restore");
+    assert!(
+        error
+            .to_string()
+            .contains("automatic replication allocations oversubscribe provider"),
+        "unexpected automatic capacity oversubscription error: {error}"
+    );
+}
+state_test! { sync service_material_restore_rejects_deleting_absent_material
+    let bundle = sample_snapshot_service_bundle();
+    let deploy_event = sample_snapshot_service_audit_event(&bundle, 1);
+    let world_with_event = |deployment: SoraServiceDeploymentStateV1,
+                            event: iroha_data_model::soracloud::SoraServiceAuditEventV1| {
+        let mut world = World::default();
+        world.soracloud_service_revisions.insert(
+            (
+                bundle.service.service_name.as_ref().to_owned(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        world
+            .soracloud_service_deployments
+            .insert(deployment.service_name.clone(), deployment);
+        world
+            .soracloud_service_audit_events
+            .insert(deploy_event.sequence, deploy_event.clone());
+        world
+            .soracloud_service_audit_events
+            .insert(event.sequence, event);
+        world
+    };
+
+    let mut config_deployment = sample_snapshot_service_deployment(&bundle);
+    config_deployment.config_generation = 1;
+    let mut phantom_config_delete = deploy_event.clone();
+    phantom_config_delete.sequence = 2;
+    phantom_config_delete.action =
+        iroha_data_model::soracloud::SoraServiceLifecycleActionV1::ConfigMutation;
+    phantom_config_delete.config_generation = 1;
+    phantom_config_delete.config_mutations = vec![
+        iroha_data_model::soracloud::SoraServiceConfigMutationV1::Delete(
+            "absent_config".to_owned(),
+        ),
+    ];
+    phantom_config_delete
+        .validate()
+        .expect("phantom config mutation remains individually valid");
+    let config_snapshot = norito::json::to_value(&snapshot_state_from_world(world_with_event(
+        config_deployment,
+        phantom_config_delete,
+    )))
+    .expect("serialize phantom config-generation advance");
+    let error = deserialize_state_snapshot_value(config_snapshot)
+        .err()
+        .expect("config generation must not advance without changing its canonical projection");
+    assert!(
+        error.to_string().contains("deletes absent config"),
+        "unexpected absent-config delete restore error: {error}"
+    );
+
+    let mut secret_deployment = sample_snapshot_service_deployment(&bundle);
+    secret_deployment.secret_generation = 1;
+    let mut phantom_secret_delete = deploy_event.clone();
+    phantom_secret_delete.sequence = 2;
+    phantom_secret_delete.action =
+        iroha_data_model::soracloud::SoraServiceLifecycleActionV1::SecretMutation;
+    phantom_secret_delete.secret_generation = 1;
+    phantom_secret_delete.secret_mutations = vec![
+        iroha_data_model::soracloud::SoraServiceSecretMutationV1::Delete(
+            "absent_secret".to_owned(),
+        ),
+    ];
+    phantom_secret_delete
+        .validate()
+        .expect("phantom secret mutation remains individually valid");
+    let secret_snapshot = norito::json::to_value(&snapshot_state_from_world(world_with_event(
+        secret_deployment,
+        phantom_secret_delete,
+    )))
+    .expect("serialize phantom secret-generation advance");
+    let error = deserialize_state_snapshot_value(secret_snapshot)
+        .err()
+        .expect("secret generation must not advance without changing its canonical projection");
+    assert!(
+        error.to_string().contains("deletes absent secret"),
+        "unexpected absent-secret delete restore error: {error}"
+    );
+}
+state_test! { sync hosted_service_restore_requires_lease_and_latest_rollover_opener
+    let bundle = sample_snapshot_hosted_service_bundle();
+    let deployment = sample_snapshot_hosted_service_deployment(&bundle);
+    let deploy_event = sample_snapshot_service_audit_event(&bundle, 1);
+    let world_with = |deployment: SoraServiceDeploymentStateV1,
+                      events: Vec<iroha_data_model::soracloud::SoraServiceAuditEventV1>| {
+        let mut world = World::default();
+        world.soracloud_service_revisions.insert(
+            (
+                bundle.service.service_name.as_ref().to_owned(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        world
+            .soracloud_service_deployments
+            .insert(deployment.service_name.clone(), deployment);
+        for event in events {
+            world.soracloud_service_audit_events.insert(event.sequence, event);
+        }
+        world
+    };
+
+    let canonical = norito::json::to_value(&snapshot_state_from_world(world_with(
+        deployment.clone(),
+        vec![deploy_event.clone()],
+    )))
+    .expect("serialize canonical hosted-service snapshot");
+    deserialize_state_snapshot_value(canonical)
+        .expect("hosted service with its exact lease must restore");
+
+    let mut noncanonical_volume_generation = deployment.clone();
+    noncanonical_volume_generation.lease_volume_states[0].authoritative_generation = 2;
+    noncanonical_volume_generation
+        .validate()
+        .expect("generation two is structurally valid but has no first-release live transition");
+    let noncanonical_volume_generation = norito::json::to_value(&snapshot_state_from_world(
+        world_with(
+            noncanonical_volume_generation,
+            vec![deploy_event.clone()],
+        ),
+    ))
+    .expect("serialize never-live lease-volume generation");
+    let error = deserialize_state_snapshot_value(noncanonical_volume_generation)
+        .err()
+        .expect("restore must reject a lease-volume generation no live writer can produce");
+    assert!(
+        error.to_string().contains("authoritative_generation")
+            && error.to_string().contains("must equal 1"),
+        "unexpected lease-volume generation restore error: {error}"
+    );
+
+    let mut missing_lease = deployment.clone();
+    missing_lease.service_lease = None;
+    missing_lease.lease_volume_states.clear();
+    missing_lease
+        .validate()
+        .expect("HTTP deployment without a lease remains individually valid");
+    let missing_lease_snapshot = norito::json::to_value(&snapshot_state_from_world(world_with(
+        missing_lease,
+        vec![deploy_event.clone()],
+    )))
+    .expect("serialize HTTP deployment without a lease");
+    let error = deserialize_state_snapshot_value(missing_lease_snapshot)
+        .err()
+        .expect("HTTP service without its authoritative lease must fail closed");
+    assert!(
+        error.to_string().contains("if and only if")
+            && error.to_string().contains("HttpService"),
+        "unexpected hosted-service lease-presence restore error: {error}"
+    );
+
+    let settled_egress_bytes = 1_u128;
+    let reporter_placement = sample_snapshot_inrou_placement(
+        bundle.service.service_name.clone(),
+        bundle.service.service_version.clone(),
+        ALICE_ID.clone(),
+    );
+    let reporter_assignment =
+        iroha_data_model::soracloud::SoraServiceLeaseReporterAssignmentV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
+            service_version: bundle.service.service_version.clone(),
+            placement: reporter_placement
+                .placements
+                .first()
+                .cloned()
+                .expect("hosted-service reporter placement"),
+            placement_reconciled_at_ms: reporter_placement.reconciled_at_ms,
+        };
+    let mut pre_rollover_lease = deployment
+        .service_lease
+        .clone()
+        .expect("hosted-service fixture lease");
+    let mut rollover_history = vec![deploy_event.clone()];
+    let mut historical_assignments =
+        (0..iroha_data_model::soracloud::SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1)
+            .map(|index| {
+                let seed = Hash::new(
+                    u64::try_from(index)
+                        .expect("checkpoint index fits u64")
+                        .to_le_bytes(),
+                );
+                let reporter_keypair = KeyPair::try_from_seed(
+                    seed.as_ref().to_vec(),
+                    iroha_crypto::Algorithm::Ed25519,
+                )
+                .expect("deterministic historical reporter key");
+                let mut assignment = reporter_assignment.clone();
+                assignment.placement.validator_account_id =
+                    AccountId::new(reporter_keypair.public_key().clone());
+                assignment.placement.peer_id =
+                    PeerId::from(reporter_keypair.public_key().clone()).to_string();
+                (assignment, reporter_keypair.public_key().clone())
+            })
+            .collect::<Vec<_>>();
+    historical_assignments.sort_by(|left, right| {
+        left.0
+            .placement
+            .validator_account_id
+            .cmp(&right.0.placement.validator_account_id)
+    });
+    for (index, (assignment, signer)) in historical_assignments.into_iter().enumerate() {
+        let index = u64::try_from(index).expect("checkpoint index fits u64");
+        let block_height = 2_u64
+            .checked_add(index)
+            .expect("fixture block height");
+        let open_sequence = 2_u64
+            .checked_add(index.checked_mul(2).expect("fixture audit sequence"))
+            .expect("fixture audit sequence");
+        pre_rollover_lease.egress_reporter_checkpoints.push(
+            iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
+                reporting_epoch: 1,
+                assignment: assignment.clone(),
+                accounted_egress_bytes: 0,
+                last_updated_height: block_height,
+                finalize_reporter: false,
+            },
+        );
+        pre_rollover_lease
+            .egress_reporter_checkpoints
+            .sort_by(|left, right| {
+                (
+                    left.reporting_epoch,
+                    left.assignment.service_version.as_str(),
+                    left.assignment.placement.replica_slot,
+                    &left.assignment.placement.validator_account_id,
+                )
+                    .cmp(&(
+                        right.reporting_epoch,
+                        right.assignment.service_version.as_str(),
+                        right.assignment.placement.replica_slot,
+                        &right.assignment.placement.validator_account_id,
+                    ))
+            });
+        pre_rollover_lease
+            .refresh_accounted_egress_bytes()
+            .expect("historical reporter aggregate");
+        let mut open_event = deploy_event.clone();
+        open_event.sequence = open_sequence;
+        open_event.block_height = block_height;
+        open_event.block_timestamp_ms = block_height.saturating_mul(1_000);
+        open_event.action =
+            iroha_data_model::soracloud::SoraServiceLifecycleActionV1::LeaseUsage;
+        open_event.from_version = Some(bundle.service.service_version.clone());
+        open_event.lease_usage = Some(
+            iroha_data_model::soracloud::SoraServiceLeaseUsageAuditV1 {
+                schema_version:
+                    iroha_data_model::soracloud::SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
+                reporting_epoch: 1,
+                assignment: assignment.clone(),
+                replica_accounted_egress_bytes: 0,
+                finalize_reporter: false,
+            },
+        );
+        open_event.service_lease_commitment = Some(
+            iroha_data_model::soracloud::derive_soracloud_service_lease_commitment_v1(
+                &pre_rollover_lease,
+            ),
+        );
+        open_event.signer = signer.clone();
+        open_event
+            .validate()
+            .expect("historical reporter opener audit fixture");
+        rollover_history.push(open_event);
+
+        let checkpoint = pre_rollover_lease
+            .egress_reporter_checkpoints
+            .iter_mut()
+            .find(|checkpoint| checkpoint.assignment == assignment)
+            .expect("newly opened historical reporter checkpoint");
+        let terminal_bytes = if index == 0 { 1 } else { 0 };
+        let terminal_block_height = block_height
+            .checked_add(1)
+            .expect("fixture terminal block height");
+        checkpoint.accounted_egress_bytes = terminal_bytes;
+        checkpoint.finalize_reporter = true;
+        checkpoint.last_updated_height = terminal_block_height;
+        pre_rollover_lease
+            .refresh_accounted_egress_bytes()
+            .expect("historical terminal reporter aggregate");
+        let mut terminal_event = deploy_event.clone();
+        terminal_event.sequence = open_sequence
+            .checked_add(1)
+            .expect("fixture terminal audit sequence");
+        terminal_event.block_height = terminal_block_height;
+        terminal_event.block_timestamp_ms = terminal_block_height.saturating_mul(1_000);
+        terminal_event.action =
+            iroha_data_model::soracloud::SoraServiceLifecycleActionV1::LeaseUsage;
+        terminal_event.from_version = Some(bundle.service.service_version.clone());
+        terminal_event.lease_usage = Some(
+            iroha_data_model::soracloud::SoraServiceLeaseUsageAuditV1 {
+                schema_version:
+                    iroha_data_model::soracloud::SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
+                reporting_epoch: 1,
+                assignment,
+                replica_accounted_egress_bytes: terminal_bytes,
+                finalize_reporter: true,
+            },
+        );
+        terminal_event.service_lease_commitment = Some(
+            iroha_data_model::soracloud::derive_soracloud_service_lease_commitment_v1(
+                &pre_rollover_lease,
+            ),
+        );
+        terminal_event.signer = signer;
+        terminal_event
+            .validate()
+            .expect("historical reporter terminal audit fixture");
+        rollover_history.push(terminal_event);
+    }
+    let rollover_height = 2_u64
+        .checked_add(
+            u64::try_from(
+                iroha_data_model::soracloud::SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
+            )
+            .expect("checkpoint limit fits u64"),
+        )
+        .expect("rollover fixture block height");
+    let mut rolled_deployment = deployment;
+    let lease = rolled_deployment
+        .service_lease
+        .as_mut()
+        .expect("hosted-service fixture lease");
+    lease.reporting_epoch = 2;
+    lease.settled_egress_bytes = settled_egress_bytes;
+    lease.accounted_egress_bytes = settled_egress_bytes;
+    lease.egress_reporter_checkpoints = vec![
+        iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
+            reporting_epoch: 2,
+            assignment: reporter_assignment.clone(),
+            accounted_egress_bytes: 0,
+            last_updated_height: rollover_height,
+            finalize_reporter: false,
+        },
+    ];
+    rolled_deployment
+        .validate()
+        .expect("post-rollover deployment fixture remains valid");
+    let mut rollover_event = deploy_event.clone();
+    rollover_event.sequence = 2_u64
+        .checked_add(
+            u64::try_from(
+                iroha_data_model::soracloud::SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
+            )
+            .expect("checkpoint limit fits u64")
+            .checked_mul(2)
+            .expect("rollover fixture audit sequence"),
+        )
+        .expect("rollover audit sequence");
+    rollover_event.block_height = rollover_height;
+    rollover_event.block_timestamp_ms = rollover_height.saturating_mul(1_000);
+    rollover_event.action =
+        iroha_data_model::soracloud::SoraServiceLifecycleActionV1::LeaseReportingEpochRollover;
+    rollover_event.from_version = Some(bundle.service.service_version.clone());
+    rollover_event.lease_usage = Some(
+        iroha_data_model::soracloud::SoraServiceLeaseUsageAuditV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
+            reporting_epoch: 2,
+            assignment: reporter_assignment,
+            replica_accounted_egress_bytes: 0,
+            finalize_reporter: false,
+        },
+    );
+    rollover_event.service_lease_commitment = Some(
+        iroha_data_model::soracloud::derive_soracloud_service_lease_commitment_v1(
+            rolled_deployment
+                .service_lease
+                .as_ref()
+                .expect("post-rollover hosted-service lease"),
+        ),
+    );
+    rollover_event.lease_reporting_epoch_rollover = Some(
+        iroha_data_model::soracloud::SoraServiceLeaseReportingEpochRolloverV1 {
+            schema_version: iroha_data_model::soracloud::SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1,
+            economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+            lease_started_height: 1,
+            previous_reporting_epoch: 1,
+            new_reporting_epoch: 2,
+            reporter_account_id: ALICE_ID.clone(),
+            active_service_version: bundle.service.service_version.clone(),
+            replica_slot: 1,
+            placement_incarnation: Hash::new(b"placement-1"),
+            finalized_checkpoint_count: u32::try_from(
+                iroha_data_model::soracloud::SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
+            )
+            .expect("checkpoint limit fits u32"),
+            settled_egress_bytes_delta: settled_egress_bytes,
+            settled_egress_bytes,
+        },
+    );
+    rollover_event
+        .validate()
+        .expect("canonical rollover audit fixture remains valid");
+    rollover_history.push(rollover_event.clone());
+    let canonical_rollover = norito::json::to_value(&snapshot_state_from_world(world_with(
+        rolled_deployment.clone(),
+        rollover_history.clone(),
+    )))
+    .expect("serialize canonical rollover snapshot");
+    deserialize_state_snapshot_value(canonical_rollover)
+        .expect("rollover with its exact successor opener checkpoint must restore");
+
+    rolled_deployment
+        .service_lease
+        .as_mut()
+        .expect("hosted-service fixture lease")
+        .egress_reporter_checkpoints
+        .clear();
+    let missing_opener = norito::json::to_value(&snapshot_state_from_world(world_with(
+        rolled_deployment,
+        rollover_history,
+    )))
+    .expect("serialize rollover without its successor opener");
+    let error = deserialize_state_snapshot_value(missing_opener)
+        .err()
+        .expect("latest rollover must retain its exact successor opener checkpoint");
+    assert!(
+        error.to_string().contains("exact reporter checkpoint opened"),
+        "unexpected rollover-opener restore error: {error}"
+    );
+}
 state_test! { sync runtime_and_inrou_restore_require_authoritative_references
     let service_name: Name = "snapshot_runtime_refs".parse().expect("valid service name");
 
@@ -33149,6 +35098,37 @@ state_test! { sync runtime_and_inrou_restore_require_authoritative_references
     assert!(
         error.to_string().contains("must equal its active deployment revision"),
         "unexpected runtime-version error: {error}"
+    );
+
+    let mut runtime_hash_world = World::default();
+    runtime_hash_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    runtime_hash_world
+        .soracloud_service_deployments
+        .insert(
+            bundle.service.service_name.clone(),
+            sample_snapshot_service_deployment(&bundle),
+        );
+    let mut forged_runtime =
+        sample_snapshot_service_runtime(bundle.service.service_name.clone(), 250);
+    forged_runtime.active_service_version = bundle.service.service_version.clone();
+    forged_runtime.materialized_bundle_hash = Hash::new(b"forged-service-runtime-bundle");
+    runtime_hash_world
+        .soracloud_service_runtime
+        .insert(bundle.service.service_name.clone(), forged_runtime);
+    let runtime_hash = norito::json::to_value(&snapshot_state_from_world(runtime_hash_world))
+        .expect("serialize runtime materialized-bundle mismatch");
+    let error = deserialize_state_snapshot_value(runtime_hash)
+        .err()
+        .expect("generic runtime materialization must bind the active admitted bundle");
+    assert!(
+        error.to_string().contains("materialized bundle hash"),
+        "unexpected generic runtime bundle error: {error}"
     );
 
     let placement = sample_snapshot_inrou_placement(
@@ -33254,6 +35234,54 @@ state_test! { sync runtime_and_inrou_restore_require_authoritative_references
             .contains("exactly match its authoritative placement assignment"),
         "unexpected replica-identity error: {error}"
     );
+
+    let placement = sample_snapshot_inrou_placement(
+        bundle.service.service_name.clone(),
+        bundle.service.service_version.clone(),
+        ALICE_ID.clone(),
+    );
+    let mut replica_hash_world = World::default();
+    replica_hash_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    replica_hash_world
+        .soracloud_service_deployments
+        .insert(
+            bundle.service.service_name.clone(),
+            sample_snapshot_service_deployment(&bundle),
+        );
+    replica_hash_world.soracloud_inrou_service_placements.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        placement,
+    );
+    let mut forged_replica =
+        sample_snapshot_inrou_replica_runtime(bundle.service.service_name.clone());
+    forged_replica.service_version = bundle.service.service_version.clone();
+    forged_replica.materialized_bundle_hash = Hash::new(b"forged-inrou-runtime-bundle");
+    replica_hash_world.soracloud_inrou_replica_runtime.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+            "1".to_owned(),
+        ),
+        forged_replica,
+    );
+    let replica_hash = norito::json::to_value(&snapshot_state_from_world(replica_hash_world))
+        .expect("serialize Inrou materialized-bundle mismatch");
+    let error = deserialize_state_snapshot_value(replica_hash)
+        .err()
+        .expect("Inrou runtime materialization must bind its exact admitted bundle");
+    assert!(
+        error.to_string().contains("exact admitted Inrou bundle"),
+        "unexpected Inrou runtime bundle error: {error}"
+    );
 }
 state_test! { sync global_clock_source_restore_validates_records_and_sequence_keys
     let mut miskeyed_world = World::default();
@@ -33288,21 +35316,452 @@ state_test! { sync global_clock_source_restore_validates_records_and_sequence_ke
         "unexpected invalid training-audit error: {error}"
     );
 
-    let mut invalid_evidence_world = World::default();
-    let evidence = sample_snapshot_model_host_violation(0);
-    invalid_evidence_world
-        .soracloud_model_host_violation_evidence
-        .insert(evidence.evidence_id, evidence);
-    let invalid_evidence = norito::json::to_value(&snapshot_state_from_world(invalid_evidence_world))
-        .expect("serialize invalid model-host evidence snapshot");
-    let error = deserialize_state_snapshot_value(invalid_evidence)
+}
+state_test! { sync parsed_soracloud_projection_stores_fail_closed_on_orphans
+    let bundle = sample_snapshot_service_bundle();
+    let mut service_audit_world = World::default();
+    service_audit_world
+        .soracloud_service_audit_events
+        .insert(1, sample_snapshot_service_audit_event(&bundle, 1));
+    let service_audit_snapshot =
+        norito::json::to_value(&snapshot_state_from_world(service_audit_world))
+            .expect("serialize orphan service audit");
+    let error = deserialize_state_snapshot_value(service_audit_snapshot)
         .err()
-        .expect("hash-keyed global-clock evidence must validate its sequence bounds");
+        .expect("orphan service audit must fail closed");
     assert!(
         error
             .to_string()
-            .contains("soracloud_model_host_violation_evidence"),
-        "unexpected invalid model-host evidence error: {error}"
+            .contains("service audit event has no authoritative deployment"),
+        "unexpected orphan-service-audit error: {error}"
+    );
+
+    let app_state = sample_snapshot_app_infra_state();
+    let app_event = sample_snapshot_app_infra_audit_event(&app_state);
+    let mut app_audit_world = World::default();
+    app_audit_world
+        .soracloud_app_infra_audit_events
+        .insert(app_event.sequence, app_event);
+    let app_audit_snapshot = norito::json::to_value(&snapshot_state_from_world(app_audit_world))
+        .expect("serialize orphan app audit");
+    let error = deserialize_state_snapshot_value(app_audit_snapshot)
+        .err()
+        .expect("orphan app audit must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("app audit event has no authoritative app state"),
+        "unexpected orphan-app-audit error: {error}"
+    );
+
+    let mut decryption_world = World::default();
+    let policy = iroha_data_model::soracloud::DecryptionAuthorityPolicyV1 {
+        schema_version: iroha_data_model::soracloud::DECRYPTION_AUTHORITY_POLICY_VERSION_V1,
+        policy_name: "snapshot_policy".parse().expect("valid policy name"),
+        mode: iroha_data_model::soracloud::DecryptionAuthorityModeV1::ThresholdService,
+        approver_quorum: std::num::NonZeroU16::new(2).expect("non-zero quorum"),
+        approver_ids: vec![
+            "approver_a".parse().expect("valid approver name"),
+            "approver_b".parse().expect("valid approver name"),
+        ],
+        allow_break_glass: true,
+        jurisdiction_tag: "snapshot-jurisdiction".to_owned(),
+        require_consent_evidence: false,
+        max_ttl_blocks: NonZeroU32::new(64).expect("non-zero TTL"),
+        audit_tag: "snapshot.decrypt".to_owned(),
+    };
+    let request = iroha_data_model::soracloud::DecryptionRequestV1 {
+        schema_version: iroha_data_model::soracloud::DECRYPTION_REQUEST_VERSION_V1,
+        request_id: "snapshot-decryption".to_owned(),
+        policy_name: policy.policy_name.clone(),
+        binding_name: "private_state".parse().expect("valid binding name"),
+        state_key: "/private/snapshot".to_owned(),
+        ciphertext_commitment: Hash::new(b"snapshot-ciphertext"),
+        justification: "restore validation".to_owned(),
+        jurisdiction_tag: policy.jurisdiction_tag.clone(),
+        consent_evidence_hash: None,
+        requested_ttl_blocks: NonZeroU32::new(8).expect("non-zero request TTL"),
+        break_glass: false,
+        break_glass_reason: None,
+        governance_tx_hash: Hash::new(b"snapshot-governance"),
+    };
+    let decryption_record = iroha_data_model::soracloud::SoraDecryptionRequestRecordV1 {
+        schema_version: iroha_data_model::soracloud::SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
+        service_name: "snapshot_decryption_service"
+            .parse()
+            .expect("valid service name"),
+        service_version: "1.0.0".to_owned(),
+        policy,
+        request,
+        sequence: 1,
+        signer: ALICE_KEYPAIR.public_key().clone(),
+    };
+    decryption_world.soracloud_decryption_request_records.insert(
+        (
+            decryption_record.service_name.as_ref().to_owned(),
+            decryption_record.request.request_id.clone(),
+        ),
+        decryption_record,
+    );
+    let decryption_snapshot =
+        norito::json::to_value(&snapshot_state_from_world(decryption_world))
+            .expect("serialize orphan decryption request");
+    let error = deserialize_state_snapshot_value(decryption_snapshot)
+        .err()
+        .expect("orphan decryption request must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("soracloud_decryption_request_records")
+            && error.to_string().contains("missing service revision"),
+        "unexpected orphan-decryption error: {error}"
+    );
+
+    let mut training_world = World::default();
+    training_world
+        .soracloud_training_job_audit_events
+        .insert(1, sample_snapshot_training_job_audit_event(1));
+    let training_snapshot = norito::json::to_value(&snapshot_state_from_world(training_world))
+        .expect("serialize orphan training audit");
+    let error = deserialize_state_snapshot_value(training_snapshot)
+        .err()
+        .expect("orphan training audit must fail closed");
+    assert!(
+        error.to_string().contains("no authoritative job record"),
+        "unexpected orphan-training error: {error}"
+    );
+
+    let mut model_world = World::default();
+    let registry = iroha_data_model::soracloud::SoraModelRegistryV1 {
+        schema_version: iroha_data_model::soracloud::SORA_MODEL_REGISTRY_VERSION_V1,
+        service_name: "snapshot_model_service"
+            .parse()
+            .expect("valid service name"),
+        service_version: "1.0.0".to_owned(),
+        model_name: "snapshot_model".to_owned(),
+        current_version: None,
+        updated_sequence: 1,
+    };
+    model_world.soracloud_model_registries.insert(
+        (
+            registry.service_name.as_ref().to_owned(),
+            registry.model_name.clone(),
+        ),
+        registry,
+    );
+    let model_snapshot = norito::json::to_value(&snapshot_state_from_world(model_world))
+        .expect("serialize orphan model registry");
+    let error = deserialize_state_snapshot_value(model_snapshot)
+        .err()
+        .expect("orphan model registry must fail closed");
+    assert!(
+        error.to_string().contains("soracloud_model_registries")
+            && error.to_string().contains("missing retained service revision"),
+        "unexpected orphan-model error: {error}"
+    );
+
+    let mut hf_world = World::default();
+    let repo_id = "openai/snapshot-model";
+    let revision = "0123456789abcdef0123456789abcdef01234567";
+    let source_id = iroha_data_model::soracloud::derive_hf_source_id_v1(repo_id, revision)
+        .expect("canonical snapshot HF source ID");
+    hf_world.soracloud_hf_sources.insert(
+        source_id,
+        iroha_data_model::soracloud::SoraHfSourceRecordV1 {
+            schema_version: iroha_data_model::soracloud::SORA_HF_SOURCE_RECORD_VERSION_V1,
+            source_id,
+            repo_id: repo_id.to_owned(),
+            resolved_revision: revision.to_owned(),
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        },
+    );
+    let hf_snapshot = norito::json::to_value(&snapshot_state_from_world(hf_world))
+        .expect("serialize orphan HF source");
+    let error = deserialize_state_snapshot_value(hf_snapshot)
+        .err()
+        .expect("orphan HF source must fail closed");
+    assert!(
+        error.to_string().contains("soracloud_hf_sources")
+            && error.to_string().contains("no retained shared-lease pool"),
+        "unexpected orphan-HF-source error: {error}"
+    );
+
+    let mut apartment_world = World::default();
+    apartment_world.soracloud_agent_apartment_audit_events.insert(
+        1,
+        iroha_data_model::soracloud::SoraAgentApartmentAuditEventV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
+            sequence: 1,
+            block_height: 1,
+            block_timestamp_ms: 1_000,
+            action: iroha_data_model::soracloud::SoraAgentApartmentActionV1::Deploy,
+            apartment_name: "snapshot_apartment"
+                .parse()
+                .expect("valid apartment name"),
+            status: iroha_data_model::soracloud::SoraAgentRuntimeStatusV1::Running,
+            lease_expires_height: 10,
+            manifest_hash: Hash::new(b"snapshot-apartment-manifest"),
+            restart_count: 0,
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            request_id: None,
+            asset_definition: None,
+            amount: None,
+            capability: None,
+            reason: None,
+            from_apartment: None,
+            to_apartment: None,
+            channel: None,
+            payload_hash: None,
+            artifact_hash: None,
+            provenance_hash: None,
+            run_id: None,
+            run_label: None,
+            budget_units: None,
+            service_name: None,
+            service_version: None,
+            handler_name: None,
+            result_commitment: None,
+            runtime_receipt_id: None,
+            journal_artifact_hash: None,
+            checkpoint_artifact_hash: None,
+            succeeded: None,
+        },
+    );
+    let apartment_snapshot =
+        norito::json::to_value(&snapshot_state_from_world(apartment_world))
+            .expect("serialize orphan apartment audit");
+    let error = deserialize_state_snapshot_value(apartment_snapshot)
+        .err()
+        .expect("orphan apartment audit must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("no authoritative apartment record"),
+        "unexpected orphan-apartment error: {error}"
+    );
+}
+state_test! { sync hf_shared_lease_audit_restore_requires_exact_retained_member
+    let (canonical_world, _source_id, _pool_id) = sample_snapshot_hf_registry_world();
+    let canonical_snapshot = norito::json::to_value(&snapshot_state_from_world(canonical_world))
+        .expect("serialize complete HF projection snapshot");
+    deserialize_state_snapshot_value(canonical_snapshot)
+        .expect("complete HF source/pool/member registry graph must restore");
+
+    let (mut orphan_world, source_id, pool_id) = sample_snapshot_hf_registry_world();
+    orphan_world.soracloud_hf_shared_lease_audit_events.insert(
+        1,
+        iroha_data_model::soracloud::SoraHfSharedLeaseAuditEventV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
+            sequence: 1,
+            action: iroha_data_model::soracloud::SoraHfSharedLeaseActionV1::Join,
+            pool_id,
+            source_id,
+            account_id: BOB_ID.clone(),
+            occurred_at_ms: 1,
+            active_member_count: 1,
+            charged: Quantity::zero(),
+            refunded: Quantity::zero(),
+            lease_expires_at_ms: 60_001,
+            failure_reason: None,
+            service_name: None,
+            apartment_name: None,
+        },
+    );
+    let orphan_snapshot = norito::json::to_value(&snapshot_state_from_world(orphan_world))
+        .expect("serialize HF audit event for an unretained account");
+    let error = deserialize_state_snapshot_value(orphan_snapshot)
+        .err()
+        .expect("HF audit account without the exact retained pool member must fail closed");
+    assert!(
+        error.to_string().contains("no retained member in the exact pool"),
+        "unexpected orphan HF audit-account error: {error}"
+    );
+}
+state_test! { sync model_artifact_restore_rejects_duplicate_registration_audits
+    let mut bundle = sample_snapshot_service_bundle();
+    bundle.container.capabilities.allow_model_training = true;
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+    bundle
+        .validate_for_admission()
+        .expect("training-enabled snapshot bundle remains admissible");
+
+    let service_name = bundle.service.service_name.clone();
+    let service_version = bundle.service.service_version.clone();
+    let model_name = "snapshot_model".to_owned();
+    let job_id = "snapshot-job".to_owned();
+    let metrics_hash = Hash::new(b"snapshot-training-metrics");
+    let job = iroha_data_model::soracloud::SoraTrainingJobRecordV1 {
+        schema_version: iroha_data_model::soracloud::SORA_TRAINING_JOB_RECORD_VERSION_V1,
+        service_name: service_name.clone(),
+        service_version: service_version.clone(),
+        model_name: model_name.clone(),
+        job_id: job_id.clone(),
+        status: iroha_data_model::soracloud::SoraTrainingJobStatusV1::Completed,
+        worker_group_size: 1,
+        target_steps: 10,
+        completed_steps: 10,
+        checkpoint_interval_steps: 10,
+        last_checkpoint_step: Some(10),
+        checkpoint_count: 1,
+        retry_count: 0,
+        max_retries: 1,
+        step_compute_units: 1,
+        compute_budget_units: 10,
+        compute_consumed_units: 10,
+        storage_budget_bytes: 100,
+        storage_consumed_bytes: 10,
+        latest_metrics_hash: Some(metrics_hash),
+        last_failure_reason: None,
+        created_sequence: 1,
+        updated_sequence: 2,
+    };
+    let training_event = |sequence,
+                          action,
+                          status,
+                          completed_steps,
+                          checkpoint_count,
+                          compute_consumed_units,
+                          storage_consumed_bytes,
+                          last_checkpoint_step,
+                          latest_metrics_hash| {
+        iroha_data_model::soracloud::SoraTrainingJobAuditEventV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1,
+            sequence,
+            action,
+            service_name: service_name.clone(),
+            service_version: service_version.clone(),
+            model_name: model_name.clone(),
+            job_id: job_id.clone(),
+            status,
+            completed_steps,
+            checkpoint_count,
+            retry_count: 0,
+            compute_consumed_units,
+            storage_consumed_bytes,
+            last_checkpoint_step,
+            latest_metrics_hash,
+            last_failure_reason: None,
+            signer: ALICE_KEYPAIR.public_key().clone(),
+        }
+    };
+    let start_event = training_event(
+        1,
+        iroha_data_model::soracloud::SoraTrainingJobActionV1::Start,
+        iroha_data_model::soracloud::SoraTrainingJobStatusV1::Running,
+        0,
+        0,
+        0,
+        0,
+        None,
+        None,
+    );
+    let checkpoint_event = training_event(
+        2,
+        iroha_data_model::soracloud::SoraTrainingJobActionV1::Checkpoint,
+        iroha_data_model::soracloud::SoraTrainingJobStatusV1::Completed,
+        10,
+        1,
+        10,
+        10,
+        Some(10),
+        Some(metrics_hash),
+    );
+    let artifact = iroha_data_model::soracloud::SoraModelArtifactRecordV1 {
+        schema_version: iroha_data_model::soracloud::SORA_MODEL_ARTIFACT_RECORD_VERSION_V1,
+        service_name: service_name.clone(),
+        service_version: service_version.clone(),
+        model_name: model_name.clone(),
+        artifact_id: job_id.clone(),
+        training_job_id: job_id.clone(),
+        weight_version: None,
+        source_provenance: Some(iroha_data_model::soracloud::SoraModelProvenanceRefV1 {
+            kind: iroha_data_model::soracloud::SoraModelProvenanceKindV1::TrainingJob,
+            id: job_id.clone(),
+        }),
+        weight_artifact_hash: Hash::new(b"snapshot-training-weight-artifact"),
+        dataset_ref: "dataset://snapshot-training".to_owned(),
+        training_config_hash: Hash::new(b"snapshot-training-config"),
+        reproducibility_hash: Hash::new(b"snapshot-training-reproducibility"),
+        provenance_attestation_hash: Hash::new(b"snapshot-training-provenance"),
+        registered_sequence: 3,
+        consumed_by_version: None,
+        chunk_manifest_root: None,
+    };
+    let registration_event = |sequence| {
+        iroha_data_model::soracloud::SoraModelArtifactAuditEventV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1,
+            sequence,
+            action: iroha_data_model::soracloud::SoraModelArtifactActionV1::Register,
+            service_name: service_name.clone(),
+            service_version: service_version.clone(),
+            model_name: model_name.clone(),
+            training_job_id: job_id.clone(),
+            consumed_by_version: None,
+            signer: ALICE_KEYPAIR.public_key().clone(),
+        }
+    };
+    let world_with_registration_count = |duplicate: bool| {
+        let mut world = World::default();
+        world.soracloud_service_revisions.insert(
+            (
+                service_name.as_ref().to_owned(),
+                service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        world.soracloud_service_deployments.insert(
+            service_name.clone(),
+            sample_snapshot_service_deployment(&bundle),
+        );
+        world.soracloud_training_jobs.insert(
+            (service_name.as_ref().to_owned(), job_id.clone()),
+            job.clone(),
+        );
+        world
+            .soracloud_training_job_audit_events
+            .insert(1, start_event.clone());
+        world
+            .soracloud_training_job_audit_events
+            .insert(2, checkpoint_event.clone());
+        world.soracloud_model_artifacts.insert(
+            (service_name.as_ref().to_owned(), job_id.clone()),
+            artifact.clone(),
+        );
+        world
+            .soracloud_model_artifact_audit_events
+            .insert(3, registration_event(3));
+        if duplicate {
+            world
+                .soracloud_model_artifact_audit_events
+                .insert(4, registration_event(4));
+        }
+        world
+    };
+
+    let canonical = norito::json::to_value(&snapshot_state_from_world(
+        world_with_registration_count(false),
+    ))
+    .expect("serialize canonical model-artifact registration graph");
+    deserialize_state_snapshot_value(canonical)
+        .expect("one exact model-artifact registration audit must restore");
+
+    let duplicate = norito::json::to_value(&snapshot_state_from_world(
+        world_with_registration_count(true),
+    ))
+    .expect("serialize duplicated model-artifact registration graph");
+    let error = deserialize_state_snapshot_value(duplicate)
+        .err()
+        .expect("a second registration audit for one artifact must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("unique exact registration projection"),
+        "unexpected duplicate model-artifact audit error: {error}"
     );
 }
 state_test! { sync service_revision_restore_requires_exact_embedded_identity_key
@@ -33325,6 +35784,678 @@ state_test! { sync service_revision_restore_requires_exact_embedded_identity_key
             .to_string()
             .contains("soracloud_service_revisions"),
         "unexpected miskeyed-service-revision error: {error}"
+    );
+}
+state_test! { large_stack mailbox_and_receipt_restore_validates_consensus_execution_attribution
+    let bundle = sample_snapshot_service_bundle();
+    let message = sample_snapshot_mailbox_message(&bundle);
+    let receipt = sample_snapshot_mailbox_receipt(&bundle, &message, b"snapshot-mailbox-receipt", 3);
+
+    let world_with_receipt = |receipt: SoraRuntimeReceiptV1| {
+        let mut world = World::default();
+        world.soracloud_service_revisions.insert(
+            (
+                bundle.service.service_name.as_ref().to_owned(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        world.soracloud_service_deployments.insert(
+            bundle.service.service_name.clone(),
+            sample_snapshot_service_deployment(&bundle),
+        );
+        world
+            .soracloud_service_audit_events
+            .insert(1, sample_snapshot_service_audit_event(&bundle, 1));
+        world.public_lane_validators.insert(
+            (LaneId::SINGLE, ALICE_ID.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: ALICE_ID.clone(),
+                peer_id: PeerId::from(ALICE_KEYPAIR.public_key().clone()),
+                stake_account: ALICE_ID.clone(),
+                total_stake: Quantity::from(1_u64),
+                self_stake: Quantity::from(1_u64),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: Some(0),
+                activation_height: Some(0),
+                last_reward_epoch: None,
+            },
+        );
+        world
+            .soracloud_mailbox_messages
+            .insert(message.message_id, message.clone());
+        world
+            .soracloud_runtime_receipts
+            .insert(receipt.receipt_id, receipt);
+        world
+    };
+    let canonical_world = world_with_receipt(receipt.clone());
+    let canonical = norito::json::to_value(&snapshot_state_from_world(canonical_world))
+        .expect("serialize canonical mailbox and receipt snapshot");
+    deserialize_state_snapshot_value(canonical)
+        .expect("canonical ordered-mailbox receipt attribution must restore");
+
+    let mut exited_host_world = world_with_receipt(receipt.clone());
+    let validator_key = (LaneId::SINGLE, ALICE_ID.clone());
+    let mut exited_record = exited_host_world
+        .view()
+        .public_lane_validators()
+        .get(&validator_key)
+        .cloned()
+        .expect("receipt host validator record");
+    exited_record.status = PublicLaneValidatorStatus::Exited;
+    exited_host_world
+        .public_lane_validators
+        .insert(validator_key.clone(), exited_record);
+    let exited_host = norito::json::to_value(&snapshot_state_from_world(exited_host_world))
+        .expect("serialize receipt from a subsequently exited validator");
+    deserialize_state_snapshot_value(exited_host)
+        .expect("historical receipt attribution must survive later validator exit");
+
+    let mut rebound_host_world = world_with_receipt(receipt.clone());
+    let mut rebound_record = rebound_host_world
+        .view()
+        .public_lane_validators()
+        .get(&validator_key)
+        .cloned()
+        .expect("receipt host validator record");
+    rebound_record.peer_id = PeerId::from(BOB_ID.expect_single_signatory().clone());
+    rebound_host_world
+        .public_lane_validators
+        .insert(validator_key, rebound_record);
+    let rebound_host = norito::json::to_value(&snapshot_state_from_world(rebound_host_world))
+        .expect("serialize receipt from a validator whose peer later rotated");
+    deserialize_state_snapshot_value(rebound_host)
+        .expect("historical receipt attribution must survive later validator peer rotation");
+
+    let mut unattributed_receipt = receipt.clone();
+    unattributed_receipt.execution_host = None;
+    let unattributed = norito::json::to_value(&snapshot_state_from_world(world_with_receipt(
+        unattributed_receipt,
+    )))
+    .expect("serialize unattributed mailbox receipt snapshot");
+    let error = deserialize_state_snapshot_value(unattributed)
+        .err()
+        .expect("mailbox receipt restore must require deterministic-validator attribution");
+    assert!(
+        error.to_string().contains("deterministic-validator"),
+        "unexpected unattributed mailbox receipt error: {error}"
+    );
+
+    let mut noncanonical_id_receipt = receipt.clone();
+    noncanonical_id_receipt.receipt_id = Hash::new(b"noncanonical ordered mailbox receipt id");
+    let noncanonical_id = norito::json::to_value(&snapshot_state_from_world(world_with_receipt(
+        noncanonical_id_receipt,
+    )))
+    .expect("serialize noncanonical mailbox receipt ID snapshot");
+    let error = deserialize_state_snapshot_value(noncanonical_id)
+        .err()
+        .expect("mailbox receipt restore must recompute its canonical receipt ID");
+    assert!(
+        error.to_string().contains("canonical sequence-independent"),
+        "unexpected mailbox receipt ID error: {error}"
+    );
+
+    for (field, substituted_receipt) in [
+        (
+            "journal_artifact_hash",
+            {
+                let mut substituted = receipt.clone();
+                substituted.journal_artifact_hash = Some(Hash::new(b"substituted journal"));
+                substituted
+            },
+        ),
+        (
+            "checkpoint_artifact_hash",
+            {
+                let mut substituted = receipt.clone();
+                substituted.checkpoint_artifact_hash =
+                    Some(Hash::new(b"substituted checkpoint"));
+                substituted
+            },
+        ),
+    ] {
+        let substituted = norito::json::to_value(&snapshot_state_from_world(world_with_receipt(
+            substituted_receipt,
+        )))
+        .unwrap_or_else(|error| panic!("serialize mailbox receipt with substituted {field}: {error}"));
+        let error = deserialize_state_snapshot_value(substituted)
+            .err()
+            .unwrap_or_else(|| panic!("substituted {field} must invalidate the retained receipt ID"));
+        assert!(
+            error.to_string().contains("canonical sequence-independent"),
+            "unexpected {field} substitution error: {error}"
+        );
+    }
+
+    let mut tampered_host_receipt = receipt.clone();
+    let Some(host) = tampered_host_receipt.execution_host.as_mut()
+    else {
+        unreachable!("snapshot mailbox receipt has deterministic attribution")
+    };
+    host.validator_account_id = BOB_ID.clone();
+    host.peer_id = PeerId::from(BOB_ID.expect_single_signatory().clone()).to_string();
+    let tampered_host = norito::json::to_value(&snapshot_state_from_world(world_with_receipt(
+        tampered_host_receipt,
+    )))
+    .expect("serialize mailbox receipt with a substituted deterministic host");
+    let error = deserialize_state_snapshot_value(tampered_host)
+        .err()
+        .expect("changing an execution host without its bound receipt ID must be rejected");
+    assert!(
+        error.to_string().contains("canonical sequence-independent"),
+        "unexpected execution-host substitution error: {error}"
+    );
+
+    let mut mismatched_host_receipt = receipt.clone();
+    let Some(host) = mismatched_host_receipt.execution_host.as_mut()
+    else {
+        unreachable!("snapshot mailbox receipt has deterministic attribution")
+    };
+    host.validator_account_id = BOB_ID.clone();
+    mismatched_host_receipt.receipt_id =
+        crate::soracloud_runtime::ordered_mailbox_runtime_receipt_id(&mismatched_host_receipt)
+            .expect("structurally mismatched receipt still has a source message");
+    let mismatched_host = norito::json::to_value(&snapshot_state_from_world(world_with_receipt(
+        mismatched_host_receipt,
+    )))
+    .expect("serialize mailbox receipt with a mismatched validator account and peer");
+    let error = deserialize_state_snapshot_value(mismatched_host)
+        .err()
+        .expect("a recomputed receipt ID must not mask structurally invalid host attribution");
+    assert!(
+        error.to_string().contains("derived from the validator account"),
+        "unexpected structurally invalid execution-host error: {error}"
+    );
+
+    let mut detached_host_receipt = receipt.clone();
+    detached_host_receipt.receipt_id = Hash::new(b"detached deterministic-validator receipt");
+    detached_host_receipt.handler_name = "query".parse().expect("valid query handler");
+    detached_host_receipt.handler_class = SoraServiceHandlerClassV1::Query;
+    detached_host_receipt.certified_by = SoraCertifiedResponsePolicyV1::AuditReceipt;
+    detached_host_receipt.mailbox_message_id = None;
+    let detached_host = norito::json::to_value(&snapshot_state_from_world(world_with_receipt(
+        detached_host_receipt,
+    )))
+    .expect("serialize deterministic-validator receipt without a mailbox message");
+    let error = deserialize_state_snapshot_value(detached_host)
+        .err()
+        .expect("deterministic-validator attribution must not restore without mailbox context");
+    assert!(
+        error
+            .to_string()
+            .contains("requires an authoritative mailbox message"),
+        "unexpected detached deterministic-validator receipt error: {error}"
+    );
+
+    let mut local_read_receipt = receipt.clone();
+    local_read_receipt.handler_name = "query".parse().expect("valid query handler");
+    local_read_receipt.handler_class = SoraServiceHandlerClassV1::Query;
+    local_read_receipt.certified_by = SoraCertifiedResponsePolicyV1::AuditReceipt;
+    local_read_receipt.mailbox_message_id = None;
+    local_read_receipt.execution_host = None;
+    local_read_receipt.emitted_sequence = 3;
+    local_read_receipt.result_commitment = Hash::new(b"snapshot-local-read-result");
+    local_read_receipt.receipt_id =
+        iroha_data_model::soracloud::derive_soracloud_local_read_receipt_id_v1(
+            &local_read_receipt,
+        );
+    let canonical_local_read = norito::json::to_value(&snapshot_state_from_world(
+        world_with_receipt(local_read_receipt.clone()),
+    ))
+    .expect("serialize canonical local-read receipt snapshot");
+    deserialize_state_snapshot_value(canonical_local_read)
+        .expect("canonical sequence-independent local-read receipt must restore");
+
+    let mut substituted_local_read = local_read_receipt;
+    substituted_local_read.result_commitment = Hash::new(b"substituted-local-read-result");
+    let substituted_local_read = norito::json::to_value(&snapshot_state_from_world(
+        world_with_receipt(substituted_local_read),
+    ))
+    .expect("serialize local-read receipt with unbound substituted content");
+    let error = deserialize_state_snapshot_value(substituted_local_read)
+        .err()
+        .expect("local-read immutable content substitution must invalidate its receipt id");
+    assert!(
+        error.to_string().contains("canonical sequence-independent local-read"),
+        "unexpected local-read receipt ID error: {error}"
+    );
+
+    let mut substituted_message_world = World::default();
+    substituted_message_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    substituted_message_world.soracloud_service_deployments.insert(
+        bundle.service.service_name.clone(),
+        sample_snapshot_service_deployment(&bundle),
+    );
+    substituted_message_world
+        .soracloud_service_audit_events
+        .insert(1, sample_snapshot_service_audit_event(&bundle, 1));
+    let mut substituted_message = message.clone();
+    substituted_message.payload_bytes = b"substituted snapshot mailbox payload".to_vec();
+    substituted_message.payload_commitment = Hash::new(&substituted_message.payload_bytes);
+    substituted_message_world
+        .soracloud_mailbox_messages
+        .insert(substituted_message.message_id, substituted_message);
+    let substituted_message = norito::json::to_value(&snapshot_state_from_world(
+        substituted_message_world,
+    ))
+    .expect("serialize mailbox message with substituted immutable payload");
+    let error = deserialize_state_snapshot_value(substituted_message)
+        .err()
+        .expect("immutable mailbox payload substitution must invalidate the retained message id");
+    assert!(
+        error.to_string().contains("canonical ledger-derived"),
+        "unexpected immutable mailbox substitution error: {error}"
+    );
+
+    let mut schedule_world = World::default();
+    schedule_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    schedule_world.soracloud_service_deployments.insert(
+        bundle.service.service_name.clone(),
+        sample_snapshot_service_deployment(&bundle),
+    );
+    schedule_world
+        .soracloud_service_audit_events
+        .insert(1, sample_snapshot_service_audit_event(&bundle, 1));
+    let mut hostile_schedule = message.clone();
+    hostile_schedule.expires_at_height -= 1;
+    hostile_schedule.message_id =
+        iroha_data_model::soracloud::derive_soracloud_mailbox_message_id_v1(&hostile_schedule);
+    schedule_world
+        .soracloud_mailbox_messages
+        .insert(hostile_schedule.message_id, hostile_schedule);
+    let hostile = norito::json::to_value(&snapshot_state_from_world(schedule_world))
+        .expect("serialize hostile mailbox schedule snapshot");
+    let error = deserialize_state_snapshot_value(hostile)
+        .err()
+        .expect("restore must recompute the exact mailbox schedule from the admitted contract");
+    assert!(
+        error.to_string().contains("ledger schedule must be exactly derived"),
+        "unexpected mailbox schedule restore error: {error}"
+    );
+
+    let mut duplicate_world = World::default();
+    duplicate_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    duplicate_world.soracloud_service_deployments.insert(
+        bundle.service.service_name.clone(),
+        sample_snapshot_service_deployment(&bundle),
+    );
+    duplicate_world
+        .soracloud_service_audit_events
+        .insert(1, sample_snapshot_service_audit_event(&bundle, 1));
+    duplicate_world
+        .soracloud_mailbox_messages
+        .insert(message.message_id, message.clone());
+    duplicate_world
+        .soracloud_runtime_receipts
+        .insert(receipt.receipt_id, receipt);
+    let second_receipt =
+        sample_snapshot_mailbox_receipt(&bundle, &message, b"second-snapshot-mailbox-receipt", 4);
+    duplicate_world
+        .soracloud_runtime_receipts
+        .insert(second_receipt.receipt_id, second_receipt);
+    let duplicate = norito::json::to_value(&snapshot_state_from_world(duplicate_world))
+        .expect("serialize duplicate mailbox consumption snapshot");
+    let error = deserialize_state_snapshot_value(duplicate)
+        .err()
+        .expect("one mailbox message must not restore as consumed twice");
+    assert!(
+        error.to_string().contains("must not be consumed by multiple receipts"),
+        "unexpected duplicate mailbox consumption restore error: {error}"
+    );
+}
+fn sample_snapshot_autonomy_apartment_world(
+    execution_artifact_hash: Option<&str>,
+    checkpoint_key_override: Option<&str>,
+    runtime_receipt: Option<&SoraRuntimeReceiptV1>,
+) -> World {
+    let manifest: iroha_data_model::soracloud::AgentApartmentManifestV1 = norito::json::from_str(
+        include_str!("../../../../fixtures/soracloud/agent_apartment_manifest_v1.json"),
+    )
+    .expect("decode canonical agent-apartment fixture");
+    manifest
+        .validate()
+        .expect("agent-apartment fixture remains canonical");
+    let apartment_name = manifest.apartment_name.clone();
+    let apartment_key = apartment_name.to_string();
+    let manifest_hash = manifest.manifest_hash();
+    let artifact_hash = "hash:SNAPSHOT-AUTONOMY#01".to_owned();
+    let provenance_hash = Some("hash:SNAPSHOT-PROVENANCE#01".to_owned());
+    let budget_units = 25;
+    let run_label = "snapshot autonomy run".to_owned();
+    let workflow_input_json = Some("{\"inputs\":\"snapshot\"}".to_owned());
+    let approved_sequence = 3;
+    let run_id = format!("{apartment_key}:autonomy:{approved_sequence}");
+    let request_commitment = iroha_data_model::soracloud::derive_agent_autonomy_request_commitment(
+        apartment_name.as_ref(),
+        &artifact_hash,
+        provenance_hash.as_deref(),
+        budget_units,
+        &run_id,
+        &run_label,
+        workflow_input_json.as_deref(),
+        1,
+    );
+    let run = iroha_data_model::soracloud::SoraAgentAutonomyRunRecordV1 {
+        run_id: run_id.clone(),
+        artifact_hash: artifact_hash.clone(),
+        provenance_hash: provenance_hash.clone(),
+        budget_units,
+        run_label: run_label.clone(),
+        workflow_input_json: workflow_input_json.clone(),
+        approved_process_generation: 1,
+        request_commitment,
+        approved_sequence,
+    };
+    let checkpoint_size = crate::smartcontracts::isi::soracloud::autonomy_checkpoint_value_size(
+        &artifact_hash,
+        provenance_hash.as_deref(),
+        &run_label,
+        budget_units,
+        workflow_input_json.as_deref(),
+    );
+    let checkpoint_key = checkpoint_key_override.map_or_else(
+        || crate::smartcontracts::isi::soracloud::autonomy_checkpoint_key(&apartment_key, &run_id),
+        str::to_owned,
+    );
+    let record = iroha_data_model::soracloud::SoraAgentApartmentRecordV1 {
+        schema_version: iroha_data_model::soracloud::SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
+        manifest,
+        manifest_hash,
+        deployed_sequence: 1,
+        lease_started_height: 1,
+        lease_expires_height: 100,
+        last_renewed_height: 1,
+        restart_count: 0,
+        last_restart_sequence: None,
+        last_restart_reason: None,
+        process_generation: 1,
+        process_started_sequence: 1,
+        last_active_sequence: if runtime_receipt.is_some() { 5 } else { 4 },
+        last_checkpoint_sequence: Some(approved_sequence),
+        checkpoint_count: 1,
+        persistent_state: iroha_data_model::soracloud::SoraAgentPersistentStateV1 {
+            total_bytes: checkpoint_size,
+            key_sizes: BTreeMap::from([(checkpoint_key, checkpoint_size)]),
+        },
+        revoked_policy_capabilities: BTreeSet::new(),
+        pending_wallet_requests: BTreeMap::new(),
+        wallet_daily_spend: BTreeMap::new(),
+        mailbox_queue: Vec::new(),
+        autonomy_budget_ceiling_units: 100,
+        autonomy_budget_remaining_units: 75,
+        artifact_allowlist: BTreeMap::from([(
+            artifact_hash.clone(),
+            iroha_data_model::soracloud::SoraAgentArtifactAllowRuleV1 {
+                artifact_hash: artifact_hash.clone(),
+                provenance_hash: provenance_hash.clone(),
+                added_sequence: 2,
+            },
+        )]),
+        autonomy_run_history: vec![run],
+    };
+    let base_event =
+        |sequence, action| iroha_data_model::soracloud::SoraAgentApartmentAuditEventV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
+            sequence,
+            block_height: sequence,
+            block_timestamp_ms: sequence.saturating_mul(1_000),
+            action,
+            apartment_name: apartment_name.clone(),
+            status: iroha_data_model::soracloud::SoraAgentRuntimeStatusV1::Running,
+            lease_expires_height: 100,
+            manifest_hash,
+            restart_count: 0,
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            request_id: None,
+            asset_definition: None,
+            amount: None,
+            capability: None,
+            reason: None,
+            from_apartment: None,
+            to_apartment: None,
+            channel: None,
+            payload_hash: None,
+            artifact_hash: None,
+            provenance_hash: None,
+            run_id: None,
+            run_label: None,
+            budget_units: None,
+            service_name: None,
+            service_version: None,
+            handler_name: None,
+            result_commitment: None,
+            runtime_receipt_id: None,
+            journal_artifact_hash: None,
+            checkpoint_artifact_hash: None,
+            succeeded: None,
+        };
+    let deploy_event = base_event(
+        1,
+        iroha_data_model::soracloud::SoraAgentApartmentActionV1::Deploy,
+    );
+    let mut allow_event = base_event(
+        2,
+        iroha_data_model::soracloud::SoraAgentApartmentActionV1::ArtifactAllowed,
+    );
+    allow_event.artifact_hash = Some(artifact_hash.clone());
+    allow_event.provenance_hash = provenance_hash.clone();
+    let mut approval_event = base_event(
+        approved_sequence,
+        iroha_data_model::soracloud::SoraAgentApartmentActionV1::AutonomyRunApproved,
+    );
+    approval_event.request_id = Some(run_id.clone());
+    approval_event.payload_hash = workflow_input_json
+        .as_ref()
+        .map(|payload| Hash::new(payload.as_bytes()));
+    approval_event.artifact_hash = Some(artifact_hash.clone());
+    approval_event.provenance_hash = provenance_hash.clone();
+    approval_event.run_id = Some(run_id.clone());
+    approval_event.run_label = Some(run_label.clone());
+    approval_event.budget_units = Some(budget_units);
+    let mut execution_event = base_event(
+        if runtime_receipt.is_some() { 5 } else { 4 },
+        iroha_data_model::soracloud::SoraAgentApartmentActionV1::AutonomyRunExecuted,
+    );
+    execution_event.request_id = Some(run_id.clone());
+    execution_event.artifact_hash =
+        Some(execution_artifact_hash.map_or_else(|| artifact_hash.clone(), str::to_owned));
+    execution_event.provenance_hash = provenance_hash;
+    execution_event.run_id = Some(run_id);
+    execution_event.run_label = Some(run_label);
+    execution_event.budget_units = Some(budget_units);
+    execution_event.result_commitment = Some(Hash::new(b"snapshot-autonomy-result"));
+    execution_event.journal_artifact_hash = Some(Hash::new(b"snapshot-autonomy-summary"));
+    if let Some(receipt) = runtime_receipt {
+        execution_event.service_name = Some(receipt.service_name.to_string());
+        execution_event.service_version = Some(receipt.service_version.clone());
+        execution_event.handler_name = Some(receipt.handler_name.to_string());
+        execution_event.runtime_receipt_id = Some(receipt.receipt_id);
+        execution_event.checkpoint_artifact_hash = Some(Hash::new(b"snapshot-autonomy-checkpoint"));
+        execution_event.succeeded = Some(true);
+    } else {
+        execution_event.reason = Some("snapshot runtime failure".to_owned());
+        execution_event.succeeded = Some(false);
+    }
+
+    let mut world = World::default();
+    world
+        .soracloud_agent_apartments
+        .insert(apartment_key, record);
+    for event in [deploy_event, allow_event, approval_event, execution_event] {
+        world
+            .soracloud_agent_apartment_audit_events
+            .insert(event.sequence, event);
+    }
+    world
+}
+fn sample_snapshot_receipt_bound_autonomy_world() -> World {
+    let bundle = sample_snapshot_service_bundle();
+    let mut receipt = SoraRuntimeReceiptV1 {
+        schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
+        receipt_id: Hash::new(b"snapshot-local-read-receipt-pending"),
+        service_name: bundle.service.service_name.clone(),
+        service_version: bundle.service.service_version.clone(),
+        handler_name: "query".parse().expect("valid query handler"),
+        handler_class: SoraServiceHandlerClassV1::Query,
+        request_commitment: Hash::new(b"snapshot-local-read-request"),
+        result_commitment: Hash::new(b"snapshot-local-read-result"),
+        certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
+        emitted_sequence: 4,
+        execution_host: None,
+        mailbox_message_id: None,
+        journal_artifact_hash: None,
+        checkpoint_artifact_hash: None,
+    };
+    receipt.receipt_id =
+        iroha_data_model::soracloud::derive_soracloud_local_read_receipt_id_v1(&receipt);
+    let mut world = World::default();
+    world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    world.soracloud_service_deployments.insert(
+        bundle.service.service_name.clone(),
+        sample_snapshot_service_deployment(&bundle),
+    );
+    world
+        .soracloud_service_audit_events
+        .insert(1, sample_snapshot_service_audit_event(&bundle, 1));
+    world
+        .soracloud_runtime_receipts
+        .insert(receipt.receipt_id, receipt.clone());
+    let mut receipt = {
+        let view = world.view();
+        view.soracloud_runtime_receipts()
+            .iter()
+            .next()
+            .map(|(_receipt_id, receipt)| receipt.clone())
+            .expect("snapshot local-read runtime receipt")
+    };
+    receipt.emitted_sequence = 4;
+    world
+        .soracloud_runtime_receipts
+        .insert(receipt.receipt_id, receipt.clone());
+
+    let apartment_world = sample_snapshot_autonomy_apartment_world(None, None, Some(&receipt));
+    let (apartments, audit_events) = {
+        let view = apartment_world.view();
+        (
+            view.soracloud_agent_apartments()
+                .iter()
+                .map(|(key, record)| (key.clone(), record.clone()))
+                .collect::<Vec<_>>(),
+            view.soracloud_agent_apartment_audit_events()
+                .iter()
+                .map(|(sequence, event)| (*sequence, event.clone()))
+                .collect::<Vec<_>>(),
+        )
+    };
+    for (key, record) in apartments {
+        world.soracloud_agent_apartments.insert(key, record);
+    }
+    for (sequence, event) in audit_events {
+        world
+            .soracloud_agent_apartment_audit_events
+            .insert(sequence, event);
+    }
+    world
+}
+state_test! { sync autonomy_restore_requires_exact_execution_and_checkpoint_projections
+    let canonical = norito::json::to_value(&snapshot_state_from_world(
+        sample_snapshot_autonomy_apartment_world(None, None, None),
+    ))
+    .expect("serialize canonical autonomy history");
+    deserialize_state_snapshot_value(canonical)
+        .expect("writer-derived autonomy history and checkpoint projection must restore");
+
+    let forged_execution = norito::json::to_value(&snapshot_state_from_world(
+        sample_snapshot_autonomy_apartment_world(
+            Some("hash:FOREIGN-ARTIFACT#01"),
+            None,
+            None,
+        ),
+    ))
+    .expect("serialize autonomy history with substituted execution attribution");
+    let error = deserialize_state_snapshot_value(forged_execution)
+        .err()
+        .expect("execution audit must bind the exact retained approval");
+    assert!(
+        error
+            .to_string()
+            .contains("must exactly bind its retained approval"),
+        "unexpected autonomy execution linkage error: {error}"
+    );
+
+    let forged_checkpoint = norito::json::to_value(&snapshot_state_from_world(
+        sample_snapshot_autonomy_apartment_world(None, Some("/forged/checkpoint"), None),
+    ))
+    .expect("serialize autonomy history with substituted checkpoint key");
+    let error = deserialize_state_snapshot_value(forged_checkpoint)
+        .err()
+        .expect("checkpoint accounting must retain its exact writer-derived key");
+    assert!(
+        error
+            .to_string()
+            .contains("writer-derived checkpoint key and byte size"),
+        "unexpected autonomy checkpoint linkage error: {error}"
+    );
+
+    let receipt_bound = norito::json::to_value(&snapshot_state_from_world(
+        sample_snapshot_receipt_bound_autonomy_world(),
+    ))
+    .expect("serialize receipt-bound autonomy execution");
+    deserialize_state_snapshot_value(receipt_bound)
+        .expect("successful autonomy execution must restore with its exact prior receipt");
+
+    let mut forged_receipt_binding_world = sample_snapshot_receipt_bound_autonomy_world();
+    let mut execution_event = {
+        let view = forged_receipt_binding_world.view();
+        view.soracloud_agent_apartment_audit_events()
+            .get(&5)
+            .cloned()
+            .expect("receipt-bound execution event")
+    };
+    execution_event.service_name = Some("foreign_service".to_owned());
+    forged_receipt_binding_world
+        .soracloud_agent_apartment_audit_events
+        .insert(5, execution_event);
+    let forged_receipt_binding = norito::json::to_value(&snapshot_state_from_world(
+        forged_receipt_binding_world,
+    ))
+    .expect("serialize autonomy execution with substituted receipt service");
+    let error = deserialize_state_snapshot_value(forged_receipt_binding)
+        .err()
+        .expect("runtime receipt identity must authorize the exact execution service context");
+    assert!(
+        error
+            .to_string()
+            .contains("uniquely bind a prior local-read receipt"),
+        "unexpected autonomy receipt-binding error: {error}"
     );
 }
 fn sample_snapshot_app_infra_state() -> SoraAppInfraStateV1 {
@@ -33355,8 +36486,8 @@ fn sample_snapshot_app_infra_state() -> SoraAppInfraStateV1 {
         current_app_version: manifest.app_version.clone(),
         current_manifest_hash: manifest.manifest_hash(),
         revision_count: 1,
-        deployed_sequence: 1,
-        updated_sequence: 1,
+        deployed_sequence: 2,
+        updated_sequence: 2,
         manifest,
     }
 }
@@ -33370,6 +36501,7 @@ fn insert_snapshot_app_service_references(world: &mut World, app_state: &SoraApp
     assert_eq!(service_ref.service_name, bundle.service.service_name);
     assert_eq!(service_ref.service_version, bundle.service.service_version);
     let deployment = sample_snapshot_service_deployment(&bundle);
+    let deploy_event = sample_snapshot_service_audit_event(&bundle, 1);
     world.soracloud_service_revisions.insert(
         (
             bundle.service.service_name.as_ref().to_owned(),
@@ -33380,6 +36512,9 @@ fn insert_snapshot_app_service_references(world: &mut World, app_state: &SoraApp
     world
         .soracloud_service_deployments
         .insert(deployment.service_name.clone(), deployment);
+    world
+        .soracloud_service_audit_events
+        .insert(deploy_event.sequence, deploy_event);
 }
 fn sample_snapshot_app_infra_audit_event(state: &SoraAppInfraStateV1) -> SoraAppInfraAuditEventV1 {
     SoraAppInfraAuditEventV1 {
@@ -33452,7 +36587,7 @@ state_test! { sync app_infra_restore_requires_exact_audit_sequence_key
         .insert(app_state.app_name.clone(), app_state);
     miskeyed_world
         .soracloud_app_infra_audit_events
-        .insert(2, audit_event);
+        .insert(3, audit_event);
     let miskeyed = norito::json::to_value(&snapshot_state_from_world(miskeyed_world))
         .expect("serialize miskeyed app-audit snapshot");
     let error = deserialize_state_snapshot_value(miskeyed)
@@ -33546,6 +36681,29 @@ state_test! { sync vpn_lease_projection_rejects_a_foreign_exact_network
     validate_vpn_lease_network(&local, &local_network).expect("local VPN lease network");
     let_row! { error = validate_vpn_lease_network(&foreign, &local_network) .expect_err("foreign VPN lease must fail exact-network restoration") };
     assert!(error.contains("different exact network"));
+}
+state_test! { sync emergency_fast_snapshot_index_finalization_defers_vpn_network_validation
+    let_row! { operator_key = KeyPair::try_from_seed(vec![0x93; 32], Algorithm::Ed25519) .expect("deterministic VPN operator key") };
+    let_row! { foreign_network = NetworkId::from_genesis_hash( HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xFD; Hash::LENGTH])), ) };
+    let foreign = indexed_settled_vpn_lease(
+        &foreign_network,
+        &*ALICE_ID,
+        2,
+        1,
+        &operator_key,
+    );
+    let kura = crate::kura::Kura::blank_kura_for_testing();
+    let query = crate::query::store::LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query);
+    state.world.vpn_leases.insert(foreign.lease_id, foreign);
+
+    let error = state
+        .finalize_snapshot_derived_state_indexes(false)
+        .expect_err("Strict snapshot restore must validate every retained VPN network");
+    assert!(error.contains("different exact network"));
+    state
+        .finalize_snapshot_derived_state_indexes(true)
+        .expect("emergency Fast snapshot restore must defer the VPN semantic scan");
 }
 state_test! { sync governance_lock_test_mutator_replaces_removes_and_rolls_back_expiry_index
     let world = World::default();
@@ -35454,5 +38612,4 @@ include!("proof_test_helpers_seed_records.rs");
 include!("trigger_execution_and_delta_merge_tests.rs");
 include!("view_projection_tests.rs");
 include!("musubi_snapshot_validation_tests.rs");
-include!("governance_activation_tests.rs");
 include!("lane_authority_exactness_tests.rs");

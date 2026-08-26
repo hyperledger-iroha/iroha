@@ -947,7 +947,11 @@ class HttpClientTransportTest {
 
     @Test
     fun prepareContractCallPostsSecretFreeSelectorPayloadAndParsesDraft() {
-        val transactionPayload = sampleTransaction(7).encodedPayload()
+        val transactionPayload = sampleTransaction(
+            seed = 7,
+            creationTimeMs = 1_712_345_678_901L,
+            gasLimit = 5_000L,
+        ).encodedPayload()
         val transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload)
         val signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload))
         val executor = StubResponseExecutor(
@@ -1076,7 +1080,11 @@ class HttpClientTransportTest {
         val instructionBytes = byteArrayOf(1, 2, 3, 4)
         val proposalId = "aa".repeat(32)
         val multisigAccountId = testMultisigAccountId()
-        val transactionPayload = sampleTransaction(8).encodedPayload()
+        val creationTimeMs = 1_700_000_000_008L
+        val transactionPayload = sampleTransaction(
+            seed = 8,
+            creationTimeMs = creationTimeMs,
+        ).encodedPayload()
         val transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload)
         val signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload))
         val executor = StubResponseExecutor(
@@ -1090,7 +1098,11 @@ class HttpClientTransportTest {
                   "instructions_hash": "$proposalId",
                   "tx_hash_hex": null,
                   "executed_tx_hash_hex": null,
-                  "creation_time_ms": 123,
+                  "creation_time_ms": $creationTimeMs,
+                  "fee_payment": {
+                    "payer": "authority",
+                    "value": {"charge_limits": [], "gas_limit": null}
+                  },
                   "transaction_payload_b64": "$transactionPayloadB64",
                   "signing_message_b64": "$signingMessageB64"
                 }
@@ -1107,7 +1119,7 @@ class HttpClientTransportTest {
                 signerAccountId = "alice",
                 instructions = listOf(instructionBytes),
                 publicKeyHex = "0X${validEd25519PublicKeyHex.uppercase()}",
-                creationTimeMs = 123,
+                creationTimeMs = creationTimeMs,
                 memo = "QR invoice 42",
                 validationFeePolicyVersion = 7,
                 validationFeePolicyHash = "AB".repeat(32),
@@ -1120,6 +1132,8 @@ class HttpClientTransportTest {
         assertEquals(multisigAccountId, response.resolvedMultisigAccountId)
         assertEquals(false, response.submitted)
         assertEquals(proposalId, response.instructionsHash)
+        assertEquals(testFeePayment(), response.feePayment)
+        assertEquals(creationTimeMs, response.creationTimeMs)
         assertEquals(transactionPayloadB64, response.transactionPayloadB64)
         assertEquals(signingMessageB64, response.signingMessageB64)
 
@@ -1137,7 +1151,7 @@ class HttpClientTransportTest {
         val feePayment = payload["fee_payment"] as Map<String, Any?>
         assertEquals("authority", feePayment["payer"])
         assertEquals("QR invoice 42", payload["memo"])
-        assertEquals(123L, (payload["creation_time_ms"] as Number).toLong())
+        assertEquals(creationTimeMs, (payload["creation_time_ms"] as Number).toLong())
         assertEquals("7", payload["validation_fee_policy_version"])
         assertEquals("ab".repeat(32), payload["validation_fee_policy_hash"])
         assertEquals("1", payload["validation_fee_instruction_index"])
@@ -1425,6 +1439,61 @@ class HttpClientTransportTest {
                     }
                 """.trimIndent().toByteArray(StandardCharsets.UTF_8)
             )
+        }
+    }
+
+    @Test
+    fun multisigResponseParserBindsAbi22DraftFields() {
+        val multisigAccountId = testMultisigAccountId()
+        val creationTimeMs = 1_700_000_000_009L
+        val transactionPayload = sampleTransaction(
+            seed = 9,
+            creationTimeMs = creationTimeMs,
+        ).encodedPayload()
+        val transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload)
+        val signingMessageB64 = Base64.getEncoder().encodeToString(
+            IrohaHash.prehash(transactionPayload),
+        )
+        val valid = """
+            {
+              "ok": true,
+              "resolved_multisig_account_id": "$multisigAccountId",
+              "submitted": false,
+              "tx_hash_hex": null,
+              "executed_tx_hash_hex": null,
+              "creation_time_ms": $creationTimeMs,
+              "fee_payment": {
+                "payer": "authority",
+                "value": {"charge_limits": [], "gas_limit": null}
+              },
+              "transaction_payload_b64": "$transactionPayloadB64",
+              "signing_message_b64": "$signingMessageB64"
+            }
+        """.trimIndent()
+
+        val parsed = ContractJsonParser.parseMultisigResponse(
+            valid.toByteArray(StandardCharsets.UTF_8),
+        )
+        assertEquals(testFeePayment(), parsed.feePayment)
+        assertEquals(creationTimeMs, parsed.creationTimeMs)
+
+        for (tampered in listOf(
+            valid.replace("\"gas_limit\": null", "\"gas_limit\": 1"),
+            valid.replace(
+                "\"creation_time_ms\": $creationTimeMs",
+                "\"creation_time_ms\": ${creationTimeMs + 1}",
+            ),
+            valid.replace(
+                "\"executed_tx_hash_hex\": null",
+                "\"executed_tx_hash_hex\": \"${"ab".repeat(32)}\"",
+            ),
+            valid.replace("\"fee_payment\"", "\"retired_fee_payment\""),
+        )) {
+            assertFailsWith<RuntimeException> {
+                ContractJsonParser.parseMultisigResponse(
+                    tampered.toByteArray(StandardCharsets.UTF_8),
+                )
+            }
         }
     }
 
@@ -1941,7 +2010,8 @@ class HttpClientTransportTest {
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private, 1_700_000_000_020L, "fee-quote-1")
+        val authority = testAccountId(0x18)
+        val auth = ToriiCanonicalRequestAuth(authority, keyPair.private, 1_700_000_000_020L, "fee-quote-1")
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
             config = signedClientConfig("https://torii.example/api"),
@@ -1951,7 +2021,7 @@ class HttpClientTransportTest {
                 "kind" to "network",
                 "value" to verifyingKeyNetworkId.literal,
             ),
-            "authority" to "alice",
+            "authority" to authority,
             "fee_payment" to testFeePayment(9_000L).toJsonMap(),
         )
 
@@ -1969,7 +2039,10 @@ class HttpClientTransportTest {
 
         val requestCount = executor.requestCount
         assertFailsWith<IllegalArgumentException> {
-            transport.quoteFees(unsignedPayload, ToriiCanonicalRequestAuth("bob@universal", keyPair.private))
+            transport.quoteFees(
+                unsignedPayload,
+                ToriiCanonicalRequestAuth(testAccountId(0x19), keyPair.private),
+            )
         }
         assertEquals(requestCount, executor.requestCount)
     }
@@ -1999,13 +2072,14 @@ class HttpClientTransportTest {
             config = signedClientConfig("https://torii.example"),
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private)
+        val authority = testAccountId(0x1a)
+        val auth = ToriiCanonicalRequestAuth(authority, keyPair.private)
         fun validPayload(): MutableMap<String, Any?> = linkedMapOf(
             "domain" to linkedMapOf(
                 "kind" to "network",
                 "value" to verifyingKeyNetworkId.literal,
             ),
-            "authority" to "alice",
+            "authority" to authority,
             "fee_payment" to testFeePayment(9_000L).toJsonMap(),
         )
 
@@ -2043,7 +2117,8 @@ class HttpClientTransportTest {
     fun quoteFeesRejectsPayerRevisionAndGasSubstitution() {
         val sponsor = testMultisigAccountId()
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private)
+        val authority = testAccountId(0x1b)
+        val auth = ToriiCanonicalRequestAuth(authority, keyPair.private)
         val sponsorIntent = FeePaymentIntent.sponsor(
             FeeSponsorProgramId(sponsor, "wallet_fx"),
             3,
@@ -2075,7 +2150,7 @@ class HttpClientTransportTest {
                             "kind" to "network",
                             "value" to verifyingKeyNetworkId.literal,
                         ),
-                        "authority" to "alice",
+                        "authority" to authority,
                         "fee_payment" to requested.toJsonMap(),
                     ),
                     auth,
@@ -4036,18 +4111,22 @@ class HttpClientTransportTest {
         return out
     }
 
-    private fun sampleTransaction(seed: Int): SignedTransaction {
+    private fun sampleTransaction(
+        seed: Int,
+        creationTimeMs: Long = 1_700_000_000_000L + seed,
+        gasLimit: Long? = null,
+    ): SignedTransaction {
         val codec = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val encoded = codec.encodeTransaction(
             TransactionPayload(
                 networkId = TestNetworkIds.fromSeed(seed.toLong()),
                 authority = testMultisigAccountId(),
-                creationTimeMs = 1_700_000_000_000L + seed,
+                creationTimeMs = creationTimeMs,
                 executable = Executable.instructions(emptyList()),
                 timeToLiveMs = 5_000L,
                 nonce = seed.toLong() + 1L,
-                feePayment = testFeePayment(),
-                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+                feePayment = testFeePayment(gasLimit),
+                admissionIntent = TransactionAdmissionIntent.ORDINARY,
                 metadata = mapOf("note" to JsonValue.string("tx-$seed")),
             ),
         )

@@ -65,7 +65,7 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
     let capability: iroha_torii_shared::offline_api::OfflineStatus =
         norito::json::from_slice(&readiness_body).expect("decode universal offline capability");
     assert_eq!(capability.cash_handoff_capability, "cash_handoff_v1");
-    assert_eq!(capability.required_bridge_abi_version, 22);
+    assert_eq!(capability.required_bridge_abi_version, 23);
     assert_eq!(capability.max_hops, 8);
     assert!(capability.ready);
     let legacy_selector = fixtures::request(

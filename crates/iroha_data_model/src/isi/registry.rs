@@ -171,6 +171,38 @@ mod tests {
             "pair payload should decode back into the canonical boxed family"
         );
     }
+    #[cfg(feature = "governance")]
+    #[test]
+    fn parliament_registry_contains_only_current_lifecycle_and_standalone_ballots() {
+        let registry = default();
+        for active in [
+            crate::isi::governance::CreateParliamentGovernanceAttemptV1::WIRE_ID,
+            crate::isi::governance::SubmitParliamentLifecycleTransitionV1::WIRE_ID,
+            "iroha_data_model::isi::governance::CastZkBallot",
+            "iroha_data_model::isi::governance::CastPlainBallot",
+        ] {
+            assert!(
+                registry.contains(active),
+                "active Parliament or standalone referendum wire id is missing: {active}"
+            );
+        }
+        for retired in [
+            "iroha_data_model::isi::governance::ApproveGovernanceProposal",
+            "iroha_data_model::isi::governance::CastParliamentBallot",
+            "iroha_data_model::isi::governance::FinalizeReferendum",
+            "iroha_data_model::isi::governance::EnactReferendum",
+            "iroha_data_model::isi::governance::EnactSccpRouteGovernance",
+        ] {
+            assert!(
+                !registry.contains(retired),
+                "retired proposal-backed governance wire id remains registered: {retired}"
+            );
+            assert!(
+                !is_instruction_wire_id_registered(retired),
+                "retired proposal-backed governance wire id remains publicly accepted: {retired}"
+            );
+        }
+    }
     #[test]
     fn default_registry_registers_public_lane_validator() {
         let registry = default();
@@ -273,7 +305,7 @@ mod tests {
     fn instruction_vtable_frame_matches_canonical_concrete_bytes() {
         let concrete = Log::new(Level::INFO, "vtable frame parity".to_owned());
         let boxed = InstructionBox::from(concrete.clone());
-        let inner = super::super::peel_instruction_box(&*boxed);
+        let inner = &*boxed;
         let expected = norito::encode_canonical(&concrete).expect("canonical concrete frame");
         let mut actual = Vec::new();
         inner
@@ -289,11 +321,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 349;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 343;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 349;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 343;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 330;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 327;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -346,9 +378,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "76d504389afcd5e06260c0408b446d6827ee7f473e08a473101c57a4b4450d02";
+            "99f32e6df5d8f77dbf0af3dbe51d1e2d4903a5baf8f7581fdb3f49354b2612e2";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "1877201fc0c83041db924b9225dab533e6603aefa2ba8b67d076205f5eae41a7";
+            "835005f5c2569b0e9dd8bad02cbc5c9c9c0ba48f8d1aee23cd530b41849d872a";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -375,7 +407,7 @@ mod tests {
                     .iter()
                     .filter(|entry| entry.governance_only)
                     .count(),
-                19,
+                16,
                 "governance-only V1 inventory changed without updating its explicit scope"
             );
             assert_eq!(

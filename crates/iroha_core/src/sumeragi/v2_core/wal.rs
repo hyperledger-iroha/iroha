@@ -852,7 +852,8 @@ pub enum WalRecord {
     ///
     /// A validated first Decision supersedes any local Prepare lock. Locks
     /// constrain voting, while a quorum Commit certificate is finality
-    /// authority; replay rejects only a later semantically different Decision.
+    /// authority; replay accepts only a later semantically identical Decision
+    /// and rejects every non-decision transition after finality.
     Decision(QuorumCertificate),
 }
 impl WalRecord {
@@ -1034,6 +1035,9 @@ impl DurableState {
         }
         if entry.record.context_id() != self.context_id {
             return Err(ReplayError::ContextMismatch);
+        }
+        if self.decision.is_some() && !matches!(&entry.record, WalRecord::Decision(_)) {
+            return Err(ReplayError::RecordAfterDecision);
         }
         match &entry.record {
             WalRecord::ProposalIntent(proposal) => {
@@ -1434,6 +1438,8 @@ pub enum ReplayError {
     ViewOverflow,
     /// Two durable `CommitQC`s decide different subjects.
     ConflictingDecision,
+    /// A non-decision record appeared after durable finality.
+    RecordAfterDecision,
 }
 impl fmt::Display for ReplayError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1479,6 +1485,9 @@ impl fmt::Display for ReplayError {
             Self::ViewRegression => formatter.write_str("durable view regression"),
             Self::ViewOverflow => formatter.write_str("view overflow"),
             Self::ConflictingDecision => formatter.write_str("conflicting durable decisions"),
+            Self::RecordAfterDecision => {
+                formatter.write_str("non-decision WAL record after durable finality")
+            }
         }
     }
 }

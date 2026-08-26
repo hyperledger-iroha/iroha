@@ -201,7 +201,7 @@ silently reclassified.
 
 The authenticated V4 manifest binds source commit, exact genesis-derived
 `NetworkId`, asset, scale,
-activation and withdrawal heights, exact bridge ABI 22, proof size, transcript,
+activation and withdrawal heights, exact bridge ABI 23, proof size, transcript,
 backend, and benchmark evidence. It contains exactly two Pasta-cycle profiles
 in Eq-then-Ep order. Each profile carries exactly four external artifacts:
 `ParamsIPA`, processed proving key, processed verifying key, and the final-key
@@ -846,7 +846,7 @@ Physical-device evidence is collected before finalization with the separate,
 off-by-default `kagemusha-candidate-evidence-lab` build. That build accepts only
 the exact reviewed candidate plus its exact ordered eight KRV4 artifacts and
 calls the same ABI-21/V4 prover, verifier, and recursion protocol through the
-ABI-22 Connect native bridge. Its symbols, marker-bearing native library, and
+ABI-23 Connect native bridge. Its symbols, marker-bearing native library, and
 test host are distinct from production and are rejected by production
 packaging. The normal artifact install and proof entrypoints remain unavailable,
 and device evidence must record that production capability stayed false.
@@ -1576,7 +1576,7 @@ validator signature.
 These commands are local primitives, not evidence of a live rollout or
 promotion. Still required are
 a clean immutable source commit with exactly one accepted SSH signature, a
-fresh same-source ABI-22 Connect native artifact, real physical App Attest and
+fresh same-source ABI-23 Connect native artifact, real physical App Attest and
 candidate artifacts, protected collection of all four host seals and their
 identical runtime-effective projections, runtime governance and signing
 inputs, and live four-validator and Taira submission/finality evidence. An

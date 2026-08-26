@@ -27,23 +27,22 @@ need jq
 need base64
 
 # [0] Health check
-echo "[0/7] Checking Torii health (server version)"
+echo "[0/5] Checking Torii health (server version)"
 if ! iroha "${CONFIG_FLAG[@]}" Version >/dev/null; then
   echo "Torii health check failed. Verify config and that the server is running." >&2
   exit 1
 fi
 
-echo "[1/7] VK register/update with the configured signer"
+echo "[1/5] VK register/update with the configured signer"
 iroha "${CONFIG_FLAG[@]}" zk vk register --json "$SCRIPT_DIR/vk_register.json"
 iroha "${CONFIG_FLAG[@]}" zk vk update --json "$SCRIPT_DIR/vk_update.json"
 iroha "${CONFIG_FLAG[@]}" zk vk get --backend halo2/ipa --name vk_add
 
-echo "[2/7] Upload JSON attachment"
+echo "[2/5] Upload JSON attachment"
 ATT_META_JSON=$(iroha "${CONFIG_FLAG[@]}" zk attachments upload --file "$SCRIPT_DIR/proof.json" --content-type application/json)
 echo "$ATT_META_JSON" | jq -C .
-ATT_ID=$(echo "$ATT_META_JSON" | jq -r .id)
 
-echo "[3/7] Upload minimal ZK1 Norito envelope"
+echo "[3/5] Upload minimal ZK1 Norito envelope"
 ZK1_BIN="$SCRIPT_DIR/zk1_min.bin"
 if base64 --help 2>&1 | grep -q -- '--decode'; then
   base64 --decode "$SCRIPT_DIR/zk1_min.b64" >"$ZK1_BIN"
@@ -52,21 +51,10 @@ else
 fi
 iroha "${CONFIG_FLAG[@]}" zk attachments upload --file "$ZK1_BIN" --content-type application/x-norito >/dev/null
 
-echo "[4/7] List attachments"
+echo "[4/5] List attachments"
 iroha "${CONFIG_FLAG[@]}" zk attachments list | jq -C .
 
-echo "[5/7] List prover reports"
-iroha "${CONFIG_FLAG[@]}" zk prover reports list | jq -C '.[:5]'
-
-echo "[6/7] Get a single prover report (first if available)"
-FIRST_REP=$(iroha "${CONFIG_FLAG[@]}" zk prover reports list | jq -r '.[0].id // empty')
-if [[ -n "$FIRST_REP" ]]; then
-  iroha "${CONFIG_FLAG[@]}" zk prover reports get --id "$FIRST_REP" | jq -C .
-else
-  echo "  No reports yet"
-fi
-
-echo "[7/7] Vote tally helper"
+echo "[5/5] Vote tally helper"
 iroha "${CONFIG_FLAG[@]}" zk vote tally --election-id "$ELECTION_ID" | jq -C .
 
 echo "Done."

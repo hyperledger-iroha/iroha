@@ -10,6 +10,7 @@
 #     python/iroha_python/requirements-ci.in
 
 blake3==1.0.9
+cryptography==50.0.1
 maturin==1.14.1
 pytest==8.4.2
 requests==2.32.5

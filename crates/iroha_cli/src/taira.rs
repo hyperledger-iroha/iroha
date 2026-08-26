@@ -149,7 +149,7 @@ pub enum Command {
     Doctor(Doctor),
     /// Preflight or execute the strictly authorized compiled public reset.
     PublicReset(crate::taira_public_reset::PublicReset),
-    /// Onboard, faucet, submit, wait, and verify a signed ping canary.
+    /// Prepare, submit, or recover exactly one authorized public-reset child.
     WriteCanary(WriteCanary),
     /// Generate the canonical deploy-mode Inrou canary workspace from AArch64 guest assets.
     InrouWorkspace(InrouWorkspace),
@@ -1957,6 +1957,9 @@ fn validate_exact_inrou_canary_status(
     status: &Value,
     deployment: &InrouProbeIdentity,
 ) -> Result<(u64, u64), String> {
+    if !crate::soracloud::is_taira_inrou_canary_service_version(&deployment.service_version) {
+        return Err("retained Taira Inrou stage has a noncanonical revision identity".to_owned());
+    }
     validate_soracloud_status(Some(status))?;
     let root = status
         .as_object()
@@ -2026,22 +2029,20 @@ fn validate_exact_inrou_canary_status(
     {
         return Err("authoritative canary version does not match the retained stage".to_owned());
     }
-    let (expected_version, expected_revision_count, expected_action) =
+    let (expected_action, revision_count_is_valid): (&str, fn(u64) -> bool) =
         match deployment.stage_mode.as_str() {
-            "deploy" => ("1.0.0", 1, "Deploy"),
-            "upgrade" => ("1.0.1", 2, "Upgrade"),
+            "deploy" => ("Deploy", |count| count == 1),
+            "upgrade" => ("Upgrade", |count| count >= 2),
             other => return Err(format!("unsupported Inrou mutation mode `{other}`")),
         };
-    if deployment.service_version != expected_version {
+    let revision_count = service
+        .get("revision_count")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "authoritative canary status is missing revision_count".to_owned())?;
+    if !revision_count_is_valid(revision_count) {
         return Err(format!(
-            "Taira Inrou {} stage must encode exact revision `{expected_version}`, found `{}`",
-            deployment.stage_mode, deployment.service_version
-        ));
-    }
-    if service.get("revision_count").and_then(Value::as_u64) != Some(expected_revision_count) {
-        return Err(format!(
-            "authoritative canary revision count must be {expected_revision_count} after {}",
-            deployment.stage_mode
+            "authoritative canary revision count {revision_count} is invalid after {}",
+            deployment.stage_mode,
         ));
     }
     if !service.get("active_rollout").is_some_and(Value::is_null) {
@@ -2061,7 +2062,14 @@ fn validate_exact_inrou_canary_status(
                 .get("last_rollout")
                 .and_then(Value::as_object)
                 .ok_or_else(|| "Taira Inrou upgrade is missing its promoted rollout".to_owned())?;
-            let promoted = rollout.get("baseline_version").and_then(Value::as_str) == Some("1.0.0")
+            let baseline_version = rollout
+                .get("baseline_version")
+                .and_then(Value::as_str)
+                .filter(|version| {
+                    crate::soracloud::is_taira_inrou_canary_service_version(version)
+                        && *version != deployment.service_version.as_str()
+                });
+            let promoted = baseline_version.is_some()
                 && rollout.get("candidate_version").and_then(Value::as_str)
                     == Some(deployment.service_version.as_str())
                 && rollout.get("canary_percent").and_then(Value::as_u64) == Some(100)
@@ -2072,7 +2080,7 @@ fn validate_exact_inrou_canary_status(
                     == Some("Promoted");
             if !promoted {
                 return Err(
-                    "Taira Inrou upgrade rollout is not the exact promoted 1.0.0 -> 1.0.1 transition"
+                    "Taira Inrou upgrade rollout is not an exact promoted immutable revision transition"
                         .to_owned(),
                 );
             }
@@ -4572,7 +4580,6 @@ fn validate_soracloud_runtime_snapshot(value: &Value) -> Result<(), String> {
         "local_peer_id",
         "services",
         "apartments",
-        "hf_sources",
     ];
     let context = "/v1/soracloud/status.runtime_manager.snapshot";
     let object = exact_soracloud_status_object(value, context, FIELDS)?;
@@ -4582,7 +4589,7 @@ fn validate_soracloud_runtime_snapshot(value: &Value) -> Result<(), String> {
     soracloud_status_u64(object, "observed_height", context)?;
     validate_soracloud_nullable_string(object, "observed_block_hash", context)?;
     validate_soracloud_nullable_string(object, "local_peer_id", context)?;
-    for field in ["services", "apartments", "hf_sources"] {
+    for field in ["services", "apartments"] {
         if !soracloud_status_field(object, field, context)?.is_object() {
             return Err(format!("{context}.{field} must be an object"));
         }
@@ -5761,7 +5768,9 @@ mod tests {
         for (scope, resolved_from) in [("global", "cache"), ("global", "queue"), ("local", "state")]
         {
             assert!(!prepared_recovery_status_is_final_applied(&response(
-                "Applied", scope, resolved_from
+                "Applied",
+                scope,
+                resolved_from
             )));
         }
         for kind in ["Rejected", "Expired"] {
@@ -6199,6 +6208,9 @@ mod tests {
             service_manifest_hash: Hash::new(b"taira-test-service-manifest").to_string(),
         }
     }
+    fn inrou_canary_artifact_version(seed: u8) -> String {
+        format!("artifact-{}", hex::encode([seed; 32]))
+    }
     #[expect(
         clippy::too_many_lines,
         reason = "the fixture spells out the complete exact Soracloud V1 response"
@@ -6275,8 +6287,7 @@ mod tests {
                     "observed_block_hash": null,
                     "local_peer_id": null,
                     "services": {},
-                    "apartments": {},
-                    "hf_sources": {}
+                    "apartments": {}
                 }
             },
             "control_plane": {
@@ -6376,8 +6387,10 @@ mod tests {
         reason = "one cohesive fail-closed deploy and upgrade contract test"
     )]
     fn exact_inrou_status_requires_distinct_promoted_upgrade() {
-        let deploy = inrou_canary_deployment("deploy", "1.0.0");
-        let deploy_status = exact_inrou_status("1.0.0", "Deploy", 1);
+        let deployed_version = inrou_canary_artifact_version(0x11);
+        let upgraded_version = inrou_canary_artifact_version(0x22);
+        let deploy = inrou_canary_deployment("deploy", &deployed_version);
+        let deploy_status = exact_inrou_status(&deployed_version, "Deploy", 1);
         assert!(validate_exact_inrou_canary_status(&deploy_status, &deploy).is_ok());
         let mut missing_schema = deploy_status.clone();
         missing_schema
@@ -6464,15 +6477,15 @@ mod tests {
                 "bare-string enum at {path} must fail closed"
             );
         }
-        let mismatched_deploy = inrou_canary_deployment("deploy", "1.0.1");
-        let mismatched_deploy_status = exact_inrou_status("1.0.1", "Deploy", 1);
+        let mismatched_deploy = inrou_canary_deployment("deploy", "1.0.0");
+        let mismatched_deploy_status = exact_inrou_status("1.0.0", "Deploy", 1);
         assert!(
             validate_exact_inrou_canary_status(&mismatched_deploy_status, &mismatched_deploy)
                 .is_err()
         );
 
-        let upgrade = inrou_canary_deployment("upgrade", "1.0.1");
-        let mut upgrade_status = exact_inrou_status("1.0.1", "Upgrade", 2);
+        let upgrade = inrou_canary_deployment("upgrade", &upgraded_version);
+        let mut upgrade_status = exact_inrou_status(&upgraded_version, "Upgrade", 3);
         upgrade_status
             .pointer_mut("/control_plane/services/0")
             .and_then(Value::as_object_mut)
@@ -6481,8 +6494,8 @@ mod tests {
                 "last_rollout".to_owned(),
                 norito::json!({
                     "rollout_handle": "taira-inrou-upgrade",
-                    "baseline_version": "1.0.0",
-                    "candidate_version": "1.0.1",
+                    "baseline_version": deployed_version.clone(),
+                    "candidate_version": upgraded_version.clone(),
                     "canary_percent": 100,
                     "traffic_percent": 100,
                     "stage": { "stage": "Promoted", "value": null },
@@ -6507,7 +6520,8 @@ mod tests {
         let mut stale = upgrade_status.clone();
         *stale
             .pointer_mut("/control_plane/services/0/last_rollout/candidate_version")
-            .expect("status fixture has a rollout candidate") = Value::from("1.0.0");
+            .expect("status fixture has a rollout candidate") =
+            Value::from(deployed_version.clone());
         assert!(validate_exact_inrou_canary_status(&stale, &upgrade).is_err());
         for field in ["rollout_handle", "updated_sequence"] {
             let mut missing = upgrade_status.clone();
@@ -6566,7 +6580,7 @@ mod tests {
     }
     #[test]
     fn doctor_soracloud_status_rejects_bare_string_enum_aliases() {
-        let canonical = exact_inrou_status("1.0.0", "Deploy", 1);
+        let canonical = exact_inrou_status(&inrou_canary_artifact_version(0x11), "Deploy", 1);
         validate_soracloud_status(Some(&canonical)).expect("canonical tagged status");
         for (path, retired) in [
             ("/control_plane/services/0/latest_revision/runtime", "Inrou"),
@@ -6606,7 +6620,7 @@ mod tests {
     }
     #[test]
     fn doctor_soracloud_status_rejects_unknown_and_missing_v1_fields() {
-        let canonical = exact_inrou_status("1.0.0", "Deploy", 1);
+        let canonical = exact_inrou_status(&inrou_canary_artifact_version(0x11), "Deploy", 1);
         let mut extra_root = canonical.clone();
         extra_root
             .as_object_mut()
@@ -6653,7 +6667,7 @@ mod tests {
             ("/resource_pressure/runtime", "artifact_cache_misses"),
             ("/failed_admissions", "total"),
             ("/runtime_manager", "snapshot"),
-            ("/runtime_manager/snapshot", "hf_sources"),
+            ("/runtime_manager/snapshot", "services"),
             ("/control_plane", "recent_audit_events"),
             ("/control_plane/services/0", "quota_class"),
             ("/control_plane/services/0/latest_revision", "network"),
@@ -6680,7 +6694,7 @@ mod tests {
     }
     #[test]
     fn doctor_soracloud_status_rejects_noncanonical_route_text() {
-        let canonical = exact_inrou_status("1.0.0", "Deploy", 1);
+        let canonical = exact_inrou_status(&inrou_canary_artifact_version(0x11), "Deploy", 1);
         for (field, retired) in [
             ("route_host", " taira-inrou-canary.sora"),
             ("route_host", "TAIRA-INROU-CANARY.SORA"),
@@ -6744,10 +6758,11 @@ mod tests {
     }
     #[test]
     fn inrou_health_identity_requires_exact_v1_shape_and_version() {
-        let deployment = inrou_canary_deployment("upgrade", "1.0.1");
+        let service_version = inrou_canary_artifact_version(0x22);
+        let deployment = inrou_canary_deployment("upgrade", &service_version);
         let canonical = norito::json!({
             "service": "taira_inrou_canary",
-            "service_version": "1.0.1",
+            "service_version": service_version.clone(),
             "runtime": "Inrou",
             "replica_slot": 3,
             "identity": "taira_inrou_canary:replica:3"
@@ -6758,12 +6773,13 @@ mod tests {
         extra
             .as_object_mut()
             .expect("health fixture is an object")
-            .insert("legacy_version".to_owned(), Value::from("1.0.0"));
+            .insert("legacy_version".to_owned(), Value::from("retired"));
         assert!(exact_inrou_health_identity(&extra, &deployment).is_none());
         let mut stale = canonical.clone();
         *stale
             .pointer_mut("/service_version")
-            .expect("health fixture has a service version") = Value::from("1.0.0");
+            .expect("health fixture has a service version") =
+            Value::from(inrou_canary_artifact_version(0x11));
         assert!(exact_inrou_health_identity(&stale, &deployment).is_none());
         let mut string_slot = canonical;
         *string_slot

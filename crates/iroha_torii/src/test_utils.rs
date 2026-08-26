@@ -989,9 +989,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             account_onboarding: None,
         },
         soracloud_runtime: A::SoracloudRuntime::default(),
-        kura: A::Kura {
-            init_mode: iroha_config::kura::InitMode::Strict,
-            store_dir: WithOrigin::inline(std::env::temp_dir()),
+        kura: A::Kura { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(std::env::temp_dir()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: nonzero!(10usize),
             debug_output_new_blocks: false,
@@ -1361,20 +1359,26 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             .parse()
             .expect("valid default governance asset id"),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
+            parliament_invitation_phase_blocks:
+                defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
+            parliament_public_finding_phase_blocks:
+                defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
+            parliament_timed_ovn: A::ParliamentTimedOvn::default(),
+            parliament_tle_partial_release_signer_provider_handle: None,
+            parliament_tle_partial_release_signer_provider_revision: None,
+            parliament_tle_partial_release_signer_provider_policy_digest: None,
             rules_committee_size: defaults::governance::PARLIAMENT_RULES_COMMITTEE_SIZE,
             agenda_council_size: defaults::governance::PARLIAMENT_AGENDA_COUNCIL_SIZE,
             interest_panel_size: defaults::governance::PARLIAMENT_INTEREST_PANEL_SIZE,
             review_panel_size: defaults::governance::PARLIAMENT_REVIEW_PANEL_SIZE,
+            coordination_council_size:
+                defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE,
             policy_jury_size: defaults::governance::PARLIAMENT_POLICY_JURY_SIZE,
+            confirmation_jury_size: defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE,
             oversight_committee_size: defaults::governance::PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE,
+            mpc_committee_size: defaults::governance::PARLIAMENT_MPC_COMMITTEE_SIZE,
             fma_committee_size: defaults::governance::PARLIAMENT_FMA_COMMITTEE_SIZE,
             viral_incentives: A::ViralIncentives::default(),
-            pipeline_study_sla_blocks: 0,
-            pipeline_review_sla_blocks: 10,
-            pipeline_decision_sla_blocks: 1,
-            pipeline_enactment_sla_blocks: 20,
-            pipeline_rules_sla_blocks: defaults::governance::PIPELINE_RULES_SLA_BLOCKS,
-            pipeline_agenda_sla_blocks: defaults::governance::PIPELINE_AGENDA_SLA_BLOCKS,
         },
         norito: A::Norito {
             allow_gpu_compression: defaults::norito::ALLOW_GPU_COMPRESSION,

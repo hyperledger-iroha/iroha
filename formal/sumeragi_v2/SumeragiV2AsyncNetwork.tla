@@ -413,7 +413,7 @@ the physical/service/durable owner-token injection below, not by assuming a
 cardinality bound for the constructor universe.
 ***************************************************************************)
 AsyncSemanticIngressLifecycleCapacity ==
-  AsyncIngressCapacity + 2 * N
+  AsyncIngressCapacity + 3 * N
 
 AsyncServicedCandidateLifecycleCapacity ==
   AsyncSemanticIngressLifecycleCapacity
@@ -535,7 +535,7 @@ AsyncConfiguration ==
   /\ AsyncIoWorkCapacity <= AsyncCompletionReserve
   /\ AsyncDeferredNormalCapacity \in Nat \ {0}
   /\ AsyncDeferredProgressCapacity \in Nat \ {0}
-  /\ AsyncDeferredProgressCapacity >= 2 * N + 3
+  /\ AsyncDeferredProgressCapacity >= 3 * N + 3
   /\ AsyncDeliveryBound \in Nat \ {0}
   /\ AsyncRetransmitPeriod \in Nat \ {0}
   /\ AsyncRoundTimeout \in Nat \ {0}
@@ -1579,6 +1579,34 @@ HistoricalLockedCommitItem(item) ==
   ELSE FALSE
 
 (***************************************************************************
+An authenticated current-view Prepare may borrow Progress only for the exact
+unchanged-subject reproposal of an older durable lock.  `validatedBodies` is
+the compact model's pre-existing local validation/round/subject binding, not a
+binding manufactured by the incoming vote and not a local Prepare intent.  Its
+generation is intentionally existential because production's monotone registry
+binding survives a same-view consumer-generation change.  The vote record has
+one round coordinate and one subject, abstracting production's equal
+current/proposal rounds and equal locked/current execution commitment.
+***************************************************************************)
+CurrentLockedReproposalPrepareItem(item) ==
+  IF item.kind = "PrepareVote"
+  THEN LET node == item.envelope.recipient
+           vote == item.envelope.vote
+       IN /\ vote.context = context
+          /\ vote.view = nodeView[node]
+          /\ lockRank[node] # NoRank
+          /\ lockRank[node] < vote.view
+          /\ lockSubject[node] = vote.subject
+          /\ LockedPrepareRound(node, lockRank[node], vote.subject)
+          /\ NoDecisionForNode(node)
+          /\ \E validation \in validatedBodies:
+               /\ validation.node = node
+               /\ validation.context = context
+               /\ validation.view = vote.view
+               /\ validation.subject = vote.subject
+  ELSE FALSE
+
+(***************************************************************************
 Per-recipient, per-source transport admission.  These delivery projections
 precede the carrier-evidence declarations which consume DeliveryCandidate;
 their declaration order is part of the complete SANY semantic contract.
@@ -1604,6 +1632,7 @@ DeliveryKind(item) ==
 \* Their candidate class is therefore not runtime Progress.
 DeliveryClass(item) ==
   IF HistoricalLockedCommitItem(item)
+       \/ CurrentLockedReproposalPrepareItem(item)
        \/ item.kind \in {"PrepareQC", "CommitQC", "TimeoutVote",
                     "TimeoutCertificate", "Chunk", "CertifiedResponse",
                     "CommitCertificateResponse",
@@ -10063,7 +10092,9 @@ CommandDispatchable(command) ==
 
 ProtectedProgressCommand(command) ==
   CASE command.kind = "DeliverVote" ->
-         HistoricalLockedCommitItem(command.item)
+         \/ HistoricalLockedCommitItem(command.item)
+         \/ /\ command.class = "Progress"
+            /\ command.item.kind = "PrepareVote"
     [] command.kind = "DeliverTimeout" ->
          command.item.kind = "TimeoutVote"
     [] command.kind = "DeliverQC" ->
@@ -10078,6 +10109,7 @@ SameProtectedProgressSlot(left, right) ==
   /\ left.node = right.node
   /\ CASE left.kind = "DeliverVote" ->
             /\ right.kind = "DeliverVote"
+            /\ left.item.kind = right.item.kind
             /\ left.item.envelope.vote.signer =
                  right.item.envelope.vote.signer
        [] left.kind = "DeliverQC" ->
@@ -10659,7 +10691,12 @@ AsyncChunkIngressStageRetired(item) ==
      \/ NodeHasDecision(recipient)
 
 AsyncControlIngressStageRetired(item) ==
-  AsyncControlServiceIdentityServicedOrAdvanced(item)
+  /\ item.kind \in AsyncControlKinds
+  /\ \/ NodeHasDecision(item.envelope.recipient)
+     \/ AsyncControlServiceConsumed(item)
+     \/ /\ item.kind # "CommitQC"
+        /\ ~HistoricalLockedCommitItem(item)
+        /\ AsyncControlServiceIdentityServicedOrAdvanced(item)
 
 AsyncCertifiedResponseIngressStageRetired(item) ==
   LET recipient == item.envelope.recipient
@@ -11041,11 +11078,13 @@ AsyncLeaderWireAdmissionAuthenticated(item) ==
 
 AsyncLeaderWireRecoveryCutObsoletesItem(item) ==
   /\ item.kind \in AsyncLeaderWireKinds
-  /\ item.kind # "CertifiedResponse"
+  /\ item.kind \in AsyncControlKinds
   /\ item.envelope.recipient \in ValidatorIds
   /\ DeliveryHeight(item) = context.height
-  /\ \/ DeliveryView(item) < nodeView[item.envelope.recipient]
-     \/ NodeHasDecision(item.envelope.recipient)
+  /\ \/ NodeHasDecision(item.envelope.recipient)
+     \/ /\ DeliveryView(item) < nodeView[item.envelope.recipient]
+        /\ item.kind # "CommitQC"
+        /\ ~HistoricalLockedCommitItem(item)
 
 AsyncLeaderWireLifecycleExactActive(item) ==
   /\ AsyncLeaderWireLifecycleSlotOwned(item)
@@ -13631,7 +13670,9 @@ AsyncLeaderWireDrainDeterministicallyRetired(item, record) ==
   /\ AsyncLeaderWireAdmissionMatchesRecord(item, record)
   /\ \/ record.context # context
      \/ record.height # height
-     \/ record.view < nodeView[record.recipient]
+     \/ /\ record.view < nodeView[record.recipient]
+        /\ record.item.kind # "CommitQC"
+        /\ ~HistoricalLockedCommitItem(record.item)
      \/ NodeHasDecision(record.recipient)
      \/ AsyncCandidateStageRetired(item)
      \/ /\ item.kind \in AsyncControlKinds
@@ -15471,10 +15512,13 @@ which BeginTimeout could execute; the runner's only current Runtime turn is
 the ingress target-only jump.  All comparisons are recipient-local.  No
 ordinal belonging to another node participates in either statement.
 ***************************************************************************)
-\* `step` and `step_recovery` classify and acknowledge only a ready selected
-\* handoff.  A restart-dormant Local record first replays its exact immutable
-\* candidate through the matching Local/Runtime carrier.  Phase selection may
-\* skip later ingress/timeout/retransmit owners but may not execute them.
+\* `step` classifies and acknowledges only a ready selected live handoff.
+\* Interrupted-tip recovery is not a second serialized-Runtime scheduler:
+\* lifecycle-owned `drive_apply_recovery_turn` binds the exact recovered Apply
+\* ordinal and stage before dispatch.  A restart-dormant Local record first
+\* replays its exact immutable candidate through its typed lifecycle carrier.
+\* Phase selection may skip later ingress/timeout/retransmit owners but may not
+\* execute them.
 \* ConditionalTransport and VolatileBody records remain owned by their exact
 \* retained transport/body corridors until those predicates make them ready.
 ResolveRunNodeCandidateProducerContinuation(node) ==
@@ -16277,12 +16321,14 @@ AsyncLeaderWireLifecycleDurableCertificateReceipt(record) ==
 
 AsyncLeaderWireLifecycleDurableControlServiceReceipt(record) ==
   /\ record.item.kind \in AsyncControlKinds
-  /\ AsyncControlServiceIdentityServicedOrAdvanced(record.item)
+  /\ AsyncControlIngressStageRetired(record.item)
 
 AsyncLeaderWireLifecycleDurableCoreRetirement(record) ==
   \/ record.context # context
   \/ record.height # height
-  \/ record.view < nodeView[record.recipient]
+  \/ /\ record.view < nodeView[record.recipient]
+     /\ record.item.kind # "CommitQC"
+     /\ ~HistoricalLockedCommitItem(record.item)
   \/ NodeHasDecision(record.recipient)
 
 AsyncLeaderWireLifecycleStableTerminalEvidence(record) ==
@@ -17332,19 +17378,23 @@ AsyncLeaderWireLifecycleCertifiedBodyReceipt(record) ==
 AsyncLeaderWireLifecycleStaleOrDecision(record) ==
   \/ record.context # context
   \/ record.height # height
-  \/ /\ record.item.kind # "CertifiedResponse"
-     /\ \/ record.view < nodeView[record.recipient]
-        \/ NodeHasDecision(record.recipient)
+  \/ /\ record.item.kind \in AsyncControlKinds
+     /\ \/ NodeHasDecision(record.recipient)
+        \/ /\ record.view < nodeView[record.recipient]
+           /\ record.item.kind # "CommitQC"
+           /\ ~HistoricalLockedCommitItem(record.item)
   \/ /\ record.status = "Ingress"
      /\ AsyncCandidateStageRetired(record.item)
 
 AsyncLeaderWireLifecycleRecoveryCutObsolete(record) ==
   /\ AsyncLeaderWireLifecycleDormant(record)
-  /\ record.item.kind # "CertifiedResponse"
+  /\ record.item.kind \in AsyncControlKinds
   /\ record.context = context
   /\ record.height = height
-  /\ \/ record.view < nodeView[record.recipient]
-     \/ NodeHasDecision(record.recipient)
+  /\ \/ NodeHasDecision(record.recipient)
+     \/ /\ record.view < nodeView[record.recipient]
+        /\ record.item.kind # "CommitQC"
+        /\ ~HistoricalLockedCommitItem(record.item)
 
 AsyncLeaderWireLifecycleConsumerTerminal(record) ==
   /\ record.status = "Runtime"
@@ -17352,7 +17402,7 @@ AsyncLeaderWireLifecycleConsumerTerminal(record) ==
      \/ AsyncLeaderWireLifecycleCertifiedBodyReceipt(record)
      \/ AsyncLeaderWireLifecycleCandidateConsumerReceipt(record)
      \/ /\ record.item.kind \in AsyncControlKinds
-        /\ AsyncControlServiceIdentityServicedOrAdvanced(record.item)
+        /\ AsyncControlIngressStageRetired(record.item)
         /\ record.causalOrigin
              \notin AsyncScheduledCandidateOriginsForNode(record.recipient)
 

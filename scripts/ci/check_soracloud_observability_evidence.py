@@ -15,13 +15,10 @@ REQUIRED_METRICS = (
     "body_limit_rejections",
     "rate_limited_requests",
     "inflight_limit_rejections",
-    "runtime_hydration_lag",
     "inrou_lifecycle",
     "lease_volume_pressure",
-    "cache_pressure",
     "disk_pressure",
     "egress_usage",
-    "model_host_stale_heartbeats",
 )
 
 REQUIRED_STATUS_FIELDS = (
@@ -29,13 +26,10 @@ REQUIRED_STATUS_FIELDS = (
     "feature_flags",
     "route_exposure",
     "runtime_capabilities",
-    "runtime_hydration",
     "inrou_lifecycle",
     "lease_volume_pressure",
-    "cache_pressure",
     "disk_pressure",
     "egress_usage",
-    "model_host_heartbeats",
 )
 
 REQUIRED_ALERTS = (
@@ -43,11 +37,9 @@ REQUIRED_ALERTS = (
     "body_limit_rejections",
     "rate_limited_requests",
     "inflight_limit_rejections",
-    "runtime_hydration_lag",
     "lease_volume_pressure",
     "disk_pressure",
     "egress_usage",
-    "model_host_stale_heartbeats",
 )
 
 RETIRED_EVIDENCE_FIELDS = ("hf_fallback_use", "private_session_failures")

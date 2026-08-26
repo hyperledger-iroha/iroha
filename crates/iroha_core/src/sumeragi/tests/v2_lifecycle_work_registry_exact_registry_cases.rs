@@ -339,6 +339,9 @@ crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     remote_proposal_replay_pre_admission_is_closed_exact_and_live
 );
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    stored_replay_store_coalescing_and_cleanup_are_owner_closed
+);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     invalid_body_replay_pre_admission_is_closed_exact_and_lifecycle_owned
 );
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
@@ -459,7 +462,9 @@ fn live_wal_sign_carrier_uses_typed_dispatch_and_both_signed_successor_families(
         .split("fn install_live_sign(self, prepared: PreparedLiveValidateSignRegistryWork)")
         .nth(1)
         .expect("live Validate Sign has one registry installation")
-        .split("impl LiveValidateApplyRegistryReservation")
+        .split(
+            "#[cfg_attr(not(test), allow(dead_code))]\nimpl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair",
+        )
         .next()
         .expect("live Validate Sign installation stays bounded");
     assert!(live_validate_install.contains("DurableLiveWalSignOriginV1::Validate"));

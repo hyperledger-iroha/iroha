@@ -6,7 +6,7 @@ use iroha_primitives::{
     numeric::{Numeric, Quantity},
 };
 use iroha_schema::IntoSchema;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 /// Metadata key storing Norito-encoded [`TransferTranscript`] collections for FASTPQ gadgets.
 pub const TRANSFER_TRANSCRIPTS_METADATA_KEY: &str = "transfer_transcripts";
 /// Transcript describing one or more deterministic asset transfers within a transaction.
@@ -99,6 +99,47 @@ impl TransferDeltaTranscript {
         .max()
         .unwrap_or(0)
     }
+}
+
+/// Derive one stable decimal witness scale per asset for a transcript sequence.
+///
+/// Repeated balance keys deliberately contribute their scale only on first use. Later transcript
+/// entries can carry stale balance snapshots that the witness materializer rewrites while chaining
+/// updates; allowing those stale values to select the scale would make the same balance change its
+/// integer interpretation midway through the batch. Transfer amounts always contribute because
+/// they are never rewritten.
+#[must_use]
+pub fn transfer_asset_scales(
+    transcripts: &[TransferTranscript],
+) -> BTreeMap<AssetDefinitionId, u32> {
+    let mut scales = BTreeMap::<AssetDefinitionId, u32>::new();
+    let mut seeded_balances = BTreeSet::<(AssetDefinitionId, AccountId)>::new();
+    for transcript in transcripts {
+        for delta in &transcript.deltas {
+            let scale = scales.entry(delta.asset_definition.clone()).or_default();
+            *scale = (*scale).max(trimmed_scale(&delta.amount));
+
+            for (account, before, after) in [
+                (
+                    &delta.from_account,
+                    &delta.from_balance_before,
+                    &delta.from_balance_after,
+                ),
+                (
+                    &delta.to_account,
+                    &delta.to_balance_before,
+                    &delta.to_balance_after,
+                ),
+            ] {
+                if seeded_balances.insert((delta.asset_definition.clone(), account.clone())) {
+                    *scale = (*scale)
+                        .max(trimmed_scale(before))
+                        .max(trimmed_scale(after));
+                }
+            }
+        }
+    }
+    scales
 }
 /// Sparse-Merkle update witness for one transfer participant.
 #[derive(
@@ -407,6 +448,47 @@ mod tests {
             normalized_numeric_to_u64(padded.as_numeric(), 3),
             Some(120_000_000)
         );
+    }
+
+    #[test]
+    fn transfer_asset_scale_ignores_stale_repeated_balance_precision() {
+        let asset = asset("xor");
+        let alice = account("alice");
+        let bob = account("bob");
+        let first = TransferDeltaTranscript {
+            from_account: alice.clone(),
+            to_account: bob.clone(),
+            asset_definition: asset.clone(),
+            amount: quantity(42, 0),
+            from_balance_before: quantity(200, 0),
+            from_balance_after: quantity(158, 0),
+            to_balance_before: quantity(1, 0),
+            to_balance_after: quantity(43, 0),
+            from_smt_witness: TransferSmtWitness::default(),
+            to_smt_witness: TransferSmtWitness::default(),
+        };
+        let repeated = TransferDeltaTranscript {
+            from_account: alice,
+            to_account: bob,
+            asset_definition: asset.clone(),
+            amount: quantity(5, 1),
+            // These repeated-key snapshots may be stale and are repaired by the witness builder.
+            // Their precision must not rescale the already-seeded balance leaves.
+            from_balance_before: quantity(158_001, 3),
+            from_balance_after: quantity(157_501, 3),
+            to_balance_before: quantity(43_001, 3),
+            to_balance_after: quantity(43_501, 3),
+            from_smt_witness: TransferSmtWitness::default(),
+            to_smt_witness: TransferSmtWitness::default(),
+        };
+        let transcripts = [TransferTranscript {
+            batch_hash: Hash::prehashed([0x11; 32]),
+            deltas: vec![first, repeated],
+            authority_digest: Hash::prehashed([0x22; 32]),
+            poseidon_preimage_digest: None,
+        }];
+
+        assert_eq!(transfer_asset_scales(&transcripts).get(&asset), Some(&1));
     }
     #[test]
     fn negative_numeric_payload_cannot_decode_as_transfer_delta_quantity() {

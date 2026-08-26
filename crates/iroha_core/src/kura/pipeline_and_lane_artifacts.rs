@@ -3321,13 +3321,6 @@ enum IndexedSidecarRewrite {
         terminal_height: u64,
         retention: NonZeroUsize,
     },
-    TruncateToHeight {
-        height: u64,
-        /// Require every retained index entry to be structurally valid instead
-        /// of replacing malformed entries with empty slots. Test-only crash
-        /// shaping enables this to preserve prior forensic evidence exactly.
-        strict_retained: bool,
-    },
 }
 #[derive(Debug, Clone, Copy)]
 enum LaneBlockArtifactConflictPolicy {

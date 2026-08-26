@@ -326,7 +326,7 @@ fn increment(counter: &AtomicU64) {
 /// Build the canonical SFM-1 projection from finalized ledger records.
 ///
 /// Input iteration order does not affect the projection or its canonical bytes. Only approved
-/// manifests and valid completed replication orders at `identity.height()` grant authority.
+/// manifests and valid completed replication orders anchored to `identity` grant authority.
 ///
 /// # Errors
 ///
@@ -358,7 +358,6 @@ where
     M: IntoIterator<Item = (&'a ManifestDigest, &'a PinManifestRecord)>,
     O: IntoIterator<Item = (&'a ReplicationOrderId, &'a ReplicationOrderRecord)>,
 {
-    let current_epoch = identity.height();
     let mut all_manifests = BTreeMap::new();
     let mut manifest_count = 0usize;
     for (digest, record) in manifests {
@@ -366,7 +365,32 @@ where
         if manifest_count > limits.manifests {
             return Err(RoutingAuthorityError::CapacityExceeded);
         }
-        if digest != &record.digest || all_manifests.insert(*digest, record).is_some() {
+        let lifecycle_is_valid = match record.status {
+            PinStatus::Pending => {
+                record.approved_epoch.is_none()
+                    && record.council_envelope_digest.is_none()
+                    && record.retirement_reason.is_none()
+            }
+            PinStatus::Approved(epoch) => {
+                record.approved_epoch == Some(epoch)
+                    && record.submitted_epoch <= epoch
+                    && epoch < record.policy.retention_epoch
+                    && record.retirement_reason.is_none()
+            }
+            PinStatus::Retired(retired_epoch) => {
+                record.submitted_epoch <= retired_epoch
+                    && record.approved_epoch.is_none_or(|approved_epoch| {
+                        record.submitted_epoch <= approved_epoch
+                            && approved_epoch <= retired_epoch
+                            && approved_epoch < record.policy.retention_epoch
+                    })
+                    && (record.approved_epoch.is_some() || record.council_envelope_digest.is_none())
+            }
+        };
+        if digest != &record.digest
+            || !lifecycle_is_valid
+            || all_manifests.insert(*digest, record).is_some()
+        {
             return Err(RoutingAuthorityError::Corrupt);
         }
     }
@@ -390,16 +414,6 @@ where
         if order_payload_bytes > limits.order_payload_bytes {
             return Err(RoutingAuthorityError::CapacityExceeded);
         }
-        let ReplicationOrderStatus::Completed(completed_epoch) = record.status else {
-            continue;
-        };
-        if completed_epoch < record.issued_epoch
-            || completed_epoch > record.deadline_epoch
-            || completed_epoch > current_epoch
-            || record.issued_epoch > current_epoch
-        {
-            return Err(RoutingAuthorityError::Corrupt);
-        }
         let Some(manifest) = all_manifests.get(&record.manifest_digest) else {
             return Err(RoutingAuthorityError::Corrupt);
         };
@@ -410,21 +424,104 @@ where
         if payload.chunking_profile != manifest.chunker.to_handle() {
             return Err(RoutingAuthorityError::Corrupt);
         }
-        if !matches!(manifest.status, PinStatus::Approved(epoch) if epoch <= current_epoch) {
-            // Historical orders for retired or not-yet-approved manifests are
-            // auditable, but never grant a current route.
+        let target_replicas = usize::from(payload.target_replicas);
+        let Some(approved_epoch) = manifest.approved_epoch else {
+            return Err(RoutingAuthorityError::Corrupt);
+        };
+        if record.issued_epoch < approved_epoch
+            || record.deadline_epoch >= manifest.policy.retention_epoch
+            || payload.target_replicas < manifest.policy.min_replicas
+            || record.assignment_revision == 0
+        {
+            return Err(RoutingAuthorityError::Corrupt);
+        }
+        match (manifest.status, record.status) {
+            (PinStatus::Pending, _)
+            | (PinStatus::Approved(_), ReplicationOrderStatus::Cancelled(_))
+            | (PinStatus::Retired(_), ReplicationOrderStatus::Pending) => {
+                return Err(RoutingAuthorityError::Corrupt);
+            }
+            (PinStatus::Approved(status_epoch), _) if status_epoch != approved_epoch => {
+                return Err(RoutingAuthorityError::Corrupt);
+            }
+            (
+                PinStatus::Retired(retired_epoch),
+                ReplicationOrderStatus::Cancelled(cancelled_epoch),
+            ) if cancelled_epoch != retired_epoch => {
+                return Err(RoutingAuthorityError::Corrupt);
+            }
+            (
+                PinStatus::Retired(retired_epoch),
+                ReplicationOrderStatus::Completed(terminal_epoch)
+                | ReplicationOrderStatus::Expired(terminal_epoch),
+            ) if terminal_epoch > retired_epoch => {
+                return Err(RoutingAuthorityError::Corrupt);
+            }
+            _ => {}
+        }
+        let mut completed_providers = BTreeSet::new();
+        let mut previous_completion_epoch = None;
+        for completion in &record.provider_completions {
+            if !payload
+                .assignments
+                .iter()
+                .any(|assignment| assignment.provider_id == *completion.provider_id.as_bytes())
+                || !completed_providers.insert(*completion.provider_id.as_bytes())
+                || completion.completion_epoch < record.issued_epoch
+                || completion.completion_epoch > record.deadline_epoch
+                || previous_completion_epoch
+                    .is_some_and(|previous| completion.completion_epoch < previous)
+                || completion.assignment_revision != record.assignment_revision
+                || !completion.completion_authority.is_valid()
+                || completion.completed_by != completion.completion_authority.provider_owner
+                || !completion.finalized_anchor.is_valid()
+                || completion.finalized_anchor.height > identity.height()
+                || completion.finalized_anchor.height == identity.height()
+                    && identity.block_hash() != Some(completion.finalized_anchor.block_hash)
+            {
+                return Err(RoutingAuthorityError::Corrupt);
+            }
+            previous_completion_epoch = Some(completion.completion_epoch);
+        }
+        let lifecycle_is_valid = match record.status {
+            ReplicationOrderStatus::Pending => record.provider_completions.len() < target_replicas,
+            ReplicationOrderStatus::Expired(epoch) => {
+                epoch > record.deadline_epoch && record.provider_completions.len() < target_replicas
+            }
+            ReplicationOrderStatus::Cancelled(epoch) => {
+                epoch >= record.issued_epoch
+                    && epoch <= record.deadline_epoch
+                    && record.provider_completions.len() < target_replicas
+            }
+            ReplicationOrderStatus::Completed(epoch) => {
+                record.provider_completions.len() == target_replicas
+                    && record
+                        .provider_completions
+                        .last()
+                        .is_some_and(|completion| completion.completion_epoch == epoch)
+            }
+        };
+        if !lifecycle_is_valid {
+            return Err(RoutingAuthorityError::Corrupt);
+        }
+        if !matches!(manifest.status, PinStatus::Approved(_))
+            || !matches!(record.status, ReplicationOrderStatus::Completed(_))
+        {
+            // Valid historical and incomplete records remain auditable, but
+            // only a currently approved manifest with exact completion evidence
+            // grants a route.
             continue;
         }
         provider_refs = provider_refs
-            .checked_add(payload.assignments.len())
+            .checked_add(completed_providers.len())
             .ok_or(RoutingAuthorityError::CapacityExceeded)?;
         if provider_refs > limits.provider_refs {
             return Err(RoutingAuthorityError::CapacityExceeded);
         }
         let providers = by_content.entry(record.manifest_root_cid).or_default();
-        for assignment in payload.assignments {
-            providers.insert(assignment.provider_id);
-            all_providers.insert(assignment.provider_id);
+        for provider_id in completed_providers {
+            providers.insert(provider_id);
+            all_providers.insert(provider_id);
         }
     }
     let routes = by_content
@@ -474,6 +571,8 @@ fn decode_canonical_order(
         || payload.order_id != *record.order_id.as_bytes()
         || payload.manifest_digest != *record.manifest_digest.as_bytes()
         || payload.manifest_cid.as_slice() != record.manifest_root_cid.as_bytes()
+        || payload.issued_at != record.issued_epoch
+        || payload.deadline_at != record.deadline_epoch
     {
         return Err(RoutingAuthorityError::Corrupt);
     }
@@ -504,7 +603,6 @@ mod tests {
         },
         time::Duration,
     };
-    const NOW: u64 = 1_700_000_100;
     fn finalized_identity(height: u64, seed: u8) -> FinalizedStateIdentityV1 {
         let mut hash = [seed.max(1); 32];
         hash[31] |= 1;
@@ -552,7 +650,11 @@ mod tests {
             None,
             Metadata::default(),
         );
-        record.status = status;
+        match status {
+            PinStatus::Pending => {}
+            PinStatus::Approved(epoch) => record.approve(epoch, None),
+            PinStatus::Retired(epoch) => record.retire(epoch, None),
+        }
         (digest, record)
     }
     fn sample_order(
@@ -583,10 +685,10 @@ mod tests {
             target_replicas: u16::try_from(canonical_providers.len())
                 .expect("bounded provider count"),
             assignments,
-            issued_at: NOW.saturating_sub(100),
-            deadline_at: NOW.saturating_add(100),
+            issued_at: 5,
+            deadline_at: 20,
             sla: ReplicationOrderSlaV1 {
-                ingest_deadline_secs: 100,
+                ingest_deadline_secs: 15,
                 min_availability_percent_milli: 99_000,
                 min_por_success_percent_milli: 98_000,
             },
@@ -618,7 +720,9 @@ mod tests {
                     },
                 })
                 .collect(),
-            ReplicationOrderStatus::Pending | ReplicationOrderStatus::Expired(_) => Vec::new(),
+            ReplicationOrderStatus::Pending
+            | ReplicationOrderStatus::Expired(_)
+            | ReplicationOrderStatus::Cancelled(_) => Vec::new(),
         };
         let record = ReplicationOrderRecord {
             order_id,
@@ -885,7 +989,7 @@ mod tests {
         );
         for status in [
             ReplicationOrderStatus::Pending,
-            ReplicationOrderStatus::Expired(9),
+            ReplicationOrderStatus::Expired(21),
         ] {
             let order = sample_order(8, &approved, &[provider], status);
             assert!(
@@ -895,25 +999,129 @@ mod tests {
                     .is_empty()
             );
         }
-        for status in [
-            PinStatus::Pending,
-            PinStatus::Retired(9),
-            PinStatus::Approved(11),
-        ] {
-            let manifest = sample_manifest(2, status);
-            let order = sample_order(
-                9,
-                &manifest,
-                &[provider],
-                ReplicationOrderStatus::Completed(8),
-            );
-            assert!(
-                build_test_projection(identity, &[manifest], &[order])
-                    .expect("inactive manifest projection")
-                    .all_providers()
-                    .is_empty()
-            );
-        }
+        let cancelled = sample_order(
+            8,
+            &approved,
+            &[provider],
+            ReplicationOrderStatus::Cancelled(9),
+        );
+        assert_eq!(
+            build_test_projection(identity, std::slice::from_ref(&approved), &[cancelled]),
+            Err(RoutingAuthorityError::Corrupt)
+        );
+        let pending = sample_manifest(2, PinStatus::Pending);
+        let pending_order = sample_order(
+            9,
+            &pending,
+            &[provider],
+            ReplicationOrderStatus::Completed(8),
+        );
+        assert_eq!(
+            build_test_projection(identity, &[pending], &[pending_order]),
+            Err(RoutingAuthorityError::Corrupt)
+        );
+        let mut retired = sample_manifest(2, PinStatus::Approved(3));
+        retired.1.retire(9, None);
+        let retired_order = sample_order(
+            9,
+            &retired,
+            &[provider],
+            ReplicationOrderStatus::Completed(8),
+        );
+        assert!(
+            build_test_projection(identity, &[retired], &[retired_order])
+                .expect("historical retired-manifest projection")
+                .all_providers()
+                .is_empty()
+        );
+    }
+    #[test]
+    fn authority_requires_exact_approval_and_completion_evidence() {
+        let identity = finalized_identity(10, 9);
+        let manifest = sample_manifest(3, PinStatus::Approved(3));
+        let providers = [[0x51; 32], [0x52; 32]];
+        let order = sample_order(
+            10,
+            &manifest,
+            &providers,
+            ReplicationOrderStatus::Completed(8),
+        );
+        let projection = build_test_projection(
+            identity,
+            std::slice::from_ref(&manifest),
+            std::slice::from_ref(&order),
+        )
+        .expect("exact completed evidence");
+        assert_eq!(
+            projection.providers_for_content(&manifest.1.root_cid),
+            Some(&BTreeSet::from(providers))
+        );
+
+        let mut mismatched_approval = manifest.clone();
+        mismatched_approval.1.approved_epoch = Some(4);
+        assert_eq!(
+            build_test_projection(
+                identity,
+                std::slice::from_ref(&mismatched_approval),
+                std::slice::from_ref(&order),
+            ),
+            Err(RoutingAuthorityError::Corrupt)
+        );
+
+        let mut missing_completion = order.clone();
+        missing_completion.1.provider_completions.pop();
+        assert_eq!(
+            build_test_projection(
+                identity,
+                std::slice::from_ref(&manifest),
+                &[missing_completion],
+            ),
+            Err(RoutingAuthorityError::Corrupt)
+        );
+
+        let mut decreasing_epochs = order.clone();
+        decreasing_epochs.1.provider_completions[0].completion_epoch = 9;
+        decreasing_epochs.1.provider_completions[0]
+            .finalized_anchor
+            .height = 9;
+        assert_eq!(
+            build_test_projection(
+                identity,
+                std::slice::from_ref(&manifest),
+                &[decreasing_epochs],
+            ),
+            Err(RoutingAuthorityError::Corrupt)
+        );
+
+        let mut substituted_time = order.clone();
+        let mut substituted_payload =
+            decode_canonical_order(&substituted_time.1).expect("decode fixture order");
+        substituted_payload.issued_at = substituted_payload.issued_at.saturating_add(1);
+        substituted_time.1.canonical_order =
+            norito::to_bytes(&substituted_payload).expect("encode substituted-time order");
+        assert_eq!(
+            build_test_projection(
+                identity,
+                std::slice::from_ref(&manifest),
+                &[substituted_time],
+            ),
+            Err(RoutingAuthorityError::Corrupt)
+        );
+
+        let mut surplus_assignment = order;
+        let mut payload =
+            decode_canonical_order(&surplus_assignment.1).expect("decode fixture order");
+        payload.target_replicas = 1;
+        surplus_assignment.1.canonical_order =
+            norito::to_bytes(&payload).expect("encode one-target order");
+        surplus_assignment.1.provider_completions.truncate(1);
+        let completed_provider = providers[0];
+        let projection = build_test_projection(identity, &[manifest], &[surplus_assignment])
+            .expect("surplus assignment does not gain authority");
+        assert_eq!(
+            projection.all_providers(),
+            &BTreeSet::from([completed_provider])
+        );
     }
     #[test]
     fn join_enforces_manifest_provider_and_projection_bounds() {
@@ -1013,18 +1221,18 @@ mod tests {
         assert!(FinalizedStateIdentityV1::new(0, None).is_ok());
     }
     #[test]
-    fn authority_rejects_future_completion_and_payload_equivocation() {
+    fn authority_rejects_out_of_window_completion_and_payload_equivocation() {
         let identity = finalized_identity(10, 11);
         let manifest = sample_manifest(3, PinStatus::Approved(1));
         let provider = [0x55; 32];
-        let future = sample_order(
+        let out_of_window = sample_order(
             10,
             &manifest,
             &[provider],
-            ReplicationOrderStatus::Completed(11),
+            ReplicationOrderStatus::Completed(21),
         );
         assert_eq!(
-            build_test_projection(identity, std::slice::from_ref(&manifest), &[future]),
+            build_test_projection(identity, std::slice::from_ref(&manifest), &[out_of_window]),
             Err(RoutingAuthorityError::Corrupt)
         );
         let mut corrupt = sample_order(

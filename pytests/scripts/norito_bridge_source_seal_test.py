@@ -93,6 +93,25 @@ def test_nonignored_untracked_dependency_input_is_dirty(source_fixture: Path) ->
     assert "?? bridge-src/new.rs" in status
 
 
+def test_tracked_deleted_dependency_input_is_bound_without_being_read(
+    source_fixture: Path,
+) -> None:
+    inputs = ["Cargo.lock", "Cargo.toml", "bridge-src"]
+    retired = source_fixture / "bridge-src/retired.rs"
+    retired.write_text("pub fn retired() {}\n", encoding="utf-8")
+    _git(source_fixture, "add", "bridge-src/retired.rs")
+    _git(source_fixture, "commit", "-qm", "add retired fixture")
+    before = SOURCE_SEAL.fingerprint(source_fixture, inputs)
+
+    retired.unlink()
+
+    assert "bridge-src/retired.rs" not in SOURCE_SEAL.listed_files(
+        source_fixture, inputs
+    )
+    assert before != SOURCE_SEAL.fingerprint(source_fixture, inputs)
+    assert " D bridge-src/retired.rs" in SOURCE_SEAL.status(source_fixture, inputs)
+
+
 def test_unnamed_policy_ignored_file_stays_outside_seal(source_fixture: Path) -> None:
     inputs = ["Cargo.lock", "Cargo.toml", "bridge-src"]
     (source_fixture / "bridge-src/local.cache").write_text("generated\n", encoding="utf-8")

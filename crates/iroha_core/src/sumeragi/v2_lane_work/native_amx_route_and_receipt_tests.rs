@@ -662,6 +662,7 @@ fn lane_signing_boundary_requires_exact_descriptor_membership() {
     assert!(
         adapter
             .sign_lane_vote(&proposal, CertPhase::Prepare)
+            .expect("descriptor-only signing check should not fail")
             .is_none(),
         "configured validator role cannot sign a descriptor which omits the local key"
     );

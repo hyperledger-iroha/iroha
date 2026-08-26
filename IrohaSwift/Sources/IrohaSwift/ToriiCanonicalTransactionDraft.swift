@@ -117,9 +117,7 @@ struct ToriiCanonicalTransactionDraft {
 
     var signatureBytes = CompactNoritoWriter()
     signatureBytes.writeUInt64LE(UInt64(signature.count))
-    for byte in signature {
-      signatureBytes.writeField(Data([byte]))
-    }
+    signatureBytes.writeByteFields(signature)
     var signatureSet = CompactNoritoWriter()
     signatureSet.writeField(signatureBytes.data)
     var signed = CompactNoritoWriter()
@@ -149,6 +147,18 @@ struct ToriiCanonicalTransactionDraft {
     context: String
   ) throws -> Data {
     try inspectVersionedSignedTransaction(bytes, context: context).transactionPayload
+  }
+
+  static func validateTransactionPayload(
+    _ bytes: Data,
+    context: String
+  ) throws {
+    guard !bytes.isEmpty, bytes.count <= maximumTransactionPayloadBytes else {
+      throw ToriiClientError.invalidPayload(
+        "\(context) must be a bounded non-empty canonical V1 TransactionPayload."
+      )
+    }
+    _ = try parsePayload(bytes, context: context)
   }
 
   static func inspectVersionedSignedTransaction(
@@ -398,7 +408,7 @@ struct ToriiCanonicalTransactionDraft {
     return signature
   }
 
-  private static func decodeEd25519Authority(
+  static func decodeEd25519Authority(
     _ bytes: Data,
     context: String
   ) throws -> Data {

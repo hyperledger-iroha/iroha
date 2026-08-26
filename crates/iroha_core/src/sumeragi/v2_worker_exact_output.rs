@@ -25,6 +25,50 @@ enum ExactOutputAttemptOutcome {
     Unavailable,
     Retired,
 }
+
+/// Scalar-only view of exact network-output ownership for scheduler-stall
+/// diagnostics. Peer identities, payloads, hashes, and reply capabilities do
+/// not cross this boundary.
+#[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
+pub(in crate::sumeragi) struct ExactOutputSchedulerSnapshotV1 {
+    sealed: bool,
+    pending: bool,
+    fanouts: usize,
+    messages: usize,
+    targets: usize,
+    remaining_message_occurrences: usize,
+    dispatchable_fanouts: usize,
+    current_posts: usize,
+    ticketless_current_posts: usize,
+    admission_tickets: usize,
+    ticket_rank_one: usize,
+    ticket_rank_later: usize,
+    ticket_rank_unavailable: usize,
+    minimum_ticket_rank: Option<usize>,
+    maximum_ticket_rank: Option<usize>,
+    pending_flushes: usize,
+    parked_targets: usize,
+    completed_targets: usize,
+    source_owner_classes: usize,
+    source_owner_edges: usize,
+    reservation_classes: usize,
+    reserved_target_classes: usize,
+    reliable_units: usize,
+    pacemaker_units: usize,
+    sidecar_topology_units: usize,
+    sidecar_reply_units: usize,
+    ownership_units: usize,
+    ownership_unit_capacity: usize,
+    shared_ownership_units: usize,
+    shared_ownership_unit_capacity: usize,
+    admitted_sidecar_receipts: usize,
+    sidecar_control_units: usize,
+    sidecar_admission_capacity: usize,
+    next_fanout_index: usize,
+    drive_attempt_budget: usize,
+}
+
 /// Process-local corridor/transport owner whose live endpoint identity binds a
 /// handoff without entering wire, durable, or consensus state.
 struct DurableExactOutputOwnerNonce {
@@ -407,6 +451,121 @@ impl PendingExactOutput {
                     .iter()
                     .any(|target| target.pending_flush.is_some())
         }) || !self.admitted_sidecar_chunks.is_empty()
+    }
+
+    fn scheduler_snapshot(&self, sealed: bool) -> ExactOutputSchedulerSnapshotV1 {
+        let mut messages = 0usize;
+        let mut targets = 0usize;
+        let mut remaining_message_occurrences = 0usize;
+        let mut dispatchable_fanouts = 0usize;
+        let mut current_posts = 0usize;
+        let mut ticketless_current_posts = 0usize;
+        let mut admission_tickets = 0usize;
+        let mut ticket_rank_one = 0usize;
+        let mut ticket_rank_later = 0usize;
+        let mut ticket_rank_unavailable = 0usize;
+        let mut minimum_ticket_rank = None;
+        let mut maximum_ticket_rank = None;
+        let mut pending_flushes = 0usize;
+        let mut parked_targets = 0usize;
+        let mut completed_targets = 0usize;
+        for fanout in &self.fanouts {
+            messages = messages.saturating_add(fanout.messages.len());
+            targets = targets.saturating_add(fanout.targets.len());
+            dispatchable_fanouts = dispatchable_fanouts
+                .saturating_add(usize::from(fanout.has_dispatchable_target()));
+            for target in &fanout.targets {
+                remaining_message_occurrences = remaining_message_occurrences
+                    .saturating_add(fanout.messages.len().saturating_sub(target.message_index));
+                current_posts = current_posts.saturating_add(usize::from(target.current.is_some()));
+                ticketless_current_posts = ticketless_current_posts.saturating_add(usize::from(
+                    target.current.is_some() && target.ticket.is_none(),
+                ));
+                if let Some(ticket) = target.ticket.as_ref() {
+                    admission_tickets = admission_tickets.saturating_add(1);
+                    let rank = ticket.rank();
+                    match rank {
+                        Some(1) => ticket_rank_one = ticket_rank_one.saturating_add(1),
+                        Some(_) => {
+                            ticket_rank_later = ticket_rank_later.saturating_add(1);
+                        }
+                        None => {
+                            ticket_rank_unavailable = ticket_rank_unavailable.saturating_add(1);
+                        }
+                    }
+                    if let Some(rank) = rank {
+                        minimum_ticket_rank = Some(
+                            minimum_ticket_rank.map_or(rank, |minimum: usize| minimum.min(rank)),
+                        );
+                        maximum_ticket_rank = Some(
+                            maximum_ticket_rank.map_or(rank, |maximum: usize| maximum.max(rank)),
+                        );
+                    }
+                }
+                pending_flushes =
+                    pending_flushes.saturating_add(usize::from(target.pending_flush.is_some()));
+                parked_targets =
+                    parked_targets.saturating_add(usize::from(target.parked));
+                completed_targets = completed_targets.saturating_add(usize::from(
+                    target.message_index == fanout.messages.len(),
+                ));
+            }
+        }
+        let mut reliable_units = 0usize;
+        let mut pacemaker_units = 0usize;
+        let mut sidecar_topology_units = 0usize;
+        let mut sidecar_reply_units = 0usize;
+        for (reservation, count) in &self.reservation_owner_counts {
+            let aggregate = match reservation.kind {
+                ExactTargetReservationKind::Reliable => &mut reliable_units,
+                ExactTargetReservationKind::Pacemaker => &mut pacemaker_units,
+                ExactTargetReservationKind::SidecarTopologyProgress => {
+                    &mut sidecar_topology_units
+                }
+                ExactTargetReservationKind::SidecarReplyControl => &mut sidecar_reply_units,
+            };
+            *aggregate = aggregate.saturating_add(*count);
+        }
+        ExactOutputSchedulerSnapshotV1 {
+            sealed,
+            pending: self.is_pending(),
+            fanouts: self.fanouts.len(),
+            messages,
+            targets,
+            remaining_message_occurrences,
+            dispatchable_fanouts,
+            current_posts,
+            ticketless_current_posts,
+            admission_tickets,
+            ticket_rank_one,
+            ticket_rank_later,
+            ticket_rank_unavailable,
+            minimum_ticket_rank,
+            maximum_ticket_rank,
+            pending_flushes,
+            parked_targets,
+            completed_targets,
+            source_owner_classes: self.source_fifo_owners.len(),
+            source_owner_edges: self
+                .source_fifo_owners
+                .values()
+                .fold(0usize, |total, owners| total.saturating_add(owners.len())),
+            reservation_classes: self.reservation_owner_counts.len(),
+            reserved_target_classes: self.reserved_target_classes.len(),
+            reliable_units,
+            pacemaker_units,
+            sidecar_topology_units,
+            sidecar_reply_units,
+            ownership_units: self.ownership_units,
+            ownership_unit_capacity: self.ownership_unit_capacity,
+            shared_ownership_units: self.shared_ownership_units,
+            shared_ownership_unit_capacity: self.shared_ownership_unit_capacity,
+            admitted_sidecar_receipts: self.admitted_sidecar_chunks.len(),
+            sidecar_control_units: self.sidecar_control_units(),
+            sidecar_admission_capacity: self.sidecar_admission_capacity,
+            next_fanout_index: self.next_fanout_index,
+            drive_attempt_budget: self.drive_attempt_budget,
+        }
     }
     fn pending_kura_replica_advert_heights(&self) -> Result<BTreeSet<u64>, String> {
         let mut heights = BTreeSet::new();

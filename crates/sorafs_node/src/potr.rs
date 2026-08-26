@@ -371,9 +371,8 @@ pub struct PotrTracker {
     checkpoint_store: Option<Arc<PotrCheckpointStore>>,
 }
 impl PotrTracker {
-    /// Construct a bounded non-persistent tracker for unit tests.
-    #[cfg(test)]
-    fn in_memory(max_records: usize) -> Result<Self, PotrTrackerError> {
+    /// Construct a bounded non-persistent tracker for emergency-disabled startup and tests.
+    pub(crate) fn in_memory(max_records: usize) -> Result<Self, PotrTrackerError> {
         validate_policy(max_records, POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1)?;
         Ok(Self {
             max_records,
@@ -2038,8 +2037,11 @@ mod tests {
             },
         };
         let (vrf_public, vrf_private) =
-            iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![0x34; 32]))
-                .expect("fixture BLS keypair");
+            iroha_crypto::BlsNormal::try_keypair(iroha_crypto::KeyGenOption::UseSeed(vec![
+                0x34;
+                32
+            ]))
+            .expect("fixture BLS keypair");
         let vrf_pair: KeyPair = (vrf_public, vrf_private).into();
         let proposal = ProviderAdmissionProposalV1 {
             version: sorafs_manifest::PROVIDER_ADMISSION_PROPOSAL_VERSION_V1,

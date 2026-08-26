@@ -127,7 +127,8 @@ For a disposable local four-validator Taira network, do not build a custom
 container corridor. Use the same-revision bare-metal smoke:
 
 ```bash
-python3 scripts/taira_devnet.py up
+python3 scripts/taira_devnet.py up \
+  --inrou-canary-dir /private/runtime/taira-inrou-canary
 python3 scripts/taira_devnet.py down
 ```
 
@@ -136,17 +137,24 @@ restart and stages a distinct owner-`0600` FD198 launch copy per peer. Each
 daemon consumes its launch copy before startup; `down` stops the cohort and
 deletes both the persistent sources and every validated launch remnant.
 
-To include the optional read-only full product-route diagnostic, run:
+To include the optional read-only full product-route diagnostic in the mandatory
+guest-workload qualification, run:
 
 ```bash
-python3 scripts/taira_devnet.py up --full-doctor
+python3 scripts/taira_devnet.py up \
+  --inrou-canary-dir /private/runtime/taira-inrou-canary \
+  --full-doctor
 ```
 
 The diagnostic uses the same-revision `iroha` CLI and the same three standard
 devnet binaries (`kagami`, `iroha3d_taira`, and `iroha`). The command requires
 Linux/AArch64, uid 0, KVM API version 12, and the canonical locked Inrou
-identities before it builds or replaces a cohort. The optional
-`--inrou-canary-dir <owner-only-workspace>` path additionally builds
-`sorafs-node`, preseeds the exact guest and bundle commitments into four
-disjoint stores, and proves four hosted replicas plus the authoritative route;
-it may be combined with `--full-doctor` when both checks are required.
+identities before it builds or replaces a cohort. The mandatory
+`--inrou-canary-dir <owner-only-workspace>` path builds `sorafs-node`, preseeds
+the exact guest and bundle commitments into four disjoint stores, and proves
+four hosted replicas plus the authoritative route. `--full-doctor` adds the
+broader public product-route surface to that qualification.
+
+This optional local diagnostic is not public-ingress qualification. Run the
+same-revision `iroha taira doctor` directly against a public ingress when
+qualifying that deployment.

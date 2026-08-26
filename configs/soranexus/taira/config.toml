@@ -718,9 +718,6 @@ min_bond_amount = "150"
 min_enactment_delay = 600
 window_span = 3600
 min_turnout = 1
-# The reviewed validation-fee policy enacts exactly 3,600 blocks after its
-# referendum closes. The deadline is inclusive; the following block fails closed.
-pipeline_enactment_sla_blocks = 3600
 voting_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 citizenship_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 citizenship_bond_amount = "10000"

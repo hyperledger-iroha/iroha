@@ -19,6 +19,128 @@ Completed history lives in [`status.md`](./status.md).
   the validator-roster length helper with the proof-of-possession-filtered
   roster.
 
+## Iroha crypto first-release closure
+
+- Add a production-source closure job for the minimal, application, consensus, node, and
+  `ffi_export` feature sets. Reject empty feature switches, backend-selection aliases,
+  unreferenced shipping modules/binaries, and public wrappers that only rename another fallible
+  operation.
+- Benchmark canonical key parsing/formatting, BLS key generation/signing/aggregation, VRF proof
+  construction, and threshold/timed-OVN arithmetic. Add deterministic output checks and allocation
+  budgets so later optimizations cannot reintroduce transient secret copies or hardware-dependent
+  results.
+- Complete an independent cryptographic and side-channel review of the adaptive threshold-BLS and
+  timed-OVN implementations, including complaint handling, transcript binding, secret custody and
+  erasure, pairing validation, corruption assumptions, and the scalar/accelerated target matrix.
+- Resolve the remaining production Clippy findings and bounded `dead_code` or lint exemptions in
+  adaptive threshold-BLS, timed-OVN, TLE, GOST, SM, and SoraNet handshake/PQ modules after proving
+  production reachability. Keep only release algorithms with owned callers, exact fixtures, and
+  deterministic cross-platform validation.
+
+## SDK first-release closure
+
+- Generate one canonical signing-algorithm token registry for the node and every SDK, then reject
+  convenience spellings that currently differ by language. Keep the canonical wire identifiers and
+  hardware-independent outputs unchanged.
+- Extend production-source reachability and exported-surface checks from the existing Sumeragi
+  closure to every maintained SDK. CI should reject unreferenced shipping files, generated package
+  metadata, deprecated annotations, compatibility-only aliases, and test helpers in production
+  artifacts.
+- Finish the Kotlin/Java reflection audit by replacing the remaining optional compression,
+  telemetry, and transport probes with direct typed dependencies or explicit unsupported results.
+  Remove raw-string status adapters and unused profile parameters in the same mirrored changes.
+- Reduce Python transaction signing to one typed credential input per operation and remove any
+  remaining alternate keyword shapes. Keep exact canonical request validation before transport.
+- Select one first-release transaction executable carrier in the data model and every SDK. Migrate
+  instruction-only transactions and shared fixtures to it, then remove dual `instructions`/`entries`
+  parameters and explicit batch-selection switches rather than preserving a legacy carrier.
+- Rebuild and publish the reviewed ABI-23 native bridge and a valid Darwin JavaScript native-binding
+  profile, then run the complete Swift, JavaScript, Python, Kotlin, Java/Android, and C# native
+  parity suites. Add allocation benchmarks for the new exact-size byte-field encoders and retain
+  byte-for-byte parity tests across implementations.
+
+## Iroha Core first-release closure
+
+- Replace the two remaining stored/ephemeral `QueryItemKind` match tables with one typed registry
+  declaration that generates both execution modes and an exhaustiveness test. Keep canonical exact
+  payload decoding and source-budget admission explicit; do not restore boxed or compatibility
+  dispatch.
+- Remove the crate-wide Clippy suppression in bounded module groups. Delete or test-gate each
+  resulting dead surface, and add a CI target that checks the production library without test-only
+  features so unused shipping code cannot accumulate again.
+- Move invariant-bypassing `*_for_testing` state mutators behind `cfg(test)` or the narrow
+  `iroha-core-tests` feature, then migrate dependent-crate fixtures through an explicit build
+  matrix. Preserve historical-format rejection and recovery detection that fail closed; those are
+  safety controls, not compatibility support.
+- Add deterministic benchmarks for query dispatch/metering, block admission, state transitions,
+  and startup indexes. Use the profiles to remove avoidable encoding, cloning, and full-collection
+  scans while asserting identical outputs across hardware paths.
+
+## Kura emergency-start closure
+
+- Keep merge and autonomous production unavailable in emergency Fast mode. If operators later need
+  those write paths before a Strict restart, first add an atomically published merge-log
+  count/length/tip marker and durable latest-route summary; Fast must never recover that authority
+  by decoding every historical frame.
+- Add large-history startup benchmarks that separately report marker preflight, hash-journal
+  binding, five-artifact metadata binding, bounded-manifest authentication, exact-tip validation,
+  minimal-State construction, merge metadata, Sumeragi replay planning, and recursive disk
+  accounting. Enforce zero-copy historical-hash, no-historical-body, no-snapshot-payload-read,
+  no-Merkle-read, no-current-World-decode, no-derived-index, no-full-StateView,
+  no-deep-snapshot-validation, and no-historical-cryptography regressions for Fast mode without
+  weakening the signer, network, configured confidential-policy, size, or exact-tip boundary.
+
+## Norito archive API closure
+
+- Centralize short archived-field padding used by `decode_archived_field` and derive-generated
+  `decode_from_slice` implementations in one fallible aligned-storage helper. Charge every
+  temporary allocation at its allocation site and remove the duplicated `Vec` padding path.
+- Replace the stateful `from_bytes`/`ArchivedBox` marker workflow with an
+  owning or borrowed archive view that carries its payload context explicitly,
+  then migrate remaining callers to exact value decode. Remove the global
+  payload-context setters once no caller can deserialize a marker after the
+  validating function returns.
+- Audit the experimental columnar and broad streaming helper surfaces against
+  first-release production call sites. Retain only layouts with an explicit V1
+  wire contract and focused consumers; remove benchmark-only public adapters
+  instead of preserving dormant APIs.
+
+## Torii first-release closure
+
+- Remove Torii's crate-wide `dead_code`, `unused_imports`, and `unused_async`
+  allowances. Delete or feature-gate every resulting production-only finding,
+  and replace trait-check helper functions with compile-time assertions that do
+  not need dead-code exemptions.
+- Bound operator-auth sessions, challenges, and lockout identities with one
+  expiry-aware capacity policy. Admission must fail closed at capacity without
+  a full-map scan, and focused tests must cover expiry, concurrency, and many
+  distinct source identities.
+- Retire the explicitly legacy `POST /v1/sorafs/storage/fetch` diagnostic and
+  its JavaScript adapter in favor of authenticated CAR/chunk reads, then
+  regenerate the OpenAPI provenance bundle and update the SoraFS operator
+  runbooks in the same change.
+- Collapse permanent operator bearer-token modes to one bootstrap-before-first-
+  credential flow, remove duplicate MCP Connect tool aliases and response
+  fields, and retain only `/openapi.json` as the OpenAPI discovery endpoint.
+- Audit wildcard diagnostic and configuration-alias surfaces (`/status/{*tail}`
+  and one-way parser spellings) against first-release callers, deleting each
+  surface that has no production owner instead of carrying compatibility
+  branches.
+
+## Data-model first-release closure
+
+- Remove the always-rejected `RegisterProviderOwner` and
+  `UnregisterProviderOwner` instruction surfaces from the registry, executor,
+  fixtures, and SDKs instead of retaining inert pre-release operations.
+- Remove the domain-selector state that canonical `AccountAddress` no longer
+  serializes, then retire `AccountRekeyTransitionProvenance::LegacyUnspecified`
+  and its startup normalization. Regenerate cross-SDK fixtures in the same
+  change so there is one account model from the first release onward.
+- Replace the boxed repository-initiation compatibility codec with its direct
+  enum payload, plan committed-transaction indexes from the typed predicate
+  tree instead of the legacy flat filter carrier, and validate DA proof-policy
+  hashes through borrowed bundles without temporary vectors.
+
 ## Generated HF isolated execution
 
 - Keep generated Hugging Face imports storage-only in V1. Any future execution
@@ -32,6 +154,101 @@ Completed history lives in [`status.md`](./status.md).
 
 - Type the two large Halo2 tail-publication ledger equations explicitly so the
   normal lint policy accepts their values without wrapping or lint overrides.
+- After the merge is recorded as a signed, clean source commit, replay the
+  Torii OpenAPI owner and synchronize the complete five-file artifact bundle.
+  The embedded source-owned specification is synchronized with the reconciled
+  router, while the inherited release copies and unsigned manifests still
+  describe the preceding source commit and artifact digest; do not hand-edit
+  that provenance bundle in the dirty merge worktree.
+
+## SORA Parliament hardening
+
+- Obtain an independent review of the exact timed-OVN arithmetic,
+  Fiat--Shamir statements, aggregate-only opening, fixed-round secret
+  exponentiation, threshold-BLS corruption model, key custody/rotation,
+  implementation, release binaries, and CPU/accelerator target matrix. The
+  publication-manifest verifier is implemented, but no external audit report or
+  evidence archive is checked in or claimed.
+- Qualify the implemented future-pulse draw and private-ballot attempt reducer
+  on at least four peers: archive same-revision finalized-beacon batching,
+  invitation sealing, authority-bound self-absence, conflicting and matching
+  two-thirds public-finding endorsements, exact phase boundaries,
+  missed-deadline classification, objective release failure,
+  opening-deadline expiry, fresh-TLE retry, restart/restore replay,
+  narrow-result fresh Confirmation Jury, stale-head supersession, exact-height
+  enactment, and rollback-isolated execution failure.
+- Qualify the implemented live threshold-beacon partial-share transport,
+  per-session runtime custody, threshold aggregation, candidate-effect
+  assembly, and authoritative finalized-pulse persistence on at least four
+  peers. Include optional Parliament demand batches, mandatory NPoS boundary
+  slots, missing/invalid shares, restart and idempotent retransmission, and key
+  rotation. The certified lifecycle now compare-and-sets the expected active
+  predecessor and makes a block-`H` global key change effective at `H + 1`;
+  qualification must prove that optional and mandatory pulses authorized by
+  the parent state are resolved by the session active at the pulse height and
+  cannot be reinterpreted through the post-block successor pointer.
+- Qualify the implemented timed-release operating seams: full-public-transcript
+  release-context read, bodyless authenticated local partial request,
+  runtime-only multi-session custody/provider injection, independent proof
+  verification, canonical combine, and ordinary `FinalizeOpenedBallot`
+  submission, plus the bounded public broker projection and separately
+  revalidated projected-signer boundary. Exercise the implemented bounded
+  operator CLI against up to 31 strict signer-peer roots: it exact-matches the
+  immutable statement, verifies/de-duplicates every partial, canonicalizes the
+  threshold, and re-fetches and revalidates the primary context and aggregate at
+  the refreshed finalized height immediately before normal signed submission.
+  Qualify the implemented certified
+  public-session install, atomic active-pointer cutover/retirement, new-ballot
+  selection guard, and local-custody retirement guard against every committed
+  ballot/retry deadline. Complete the authenticated broker transport and HSM
+  provisioning path; then demonstrate old-share retention/zeroization, restart
+  recovery, peer authentication/rate limits, freshness expiry, canonical
+  collection, and operator submission on at least four peers. Do not describe
+  aggregate opening as operationally automatic or claim secure erasure from the
+  software adapter.
+- Qualify the implemented Core-authorized pre-seal timed-OVN casting-context
+  archive read and its maximum-4,194,304-byte canonical header-framed Norito
+  `ParliamentTimedOvnCastingContextArchiveV1`. The archive is public diagnostic
+  material and never a continuing authorization. Qualify the separate app-signed
+  casting-proof route and exact ABI 23 proof-only C/JNI wallet surface. The native
+  verifier must continue to consume an explicit immutable raw-network/checkpoint/
+  context/ballot trust anchor, reject nonterminal proof pages, verify finality,
+  the fixed witness, and membership, replay-validate the embedded archive, and
+  exact-match its rederived compact binding before keystore seed access. Preserve
+  removal of every archive-only wallet export. Qualify Core's exact half-open
+  phase-window and nonmonotone-schedule rejection, the generation-bound Android
+  seed handles, and the Swift/Kotlin/Java immutable no-default trust-anchor APIs.
+  Keep the aligned served OpenAPI and JavaScript/Kotlin/Java/Swift projections
+  strict, including negative tests for malformed proofs, fake chains, wrong
+  network/context/ballot anchors, intermediate pages, archive substitution, and
+  binding tampering. Cargo-qualify the bounded proof decoder and
+  multi-registration native ballot path before treating the corridor as
+  operational. Rebuild and execute same-source ABI-23 Swift XCFramework and
+  Android native artifacts rather than treating parse, JVM-descriptor, or
+  source-contract gates as native execution evidence; keep the packaged ABI-21
+  XCFramework as a truthful blocker until it is replaced.
+- Qualify early impossible-quorum and post-deadline public-finding `NoResult`
+  across persistence restore and at least four peers. The closed reducer state
+  is deterministic and prevents manager-chosen roots; operational progress
+  still depends on an eligible transaction eventually submitting the
+  permissionless deadline trigger, so exercise delayed and competing triggers.
+- Finish the generated public-contract closure from a settled candidate.
+  Regenerate the static served OpenAPI authority and truthful provenance after
+  the source and pinned Cargo input are sealed, then publish the exact
+  proposal-kind/body/route inventory. Keep the retired equal Parliament ballot
+  route and proposal-backed referendum/finalize/enact surfaces absent from the
+  served OpenAPI as they already are from source and SDKs. Standalone referenda
+  must remain explicitly separate from Parliament attempts, and automatic
+  execution must remain only its non-submit-able audit outcome.
+- Add reviewed operator dashboards and alarms for stuck attempts and deadline
+  misses using the implemented aggregate-only Parliament counters/gauges;
+  qualify their restart and four-peer behavior without adding identifiers,
+  free-form labels, or private ballot material.
+- Run the bounded Parliament model and deterministic source/model contract from
+  the immutable candidate, then pass focused data-model/Core/Torii tests, the
+  legacy-codec guard, workspace tests, strict all-target Clippy, formatting, and
+  a clean signed release corridor. Bounded model checking is regression
+  evidence only and does not replace cryptographic review or multi-peer tests.
 
 ## ZK algorithm release qualification
 
@@ -119,8 +336,9 @@ Completed history lives in [`status.md`](./status.md).
   and escape-negative evidence.
 - Run the mandatory disposable four-validator Taira corridor with the exact
   four locked Inrou identities, files-only NSS/subid policy, `/dev/kvm` custody,
-  write-lease reclaim, anonymous QMP, fail-secure firewall cleanup, converged
-  finality, and four-replica guest workload canary. The current macOS/arm64 host
+  pinned ext4 V1 write-lease mount/reuse/recovery and disk reclaim, anonymous
+  QMP, fail-secure firewall cleanup, converged finality, and four-replica guest
+  workload canary. The current macOS/arm64 host
   cannot supply this Linux/KVM evidence; static/mock orchestration tests are not
   a substitute.
 - Restore authorized public reachability and runtime custody: the HTTPS probe on
@@ -250,14 +468,12 @@ Production readiness is not complete. The remaining work is internal release
 qualification plus external evidence and execution; external evidence cannot
 close the internal blockers below:
 
-- Replace the infeasible authenticated V5 k17 path with a feasible, reviewed
-  shipping recursion backend that meets the release device and memory limits.
-  V7 remains an unreviewed diagnostic experiment, not a fallback; keep
-  promotion hard-failing until a reviewed shipping backend is authenticated.
-  The public V5 authentication boundary also hard-fails because V5 does not yet
-  carry a signed candidate-bound internal-validation receipt; thread a genuine
-  V5 receipt through manifest, attestation subject, promotion marker, and
-  release record before any V5 authentication or admission path is enabled.
+- Qualify the sole ABI-21/V4 recursion backend against the release device and
+  memory limits, and keep promotion hard-failing until that exact backend is
+  reviewed and authenticated. The disconnected release-V5 model and rejected
+  serialized-audit V7 lab are removed, not fallback paths. `StateBoundaryV5`
+  and compact-v5 identifiers remain only as internal layout names inside the
+  V4 release protocol; they do not define another release or admission family.
 - Produce the independently authenticated candidate-bound internal-validation
   receipt. The locally trusted release policy now pins the exact
   key-and-executable validation-runner identity, so a receipt's self-declared
@@ -289,7 +505,7 @@ close the internal blockers below:
   root, and immutable candidate.
 - Provision the exact Xcode 26.6 candidate-lab toolchain and run native build
   and both physical launches with the same full Xcode build identity and
-  `iphoneos` SDK. Rebuild a fresh same-source Connect artifact at ABI 22; the
+  `iphoneos` SDK. Rebuild a fresh same-source Connect artifact at ABI 23; the
   ignored local ABI 19 bridge manifest is not candidate evidence.
 - Governance-bind a still-fresh Android Key Attestation status response, or
   recapture it with the checked fixed-endpoint helper if it has expired, and
@@ -582,6 +798,9 @@ runtime receipt only from the exact checked dequeue and terminalizes that body
 after every registry, coordinator, executor, service, and worker
 acknowledgement. Superseded generic WAL, storage-recovery, dedicated parked-
 completion, and coordinator-to-runtime ordinal adoption surfaces are absent.
+The production tree also contains no generic `step_recovery`, `RecoveryFifo`,
+retry-retained/idle scheduler, `RecoveryAfterClocksArmed`, or generic
+`Recovery*` effect owner; PendingKura is the sole lifecycle scheduler.
 
 Exact checkpoint evidence is recorded in `status.md`. The final source-only
 Sumeragi audit matched the frozen 1,745-path formal cone at SHA-256
@@ -611,8 +830,9 @@ The outstanding revision-4 work includes:
   preflight that rehydrates late canonical ownership, services historical
   dependencies, and requires every winning certificate plus its application
   witness to be durable before rollover authority or successor activation.
-  There is no incomplete-session successor branch. Run the remaining focused
-  Rust and four-validator loss/hold/heal corridors against this exact source
+  There is no incomplete-session successor branch. Preserve the completed
+  focused Rust and four-validator loss/hold/heal evidence while closing the
+  remaining release-qualification work against the eventual merged source
   seal.
 - Run a fresh strict source-bound TLAPS wave over the exact-cardinality change
   closure. The TLA model now preserves `DualQuorum` as mathematical
@@ -887,9 +1107,10 @@ The outstanding revision-4 work includes:
   post-LedgerV1-fsync fail-stop in exact four-validator BLS/RS16 contexts, plus
   real four-validator success, view-change, restart, and authenticated
   consensus Hold/Drop convergence. The feature-only controller and exact
-  four-validator test now cover authenticated, Proposal-bound `PayloadChunk`
-  Hold/heal selection, but the current-tree integration acceptance run remains
-  outstanding. The other strict live-network gaps are an unskipped invalid-
+  four-validator test cover authenticated, Proposal-bound `PayloadChunk`
+  Hold/heal selection, and the final current-tree locked/offline acceptance run
+  is green, 1/1 in 84.82 seconds. The other strict live-network gaps are an
+  unskipped invalid-
   body-report test, merge-sidecar-recovery test, publication-phase-targeted
   restart matrix, and the ignored strongest observer/body-recovery case. These
   are evidence gaps, not missing production joins. CompleteTip
@@ -933,8 +1154,10 @@ The outstanding revision-4 work includes:
   adapter/body-store/service startup path. The isolated one-height PendingKura
   path now has its dedicated lifecycle state and an executable Kura-first
   shutdown/finalization fixture with source mutations. The former monolithic
-  height body is removed; the remaining gate is coordinated Rust execution of
-  that restricted no-clock corridor and the full source/formal suite.
+  height body is removed. The current-source runtime slice is 159/159, the
+  lifecycle height-driver slice is 12/12, and the production-shaped terminal
+  CurrentServe regressions are green; broader formal baseline debt and the
+  unrelated all-target workspace errors remain release-wide gates.
 - Exercise autonomous carrier terminal gating, bootstrap roll-forward, and
   lifecycle retention with the focused Kura/Sumeragi regressions and a fresh
   disposable four-validator devnet. Require the multi-stage workload to apply,
@@ -960,11 +1183,13 @@ The outstanding revision-4 work includes:
   retries on their immutable owner, reject owner replacement before refinement,
   and retain only the separately typed monotone Fetch/Store/Validate authority
   lineage.
-- Preserve the clean final-source 462/462 enlarged-stack coordinator and exact
-  `iroha_core` compile receipts while closing release evidence. Resolve or
-  explicitly scope the 19 unrelated/pre-existing source-budget findings before
-  release evidence is sealed. Run the remaining workspace tests, strict Clippy,
-  and the revision-4 formal syntax, invariant, and mutation corridor. Focused
+- Preserve the final-seam targeted lifecycle and exact `iroha_core`
+  compilation receipts while closing release evidence. The current-source
+  enlarged-stack coordinator sweep is green 510/510. Resolve or explicitly
+  scope all 66 broader source-budget findings before release evidence is
+  sealed. Run the
+  remaining workspace tests, strict Clippy, and the revision-4 formal syntax,
+  invariant, and mutation corridor. Focused
   consensus validation must include pre-Decision cache rejection,
   disjoint-roster historical lane signing/recovery, exact-predecessor sidecar
   reservation under outsider pressure, DA resource-cap boundaries, volatile
@@ -1469,16 +1694,37 @@ source validation.
   outputs; do not add SDK-local generators, generic exporter binaries,
   compatibility commands, or migration adapters.
 
-## Taira development networks
+## Public Taira node onboarding
+
+- Treat Taira as the persistent public testnet. Provide one supported node-init
+  flow: `iroha taira join --data-dir <owner-only-directory>`.
+  The command must discover the canonical bootstrap URL by default, consume a
+  signed public bootstrap manifest, generate local node keys, write and validate
+  the complete runtime configuration, and start the node with sensible
+  first-release defaults as a permissionless observer. Validator activation is
+  a subsequent on-chain transition through the existing staking registration
+  and peer lifecycle after synchronization; do not introduce an operator-issued
+  admission-token format or a second bootstrap path. Generated keys remain
+  runtime-only. Joining must not require running the disposable four-validator
+  or Inrou canary corridors.
+- Publish the current public Torii/MCP roots, genesis trust anchor, seed peers,
+  permissionless observer policy, validator staking/peer activation
+  requirements, and upgrade procedure as one versioned bootstrap bundle. Fail
+  closed on an expired, unsigned, or
+  network-mismatched bundle. Do not expose a matrix of raw genesis, peer, or
+  network-ID flags on the public join path; custom networks use their own
+  explicit tooling. Keep ordinary observer setup to the single command above.
+
+## Disposable Taira-compatible development networks
 
 - Keep the disposable Taira path one command and four peers:
   `python3 scripts/taira_devnet.py up --inrou-canary-dir <owner-only-workspace>`.
   It must generate fresh keys, canonical Taira chain identity, NPoS Nexus
   configuration, validate all four daemon configs with the current binaries,
-  start only its owned cohort, and require readiness, a blocking signed
-  transaction, converged advancing heights, semantic MCP initialization, and
-  the exact four-replica guest workload canary before returning success. There
-  is no startup-only success mode.
+  start only its owned cohort, and require readiness, typed `Applied` status
+  for its signed transaction, converged advancing heights, semantic MCP
+  initialization, and the exact four-replica guest workload canary before
+  returning success. There is no startup-only success mode.
 - `up` must build the fixed `local-release` toolchain for the exact native
   Linux/AArch64 Rust target from the `optimizations` worktree. Observe the HEAD,
   tracked diff, and non-ignored untracked entries before and after the run, while
@@ -1492,6 +1738,8 @@ source validation.
   the owner-only exact V1 guest qualification record emitted by `up`. It must
   not claim to repeat KVM, source/binary identity, signed finality, or the
   mutating Inrou deployment.
+- Once peer shutdown is proven, `down` must destroy every generated peer,
+  operator, and onboarding signer plus the onboarding token.
   Do not restore release authorities, source-seal handoffs, publication
   receipts, LaunchAgents, systemd validator units, predecessor rollback, or
   24-hour soak requirements to this path.
@@ -3049,8 +3297,8 @@ output can resume.
 
 Consensus owns one bounded `SccpRegistryV1`. A complete
 `SccpRouteGovernanceAnchorV1` binds the exact genesis-derived `NetworkId` and
-one closed compare-and-swap action. Only `EnactSccpRouteGovernance` may apply
-that action after a finalized threshold referendum; the old direct
+one closed compare-and-swap action. Only the automatic exact-height execution
+of a valid Parliament certificate may apply that action; the old direct
 `ApplySccpRouteGovernance` surface rejects every caller, including genesis and
 legacy managers. Generic parameter writes, node-local configuration, HTTP
 signing fields, and old route-manifest instructions cannot change SCCP policy.
@@ -15655,8 +15903,8 @@ excluded from the first release.
   display and prefixed compatibility formatting now return a non-secret
   invalid-private-key marker instead of unwrapping checked private-key
   formatting; `Signature::try_new` now routes SM2 through checked private-key
-  rebuild/signing helpers, the high-level Rust SDK `Sm2KeyPair` exposes
-  `try_sign` while keeping `sign` as a compatibility wrapper, Connect/Norito C
+  rebuild/signing helpers, the high-level Rust SDK `Sm2KeyPair` exposes only
+  checked `try_sign`; the panicking `sign` compatibility wrapper is removed. Connect/Norito C
   SM2 detached signing returns `ERR_SM2_SIGN` from the checked signer on backend
   failures, and SM2 key-pair/public-key derivation now routes through
   `try_public_key`; SM2

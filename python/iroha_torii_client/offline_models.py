@@ -156,14 +156,11 @@ class OfflineLanePrivacyMerkleVariantJson(TypedDict):
     payload: OfflineLanePrivacyMerkleWitnessJson
 
 
-OfflineLanePrivacyWitnessJson = OfflineLanePrivacyMerkleVariantJson
-
-
 class OfflineLanePrivacyProofJson(TypedDict):
     """Lane commitment identity and its typed privacy witness."""
 
     commitment_id: List[int]
-    witness: OfflineLanePrivacyWitnessJson
+    witness: OfflineLanePrivacyMerkleVariantJson
 
 
 class _OfflineProofAttachmentJsonOptional(TypedDict, total=False):

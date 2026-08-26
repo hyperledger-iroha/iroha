@@ -137,6 +137,7 @@ where
 fn bounded_roundtrip<S, T>(source: &S, limits: SingularQueryOutputLimits) -> Result<T, Error>
 where
     S: NoritoSerialize,
+    T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     let max_frame_bytes =
@@ -165,6 +166,7 @@ where
 pub(crate) fn own_singular_query_serialized_source<S, T>(source: S) -> Result<T, Error>
 where
     S: NoritoSerialize,
+    T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     let limits = ACTIVE_LIMITS.get().ok_or_else(|| {
@@ -181,6 +183,7 @@ fn bounded_roundtrip_owned_as<S, T>(
 ) -> Result<T, Error>
 where
     S: NoritoSerialize,
+    T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     let max_frame_bytes =

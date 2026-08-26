@@ -13,8 +13,8 @@ profile that exposes Prometheus metrics (`telemetry_profile = "extended"` or
   or `iroha_cli app zk attachments *`.
 - **Background prover** – Controlled by
   `torii.zk_prover_enabled=true`. The worker drains the attachment queue,
-  verifies `ProofAttachment` payloads, and produces JSON reports
-  (`/v1/zk/prover/reports`). It enforces resource budgets:
+  verifies `ProofAttachment` payloads, and produces bounded node-local JSON
+  diagnostics. It enforces resource budgets:
   `torii.zk_prover_max_inflight`, `torii.zk_prover_max_scan_bytes`, and
   `torii.zk_prover_max_scan_millis`. Discovery retains only a bounded,
   canonically ordered window and resumes its directory cursor across cycles;
@@ -114,7 +114,7 @@ source UID if necessary.
 
 1. Verify retention: `torii.zk_prover_reports_ttl_secs`.
 2. Inspect `torii_zk_prover_gc_total` to see if GC is deleting reports.
-3. Check that clients poll `/v1/zk/prover/reports` before TTL expiry.
+3. Inspect worker logs, metrics, and the node-local report store before TTL expiry.
 4. For urgent analysis, manually fetch raw attachments and reprocess offline.
 
 ## Integration with CLI & SDKs

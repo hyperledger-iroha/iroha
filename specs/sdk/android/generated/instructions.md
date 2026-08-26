@@ -44,6 +44,34 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 | `trigger` | `TriggerId` |
 | `args` | `Json` |
 
+## `iroha.governance.parliament.attempt.create.v1`
+
+> Schema summary: struct fields: proposal: ProposalKind, attempt_sequence: u32.
+
+- Rust type: `iroha_data_model::isi::governance::parliament::CreateParliamentGovernanceAttemptV1`
+- Schema hash: `542173ac9f504109093eb8f4eeec5a4a`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `proposal` | `ProposalKind` |
+| `attempt_sequence` | `u32` |
+
+## `iroha.governance.parliament.transition.submit.v1`
+
+> Schema summary: struct fields: governance_attempt_id: GovernanceAttemptId, transition: ParliamentLifecycleTransitionV1.
+
+- Rust type: `iroha_data_model::isi::governance::parliament::SubmitParliamentLifecycleTransitionV1`
+- Schema hash: `b2cf1e14d18c7639a3181615121997ae`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `governance_attempt_id` | `GovernanceAttemptId` |
+| `transition` | `ParliamentLifecycleTransitionV1` |
+
 ## `iroha.grant`
 
 > Schema summary: enum variants: Permission (Grant<Permission, Account>), Role (Grant<RoleId, Account>), RolePermission (Grant<Permission, Role>).
@@ -224,7 +252,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha.settlement`
 
-> Schema summary: enum variants: Dvp (DvpIsi), Pvp (PvpIsi), SetFxCorridorPolicy (SetFxCorridorPolicy), SettleFxCorridor (SettleFxCorridor).
+> Schema summary: enum variants: Dvp (DvpIsi), Pvp (PvpIsi), SetFxCorridorPolicy (SetFxCorridorPolicy), FundFxCorridorEscrow (FundFxCorridorEscrow), RefundFxCorridorEscrow (RefundFxCorridorEscrow), SettleFxCorridor (SettleFxCorridor).
 
 - Rust type: `iroha_data_model::isi::settlement::SettlementInstructionBox`
 - Schema hash: `a1f5f5f5e7b87acd6bcc319e8635a3a3`
@@ -236,7 +264,9 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 | `Dvp` | 0 | `DvpIsi` |
 | `Pvp` | 1 | `PvpIsi` |
 | `SetFxCorridorPolicy` | 2 | `SetFxCorridorPolicy` |
-| `SettleFxCorridor` | 3 | `SettleFxCorridor` |
+| `FundFxCorridorEscrow` | 3 | `FundFxCorridorEscrow` |
+| `RefundFxCorridorEscrow` | 4 | `RefundFxCorridorEscrow` |
+| `SettleFxCorridor` | 5 | `SettleFxCorridor` |
 
 ## `iroha.transfer`
 
@@ -332,35 +362,6 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 | `proof_b64` | `String` |
 | `public_inputs_json` | `String` |
 
-## `iroha_data_model::isi::governance::EnactReferendum`
-
-> Schema summary: struct fields: referendum_id: Array<u8, 32>, preimage_hash: Array<u8, 32>, at_window: AtWindow.
-
-- Rust type: `iroha_data_model::isi::governance::EnactReferendum`
-- Schema hash: `ceaa89089eba40dcb61010a1e395a259`
-
-**Layout:** `struct`
-
-| Field | Type |
-|-------|------|
-| `referendum_id` | `Array<u8, 32>` |
-| `preimage_hash` | `Array<u8, 32>` |
-| `at_window` | `AtWindow` |
-
-## `iroha_data_model::isi::governance::FinalizeReferendum`
-
-> Schema summary: struct fields: referendum_id: String, proposal_id: Array<u8, 32>.
-
-- Rust type: `iroha_data_model::isi::governance::FinalizeReferendum`
-- Schema hash: `9e8394eeb97d215a830a600e16d4c1aa`
-
-**Layout:** `struct`
-
-| Field | Type |
-|-------|------|
-| `referendum_id` | `String` |
-| `proposal_id` | `Array<u8, 32>` |
-
 ## `iroha_data_model::isi::governance::PersistCouncilForEpoch`
 
 > Schema summary: struct fields: epoch: u64, members: Vec<AccountId>, alternates: Vec<AccountId>.
@@ -378,7 +379,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha_data_model::isi::governance::ProposeDeployContract`
 
-> Schema summary: struct fields: contract_address: ContractAddress, code_hash_hex: String, abi_hash_hex: String, abi_version: String, window: Option<AtWindow>, mode: Option<VotingMode>, manifest_provenance: Option<ManifestProvenance>.
+> Schema summary: struct fields: contract_address: ContractAddress, code_hash: ContractCodeHash, abi_hash: ContractAbiHash, abi_version: AbiVersion, manifest_provenance: Option<ManifestProvenance>.
 
 - Rust type: `iroha_data_model::isi::governance::ProposeDeployContract`
 - Schema hash: `926530a822dece971cc0fb5ab36850c0`
@@ -388,11 +389,9 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 | Field | Type |
 |-------|------|
 | `contract_address` | `ContractAddress` |
-| `code_hash_hex` | `String` |
-| `abi_hash_hex` | `String` |
-| `abi_version` | `String` |
-| `window` | `Option<AtWindow>` |
-| `mode` | `Option<VotingMode>` |
+| `code_hash` | `ContractCodeHash` |
+| `abi_hash` | `ContractAbiHash` |
+| `abi_version` | `AbiVersion` |
 | `manifest_provenance` | `Option<ManifestProvenance>` |
 
 ## `iroha_data_model::isi::kaigi::CreateKaigi`
@@ -1104,7 +1103,7 @@ Alias binding payload approved alongside a manifest.
 
 ## `iroha_data_model::isi::sorafs::IssueReplicationOrder`
 
-> Schema summary: struct fields: order_id: ReplicationOrderId, order_payload: Vec<u8>, issued_epoch: u64, deadline_epoch: u64.
+> Schema summary: struct fields: order_id: ReplicationOrderId, order_payload: Vec<u8>, issued_epoch: u64, deadline_epoch: u64, musubi_archive: Option<ArchiveId>.
 
 - Rust type: `iroha_data_model::isi::sorafs::IssueReplicationOrder`
 - Schema hash: `c4b340f0b6d646e6865d4a23087f5e2c`
@@ -1117,6 +1116,7 @@ Alias binding payload approved alongside a manifest.
 | `order_payload` | `Vec<u8>` |
 | `issued_epoch` | `u64` |
 | `deadline_epoch` | `u64` |
+| `musubi_archive` | `Option<ArchiveId>` |
 
 ## `iroha_data_model::isi::sorafs::RecordCapacityTelemetry`
 
@@ -1653,7 +1653,7 @@ Alias binding payload approved alongside a manifest.
 
 ## `iroha_data_model::isi::zk::RegisterZkAsset`
 
-> Schema summary: struct fields: asset: AssetDefinitionId, mode: ZkAssetMode, allow_shield: bool, allow_unshield: bool, vk_transfer: Option<VerifyingKeyId>, vk_unshield: Option<VerifyingKeyId>, vk_shield: Option<VerifyingKeyId>.
+> Schema summary: struct fields: asset: AssetDefinitionId, vk_unshield: Option<VerifyingKeyId>, vk_shield: Option<VerifyingKeyId>.
 
 - Rust type: `iroha_data_model::isi::zk::RegisterZkAsset`
 - Schema hash: `5fc0b16cf5cb3dd02292dc01fdcb8179`
@@ -1663,10 +1663,6 @@ Alias binding payload approved alongside a manifest.
 | Field | Type |
 |-------|------|
 | `asset` | `AssetDefinitionId` |
-| `mode` | `ZkAssetMode` |
-| `allow_shield` | `bool` |
-| `allow_unshield` | `bool` |
-| `vk_transfer` | `Option<VerifyingKeyId>` |
 | `vk_unshield` | `Option<VerifyingKeyId>` |
 | `vk_shield` | `Option<VerifyingKeyId>` |
 
@@ -1686,24 +1682,6 @@ Alias binding payload approved alongside a manifest.
 | `ballot_proof` | `ProofAttachment` |
 | `nullifier` | `Array<u8, 32>` |
 
-## `iroha_data_model::isi::zk::Unshield`
-
-> Schema summary: struct fields: asset: AssetDefinitionId, to: AccountId, public_amount: Quantity, inputs: Vec<Array<u8, 32>>, proof: ProofAttachment, root_hint: Option<Array<u8, 32>>.
-
-- Rust type: `iroha_data_model::isi::zk::Unshield`
-- Schema hash: `1cb55ecc7fd92625b2bee33e491a4a0c`
-
-**Layout:** `struct`
-
-| Field | Type |
-|-------|------|
-| `asset` | `AssetDefinitionId` |
-| `to` | `AccountId` |
-| `public_amount` | `Quantity` |
-| `inputs` | `Vec<Array<u8, 32>>` |
-| `proof` | `ProofAttachment` |
-| `root_hint` | `Option<Array<u8, 32>>` |
-
 ## `iroha_data_model::isi::zk::VerifyProof`
 
 > Schema summary: struct fields: attachment: ProofAttachment.
@@ -1716,23 +1694,6 @@ Alias binding payload approved alongside a manifest.
 | Field | Type |
 |-------|------|
 | `attachment` | `ProofAttachment` |
-
-## `iroha_data_model::isi::zk::ZkTransfer`
-
-> Schema summary: struct fields: asset: AssetDefinitionId, inputs: Vec<Array<u8, 32>>, outputs: Vec<Array<u8, 32>>, proof: ProofAttachment, root_hint: Option<Array<u8, 32>>.
-
-- Rust type: `iroha_data_model::isi::zk::ZkTransfer`
-- Schema hash: `47144daf134fc01da511d50f913c7b80`
-
-**Layout:** `struct`
-
-| Field | Type |
-|-------|------|
-| `asset` | `AssetDefinitionId` |
-| `inputs` | `Vec<Array<u8, 32>>` |
-| `outputs` | `Vec<Array<u8, 32>>` |
-| `proof` | `ProofAttachment` |
-| `root_hint` | `Option<Array<u8, 32>>` |
 
 ## `zk::CancelConfidentialPolicyTransition`
 

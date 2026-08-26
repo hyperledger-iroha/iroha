@@ -502,12 +502,6 @@
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "soracloud::HeartbeatSoracloudModelHost"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
                         "wire_id": "soracloud::AdvertiseSoracloudInrouHost"
                       }
                     },
@@ -515,18 +509,6 @@
                       "kind": "native_instruction",
                       "value": {
                         "wire_id": "soracloud::ReconcileSoracloudInrouPlacements"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha_data_model::isi::soracloud::ReconcileSoracloudModelHosts"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha_data_model::isi::soracloud::ReportSoracloudModelHostViolation"
                       }
                     },
                     {

@@ -6131,28 +6131,7 @@ pub mod isi {
             Ok(())
         }
     }
-    /// Assert that this asset is `mintable`.
-    // Internal helper retained alongside cached variant; keep for clarity and potential reuse.
-    #[allow(dead_code)]
-    fn assert_can_mint(
-        asset_definition: &AssetDefinition,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<bool, Error> {
-        match asset_definition.mintable() {
-            Mintable::Infinitely => Ok(false),
-            Mintable::Not => Err(Error::Mintability(MintabilityError::MintUnmintable)),
-            Mintable::Once | Mintable::Limited(_) => {
-                let asset_definition_id = asset_definition.id().clone();
-                let asset_definition = state_transaction
-                    .world
-                    .asset_definition_mut(&asset_definition_id)?;
-                asset_definition
-                    .consume_mintability()
-                    .map_err(Error::Mintability)
-            }
-        }
-    }
-    /// Cached variant of `assert_can_mint` using `StateTransaction` caches.
+    /// Check and consume mintability through the transaction-local cache.
     fn assert_can_mint_cached(
         state_transaction: &mut StateTransaction<'_, '_>,
         def_id: &AssetDefinitionId,

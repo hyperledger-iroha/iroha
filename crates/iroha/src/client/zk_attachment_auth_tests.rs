@@ -33,9 +33,11 @@ fn zk_attachment_calls_sign_the_exact_method_path_and_body_once() {
             client
                 .get_zk_attachments_list()
                 .expect("signed attachment list");
-            client
+            let (attachment, content_type) = client
                 .get_zk_attachment_raw("attachment-1")
                 .expect("signed attachment read");
+            assert_eq!(attachment, [0x01, 0x02]);
+            assert_eq!(content_type.as_deref(), Some("application/x-norito"));
             client
                 .delete_zk_attachment("attachment-1")
                 .expect("signed attachment delete");

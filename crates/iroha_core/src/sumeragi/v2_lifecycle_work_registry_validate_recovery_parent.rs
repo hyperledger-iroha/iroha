@@ -466,6 +466,7 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
         {
             return None;
         }
+        let durable_predecessor = coordinator.stage_durable_transaction();
         coordinator
             .finish_terminal(parent_ordinal, super::TerminalOutcome::Advanced)
             .ok()?;
@@ -520,6 +521,13 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
         self.registry_for_test()
             .attest_ready_recovered_lifecycle_signed_broadcast(coordinator, broadcast_ordinal)
             .ok()?;
+        if coordinator.ledger_store.is_some()
+            && durable_predecessor
+                .persist_exact_staged_successor(coordinator)
+                .is_err()
+        {
+            return None;
+        }
         Some(broadcast_ordinal)
     }
     /// Install one exact recovered Broadcast pair plus an unrelated Ready Sign.

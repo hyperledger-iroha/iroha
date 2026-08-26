@@ -18,16 +18,15 @@ Torii also exposes the authenticated registry read:
 There is no uploaded-model execution endpoint in V1. In particular, Torii does
 not accept caller-supplied model weights, biases, plaintext inference input, or
 encrypted-artifact receipt claims. The node does not publish an upload
-recipient or retain a corresponding decryption secret. Registry metadata can
-describe an externally provisioned recipient and wrapped bundle key, but that
-metadata is not a claim that any validator can decrypt or execute the bundle.
+recipient or retain a corresponding decryption secret. The registry schema also
+contains no recipient, wrapped-key, KEM/AEAD, or decryption-policy metadata.
 
 ## Register Flow
 
 1. The client normalizes the model repository into the accepted package format.
-2. The client encrypts the package locally for an externally provisioned
-   recipient. Recipient key custody and any future execution environment are
-   outside the V1 validator process.
+2. The client prepares the stored package locally. If an operator encrypts it,
+   recipient selection and key custody remain entirely outside the V1 request,
+   registry, and validator process.
 3. The client pins the encrypted package through SoraFS.
 4. The client waits until the SoraFS pin record is active and approved.
 5. The client submits a signed `upload/register` request containing:
@@ -76,14 +75,11 @@ prepare the storage, runtime, and signing surfaces as one controlled change.
 - uploaded model id;
 - weight version;
 - model family and modalities;
-- plaintext and encrypted bundle roots;
+- plaintext root, package format, and canonical bundle root;
 - approved SoraFS manifest digest;
 - chunk count and byte counts;
 - chunk-manifest root;
-- upload recipient metadata;
-- wrapped bundle-key metadata;
-- storage pricing snapshot;
-- decryption policy reference metadata.
+- storage pricing snapshot.
 
 `SoraModelArtifactRecordV1` and `SoraModelWeightVersionRecordV1` link the
 uploaded model into the normal Soracloud model registry. For uploaded models,
@@ -140,21 +136,21 @@ budgets, and any host-local Hugging Face execution path outside Inrou.
 Production profiles should state the runtime fee payer explicitly; `authority`
 is the deterministic development default.
 
-Generated public Hugging Face imports are authenticated metadata-only records
-in V1. Their generated service bundles expose only internal metadata and carry
-no inference handler or tool. The authoritative source remains `PendingImport`;
-the runtime does not materialize it, advertise it as `Ready`, probe a host model
-stack, start a resident worker, or publish an inference bridge. Imported model
-artifacts therefore have no execution surface in this release.
+Generated public Hugging Face sources are authenticated metadata-only records
+in V1. No service or apartment runtime is generated for them, and they expose
+no inference handler or tool. The authoritative source is `Admitted`;
+the runtime does not materialize it, advertise it as execution-ready, probe a host model
+stack, start a resident worker, or publish an inference bridge. Registered model
+metadata therefore has no execution surface in this release.
 
 HF source admission uses one exact case-sensitive `namespace/repository`
 identity and one full lowercase commit OID. Model-info must return that same
 `modelId` and commit byte-for-byte and must be requested with `blobs=true`.
-Torii and the importer select GGUF, then SafeTensors, then PyTorch, require
+Torii admission selects GGUF, then SafeTensors, then PyTorch, requires
 canonical LFS SHA-256 and positive size metadata for every selected shard, and
-apply identical file-count, per-file, and aggregate byte limits. The consensus
-resource profile records the selected shard count, authenticated byte total,
-format/backend family, and domain-separated commitment to the sorted exact
+applies identical file-count, per-file, and aggregate byte limits. The
+authoritative source profile records the selected shard count, authenticated
+byte total, format, and domain-separated commitment to the sorted exact
 path/size/digest set.
 
 Production behavior is sourced from configuration, not environment variables.

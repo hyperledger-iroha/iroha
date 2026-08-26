@@ -1441,3 +1441,248 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
         JNI_FALSE
     }
 }
+
+fn clear_parliament_jni_exception(env: &mut jni::JNIEnv<'_>) {
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+    }
+}
+
+fn read_parliament_jni_bytes(
+    env: &mut jni::JNIEnv<'_>,
+    value: &jni::objects::JByteArray<'_>,
+    maximum: usize,
+) -> Option<Vec<u8>> {
+    let length = usize::try_from(env.get_array_length(value).ok()?).ok()?;
+    if length == 0 || length > maximum {
+        return None;
+    }
+    env.convert_byte_array(value).ok()
+}
+
+fn read_parliament_jni_trust_anchor(
+    env: &mut jni::JNIEnv<'_>,
+    value: &jni::objects::JByteArray<'_>,
+) -> Option<[u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1]> {
+    read_parliament_jni_bytes(
+        env,
+        value,
+        CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1,
+    )?
+    .try_into()
+    .ok()
+}
+
+fn parliament_jni_checkpoint_height(value: jni::sys::jlong) -> Option<u64> {
+    u64::try_from(value).ok().filter(|height| *height != 0)
+}
+
+fn read_parliament_jni_authority(
+    env: &mut jni::JNIEnv<'_>,
+    value: &jni::objects::JString<'_>,
+) -> Option<String> {
+    let java = env.get_string(value).ok()?;
+    let authority = java.to_str().ok()?;
+    if authority.is_empty()
+        || authority.len() > super::parliament_timed_ovn_ffi::AUTHORITY_UTF8_MAX_BYTES_V1
+    {
+        return None;
+    }
+    Some(authority.to_owned())
+}
+
+fn parliament_jni_result(
+    env: &mut jni::JNIEnv<'_>,
+    expected_bytes: usize,
+    body: impl FnOnce(&mut jni::JNIEnv<'_>) -> Option<Vec<u8>>,
+) -> jni::sys::jbyteArray {
+    let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(env)))
+        .ok()
+        .flatten()
+        .filter(|bytes| bytes.len() == expected_bytes);
+    let Some(output) = output else {
+        clear_parliament_jni_exception(env);
+        return std::ptr::null_mut();
+    };
+    match env.byte_array_from_slice(&output) {
+        Ok(array) => array.into_raw(),
+        Err(_) => {
+            clear_parliament_jni_exception(env);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    proof_response: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+    expected_ballot_attempt_id: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    let verified = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let proof_response = read_parliament_jni_bytes(
+            &mut env,
+            &proof_response,
+            CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1,
+        )?;
+        let network_id = read_parliament_jni_trust_anchor(&mut env, &network_id)?;
+        let trusted_checkpoint_height =
+            parliament_jni_checkpoint_height(trusted_checkpoint_height)?;
+        let trusted_checkpoint_context_id =
+            read_parliament_jni_trust_anchor(&mut env, &trusted_checkpoint_context_id)?;
+        let expected_ballot_attempt_id =
+            read_parliament_jni_trust_anchor(&mut env, &expected_ballot_attempt_id)?;
+        super::parliament_timed_ovn_ffi::verified_casting_context_from_proof_v1(
+            &proof_response,
+            network_id,
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+            expected_ballot_attempt_id,
+        )
+        .ok()
+    }))
+    .ok()
+    .flatten()
+    .is_some();
+    if verified {
+        jni::sys::JNI_TRUE
+    } else {
+        clear_parliament_jni_exception(&mut env);
+        jni::sys::JNI_FALSE
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeRegistrationFromProofV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    proof_response: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+    expected_ballot_attempt_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JString<'_>,
+    seed: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    parliament_jni_result(
+        &mut env,
+        iroha_core::governance::timed_ovn::TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
+        |env| {
+            let proof_response = read_parliament_jni_bytes(
+                env,
+                &proof_response,
+                CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1,
+            )?;
+            let network_id = read_parliament_jni_trust_anchor(env, &network_id)?;
+            let trusted_checkpoint_height =
+                parliament_jni_checkpoint_height(trusted_checkpoint_height)?;
+            let trusted_checkpoint_context_id =
+                read_parliament_jni_trust_anchor(env, &trusted_checkpoint_context_id)?;
+            let expected_ballot_attempt_id =
+                read_parliament_jni_trust_anchor(env, &expected_ballot_attempt_id)?;
+            let casting_context =
+                super::parliament_timed_ovn_ffi::verified_casting_context_from_proof_v1(
+                    &proof_response,
+                    network_id,
+                    trusted_checkpoint_height,
+                    trusted_checkpoint_context_id,
+                    expected_ballot_attempt_id,
+                )
+                .ok()?;
+            let authority = read_parliament_jni_authority(env, &authority)?;
+            // Never copy the Java seed until every proof/archive check succeeds.
+            let seed_bytes = Zeroizing::new(read_parliament_jni_bytes(
+                env,
+                &seed,
+                CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1,
+            )?);
+            if seed_bytes.len() != CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1 {
+                return None;
+            }
+            let mut seed =
+                Zeroizing::new([0_u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1]);
+            seed.copy_from_slice(&seed_bytes);
+            super::parliament_timed_ovn_ffi::registration_from_verified_context_v1(
+                &casting_context,
+                &authority,
+                &seed,
+            )
+            .ok()
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBallotFromProofV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    proof_response: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+    expected_ballot_attempt_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JString<'_>,
+    seed: jni::objects::JByteArray<'_>,
+    choice: jni::sys::jint,
+) -> jni::sys::jbyteArray {
+    parliament_jni_result(
+        &mut env,
+        iroha_core::governance::timed_ovn::TIMED_OVN_BALLOT_RECORD_BYTES_V1,
+        |env| {
+            let choice = u8::try_from(choice).ok().filter(|choice| *choice <= 2)?;
+            let proof_response = read_parliament_jni_bytes(
+                env,
+                &proof_response,
+                CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1,
+            )?;
+            let network_id = read_parliament_jni_trust_anchor(env, &network_id)?;
+            let trusted_checkpoint_height =
+                parliament_jni_checkpoint_height(trusted_checkpoint_height)?;
+            let trusted_checkpoint_context_id =
+                read_parliament_jni_trust_anchor(env, &trusted_checkpoint_context_id)?;
+            let expected_ballot_attempt_id =
+                read_parliament_jni_trust_anchor(env, &expected_ballot_attempt_id)?;
+            let casting_context =
+                super::parliament_timed_ovn_ffi::verified_casting_context_from_proof_v1(
+                    &proof_response,
+                    network_id,
+                    trusted_checkpoint_height,
+                    trusted_checkpoint_context_id,
+                    expected_ballot_attempt_id,
+                )
+                .ok()?;
+            let authority = read_parliament_jni_authority(env, &authority)?;
+            // Never copy the Java seed until every proof/archive check succeeds.
+            let seed_bytes = Zeroizing::new(read_parliament_jni_bytes(
+                env,
+                &seed,
+                CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1,
+            )?);
+            if seed_bytes.len() != CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1 {
+                return None;
+            }
+            let mut seed =
+                Zeroizing::new([0_u8; CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1]);
+            seed.copy_from_slice(&seed_bytes);
+            super::parliament_timed_ovn_ffi::ballot_from_verified_context_v1(
+                &casting_context,
+                &authority,
+                &seed,
+                choice,
+            )
+            .ok()
+        },
+    )
+}

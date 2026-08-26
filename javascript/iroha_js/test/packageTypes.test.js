@@ -463,8 +463,8 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
   }
   assert.match(
     blockProofDeclarations,
-    /readonly networkId: string;/u,
-    "authenticated BlockProofs must bind the exact NetworkId",
+    /readonly networkId: NetworkId;/u,
+    "authenticated BlockProofs must bind the nominal exact NetworkId",
   );
   assert.doesNotMatch(
     blockProofDeclarations,
@@ -640,7 +640,7 @@ test("dedicated browser declarations compile without ambient Node types", () => 
         "const bytes = new Uint8Array(17);",
         "void createConnectAppSession; void approval; void connectAuth; void options;",
         "void connectSession.signRaw(TORII_CANONICAL_REQUEST_DOMAIN_TAG, bytes);",
-        "void new NexusAppClient({ transactionCodec: browserTransactionCodec });",
+        "void new NexusAppClient({ chainDiscriminant: 753, transactionCodec: browserTransactionCodec });",
         "void computeIvmArtifactHashes(bytes);",
         "declare const privacyClient: PrivacyCapabilitiesBrowserClientV1;",
         "const privacyResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(privacyClient, { headers: { Accept: 'application/json' }, authAccountId: 'i105...', sign: async () => new Uint8Array(64) });",

@@ -12,12 +12,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "integration_tests/tests/iroha_cli.rs"
 PREIMAGE_SHA256 = "aa1a2f2e6113915b33107d68d255f66194bd3813f853bd031125fe4459a57d43"
-EXPECTED_SOURCE_LINES = 4_458
+EXPECTED_SOURCE_LINES = 4_197
 
 HELPER_START = "struct SoracloudCli<'a>"
 HELPER_END = "async fn wait_for_soracloud_json_command"
 HELPER_HASH = "834a379d73e93b4efbe1d75c5899cf26e6064608a0cdd502b46f8fb9316577a9"
-ADVERTISE_HASH = "107212fbf26920091dee3580de1bbfb8bdf4e1b38bdcfbbcd7ddc8d1cfe84179"
 
 # Hash, bounded-success calls, bounded raw calls, shared success assertions, live network.
 FUNCTION_CONTRACTS = {
@@ -29,7 +28,7 @@ FUNCTION_CONTRACTS = {
         True,
     ),
     "soracloud_mutations_use_live_torii_control_plane": (
-        "a0670560be55d527ba48625a71f626c7bdf972c71e9dfb5810c1a93f225cd431",
+        "7d6b0a9c299aa6de7498285a5f0d61e9e261ecd7db830c9e6ca1d55a63a65d33",
         0,
         0,
         4,
@@ -50,49 +49,49 @@ FUNCTION_CONTRACTS = {
         True,
     ),
     "soracloud_hf_shared_lease_commands_use_live_torii_control_plane": (
-        "c020bd7536e9a18a41d58d74916c7320f0319e98bcea4dc84190bd89e8d35f44",
+        "eac83f6fd3561444a674487ccc747ccb38ce57f658a44516d27d731690079f99",
         0,
         0,
-        8,
+        6,
         True,
     ),
     "soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window": (
-        "cdf5441eab09da678bf66195dc171c7f352dfc2a8adb06aa047e8aacdc71bdfd",
+        "3da039b3106d7d3c546b33edf20f521d81cca7ac492b792b82a784c307da1937",
         0,
         0,
         4,
         True,
     ),
     "soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts": (
-        "2a91d284a879bb4f17c8acbdd7dee330f67ef396c2c04013899fc507088d969c",
+        "92d27a6805fc1cfa54b6d7bbc88d4c81993c75aab19ec36a8ef10b48a077fbd0",
         0,
         0,
         3,
         True,
     ),
     "soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback": (
-        "211dec6de4c6001170ada71c21a7c6d57090f8700f4407098d67ba64f489fec6",
+        "7b9123447ce7fd6ef9a7c928b5dd67ecad7fc3669b3e02bb624efc848aaff67d",
         8,
         0,
         0,
         True,
     ),
     "soracloud_agent_autonomy_controls_use_live_torii_control_plane": (
-        "19e23e795c3867868452e3393cd10642e31519980af1f26a68dd54d83df7931a",
+        "b3507daafe824b8de8b258a97bfc1d6ba223341b1486d670e4e29dee598c0210",
         4,
         0,
         0,
         True,
     ),
     "soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_control_plane": (
-        "78d34bbe876333d3f80285528b049c02019607907b73953ab45d809ff3819572",
+        "dfa5971bbf2b9b792f18fb06d586f1619362baf7bb86df18d82a1db5dfa1a179",
         11,
         1,
         0,
         True,
     ),
     "soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_control_plane": (
-        "0706cd742a083fd2c0885994e5229fa3e78f37cfad297386b8cd91508b4cfa8d",
+        "a5a0ed196719e8b85ddec35319e9fb1baf5aeb71168dc43d551b708791a4839f",
         12,
         0,
         0,
@@ -113,14 +112,14 @@ FUNCTION_CONTRACTS = {
         False,
     ),
     "soracloud_agent_lease_commands_require_torii_url": (
-        "1d2970a2cd62ff5a929a1e1f33d4aa85458efd26dc67f1d1445347930d16d982",
+        "cb746d3974e64c092f0d62c7d22ec0bfdbe834ad83d77b1d33b6e051d0b70e1e",
         0,
         0,
         0,
         False,
     ),
     "soracloud_hf_shared_lease_commands_require_torii_url": (
-        "12e8a8c28e374669fb744a7554c3434b9af56adcb18191202aa5f3daf669f942",
+        "b4c2e3ef4989e96fbaf6d643c3512e4d73ed23ff6ab2d8ced34cd597249fbcc1",
         0,
         0,
         0,
@@ -305,12 +304,6 @@ def validate_source(source: str) -> None:
         if live and len(context_pattern.findall(function)) != 1:
             raise GuardError(f"{name}: sandbox network context changed")
 
-    advertise, _start = _function(source, "advertise_soracloud_model_host")
-    if _normalized_hash(advertise) != ADVERTISE_HASH:
-        raise GuardError("model-host advertising command contract changed")
-    if advertise.count("assert_soracloud_success(") != 1:
-        raise GuardError("model-host advertising success diagnostic changed")
-
     protected = helper + "".join(protected_functions)
     for token in REQUIRED_SECURITY_TOKENS:
         if token not in protected:
@@ -384,8 +377,8 @@ class IrohaCliSoracloudCommandSourceTests(unittest.TestCase):
         self.assert_rejected(_replace_once(self.source, old, old.removeprefix("!")))
 
     def test_control_plane_diagnostic_mutation_is_rejected(self) -> None:
-        old = 'assert_soracloud_success(&deploy, "hf-deploy");'
-        self.assert_rejected(_replace_once(self.source, old, old.replace("hf-deploy", "hf-status")))
+        old = 'assert_soracloud_success(&deploy, "hf-join");'
+        self.assert_rejected(_replace_once(self.source, old, old.replace("hf-join", "hf-status")))
 
     def test_helper_argument_emission_mutation_is_rejected(self) -> None:
         old = "$(command.arg($arg);)+"

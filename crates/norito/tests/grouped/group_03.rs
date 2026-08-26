@@ -18,8 +18,6 @@ mod hashmap_decode;
 mod header_minor_validation;
 #[path = "../header_only_decode.rs"]
 mod header_only_decode;
-#[path = "../heuristics_override.rs"]
-mod heuristics_override;
 #[path = "../hybrid_struct.rs"]
 mod hybrid_struct;
 #[path = "../iroha_like_roundtrip.rs"]

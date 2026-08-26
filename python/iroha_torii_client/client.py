@@ -25,7 +25,6 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
-    TypedDict,
     Union,
     cast,
 )
@@ -34,7 +33,11 @@ from urllib.parse import quote, urlencode, urlsplit
 import requests
 from blake3 import blake3
 
-from . import connect_session as _connect_session, identifier_receipts as _identifier_receipts
+from . import (
+    _account_id as _account_id_codec,
+    connect_session as _connect_session,
+    identifier_receipts as _identifier_receipts,
+)
 from .attachment_client import authenticated_attachment_request
 from .client_status_models import (
     SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES,
@@ -112,6 +115,7 @@ from .canonical_transport import (
     send_request as _send_request,
 )
 from .governance_ballot_client import create_governance_ballot_client_mixin
+from .governance_proposals import GovernanceProposalResult
 from .kaigi_relay_client import create_kaigi_relay_client_mixin
 from .native_amx import (
     compute_native_amx_descriptor_hash,
@@ -138,7 +142,6 @@ from .offline_models import (
     OfflineLanePrivacyMerkleVariantJson,
     OfflineLanePrivacyMerkleWitnessJson,
     OfflineLanePrivacyProofJson,
-    OfflineLanePrivacyWitnessJson,
     OfflineMerkleProofJson,
     OfflinePeerSplitTransitionJson,
     OfflinePeerSplitTransitionVariantJson,
@@ -216,22 +219,18 @@ _SCCP_PROOF_REQUEST_NORITO_TYPE_NAME = (
     "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
 )
 
-BASE58_ALPHABET = tuple("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+BASE58_ALPHABET = _account_id_codec.BASE58_ALPHABET
 BASE58_INDEX = {symbol: idx for idx, symbol in enumerate(BASE58_ALPHABET)}
-IROHA_POEM_KANA_HALFWIDTH = (
-    "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
-    "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
-    "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
-)
-I105_ALPHABET = BASE58_ALPHABET + IROHA_POEM_KANA_HALFWIDTH
-I105_INDEX = {symbol: idx for idx, symbol in enumerate(I105_ALPHABET)}
-I105_BASE = len(I105_ALPHABET)
-I105_CHECKSUM_LEN = 6
-I105_BECH32M_CONST = 0x2BC830A3
-I105_SENTINELS = ("sora", "test", "dev")
-I105_NUMERIC_SENTINEL_PREFIX = "n"
-I105_DISCRIMINANT_MAX = 0xFFFF
-I105_SENTINEL_DISCRIMINANTS = {"sora": 0x02F1, "test": 0x0171, "dev": 0}
+IROHA_POEM_KANA_HALFWIDTH = _account_id_codec.IROHA_POEM_KANA_HALFWIDTH
+I105_ALPHABET = _account_id_codec.I105_ALPHABET
+I105_INDEX = _account_id_codec.I105_INDEX
+I105_BASE = _account_id_codec.I105_BASE
+I105_CHECKSUM_LEN = _account_id_codec.I105_CHECKSUM_LEN
+I105_BECH32M_CONST = _account_id_codec.I105_BECH32M_CONST
+I105_SENTINELS = _account_id_codec.I105_SENTINELS
+I105_NUMERIC_SENTINEL_PREFIX = _account_id_codec.I105_NUMERIC_SENTINEL_PREFIX
+I105_DISCRIMINANT_MAX = _account_id_codec.I105_DISCRIMINANT_MAX
+I105_SENTINEL_DISCRIMINANTS = _account_id_codec.I105_SENTINEL_DISCRIMINANTS
 I105_PROFILE_NAMES = {0x02F1: "minamoto", 0x0171: "taira", 0: "dev"}
 _SORAFS_ORDERBOOK_QUERY_MAX_ITEMS = 500
 _SORAFS_ORDERBOOK_ORDER_STATUS_VALUES = {
@@ -546,18 +545,6 @@ _SORAFS_ORDERBOOK_LEDGER_EVENT_FIELDS = frozenset(
         "occurred_at_unix_ms",
     }
 )
-_SORAFS_ORDERBOOK_SUBMISSION_RECEIPT_FIELDS = frozenset({"payload", "signature"})
-_SORAFS_ORDERBOOK_SUBMISSION_PAYLOAD_FIELDS = frozenset(
-    {
-        "entrypoint_hash",
-        "signed_transaction_hash",
-        "submitted_at_ms",
-        "submitted_at_height",
-        "signer",
-    }
-)
-
-
 def _decode_base_n(digits: Sequence[int], base: int) -> bytes:
     value = 0
     for digit in digits:
@@ -579,130 +566,18 @@ def _decode_base_n(digits: Sequence[int], base: int) -> bytes:
     return b"\x00" * pad + decoded
 
 
-def _convert_to_base32(data: bytes) -> List[int]:
-    acc = 0
-    bits = 0
-    out: List[int] = []
-    for byte in data:
-        acc = (acc << 8) | byte
-        bits += 8
-        while bits >= 5:
-            bits -= 5
-            out.append((acc >> bits) & 0x1F)
-    if bits:
-        out.append((acc << (5 - bits)) & 0x1F)
-    return out
-
-
-def _bech32_polymod(values: Iterable[int]) -> int:
-    generators = (0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3)
-    chk = 1
-    for value in values:
-        top = chk >> 25
-        chk = ((chk & 0x1FF_FFFF) << 5) ^ value
-        for idx, generator in enumerate(generators):
-            if (top >> idx) & 1:
-                chk ^= generator
-    return chk
-
-
-def _expand_hrp(hrp: str) -> List[int]:
-    out: List[int] = []
-    for ch in hrp:
-        value = ord(ch)
-        out.append(value >> 5)
-    out.append(0)
-    out.extend(ord(ch) & 0x1F for ch in hrp)
-    return out
-
-
-def _bech32m_checksum(data: Sequence[int]) -> List[int]:
-    values = _expand_hrp("snx")
-    values.extend(data)
-    values.extend([0] * I105_CHECKSUM_LEN)
-    polymod = _bech32_polymod(values) ^ I105_BECH32M_CONST
-    return [(polymod >> (5 * (I105_CHECKSUM_LEN - 1 - i))) & 0x1F for i in range(I105_CHECKSUM_LEN)]
-
-
-def _i105_checksum_digits(canonical: bytes) -> List[int]:
-    return _bech32m_checksum(_convert_to_base32(canonical))
-
-
-def _strip_i105_sentinel(encoded: str) -> str:
-    return _parse_i105_sentinel_and_payload(encoded)[2]
-
-
 def _parse_i105_sentinel_and_payload(encoded: str) -> Tuple[str, int, str]:
-    for sentinel in I105_SENTINELS:
-        if encoded.startswith(sentinel):
-            return sentinel, I105_SENTINEL_DISCRIMINANTS[sentinel], encoded[len(sentinel) :]
-    if encoded.startswith(I105_NUMERIC_SENTINEL_PREFIX):
-        index = len(I105_NUMERIC_SENTINEL_PREFIX)
-        while index < len(encoded) and "0" <= encoded[index] <= "9":
-            index += 1
-        if index > len(I105_NUMERIC_SENTINEL_PREFIX):
-            discriminant = int(encoded[len(I105_NUMERIC_SENTINEL_PREFIX):index])
-            if discriminant > I105_DISCRIMINANT_MAX:
-                raise ValueError(
-                    "i105 chain discriminant must fit in an unsigned 16-bit integer"
-                )
-            return encoded[:index], discriminant, encoded[index:]
-    raise ValueError("i105 address is missing the expected chain-discriminant sentinel")
+    return _account_id_codec.parse_i105_sentinel_and_payload(encoded)
 
 
 def _decode_i105_string(encoded: str) -> bytes:
-    payload = _strip_i105_sentinel(encoded)
-    digits: List[int] = []
-    for symbol in payload:
-        try:
-            digits.append(I105_INDEX[symbol])
-        except KeyError as exc:
-            raise ValueError("invalid character in i105 address") from exc
-    if len(digits) <= I105_CHECKSUM_LEN:
-        raise ValueError("i105 address too short")
-    data_digits = digits[:-I105_CHECKSUM_LEN]
-    checksum_digits = digits[-I105_CHECKSUM_LEN:]
-    canonical = _decode_base_n(data_digits, I105_BASE)
-    if checksum_digits != _i105_checksum_digits(canonical):
-        raise ValueError("i105 checksum mismatch")
-    return canonical
-
-
-def _encode_i105_string(canonical: bytes, discriminant: int) -> str:
-    """Render decoded address bytes with the one canonical I105 sentinel."""
-
-    leading_zeroes = len(canonical) - len(canonical.lstrip(b"\x00"))
-    value = int.from_bytes(canonical, "big")
-    digits: List[int] = []
-    while value:
-        value, remainder = divmod(value, I105_BASE)
-        digits.append(remainder)
-    encoded_digits = [0] * leading_zeroes + list(reversed(digits))
-    if not encoded_digits:
-        encoded_digits = [0]
-
-    sentinel = next(
-        (
-            name
-            for name, known_discriminant in I105_SENTINEL_DISCRIMINANTS.items()
-            if known_discriminant == discriminant
-        ),
-        f"{I105_NUMERIC_SENTINEL_PREFIX}{discriminant}",
-    )
-    return sentinel + "".join(
-        I105_ALPHABET[digit]
-        for digit in (*encoded_digits, *_i105_checksum_digits(canonical))
-    )
+    return _account_id_codec.decode_canonical_i105_account_id(encoded)
 
 
 def _decode_canonical_i105_string(encoded: str) -> bytes:
     """Parse an I105 literal and reject every non-canonical re-rendering."""
 
-    _, discriminant, _ = _parse_i105_sentinel_and_payload(encoded)
-    canonical = _decode_i105_string(encoded)
-    if _encode_i105_string(canonical, discriminant) != encoded:
-        raise ValueError("i105 address must use its exact canonical rendering")
-    return canonical
+    return _account_id_codec.decode_canonical_i105_account_id(encoded)
 
 
 @dataclass(frozen=True)
@@ -750,7 +625,6 @@ __all__ = [
     "I105NetworkPrefix",
     "CouncilMember",
     "CouncilCurrentStatus",
-    "GovernanceProposalStatus",
     "GovernanceLockCustody",
     "GovernanceLockRecord",
     "GovernanceLocksOverview",
@@ -758,7 +632,6 @@ __all__ = [
     "GovernanceTallySummary",
     "GovernanceUnlockStats",
     "TransactionInstruction",
-    "GovernanceInstructionDraft",
     "GovernanceProposalDraft",
     "ContractOperationReceipt",
     "ContractCallResponse",
@@ -861,10 +734,6 @@ __all__ = [
     "SumeragiV2ProgressTransitionStatus",
     "SumeragiV2IgnoreCount",
     "SumeragiV2LivenessStatus",
-    "SumeragiV2AdapterQueueStatus",
-    "SumeragiV2TxQueueStatus",
-    "SumeragiV2OperatorStatus",
-    "SumeragiSafetyHaltStatus",
     "SumeragiV2Status",
     "SumeragiPipelineExecutionStatus",
     "SumeragiNposDiagnostics",
@@ -909,7 +778,6 @@ __all__ = [
     "OfflineMerkleProofJson",
     "OfflineLanePrivacyMerkleWitnessJson",
     "OfflineLanePrivacyMerkleVariantJson",
-    "OfflineLanePrivacyWitnessJson",
     "OfflineLanePrivacyProofJson",
     "OfflineVerifiedFoldStepJson",
     "OfflineVerifiedFoldBundleJson",
@@ -1826,19 +1694,14 @@ _OFFLINE_OPERATION_ID_RE = re.compile(r"^(?!0{64}$)[0-9a-f]{64}$")
 _OFFLINE_TRANSACTION_HASH_RE = re.compile(r"^[0-9a-f]{63}[13579bdf]$")
 _OFFLINE_ERROR_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
 _OFFLINE_ASSET_DEFINITION_ID_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{28}$")
-_OFFLINE_ASSET_ALIAS_RE = re.compile(
-    r"^[a-z0-9]+(?:[._-][a-z0-9]+)*#[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)?$"
-)
 _OFFLINE_MAX_U32 = (1 << 32) - 1
 _OFFLINE_MAX_U64 = (1 << 64) - 1
 _OFFLINE_MAX_U128 = (1 << 128) - 1
 _OFFLINE_MAX_ASSET_SCALE = 28
 _OFFLINE_TOP_UP_SHIELD_TREE_CAPACITY = 1 << 16
-_OFFLINE_TOP_UP_SHIELD_MAX_PROOF_BYTES = 192 * 1024
 _OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS = 4096
 _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK = 16
 _OFFLINE_TOP_UP_FINALITY_MAX_SIBLINGS = 4
-_OFFLINE_TOP_UP_FINALITY_PROOF_VERSION = 1
 _OFFLINE_SUMERAGI_PROTOCOL_VERSION = 4
 _SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1
@@ -1854,7 +1717,7 @@ _OFFLINE_MAX_JSON_DEPTH = 128
 _OFFLINE_MAX_JSON_RESPONSE_BYTES = 256 * 1024
 _KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES = 512 * 1024
 _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES = 48 * 1024 * 1024
-_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 22
+_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 23
 _KAGEMUSHA_MAX_HOPS = 8
 _KAGEMUSHA_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1"
 
@@ -1886,17 +1749,6 @@ def _offline_exact_string(value: Any, context: str, *, non_empty: bool = True) -
     if any(ord(character) < 0x20 or 0x7F <= ord(character) <= 0x9F for character in value):
         raise RuntimeError(f"{context} must not contain control characters")
     return value
-
-
-def _offline_asset_selector(value: Any, context: str) -> str:
-    selector = _offline_exact_string(value, context)
-    if "#" not in selector:
-        return _offline_canonical_asset_definition_id(selector, context)
-    if _OFFLINE_ASSET_ALIAS_RE.fullmatch(selector) is None:
-        raise RuntimeError(
-            f"{context} must be a canonical Base58 asset definition id or lowercase scoped asset alias"
-        )
-    return selector
 
 
 def _offline_canonical_asset_definition_id(value: Any, context: str) -> str:
@@ -2047,13 +1899,6 @@ def _offline_byte_array(value: Any, context: str, exact_length: Optional[int] = 
     return value
 
 
-def _offline_operation_id_from_bytes(value: Any, context: str) -> str:
-    raw = _offline_byte_array(value, context, 32)
-    if not any(raw):
-        raise RuntimeError(f"{context} must not be all zero")
-    return bytes(raw).hex()
-
-
 def _require_offline_operation_id(value: Any, context: str = "operation_id") -> str:
     if not isinstance(value, str) or _OFFLINE_OPERATION_ID_RE.fullmatch(value) is None:
         raise RuntimeError(
@@ -2099,95 +1944,6 @@ def _offline_hash_literal(value: Any, context: str) -> str:
     if int(body[-2:], 16) & 1 == 0:
         raise RuntimeError(f"{context} must set the Iroha hash marker bit")
     return value
-
-
-def _offline_scaled_amount(value: Any, context: str) -> None:
-    amount = _offline_mapping(value, context)
-    _offline_unsigned(
-        _offline_required(amount, "atomic_units", context),
-        f"{context}.atomic_units",
-        _OFFLINE_MAX_U128,
-        positive=True,
-    )
-    _offline_unsigned(
-        _offline_required(amount, "scale", context),
-        f"{context}.scale",
-        _OFFLINE_MAX_ASSET_SCALE,
-    )
-
-
-def _offline_top_up_shield_evidence_request(value: Any, context: str) -> None:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=("initial_root", "finalized_root", "leaf_index", "proof"),
-    )
-    initial_root = _offline_fixed_bytes(
-        _offline_required(record, "initial_root", context),
-        f"{context}.initial_root",
-        non_zero=True,
-    )
-    finalized_root = _offline_fixed_bytes(
-        _offline_required(record, "finalized_root", context),
-        f"{context}.finalized_root",
-        non_zero=True,
-    )
-    if finalized_root == initial_root:
-        raise RuntimeError(f"{context}.finalized_root must differ from initial_root")
-    _offline_unsigned(
-        _offline_required(record, "leaf_index", context),
-        f"{context}.leaf_index",
-        _OFFLINE_TOP_UP_SHIELD_TREE_CAPACITY - 1,
-    )
-
-    proof_context = f"{context}.proof"
-    proof = _offline_mapping(_offline_required(record, "proof", context), proof_context)
-    _offline_exact_object_fields(
-        proof,
-        proof_context,
-        required=("backend", "proof", "vk_ref"),
-        optional=("vk_commitment", "envelope_hash", "lane_privacy"),
-    )
-    backend = _offline_exact_string(
-        _offline_required(proof, "backend", proof_context),
-        f"{proof_context}.backend",
-    )
-    if len(backend.encode("utf-8")) > 256:
-        raise RuntimeError(f"{proof_context}.backend must contain at most 256 UTF-8 bytes")
-
-    proof_box_context = f"{proof_context}.proof"
-    proof_box = _offline_mapping(
-        _offline_required(proof, "proof", proof_context), proof_box_context
-    )
-    _offline_exact_object_fields(
-        proof_box,
-        proof_box_context,
-        required=("backend", "bytes"),
-    )
-    proof_backend = _offline_exact_string(
-        _offline_required(proof_box, "backend", proof_box_context),
-        f"{proof_box_context}.backend",
-    )
-    if proof_backend != backend:
-        raise RuntimeError(f"{proof_box_context}.backend must equal {proof_context}.backend")
-    proof_bytes = _offline_byte_array(
-        _offline_required(proof_box, "bytes", proof_box_context),
-        f"{proof_box_context}.bytes",
-    )
-    if not 1 <= len(proof_bytes) <= _OFFLINE_TOP_UP_SHIELD_MAX_PROOF_BYTES:
-        raise RuntimeError(
-            f"{proof_box_context}.bytes must contain between 1 and "
-            f"{_OFFLINE_TOP_UP_SHIELD_MAX_PROOF_BYTES} bytes"
-        )
-    _offline_verifier_key_id(
-        _offline_required(proof, "vk_ref", proof_context), f"{proof_context}.vk_ref"
-    )
-    for field in ("vk_commitment", "envelope_hash"):
-        if field in proof and proof[field] is not None:
-            _offline_fixed_bytes(proof[field], f"{proof_context}.{field}", non_zero=True)
-    if "lane_privacy" in proof and proof["lane_privacy"] is not None:
-        _offline_mapping(proof["lane_privacy"], f"{proof_context}.lane_privacy")
 
 
 @dataclass(frozen=True)
@@ -4437,14 +4193,6 @@ class CouncilCurrentStatus:
 
 
 @dataclass(frozen=True)
-class GovernanceProposalStatus:
-    """Result returned by ``GET /v1/gov/proposals/{id}``."""
-
-    found: bool
-    proposal: Optional[Dict[str, Any]]
-
-
-@dataclass(frozen=True)
 class GovernanceLockCustody:
     """Immutable asset custody retained with a governance lock."""
 
@@ -4837,18 +4585,9 @@ class VpnReceiptListResponse:
 
 
 @dataclass(frozen=True)
-class GovernanceInstructionDraft:
-    """Instruction bundle returned by finalize/enact helpers."""
-
-    ok: bool
-    tx_instructions: List[TransactionInstruction]
-
-
-@dataclass(frozen=True)
 class GovernanceProposalDraft:
     """Result returned by ``POST /v1/gov/proposals/deploy-contract``."""
 
-    ok: bool
     proposal_id: str
     tx_instructions: List[TransactionInstruction]
 
@@ -5196,9 +4935,10 @@ class GovernanceProposalCounters:
     """Proposal lifecycle counters inside the status payload."""
 
     proposed: int
-    approved: int
     rejected: int
     enacted: int
+    superseded: int
+    execution_failed: int
 
 
 @dataclass(frozen=True)
@@ -5471,60 +5211,6 @@ class SumeragiV2LivenessStatus:
     no_progress_age_ms: int
     blocker: Optional[str]
     ignore_counts: List[SumeragiV2IgnoreCount]
-
-
-@dataclass(frozen=True)
-class SumeragiV2AdapterQueueStatus:
-    """Bounded v2 reducer-adapter queue occupancy."""
-
-    ingress_keys: int
-    ingress_capacity: int
-    deferred_completion: int
-    deferred_progress: int
-    deferred_progress_capacity: int
-    deferred_normal: int
-    deferred_normal_capacity: int
-
-
-@dataclass(frozen=True)
-class SumeragiV2TxQueueStatus:
-    """Exact transaction-queue pressure sampled by the v2 runner."""
-
-    tracked_transactions: int
-    queued_transactions: int
-    capacity: int
-    retained_bytes: int
-    max_retained_bytes: int
-    oldest_queued_age_ms: int
-    saturated_by_count: bool
-    saturated_by_bytes: bool
-    saturated_by_age: bool
-
-
-@dataclass(frozen=True)
-class SumeragiV2OperatorStatus:
-    """Local diagnostics kept outside reducer-authoritative consensus state."""
-
-    view_change_install_total: int
-    busy_deferral_total: int
-    adapter_queues: SumeragiV2AdapterQueueStatus
-    tx_queue: SumeragiV2TxQueueStatus
-
-
-@dataclass(frozen=True)
-class SumeragiSafetyHaltStatus:
-    """Fail-closed local consensus safety state reported with v2 status."""
-
-    active: bool
-    reason: Optional[str]
-    height: int
-    epoch: int
-    first_block_hash: Optional[str]
-    conflicting_block_hash: Optional[str]
-    first_parent_state_root: Optional[str]
-    first_post_state_root: Optional[str]
-    conflicting_parent_state_root: Optional[str]
-    conflicting_post_state_root: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -6623,49 +6309,6 @@ class _SumeragiV2StatusParser:
         return value
 
     @classmethod
-    def _safety_halt(cls, value: Any, context: str) -> SumeragiSafetyHaltStatus:
-        record = cls._mapping(value, context)
-        allowed_fields = {
-            "active",
-            "reason",
-            "height",
-            "epoch",
-            "first_block_hash",
-            "conflicting_block_hash",
-            "first_parent_state_root",
-            "first_post_state_root",
-            "conflicting_parent_state_root",
-            "conflicting_post_state_root",
-        }
-        unknown_fields = set(record) - allowed_fields
-        if unknown_fields:
-            unknown = sorted(unknown_fields)[0]
-            raise RuntimeError(f"{context} contains unknown field {unknown}")
-
-        reason = record.get("reason")
-        if reason is not None and not isinstance(reason, str):
-            raise RuntimeError(f"{context}.reason must be a string or null")
-
-        def optional_hash(field: str) -> Optional[str]:
-            field_value = record.get(field)
-            if field_value is None:
-                return None
-            return cls._hash(field_value, f"{context}.{field}")
-
-        return SumeragiSafetyHaltStatus(
-            active=cls._boolean(record.get("active"), f"{context}.active"),
-            reason=reason,
-            height=cls._unsigned(record.get("height"), f"{context}.height"),
-            epoch=cls._unsigned(record.get("epoch"), f"{context}.epoch"),
-            first_block_hash=optional_hash("first_block_hash"),
-            conflicting_block_hash=optional_hash("conflicting_block_hash"),
-            first_parent_state_root=optional_hash("first_parent_state_root"),
-            first_post_state_root=optional_hash("first_post_state_root"),
-            conflicting_parent_state_root=optional_hash("conflicting_parent_state_root"),
-            conflicting_post_state_root=optional_hash("conflicting_post_state_root"),
-        )
-
-    @classmethod
     def _nonzero_hash(cls, value: Any, context: str) -> str:
         literal = cls._hash(value, context)
         body = literal[5:69]
@@ -7049,56 +6692,6 @@ class _SumeragiV2StatusParser:
             min_signers=min_signers,
             signed_power=signed_power,
             total_power=total_power,
-        )
-
-    @classmethod
-    def _operator(cls, value: Any, *, context: str) -> SumeragiV2OperatorStatus:
-        record = cls._mapping(value, context)
-        adapter = cls._mapping(record.get("adapter_queues"), f"{context}.adapter_queues")
-        adapter_status = SumeragiV2AdapterQueueStatus(
-            ingress_keys=cls._unsigned(adapter.get("ingress_keys"), f"{context}.adapter_queues.ingress_keys"),
-            ingress_capacity=cls._unsigned(adapter.get("ingress_capacity"), f"{context}.adapter_queues.ingress_capacity"),
-            deferred_completion=cls._unsigned(adapter.get("deferred_completion"), f"{context}.adapter_queues.deferred_completion"),
-            deferred_progress=cls._unsigned(adapter.get("deferred_progress"), f"{context}.adapter_queues.deferred_progress"),
-            deferred_progress_capacity=cls._unsigned(adapter.get("deferred_progress_capacity"), f"{context}.adapter_queues.deferred_progress_capacity"),
-            deferred_normal=cls._unsigned(adapter.get("deferred_normal"), f"{context}.adapter_queues.deferred_normal"),
-            deferred_normal_capacity=cls._unsigned(adapter.get("deferred_normal_capacity"), f"{context}.adapter_queues.deferred_normal_capacity"),
-        )
-        if (
-            adapter_status.ingress_keys > adapter_status.ingress_capacity
-            or adapter_status.deferred_completion > adapter_status.deferred_progress_capacity
-            or adapter_status.deferred_progress > adapter_status.deferred_progress_capacity
-            or adapter_status.deferred_normal > adapter_status.deferred_normal_capacity
-        ):
-            raise RuntimeError(f"{context}.adapter_queues occupancy exceeds capacity")
-        queue = cls._mapping(record.get("tx_queue"), f"{context}.tx_queue")
-        tx_queue = SumeragiV2TxQueueStatus(
-            tracked_transactions=cls._unsigned(queue.get("tracked_transactions"), f"{context}.tx_queue.tracked_transactions"),
-            queued_transactions=cls._unsigned(queue.get("queued_transactions"), f"{context}.tx_queue.queued_transactions"),
-            capacity=cls._unsigned(queue.get("capacity"), f"{context}.tx_queue.capacity", positive=True),
-            retained_bytes=cls._unsigned(queue.get("retained_bytes"), f"{context}.tx_queue.retained_bytes"),
-            max_retained_bytes=cls._unsigned(queue.get("max_retained_bytes"), f"{context}.tx_queue.max_retained_bytes", positive=True),
-            oldest_queued_age_ms=cls._unsigned(queue.get("oldest_queued_age_ms"), f"{context}.tx_queue.oldest_queued_age_ms"),
-            saturated_by_count=cls._boolean(queue.get("saturated_by_count"), f"{context}.tx_queue.saturated_by_count"),
-            saturated_by_bytes=cls._boolean(queue.get("saturated_by_bytes"), f"{context}.tx_queue.saturated_by_bytes"),
-            saturated_by_age=cls._boolean(queue.get("saturated_by_age"), f"{context}.tx_queue.saturated_by_age"),
-        )
-        if (
-            tx_queue.queued_transactions > tx_queue.tracked_transactions
-            or tx_queue.tracked_transactions > tx_queue.capacity
-            or tx_queue.retained_bytes > tx_queue.max_retained_bytes
-        ):
-            raise RuntimeError(f"{context}.tx_queue occupancy exceeds capacity")
-        return SumeragiV2OperatorStatus(
-            view_change_install_total=cls._unsigned(
-                record.get("view_change_install_total"),
-                f"{context}.view_change_install_total",
-            ),
-            busy_deferral_total=cls._unsigned(
-                record.get("busy_deferral_total"), f"{context}.busy_deferral_total"
-            ),
-            adapter_queues=adapter_status,
-            tx_queue=tx_queue,
         )
 
     @classmethod
@@ -9444,47 +9037,6 @@ class ToriiClient(
         self._expect_status(response, {204})
 
     # ------------------------------------------------------------------
-    # Prover reports
-    # ------------------------------------------------------------------
-    def list_prover_reports(self, **filters: Any) -> List[Mapping[str, Any]]:
-        """List prover reports applying optional filters."""
-
-        response = self._request(
-            "GET",
-            "/v1/zk/prover/reports",
-            params=self._encode_prover_filters(filters),
-        )
-        self._expect_status(response, {200})
-        return response.json()
-
-    def get_prover_report(self, report_id: str) -> Mapping[str, Any]:
-        """Fetch a single prover report by id."""
-
-        response = self._request("GET", f"/v1/zk/prover/reports/{report_id}")
-        self._expect_status(response, {200})
-        return response.json()
-
-    def delete_prover_report(self, report_id: str) -> None:
-        """Delete a prover report by id."""
-
-        response = self._request("DELETE", f"/v1/zk/prover/reports/{report_id}")
-        self._expect_status(response, {204})
-
-    def count_prover_reports(self, **filters: Any) -> int:
-        """Return the count of prover reports matching filters."""
-
-        response = self._request(
-            "GET",
-            "/v1/zk/prover/reports/count",
-            params=self._encode_prover_filters(filters),
-        )
-        self._expect_status(response, {200})
-        payload = response.json()
-        if not isinstance(payload, Mapping) or "count" not in payload:
-            raise RuntimeError("invalid prover count payload")
-        return int(payload["count"])
-
-    # ------------------------------------------------------------------
     # Admin & telemetry surfaces
     # ------------------------------------------------------------------
     def list_peers(self) -> List[PeerInfo]:
@@ -11645,24 +11197,33 @@ class ToriiClient(
             context="governance contract response",
         )
 
-    def get_governance_proposal(
+    def get_governance_proposal_raw(
         self, proposal_id: str, *, canonical_auth: ToriiCanonicalRequestAuth
-    ) -> GovernanceProposalStatus:
-        """Fetch proposal metadata via ``GET /v1/gov/proposals/{id}``."""
+    ) -> Mapping[str, Any]:
+        """Fetch the unparsed proposal JSON for diagnostic callers."""
 
         proposal_id = self._require_governance_proposal_id_v1(
             proposal_id,
             context="governance proposal proposal_id",
         )
-        payload = self._account_json_request(
+        return self._account_json_request(
             "GET",
             f"/v1/gov/proposals/{quote(proposal_id, safe='')}",
             canonical_auth=canonical_auth,
             context="governance proposal",
         )
-        found = bool(payload.get("found"))
-        proposal = self._optional_mapping(payload.get("proposal"), context="governance proposal body")
-        return GovernanceProposalStatus(found=found, proposal=proposal)
+
+    def get_governance_proposal(
+        self, proposal_id: str, *, canonical_auth: ToriiCanonicalRequestAuth
+    ) -> GovernanceProposalResult:
+        """Fetch and strictly decode first-release proposal metadata."""
+
+        return GovernanceProposalResult.from_payload(
+            self.get_governance_proposal_raw(
+                proposal_id,
+                canonical_auth=canonical_auth,
+            )
+        )
 
     def get_governance_locks(
         self, referendum_id: str, *, canonical_auth: ToriiCanonicalRequestAuth
@@ -11781,12 +11342,10 @@ class ToriiClient(
         canonical_auth: ToriiCanonicalRequestAuth,
         contract_address: Optional[str] = None,
         contract_alias: Optional[str] = None,
-        abi_version: str,
+        abi_version: int,
         code_hash: str,
         abi_hash: str,
-        window: Optional[Tuple[int, int]] = None,
-        mode: Optional[Literal["Zk", "Plain"]] = None,
-        limits: Optional[Mapping[str, Any]] = None,
+        manifest_provenance: Optional[Mapping[str, str]] = None,
     ) -> GovernanceProposalDraft:
         """Draft a deploy-contract proposal via ``POST /v1/gov/proposals/deploy-contract``."""
 
@@ -11794,23 +11353,40 @@ class ToriiClient(
             raise ValueError(
                 "provide exactly one of contract_address or contract_alias",
             )
+        if isinstance(abi_version, bool) or abi_version != 1:
+            raise ValueError("abi_version must be the integer 1")
+        for field_name, value in (("code_hash", code_hash), ("abi_hash", abi_hash)):
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise ValueError(
+                    f"{field_name} must be exactly 32 lowercase hexadecimal bytes"
+                )
         payload: Dict[str, Any] = {
             "abi_version": abi_version,
             "code_hash": code_hash,
             "abi_hash": abi_hash,
         }
         if contract_address is not None:
-            payload["contract_address"] = contract_address
+            payload["contract_address"] = _require_exact_non_empty_string(
+                contract_address,
+                "propose_contract_deploy.contract_address",
+            )
         if contract_alias is not None:
-            payload["contract_alias"] = contract_alias
-        if window is not None:
-            payload["window"] = {"lower": int(window[0]), "upper": int(window[1])}
-        if mode is not None:
-            if mode not in ("Zk", "Plain"):
-                raise ValueError("mode must be exactly 'Zk' or 'Plain'")
-            payload["mode"] = mode
-        if limits is not None:
-            payload["limits"] = dict(limits)
+            payload["contract_alias"] = _require_exact_non_empty_string(
+                contract_alias,
+                "propose_contract_deploy.contract_alias",
+            )
+        if manifest_provenance is not None:
+            if set(manifest_provenance) != {"signer", "signature"}:
+                raise ValueError(
+                    "manifest_provenance must contain exactly signer and signature"
+                )
+            payload["manifest_provenance"] = {
+                field: _require_exact_non_empty_string(
+                    manifest_provenance[field],
+                    f"propose_contract_deploy.manifest_provenance.{field}",
+                )
+                for field in ("signer", "signature")
+            }
         body = self._account_json_request(
             "POST",
             "/v1/gov/proposals/deploy-contract",
@@ -11818,76 +11394,40 @@ class ToriiClient(
             canonical_auth=canonical_auth,
             context="deploy-contract proposal",
         )
-        ok = bool(body.get("ok"))
-        proposal_id = str(body.get("proposal_id") or "")
-        if not proposal_id:
-            raise RuntimeError("deploy-contract response missing proposal_id")
-        instructions = self._parse_tx_instructions(body.get("tx_instructions"))
-        return GovernanceProposalDraft(ok=ok, proposal_id=proposal_id, tx_instructions=instructions)
-
-    def finalize_referendum(
-        self,
-        *,
-        referendum_id: str,
-        proposal_id: str,
-    ) -> GovernanceInstructionDraft:
-        """Draft a FinalizeReferendum transaction via ``POST /v1/gov/finalize``."""
-
-        referendum_id = self._require_governance_proposal_id_v1(
-            referendum_id,
-            context="governance finalize referendum_id",
-        )
-        proposal_id = self._require_governance_proposal_id_v1(
-            proposal_id,
-            context="governance finalize proposal_id",
-        )
-        if referendum_id != proposal_id:
+        if set(body) != {"proposal_id", "tx_instructions"}:
             raise RuntimeError(
-                "governance finalize referendum_id must equal proposal_id"
+                "deploy-contract response must contain exactly proposal_id and tx_instructions"
             )
-        payload = {"referendum_id": referendum_id, "proposal_id": proposal_id}
-        body = self._post_json(
-            "/v1/gov/finalize",
-            payload,
-            context="governance finalize",
-            expected_status=(200, 202, 204),
+        proposal_id = body.get("proposal_id")
+        if not isinstance(proposal_id, str) or re.fullmatch(r"[0-9a-f]{64}", proposal_id) is None:
+            raise RuntimeError(
+                "deploy-contract response proposal_id must be exactly 32 lowercase hexadecimal bytes"
+            )
+        raw_instructions = body.get("tx_instructions")
+        if not isinstance(raw_instructions, list) or len(raw_instructions) != 1:
+            raise RuntimeError("deploy-contract response must contain exactly one instruction")
+        instruction_entry = raw_instructions[0]
+        if not isinstance(instruction_entry, Mapping) or set(instruction_entry) != {
+            "wire_id",
+            "payload_hex",
+        }:
+            raise RuntimeError(
+                "deploy-contract response instruction must contain exactly wire_id and payload_hex"
+            )
+        instructions = self._parse_tx_instructions(body.get("tx_instructions"))
+        if instructions[0].wire_id != (
+            "iroha_data_model::isi::governance::ProposeDeployContract"
+        ):
+            raise RuntimeError("deploy-contract response returned the wrong instruction wire_id")
+        canonical_payload_hex = self._require_exact_lower_even_hex_string(
+            instructions[0].payload_hex,
+            context="deploy-contract response instruction.payload_hex",
         )
-        return GovernanceInstructionDraft(
-            ok=bool(body.get("ok")),
-            tx_instructions=self._parse_tx_instructions(body.get("tx_instructions")),
+        instructions[0] = TransactionInstruction(
+            wire_id=instructions[0].wire_id,
+            payload_hex=canonical_payload_hex,
         )
-
-    def enact_proposal(
-        self,
-        *,
-        canonical_auth: ToriiCanonicalRequestAuth,
-        proposal_id: str,
-        preimage_hash: Optional[str] = None,
-        window: Optional[Tuple[int, int]] = None,
-    ) -> GovernanceInstructionDraft:
-        """Draft an EnactReferendum transaction via ``POST /v1/gov/enact``."""
-
-        proposal_id = self._require_governance_proposal_id_v1(
-            proposal_id,
-            context="governance enact proposal_id",
-        )
-        payload: Dict[str, Any] = {"proposal_id": proposal_id}
-        if preimage_hash:
-            payload["preimage_hash"] = preimage_hash
-        if window is not None:
-            payload["window"] = {"lower": int(window[0]), "upper": int(window[1])}
-        body = self._account_json_request(
-            "POST",
-            "/v1/gov/enact",
-            body_payload=payload,
-            canonical_auth=canonical_auth,
-            context="governance enact",
-            expected_status=(200, 202, 204),
-        )
-        return GovernanceInstructionDraft(
-            ok=bool(body.get("ok")),
-            tx_instructions=self._parse_tx_instructions(body.get("tx_instructions")),
-        )
+        return GovernanceProposalDraft(proposal_id=proposal_id, tx_instructions=instructions)
 
     def apply_protected_namespaces(
         self,
@@ -12736,20 +12276,6 @@ class ToriiClient(
         )
 
     @staticmethod
-    def _encode_prover_filters(filters: Mapping[str, Any]) -> Dict[str, Any]:
-        if not filters:
-            return {}
-        params: Dict[str, Any] = {}
-        for key, value in filters.items():
-            if value in (None, False):
-                continue
-            if value is True:
-                params[_FILTER_MAPPING.get(key, key)] = "true"
-            else:
-                params[_FILTER_MAPPING.get(key, key)] = value
-        return params
-
-    @staticmethod
     def _clean_params(params: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
         if not params:
             return None
@@ -13071,56 +12597,6 @@ class ToriiClient(
             "events": cls._parse_sorafs_orderbook_event_page(
                 record.get("events"),
                 context=f"{context}.events",
-            ),
-        }
-
-    @classmethod
-    def _parse_sorafs_orderbook_submission_receipt(
-        cls,
-        payload: Any,
-        *,
-        context: str,
-    ) -> Dict[str, Any]:
-        record = cls._ensure_mapping(payload, context)
-        cls._require_exact_sorafs_orderbook_fields(
-            record,
-            _SORAFS_ORDERBOOK_SUBMISSION_RECEIPT_FIELDS,
-            context,
-        )
-        receipt_payload = cls._ensure_mapping(record.get("payload"), f"{context}.payload")
-        cls._require_exact_sorafs_orderbook_fields(
-            receipt_payload,
-            _SORAFS_ORDERBOOK_SUBMISSION_PAYLOAD_FIELDS,
-            f"{context}.payload",
-        )
-        return {
-            "payload": {
-                key: cls._require_sorafs_orderbook_string(
-                    receipt_payload.get(key),
-                    f"{context}.payload.{key}",
-                )
-                for key in (
-                    "entrypoint_hash",
-                    "signed_transaction_hash",
-                )
-            }
-            | {
-                "submitted_at_ms": cls._require_sorafs_orderbook_uint(
-                    receipt_payload.get("submitted_at_ms"),
-                    f"{context}.payload.submitted_at_ms",
-                ),
-                "submitted_at_height": cls._require_sorafs_orderbook_uint(
-                    receipt_payload.get("submitted_at_height"),
-                    f"{context}.payload.submitted_at_height",
-                ),
-                "signer": cls._require_sorafs_orderbook_string(
-                    receipt_payload.get("signer"),
-                    f"{context}.payload.signer",
-                ),
-            },
-            "signature": cls._require_sorafs_orderbook_string(
-                record.get("signature"),
-                f"{context}.signature",
             ),
         }
 
@@ -14034,46 +13510,6 @@ class ToriiClient(
         return literal
 
     @staticmethod
-    def _normalize_numeric_literal(
-        value: Any, context: str, *, allow_negative: bool = False
-    ) -> str:
-        if isinstance(value, bool):
-            raise TypeError(f"{context} must be a numeric literal")
-        if isinstance(value, str):
-            raw = value.strip()
-        elif isinstance(value, (int, float)):
-            if isinstance(value, float) and not math.isfinite(value):
-                raise ValueError(f"{context} must be a finite number")
-            raw = str(value)
-        else:
-            raise TypeError(f"{context} must be a numeric literal")
-        if not raw:
-            raise ValueError(f"{context} must be a numeric literal")
-        sign = raw[0]
-        if sign in ("-", "+"):
-            if sign == "-" and not allow_negative:
-                raise ValueError(f"{context} must be non-negative")
-            digits = raw[1:]
-        else:
-            digits = raw
-        if not digits:
-            raise ValueError(f"{context} must be a numeric literal")
-        seen_dot = False
-        seen_digit = False
-        for ch in digits:
-            if ch == ".":
-                if seen_dot:
-                    raise ValueError(f"{context} must be a numeric literal")
-                seen_dot = True
-                continue
-            if not ch.isdigit():
-                raise ValueError(f"{context} must be a numeric literal")
-            seen_digit = True
-        if not seen_digit:
-            raise ValueError(f"{context} must be a numeric literal")
-        return raw
-
-    @staticmethod
     def _normalize_contract_selector(
         *,
         contract_address: Optional[str],
@@ -14258,16 +13694,6 @@ class ToriiClient(
         raise TypeError(f"{context} must be bytes-like or base64 text")
 
     @staticmethod
-    def _normalize_optional_base64_payload(
-        value: Any,
-        *,
-        context: str,
-    ) -> Optional[str]:
-        if value is None:
-            return None
-        return ToriiClient._normalize_required_base64_payload(value, context)
-
-    @staticmethod
     def _normalize_optional_exact_base64_payload(value: Any, context: str) -> Optional[str]:
         return None if value is None else ToriiClient._normalize_required_exact_base64_payload(value, context)
 
@@ -14415,12 +13841,6 @@ class ToriiClient(
         if value < 0 or value > _VPN_UINT64_MAX:
             raise RuntimeError(f"{context} must be between 0 and {_VPN_UINT64_MAX}")
         return value
-
-    @staticmethod
-    def _ensure_list(payload: Any, context: str) -> List[Any]:
-        if isinstance(payload, list):
-            return payload
-        raise RuntimeError(f"{context} response must be a JSON array")
 
     @staticmethod
     def _optional_mapping(
@@ -14874,9 +14294,16 @@ class ToriiClient(
         return GovernanceStatusSnapshot(
             proposals=GovernanceProposalCounters(
                 proposed=self._coerce_int(proposals.get("proposed"), "governance.proposals.proposed"),
-                approved=self._coerce_int(proposals.get("approved"), "governance.proposals.approved"),
                 rejected=self._coerce_int(proposals.get("rejected"), "governance.proposals.rejected"),
                 enacted=self._coerce_int(proposals.get("enacted"), "governance.proposals.enacted"),
+                superseded=self._coerce_int(
+                    proposals.get("superseded"),
+                    "governance.proposals.superseded",
+                ),
+                execution_failed=self._coerce_int(
+                    proposals.get("execution_failed"),
+                    "governance.proposals.execution_failed",
+                ),
             ),
             protected_namespace=GovernanceProtectedNamespaceStats(
                 total_checks=self._coerce_int(
@@ -16697,46 +16124,6 @@ class ToriiClient(
         return value
 
     @staticmethod
-    def _require_exact_inline_hex_string(value: Any, *, context: str) -> None:
-        if not isinstance(value, str):
-            return
-        if value.strip() != value:
-            raise RuntimeError(f"{context} must be canonical hex")
-        literal = value[2:] if value.startswith(("0x", "0X")) else value
-        if any(character.isspace() for character in literal):
-            raise RuntimeError(f"{context} must be canonical hex")
-
-    @classmethod
-    def _normalize_nonzero_hex_bytes(
-        cls,
-        value: Union[str, bytes, bytearray, memoryview],
-        *,
-        context: str,
-        expected_byte_length: Optional[int] = None,
-    ) -> str:
-        normalized = cls._normalize_hex_string(value, context=context)
-        if not any(bytes.fromhex(normalized)):
-            raise RuntimeError(f"{context} must not be all zero")
-        if expected_byte_length is not None and len(normalized) != expected_byte_length * 2:
-            raise RuntimeError(f"{context} must be a {expected_byte_length}-byte hex string")
-        return normalized
-
-    @classmethod
-    def _normalize_exact_nonzero_hex_bytes(
-        cls,
-        value: Union[str, bytes, bytearray, memoryview],
-        *,
-        context: str,
-        expected_byte_length: Optional[int] = None,
-    ) -> str:
-        cls._require_exact_inline_hex_string(value, context=context)
-        return cls._normalize_nonzero_hex_bytes(
-            value,
-            context=context,
-            expected_byte_length=expected_byte_length,
-        )
-
-    @staticmethod
     def _normalize_uaid_literal(value: Any, *, context: str) -> str:
         if not isinstance(value, str):
             raise RuntimeError(f"{context} must be a UAID string")
@@ -16980,22 +16367,6 @@ class ToriiClient(
             data_model_version=data_model_version,
             crypto=NodeCryptoCapabilities(sm=sm, curves=curves),
         )
-
-    @staticmethod
-    def _parse_mapping_list(value: Any, *, context: str) -> List[Mapping[str, Any]]:
-        if value is None:
-            return []
-        if not isinstance(value, list):
-            raise RuntimeError(f"{context} must be a list")
-        return [ToriiClient._ensure_mapping(entry, f"{context}[{index}]") for index, entry in enumerate(value)]
-
-    @staticmethod
-    def _require_choice(value: Any, *, allowed: set[str], context: str) -> str:
-        literal = ToriiClient._require_string(value, context)
-        if literal not in allowed:
-            allowed_sorted = ", ".join(sorted(allowed))
-            raise RuntimeError(f"{context} must be one of: {allowed_sorted}")
-        return literal
 
     @staticmethod
     def _parse_node_sm_capabilities(value: Any, *, context: str) -> NodeSmCapabilities:
@@ -17729,21 +17100,3 @@ def _monotonic_millis() -> float:
     """Return a monotonic timestamp in milliseconds."""
 
     return time.perf_counter() * 1000.0
-
-
-_FILTER_MAPPING: Dict[str, str] = {
-    "ok_only": "ok_only",
-    "failed_only": "failed_only",
-    "errors_only": "errors_only",
-    "content_type": "content_type",
-    "has_tag": "has_tag",
-    "limit": "limit",
-    "since_ms": "since_ms",
-    "before_ms": "before_ms",
-    "ids_only": "ids_only",
-    "order": "order",
-    "offset": "offset",
-    "latest": "latest",
-    "messages_only": "messages_only",
-    "id": "id",
-}

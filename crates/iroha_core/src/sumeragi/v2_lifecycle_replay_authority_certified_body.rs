@@ -34,16 +34,48 @@ pub(in crate::sumeragi) struct AuthenticatedGenesisStoredReplayEvidenceV1 {
     family: CertifiedBodyPipelineReplayFamilyV1,
     store_pending: Arc<PendingRuntimeEffectBinding>,
 }
-/// Internal families admitted through the closed top-level `LocalBody` owner.
+/// Internal certified families admitted through the closed top-level `LocalBody` owner.
 ///
-/// `AuthenticatedGenesis` retains a certified replay envelope because the
-/// inherited runtime candidate statement carries QC authority. It is still a
-/// `LocalBody` admission origin because the exact bytes came from the opaque
-/// launch-authenticated local genesis cut, not from a remote response.
+/// Both subtypes carry a complete authenticated QC, but neither represents a
+/// certified Fetch response. Genesis bytes come from the opaque launch cut;
+/// protected-lock bytes were already made durable by an earlier Proposal
+/// pipeline whose live replay owner has since retired.
+#[derive(Clone, Debug)]
+enum AuthenticatedCertifiedLocalValidateFamilyV1 {
+    Genesis(CertifiedBodyPipelineReplayFamilyV1),
+    ProtectedLock(CertifiedBodyPipelineReplayFamilyV1),
+}
+
+impl AuthenticatedCertifiedLocalValidateFamilyV1 {
+    const fn family(&self) -> &CertifiedBodyPipelineReplayFamilyV1 {
+        match self {
+            Self::Genesis(family) | Self::ProtectedLock(family) => family,
+        }
+    }
+
+    fn family_mut(&mut self) -> &mut CertifiedBodyPipelineReplayFamilyV1 {
+        match self {
+            Self::Genesis(family) | Self::ProtectedLock(family) => family,
+        }
+    }
+
+    fn authenticated_by_verified_height(&self, verified: &VerifiedHeightContext) -> bool {
+        match self {
+            Self::Genesis(family) => {
+                authenticated_genesis_standalone_source(verified, &family.source)
+            }
+            Self::ProtectedLock(family) => {
+                authenticated_refined_proposal_standalone_source(verified, &family.source)
+            }
+        }
+    }
+}
+
+/// Internal families admitted through the closed top-level `LocalBody` owner.
 #[derive(Clone, Debug)]
 enum LocalValidateReplayFamilyV1 {
     Assembled(LocalBodyPipelineReplayFamilyV1),
-    AuthenticatedGenesis(CertifiedBodyPipelineReplayFamilyV1),
+    AuthenticatedCertified(AuthenticatedCertifiedLocalValidateFamilyV1),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CertifiedBodyPipelineCoordinatesV1 {
@@ -339,13 +371,24 @@ impl AuthenticatedGenesisStoredReplayEvidenceV1 {
             )
             .expect("an exact authenticated-genesis Store has one Validate successor");
         Ok(LocalValidateReplayEvidenceV1 {
-            family: LocalValidateReplayFamilyV1::AuthenticatedGenesis(self.family),
+            family: LocalValidateReplayFamilyV1::AuthenticatedCertified(
+                AuthenticatedCertifiedLocalValidateFamilyV1::Genesis(self.family),
+            ),
             validate_pending: Arc::new(projected),
         })
     }
 }
 
 impl LocalValidateReplayFamilyV1 {
+    fn authenticated_by_verified_height(&self, verified: &VerifiedHeightContext) -> bool {
+        match self {
+            Self::Assembled(_) => true,
+            Self::AuthenticatedCertified(certified) => {
+                certified.authenticated_by_verified_height(verified)
+            }
+        }
+    }
+
     #[cfg(test)]
     fn assembled_body_frame_mut_for_test(&mut self) -> &mut BodyFrameBindingV1 {
         let Self::Assembled(family) = self else {
@@ -357,19 +400,22 @@ impl LocalValidateReplayFamilyV1 {
     fn is_exact_for_stage_for_test(&self, stage: LifecycleStageKind) -> bool {
         match self {
             Self::Assembled(family) => family.is_exact_for_stage(stage),
-            Self::AuthenticatedGenesis(family) => family.is_exact_for_stage(stage),
+            Self::AuthenticatedCertified(certified) => certified.family().is_exact_for_stage(stage),
         }
     }
     fn source_and_frame(&self) -> (&BodyPipelineReplaySourceV1, BodyFrameBindingV1) {
         match self {
             Self::Assembled(family) => (&family.source, family.body_frame),
-            Self::AuthenticatedGenesis(family) => (&family.source, family.body_frame),
+            Self::AuthenticatedCertified(certified) => {
+                let family = certified.family();
+                (&family.source, family.body_frame)
+            }
         }
     }
     fn source_mut(&mut self) -> &mut BodyPipelineReplaySourceV1 {
         match self {
             Self::Assembled(family) => &mut family.source,
-            Self::AuthenticatedGenesis(family) => &mut family.source,
+            Self::AuthenticatedCertified(certified) => &mut certified.family_mut().source,
         }
     }
     fn exactly_matches_validate(
@@ -381,8 +427,8 @@ impl LocalValidateReplayFamilyV1 {
             Self::Assembled(family) => {
                 local_body_stage_matches(family, effect, receipt, LifecycleStageKind::ValidateBody)
             }
-            Self::AuthenticatedGenesis(family) => certified_body_stage_matches(
-                family,
+            Self::AuthenticatedCertified(certified) => certified_body_stage_matches(
+                certified.family(),
                 effect,
                 receipt,
                 LifecycleStageKind::ValidateBody,
@@ -396,12 +442,15 @@ impl LocalValidateReplayFamilyV1 {
                     .is_some_and(|expected| expected == *family)
                     && family.is_exact_for_stage(LifecycleStageKind::ValidateBody)
             }
-            Self::AuthenticatedGenesis(family) => exact_family_coordinates(family)
-                .and_then(|coordinates| certified_body_pipeline_family(&coordinates, receipt))
-                .is_some_and(|expected| {
-                    expected == *family
-                        && family.is_exact_for_stage(LifecycleStageKind::ValidateBody)
-                }),
+            Self::AuthenticatedCertified(certified) => {
+                let family = certified.family();
+                exact_family_coordinates(family)
+                    .and_then(|coordinates| certified_body_pipeline_family(&coordinates, receipt))
+                    .is_some_and(|expected| {
+                        expected == *family
+                            && family.is_exact_for_stage(LifecycleStageKind::ValidateBody)
+                    })
+            }
         }
     }
     fn assembled_manifest(&self) -> Option<&wire::PayloadManifest> {
@@ -413,15 +462,76 @@ impl LocalValidateReplayFamilyV1 {
         };
         Some(manifest)
     }
-    fn authenticated_genesis_family(&self) -> Option<&CertifiedBodyPipelineReplayFamilyV1> {
+    fn authenticated_certified_family(&self) -> Option<&CertifiedBodyPipelineReplayFamilyV1> {
         match self {
-            Self::AuthenticatedGenesis(family) => Some(family),
+            Self::AuthenticatedCertified(certified) => Some(certified.family()),
             Self::Assembled(_) => None,
         }
     }
 }
 
 impl LocalValidateReplayEvidenceV1 {
+    /// Reseal one historical protected-lock body whose original Proposal replay
+    /// owner retired before this exact Validate turn.
+    ///
+    /// The runtime binding must already carry the same Prepare statement. The
+    /// complete QC is retained in the certified replay source and is verified
+    /// again at lifecycle admission (and again by cold standalone recovery).
+    pub(in crate::sumeragi) fn from_exact_protected_lock_validate(
+        effect: &AdapterEffect,
+        manifest: &wire::PayloadManifest,
+        receipt: &DurableBodyReceipt,
+        certificate: &wire::QuorumCertificate,
+        pending: PendingRuntimeEffectBinding,
+    ) -> Option<Self> {
+        let AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } = effect
+        else {
+            return None;
+        };
+        let statement = pending.candidate_statement()?;
+        if !pending.exactly_binds_adapter_effect(effect)
+            || certificate.phase != wire::GlobalPhase::Prepare
+            || certificate.round != *round
+            || certificate.proposal_round != manifest.round
+            || certificate.subject != *subject
+            || manifest.round != *round
+            || manifest.subject != *subject
+            || statement.context_id() != certificate.round.context_id
+            || statement.round() != certificate.round
+            || statement.proposal_round() != certificate.proposal_round
+            || statement.subject() != Some(certificate.subject)
+            || statement.phase() != Some(wire::GlobalPhase::Prepare)
+            || statement.execution_commitment() != Some(certificate.execution_commitment)
+        {
+            return None;
+        }
+        let coordinates = CertifiedBodyPipelineCoordinatesV1 {
+            tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
+            certificate: certificate.clone(),
+            manifest: manifest.clone(),
+            fetch_manifest_present: true,
+            certified_sources: Vec::new(),
+        };
+        let family = exact_certified_body_pipeline_family(&coordinates, receipt)?;
+        if !certified_body_stage_matches(&family, effect, receipt, LifecycleStageKind::ValidateBody)
+        {
+            return None;
+        }
+        let evidence = Self {
+            family: LocalValidateReplayFamilyV1::AuthenticatedCertified(
+                AuthenticatedCertifiedLocalValidateFamilyV1::ProtectedLock(family),
+            ),
+            validate_pending: Arc::new(pending),
+        };
+        evidence
+            .exactly_matches_validate_pending(effect, receipt, evidence.validate_pending.as_ref())
+            .then_some(evidence)
+    }
+
     /// Report whether this closed test-only carrier may project a local-proposal handoff.
     #[cfg(test)]
     pub(super) fn projects_local_proposal_handoff_for_test(&self) -> bool {
@@ -436,7 +546,7 @@ impl LocalValidateReplayEvidenceV1 {
         let (source, body_frame) = self.family.source_and_frame();
         let origin_class_is_exact = match &self.family {
             LocalValidateReplayFamilyV1::Assembled(_) => authority.is_local_body_origin(),
-            LocalValidateReplayFamilyV1::AuthenticatedGenesis(_) => {
+            LocalValidateReplayFamilyV1::AuthenticatedCertified(_) => {
                 matches!(&source.origin, BodyPipelineOriginV1::Certified { .. })
             }
         };
@@ -1268,6 +1378,38 @@ impl RecoveredStandaloneValidateReplayEvidenceV1 {
         })
     }
 }
+impl RecoveredDecisionValidateReplayEvidenceV1 {
+    fn exactly_matches_validate_pending(
+        &self,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        self.validate_pending.exactly_matches(effect, pending)
+            && self
+                .lineage
+                .is_stage_closed(replay_context(receipt.round()))
+            && recovered_decision_validate_stage_matches(
+                &self.lineage.body.source,
+                self.lineage.body.body_frame,
+                effect,
+                receipt,
+            )
+    }
+
+    fn exactly_matches_durable_body(&self, receipt: &DurableBodyReceipt) -> bool {
+        recovered_decision_validate_effect(&self.lineage.body.source).is_some_and(|effect| {
+            self.lineage
+                .is_stage_closed(replay_context(receipt.round()))
+                && recovered_decision_validate_stage_matches(
+                    &self.lineage.body.source,
+                    self.lineage.body.body_frame,
+                    &effect,
+                    receipt,
+                )
+        })
+    }
+}
 impl RecoveredStandaloneValidateSourceV1 {
     /// Return whether this recovered source requires the private genesis body-store policy.
     pub(super) fn requires_genesis_authority_body_store(&self) -> bool {
@@ -1307,6 +1449,15 @@ fn standalone_origin_manifest(
         BodyPipelineOriginV1::Certified { manifest, .. } => Some(manifest),
         BodyPipelineOriginV1::RecoveredDecision { .. } => None,
     }
+}
+
+fn recovered_decision_origin_manifest(
+    source: &BodyPipelineReplaySourceV1,
+) -> Option<&wire::PayloadManifest> {
+    let BodyPipelineOriginV1::RecoveredDecision { manifest, .. } = &source.origin else {
+        return None;
+    };
+    Some(manifest)
 }
 
 fn authenticated_genesis_standalone_source(
@@ -1390,6 +1541,20 @@ fn standalone_validate_effect(source: &BodyPipelineReplaySourceV1) -> Option<Ada
         subject: manifest.subject,
     })
 }
+fn recovered_decision_validate_effect(
+    source: &BodyPipelineReplaySourceV1,
+) -> Option<AdapterEffect> {
+    let manifest = recovered_decision_origin_manifest(source)?;
+    Some(AdapterEffect::ValidateBody {
+        tag: EventTag::new(
+            source.tag.height,
+            source.tag.view,
+            crate::sumeragi::v2_core::Generation::new(source.tag.generation),
+        ),
+        round: manifest.round,
+        subject: manifest.subject,
+    })
+}
 fn standalone_validate_stage_matches(
     source: &BodyPipelineReplaySourceV1,
     body_frame: BodyFrameBindingV1,
@@ -1397,6 +1562,40 @@ fn standalone_validate_stage_matches(
     receipt: &DurableBodyReceipt,
 ) -> bool {
     let Some(manifest) = standalone_origin_manifest(source) else {
+        return false;
+    };
+    let AdapterEffect::ValidateBody {
+        tag,
+        round,
+        subject,
+    } = effect
+    else {
+        return false;
+    };
+    let context = replay_context(*round);
+    source.tag == ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get())
+        && *round == manifest.round
+        && *subject == manifest.subject
+        && receipt.context_id() == round.context_id
+        && receipt.round() == *round
+        && receipt.subject() == *subject
+        && receipt.manifest_hash() == HashOf::new(manifest)
+        && durable_body_frame_reference(context, receipt) == Some(body_frame.durable_reference())
+        && canonical_replay_authority(
+            context,
+            LifecycleReplaySourceV1::BodyPipeline(source.clone()),
+            LifecycleStageKind::ValidateBody,
+            ReplayPayloadBindingV1::BodyFrame(body_frame),
+        )
+        .is_some()
+}
+fn recovered_decision_validate_stage_matches(
+    source: &BodyPipelineReplaySourceV1,
+    body_frame: BodyFrameBindingV1,
+    effect: &AdapterEffect,
+    receipt: &DurableBodyReceipt,
+) -> bool {
+    let Some(manifest) = recovered_decision_origin_manifest(source) else {
         return false;
     };
     let AdapterEffect::ValidateBody {
@@ -1441,6 +1640,10 @@ impl DurableValidateReplayEvidenceV1 {
             Self::RemoteProposal(evidence) => (&evidence.family.source, evidence.family.body_frame),
             Self::LocalBody(evidence) => evidence.family.source_and_frame(),
             Self::RecoveredStandalone(evidence) => (&evidence.source, evidence.body_frame),
+            Self::RecoveredDecision(evidence) => (
+                &evidence.lineage.body.source,
+                evidence.lineage.body.body_frame,
+            ),
         };
         body_stage_matches_recovered_record(
             source,
@@ -1470,6 +1673,49 @@ impl DurableValidateReplayEvidenceV1 {
     }
     fn recovered_standalone(evidence: RecoveredStandaloneValidateReplayEvidenceV1) -> Self {
         Self::RecoveredStandalone(evidence)
+    }
+    /// Retain only the inert recovered-Decision replay identity for a registry seal.
+    pub(super) fn seal_recovered_decision_registry_evidence(
+        &self,
+    ) -> Option<RecoveredDecisionValidateReplayEvidenceV1> {
+        match self {
+            Self::RecoveredDecision(evidence) => Some(evidence.clone()),
+            Self::Certified(_)
+            | Self::RemoteProposal(_)
+            | Self::LocalBody(_)
+            | Self::RecoveredStandalone(_) => None,
+        }
+    }
+    /// Compare two Validate replay carriers only within the recovered-Decision family.
+    pub(super) fn same_recovered_decision_registry_evidence(&self, other: &Self) -> bool {
+        matches!(
+            (self, other),
+            (Self::RecoveredDecision(left), Self::RecoveredDecision(right)) if left == right
+        )
+    }
+    /// Compare an installed Validate carrier with one inert recovered-Decision seal.
+    pub(super) fn matches_recovered_decision_registry_evidence(
+        &self,
+        expected: &RecoveredDecisionValidateReplayEvidenceV1,
+    ) -> bool {
+        matches!(self, Self::RecoveredDecision(evidence) if evidence == expected)
+    }
+    /// Reproject and compare the exact recovered-Decision Validate candidate.
+    ///
+    /// This comparison-only oracle releases no candidate or runtime owner and
+    /// is used before the linear startup projection is consumed.
+    pub(super) fn exactly_projects_recovered_decision_validate_candidate(
+        &self,
+        verified: &VerifiedHeightContext,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+        expected: &CandidateAdmission,
+    ) -> bool {
+        matches!(self, Self::RecoveredDecision(_))
+            && self
+                .project_exact_validate_candidate(verified, effect, receipt, pending)
+                .is_ok_and(|candidate| candidate == *expected)
     }
     /// Project local-proposal completion authority without exposing a generic
     /// replay-source or pending-binding constructor.
@@ -1516,7 +1762,7 @@ impl DurableValidateReplayEvidenceV1 {
                     manifest.clone(),
                 ))
             }
-            Self::Certified(_) | Self::RemoteProposal(_) => None,
+            Self::Certified(_) | Self::RemoteProposal(_) | Self::RecoveredDecision(_) => None,
         }
     }
     /// Compare the closed family with one exact Validate effect, body frame,
@@ -1540,6 +1786,9 @@ impl DurableValidateReplayEvidenceV1 {
             Self::RecoveredStandalone(evidence) => {
                 evidence.exactly_matches_validate_pending(effect, receipt, pending)
             }
+            Self::RecoveredDecision(evidence) => {
+                evidence.exactly_matches_validate_pending(effect, receipt, pending)
+            }
         }
     }
     /// Revalidate the closed family against its retained durable body frame.
@@ -1551,6 +1800,7 @@ impl DurableValidateReplayEvidenceV1 {
             }
             Self::LocalBody(evidence) => evidence.exactly_matches_durable_body(receipt),
             Self::RecoveredStandalone(evidence) => evidence.exactly_matches_durable_body(receipt),
+            Self::RecoveredDecision(evidence) => evidence.exactly_matches_durable_body(receipt),
         }
     }
     /// Project one installed Validate carrier without exposing its replay family.
@@ -1586,6 +1836,7 @@ impl DurableValidateReplayEvidenceV1 {
             Self::RemoteProposal(evidence) => &mut evidence.family.source,
             Self::LocalBody(evidence) => evidence.family.source_mut(),
             Self::RecoveredStandalone(evidence) => &mut evidence.source,
+            Self::RecoveredDecision(evidence) => &mut evidence.lineage.body.source,
         };
         let previous = source.tag;
         source.tag.generation = previous.generation.wrapping_add(1);
@@ -1639,6 +1890,9 @@ impl DurableValidateReplayEvidenceV1 {
                 evidence.validate_source.clone()
             }
             Self::LocalBody(evidence) => {
+                if !evidence.family.authenticated_by_verified_height(verified) {
+                    return Err(AdapterEffectAdmissionError::InvalidCarrier);
+                }
                 let (source, body_frame) = evidence.family.source_and_frame();
                 if payload_binding != ReplayPayloadBindingV1::BodyFrame(body_frame) {
                     return Err(AdapterEffectAdmissionError::InvalidCarrier);
@@ -1650,6 +1904,14 @@ impl DurableValidateReplayEvidenceV1 {
                     return Err(AdapterEffectAdmissionError::InvalidCarrier);
                 }
                 evidence.source.clone()
+            }
+            Self::RecoveredDecision(evidence) => {
+                if payload_binding
+                    != ReplayPayloadBindingV1::BodyFrame(evidence.lineage.body.body_frame)
+                {
+                    return Err(AdapterEffectAdmissionError::InvalidCarrier);
+                }
+                evidence.lineage.body.source.clone()
             }
         };
         let authority = canonical_replay_authority(
@@ -2008,7 +2270,7 @@ fn exact_invalid_body_report_authority(
             (evidence.family.source.clone(), proposal.manifest.clone())
         }
         DurableValidateReplayEvidenceV1::LocalBody(evidence) => {
-            let family = evidence.family.authenticated_genesis_family()?;
+            let family = evidence.family.authenticated_certified_family()?;
             let coordinates = exact_family_coordinates(family)?;
             if coordinates.certificate != *certificate {
                 return None;
@@ -2037,6 +2299,7 @@ fn exact_invalid_body_report_authority(
                 | BodyPipelineOriginV1::RecoveredDecision { .. } => return None,
             }
         }
+        DurableValidateReplayEvidenceV1::RecoveredDecision(_) => return None,
     };
     if receipt.manifest_hash() != HashOf::new(&manifest) {
         return None;

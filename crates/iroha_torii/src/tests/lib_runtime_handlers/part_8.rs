@@ -1626,6 +1626,7 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
     assert_eq!(body.as_ref(), b"forwarded-ok");
 }
 #[tokio::test]
+
 async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
     let app = mk_app_state_for_tests();
     let request_id = Hash::new(b"torii-proxy-dispatch");
@@ -1968,6 +1969,7 @@ fn completed_torii_proxy_requests_are_fifo_bounded_and_ttl_pruned() {
     assert!(completed.entries.is_empty());
     assert!(completed.insertion_order.is_empty());
 }
+
 fn sccp_ingress_test_router_with_limit(
     app: SharedAppState,
     operator_max_body_bytes: usize,

@@ -31,11 +31,10 @@ fn authoritative_agent_autonomy_status_includes_authoritative_run_evidence()
         SoraAgentApartmentRecordV1 {
             schema_version: iroha_data_model::soracloud::SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
             manifest_hash: Hash::new(b"agent-manifest"),
-            status: SoraAgentRuntimeStatusV1::Running,
             deployed_sequence: 1,
-            lease_started_sequence: 1,
-            lease_expires_sequence: 100,
-            last_renewed_sequence: 1,
+            lease_started_height: 1,
+            lease_expires_height: 100,
+            last_renewed_height: 1,
             restart_count: 0,
             last_restart_sequence: None,
             last_restart_reason: None,
@@ -72,12 +71,10 @@ fn authoritative_agent_autonomy_status_includes_authoritative_run_evidence()
             result_commitment: Hash::new(b"authoritative-runtime-result"),
             certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
             emitted_sequence: 77,
+            execution_host: None,
             mailbox_message_id: None,
             journal_artifact_hash: Some(Hash::new(b"ops-agent-authoritative-journal")),
             checkpoint_artifact_hash: Some(Hash::new(br#"{"text":"ok"}"#)),
-            placement_id: None,
-            selected_validator_account_id: None,
-            selected_peer_id: None,
         },
     );
     world
@@ -87,10 +84,12 @@ fn authoritative_agent_autonomy_status_includes_authoritative_run_evidence()
             SoraAgentApartmentAuditEventV1 {
                 schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
                 sequence: 78,
+                block_height: 78,
+                block_timestamp_ms: 78,
                 action: SoraAgentApartmentActionV1::AutonomyRunExecuted,
                 apartment_name: "ops_agent".parse().expect("valid apartment name"),
                 status: SoraAgentRuntimeStatusV1::Running,
-                lease_expires_sequence: 100,
+                lease_expires_height: 100,
                 manifest_hash: Hash::new(b"agent-manifest"),
                 restart_count: 0,
                 signer: checked_test_keypair(0xB4).public_key().clone(),
@@ -122,37 +121,24 @@ fn authoritative_agent_autonomy_status_includes_authoritative_run_evidence()
     let app = mk_app_state_for_tests_with_world(world);
     let status = authoritative_agent_autonomy_status_response(&app, "ops_agent")
         .map_err(|err| eyre::eyre!("agent autonomy status failed: {err:?}"))?;
+    let recent = &status.recent_runs[0];
     assert_eq!(
-        status.recent_runs[0].workflow_input_json.as_deref(),
+        recent.workflow_input_json.as_deref(),
         Some("{\"inputs\":\"nightly\"}")
     );
     assert_eq!(
-        status.recent_runs[0]
+        recent
             .authoritative_runtime_receipt
             .as_ref()
             .map(|receipt| receipt.receipt_id),
         Some(Hash::new(b"ops-agent-authoritative-receipt"))
     );
     assert_eq!(
-        status.recent_runs[0]
+        recent
             .authoritative_execution_audit
             .as_ref()
-            .map(|audit| audit.sequence),
-        Some(78)
-    );
-    assert_eq!(
-        status.recent_runs[0]
-            .authoritative_execution_audit
-            .as_ref()
-            .and_then(|audit| audit.runtime_receipt_id),
-        Some(Hash::new(b"ops-agent-authoritative-receipt"))
-    );
-    assert_eq!(
-        status.recent_runs[0]
-            .authoritative_execution_audit
-            .as_ref()
-            .map(|audit| audit.succeeded),
-        Some(true)
+            .map(|audit| (audit.sequence, audit.succeeded)),
+        Some((78, true))
     );
     Ok(())
 }

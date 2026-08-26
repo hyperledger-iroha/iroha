@@ -6866,9 +6866,7 @@ fn exact_transaction_wait_poll_interval(poll_interval: Duration) -> Result<Durat
     Ok(poll_interval)
 }
 fn is_state_resolved_terminal_failure(kind: &str, scope: &str, resolved_from: &str) -> bool {
-    scope == "global"
-        && resolved_from == "state"
-        && matches!(kind, "Rejected" | "Expired")
+    scope == "global" && resolved_from == "state" && matches!(kind, "Rejected" | "Expired")
 }
 fn wait_for_transaction_applied_with_failover(
     ingress_pool: &IngressEndpointPool,
@@ -10879,9 +10877,7 @@ mod tests {
             Duration::from_millis(1)
         );
         for kind in ["Rejected", "Expired"] {
-            assert!(is_state_resolved_terminal_failure(
-                kind, "global", "state"
-            ));
+            assert!(is_state_resolved_terminal_failure(kind, "global", "state"));
             for source in ["cache", "queue"] {
                 assert!(!is_state_resolved_terminal_failure(kind, "global", source));
             }
@@ -10989,8 +10985,7 @@ mod tests {
             is_shutdown_noise_status_read_failure("audit_confirmation", &err, &run_control),
             "status reads should be ignored during shutdown"
         );
-        let timeout_err =
-            eyre!("transaction did not reach state-resolved Applied within 90000 ms");
+        let timeout_err = eyre!("transaction did not reach state-resolved Applied within 90000 ms");
         assert!(
             is_shutdown_noise_status_read_failure("audit_confirmation", &timeout_err, &run_control),
             "status read timeouts should be ignored once shutdown has started"

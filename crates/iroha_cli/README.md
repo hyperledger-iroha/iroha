@@ -30,19 +30,22 @@ the current installation instructions.
 The CLI will attempt to detect your system language for messages. Use `--language <CODE>` to override this selection.
 For automation, prefer `--output-format json --machine` to suppress startup chatter and fail fast when `client.toml` is missing.
 
-The Taira write canary requires an explicit owner-only token file for account
-onboarding. The file must be a current-user-owned, regular non-symlink with no
-group/other permissions and must contain the exact 32–256 byte printable-ASCII
-credential without a trailing newline:
+Use `iroha taira doctor` for read-only public-testnet diagnostics. Authorized
+public reset writes belong to the durable `iroha taira public-reset apply`
+coordinator. Its low-level `write-canary` child accepts exactly one ordered
+operation and one prepare, retained-envelope submit, or read-only recovery
+action; it is not a one-shot operator command. Keep onboarding tokens and all
+signing inputs in owner-only runtime files outside the repository.
 
-```bash
-iroha --fee-payer authority taira write-canary \
-  --public-root https://taira.sora.org \
-  --onboarding-token-file "$HOME/.config/iroha/taira-onboarding.token"
-```
-
-The credential is sent only as `X-Iroha-Onboarding-Token` on the JSON onboarding
-request and is never forwarded across redirects.
+Public node onboarding is deliberately a single future surface:
+`iroha taira join --data-dir <owner-only-directory>`. It will consume the
+published signed bootstrap bundle, generate local keys, and join as a
+permissionless observer with no operator-issued admission token. Validator
+activation is a separate on-chain transition through the existing staking and
+peer lifecycle after the node has synchronized; it does not use a parallel
+off-chain token format. The command and bundle are not shipped yet. The
+disposable four-validator devnet is qualification tooling, not a way to join
+the public testnet.
 
 ### Client configuration
 
@@ -169,19 +172,20 @@ This posts to `/v1/zk/vote/tally` and prints the snapshot-bound JSON response, e
 
 ### Governance helpers (app API convenience)
 
-Build governance transaction skeletons and query governance state via Torii app endpoints. The server does not sign or submit transactions; clients assemble and POST to `/transaction`.
+Build governance transaction skeletons and query governance state via Torii app endpoints. The server does not sign or submit transactions; clients assemble and POST to `/v1/pipeline/transactions`.
 
 - Propose deployment of IVM bytecode via governance:
 
 ```bash
 iroha app gov deploy propose \
   --contract-address irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw \
-  --code-hash 0123...ABCD --abi-hash 0123...ABCD \
-  --abi-version v1 --window-lower 12345 --window-upper 12400 \
-  --mode Plain
+  --code-hash <64-lowercase-hex> --abi-hash <64-lowercase-hex> \
+  --abi-version 1
 ```
 
-Responds with `{ ok, proposal_id, tx_instructions: [{ wire_id, payload_hex }] }`.
+Responds with `{ proposal_id, tx_instructions: [{ wire_id, payload_hex }] }`.
+The certificate lifecycle and enactment height are Core-derived; this command
+accepts no referendum window or voting mode.
 
 - Submit a ballot (auto-detects referendum mode unless overridden):
 
@@ -198,17 +202,9 @@ iroha app gov vote --referendum-id r1 --mode plain --owner <canonical-i105-owner
   --amount 1000 --duration-blocks 6000 --direction Aye
 ```
 
-- Finalize a referendum (compute tally, emit Approved/Rejected):
-
-```bash
-curl -sS -X POST -H 'Content-Type: application/json' \
-  "$TORII/v1/gov/finalize" \
-  -d '{"referendum_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","proposal_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}' | jq .
-```
-
-- Build an enactment transaction (for an approved proposal):
-
-  iroha app gov enact --proposal-id 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+Proposal-backed Parliament decisions are certificate driven. The node advances
+certified attempts at their consensus-scheduled due height; the CLI does not
+expose client finalization or proposal-enactment drafts.
 
 - Apply protected namespaces on the server (admin/testing):
 
@@ -310,7 +306,7 @@ iroha app zk schema-hash --norito proof_env.norito
 iroha app zk schema-hash --public-inputs-hex 0x0123abcd...
 ```
 
-### ZK attachments and prover reports (app API convenience)
+### ZK attachments (app API convenience)
 
 Upload an attachment (set Content-Type appropriately):
 
@@ -367,42 +363,6 @@ verifier or generic transfer/withdrawal ISI exists.
 iroha app zk verify-batch --norito ./batch.norito
 # Or pass a JSON array of base64-encoded Norito envelopes:
 iroha app zk verify-batch --json ./batch.json
-```
-
-List background prover reports and fetch one (non‑consensus):
-
-```bash
-iroha app zk prover reports list
-iroha app zk prover reports get --id 0123ab...
-```
-
-Count prover reports matching filters (server‑side):
-
-```bash
-# Total count
-iroha app zk prover reports count
-
-# Only Norito reports with a specific ZK1 tag
-iroha app zk prover reports count --content-type application/x-norito --has-tag IPAK
-
-# Only successful reports since a timestamp (ms)
-iroha app zk prover reports count --ok-only --since-ms 1725500000000
-```
-
-Server‑side bulk cleanup (dangerous; use filters + --yes):
-
-```bash
-# Dry‑run: show what would be deleted (client lists, server filters applied by CLI)
-iroha app zk prover reports cleanup --failed-only --content-type application/x-norito
-
-# Server‑side delete of matching reports (confirm with --yes)
-iroha app zk prover reports cleanup --server --yes --failed-only --content-type application/x-norito --since-ms 1725500000000
-
-# Delete within a time window [since_ms, before_ms]
-iroha app zk prover reports cleanup --server --yes \
-  --content-type application/x-norito \
-  --since-ms 1725500000000 \
-  --before-ms 1725600000000
 ```
 
 Run the full sample sequence:

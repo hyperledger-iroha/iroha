@@ -1,16 +1,19 @@
 impl MergeLedgerLog {
+    #[cfg(test)]
     fn snapshot(&self) -> Vec<MergeLedgerEntry> {
         self.entries.clone()
     }
-    fn latest_snapshot(&self, limit: usize) -> Vec<MergeLedgerEntry> {
-        self.entries.iter().rev().take(limit).cloned().collect()
+    fn latest_snapshot(&self, limit: usize) -> Result<Vec<MergeLedgerEntry>> {
+        self.ensure_history_available()?;
+        Ok(self.entries.iter().rev().take(limit).cloned().collect())
     }
-    fn contains_hash(&mut self, hash: HashOf<MergeLedgerEntry>) -> bool {
+    fn contains_hash(&mut self, hash: HashOf<MergeLedgerEntry>) -> Result<bool> {
+        self.ensure_history_available()?;
         #[cfg(test)]
         {
             self.indexed_membership_checks = self.indexed_membership_checks.saturating_add(1);
         }
-        self.frames_by_hash.contains_key(&hash)
+        Ok(self.frames_by_hash.contains_key(&hash))
     }
     /// Provisional snapshot authentication must not open, create, or repair the
     /// unauthenticated durable merge log.
@@ -132,6 +135,7 @@ impl MergeLedgerLog {
         &mut self,
         identities: &BTreeSet<(LaneId, DataSpaceId, Hash, u64, u64)>,
     ) -> Result<BTreeMap<(LaneId, DataSpaceId, Hash, u64, u64), HashOf<MergeLedgerEntry>>> {
+        self.ensure_history_available()?;
         if identities.len() > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
             return Err(Error::MergeCarrierConflict(
                 "exact merge execution reconstruction exceeds its identity bound".to_owned(),
@@ -210,6 +214,7 @@ impl MergeLedgerLog {
         hash: HashOf<MergeLedgerEntry>,
         repair_append_tail: bool,
     ) -> Result<Option<MergeLedgerEntry>> {
+        self.ensure_history_available()?;
         if repair_append_tail {
             self.recover_failed_append_tail()?;
         } else if self.append_recovery_offset.is_some() {

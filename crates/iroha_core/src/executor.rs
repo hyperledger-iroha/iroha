@@ -5814,7 +5814,7 @@ impl Executor {
         host.set_crypto_config(Arc::clone(&state_transaction.crypto));
         host.set_zk_config(&state_transaction.zk);
         host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
-        host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
+        host.set_vrf_epoch_seeds_from_state(state_transaction);
         host.set_query_state(state_transaction);
         host.set_contract_runtime_context(contract_runtime_context.clone());
         host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
@@ -6635,7 +6635,7 @@ impl Executor {
                         host.set_public_inputs_from_parameters(
                             state_transaction.world.parameters.get(),
                         );
-                        host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
+                        host.set_vrf_epoch_seeds_from_state(state_transaction);
                         host.set_query_state(state_transaction);
                         host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
                         crate::pipeline::overlay::apply_streaming_metadata(
@@ -6817,7 +6817,7 @@ impl Executor {
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
                 host.set_zk_config(&state_transaction.zk);
                 host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
-                host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
+                host.set_vrf_epoch_seeds_from_state(state_transaction);
                 host.set_query_state(state_transaction);
                 host.set_contract_runtime_context(contract_runtime_context.clone());
                 host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
@@ -9317,9 +9317,10 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-    // Cross-border settlement, relays, and public governance mutations either
-    // require an exact Core-enforced permission or consume a cryptographically
-    // verified, replay-protected proof. Keep the signed governance draft surface
+    // Cross-border settlement, relays, scoped governance mutations, and
+    // authority-bound public agenda intake reach Core only where it enforces an
+    // exact permission or proof, or persists the exact signed authority after
+    // canonical payload validation. Keep the signed governance draft surface
     // usable while the fail-safe Initial executor is active; the lower-level
     // `zk::SubmitBallot` vendor instruction remains IVM-latch-only below.
     if is_any!(
@@ -9333,18 +9334,16 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::governance::ProposeDeployContract,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
-        iroha_data_model::isi::governance::EnactSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle,
         iroha_data_model::isi::governance::ProposeValidationFeePolicy,
-        iroha_data_model::isi::governance::ApproveGovernanceProposal,
-        iroha_data_model::isi::governance::CastParliamentBallot,
+        iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1,
+        iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
         iroha_data_model::isi::governance::CastZkBallot,
         iroha_data_model::isi::governance::CastPlainBallot,
         iroha_data_model::isi::governance::SlashGovernanceLock,
         iroha_data_model::isi::governance::RestituteGovernanceLock,
         iroha_data_model::isi::governance::RecordCitizenServiceOutcome,
-        iroha_data_model::isi::governance::FinalizeReferendum,
-        iroha_data_model::isi::governance::EnactReferendum,
+        iroha_data_model::isi::ministry::SubmitAgendaProposal,
         iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay,
         iroha_data_model::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
         iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators,
@@ -11647,6 +11646,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorization() {
+        use iroha_data_model::governance::types::{AbiVersion, ContractAbiHash, ContractCodeHash};
         use iroha_data_model::isi::governance as gov;
         use iroha_executor_data_model::permission::governance::{
             CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRecordCitizenService,
@@ -11683,24 +11683,17 @@ mod tests {
             (
                 gov::ProposeDeployContract {
                     contract_address: contract_address.clone(),
-                    code_hash_hex: "11".repeat(32),
-                    abi_hash_hex: hex::encode(abi_hash),
-                    abi_version: " 1".to_owned(),
-                    window: None,
-                    mode: Some(gov::VotingMode::Zk),
+                    code_hash: ContractCodeHash::new([0x11; 32]),
+                    abi_hash: ContractAbiHash::new(abi_hash),
+                    abi_version: AbiVersion::new(2),
                     manifest_provenance: None,
                 }
                 .into(),
                 "CanProposeContractDeployment",
-                "exact string `1`",
+                "abi_version must be exactly 1",
             ),
             (
-                gov::ProposeRuntimeUpgradeProposal {
-                    manifest,
-                    window: None,
-                    mode: Some(gov::VotingMode::Plain),
-                }
-                .into(),
+                gov::ProposeRuntimeUpgradeProposal { manifest }.into(),
                 "CanProposeRuntimeUpgrade",
                 "runtime upgrade window",
             ),
@@ -11888,76 +11881,68 @@ mod tests {
         );
     }
     #[test]
-    fn initial_executor_requires_exact_enactment_permission_before_state_lookup() {
-        use iroha_data_model::isi::governance::{AtWindow, EnactReferendum};
-        use iroha_executor_data_model::permission::governance::CanEnactGovernance;
-        let authority = checked_account_id();
-        let account = Account::new(authority.clone()).build(&authority);
-        let mut world = World::with([], [account], []);
-        world.account_permissions.insert(
-            authority.clone(),
-            BTreeSet::from([Permission::new(
-                "CanEnactGovernance".to_owned(),
-                Json::from(norito::json!({ "unexpected": true })),
-            )]),
-        );
-        let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
-        let mut state_transaction = block.transaction();
-        let proposal_id = [0xA6; 32];
-        let instruction: InstructionBox = EnactReferendum {
-            referendum_id: proposal_id,
-            preimage_hash: proposal_id,
-            at_window: AtWindow { lower: 1, upper: 1 },
+    fn initial_executor_keeps_explicitly_standalone_referendum_ballots() {
+        use iroha_data_model::isi::governance::{CastPlainBallot, CastZkBallot};
+
+        let ballots = [
+            InstructionBox::from(CastPlainBallot {
+                referendum_id: "standalone-plain".to_owned(),
+                owner: checked_account_id(),
+                amount: 1_u64.into(),
+                duration_blocks: 1,
+                direction: 0,
+            }),
+            InstructionBox::from(CastZkBallot {
+                election_id: "standalone-zk".to_owned(),
+                proof_b64: "AA==".to_owned(),
+                public_inputs_json: "{}".to_owned(),
+            }),
+        ];
+        for ballot in &ballots {
+            assert!(
+                initial_native_instruction_is_explicitly_admitted(ballot),
+                "standalone referendum ballot must remain reachable after Parliament cutover"
+            );
+        }
+    }
+    #[test]
+    fn initial_executor_admits_public_ministry_agenda_submissions() {
+        use iroha_data_model::{
+            isi::ministry::SubmitAgendaProposal,
+            ministry::{
+                AGENDA_PROPOSAL_VERSION_V1, AgendaProposalAction, AgendaProposalSubmitter,
+                AgendaProposalSummary, AgendaProposalV1,
+            },
+        };
+        let instruction: InstructionBox = SubmitAgendaProposal {
+            proposal: AgendaProposalV1 {
+                version: AGENDA_PROPOSAL_VERSION_V1,
+                proposal_id: "AC-2026-001".to_owned(),
+                submitted_at_unix_ms: 1,
+                language: "en".to_owned(),
+                action: AgendaProposalAction::AmendPolicy,
+                summary: AgendaProposalSummary {
+                    title: "Public agenda proposal".to_owned(),
+                    motivation: "Exercise the signed public submission surface.".to_owned(),
+                    expected_impact: "The initial executor reaches exact Core validation."
+                        .to_owned(),
+                },
+                tags: Vec::new(),
+                targets: Vec::new(),
+                evidence: Vec::new(),
+                submitter: AgendaProposalSubmitter {
+                    name: "Citizen".to_owned(),
+                    contact: "citizen@example.org".to_owned(),
+                    organization: None,
+                    pgp_fingerprint: None,
+                },
+                duplicates: Vec::new(),
+            },
         }
         .into();
-        assert!(initial_native_instruction_is_explicitly_admitted(
-            &instruction
-        ));
-        let error = super::Executor::Initial
-            .execute_instruction(&mut state_transaction, &authority, instruction.clone())
-            .expect_err("a malformed same-name permission must not authorize enactment");
         assert!(
-            matches!(
-                error,
-                ValidationFail::InstructionFailed(
-                    InstructionExecutionError::InvariantViolation(ref message)
-                ) if message.as_ref() == "not permitted: exact CanEnactGovernance required"
-            ),
-            "unexpected malformed-token rejection: {error:?}"
-        );
-        assert!(
-            state_transaction
-                .world
-                .governance_proposals
-                .iter()
-                .next()
-                .is_none()
-        );
-        assert!(
-            state_transaction
-                .world
-                .governance_referenda
-                .iter()
-                .next()
-                .is_none()
-        );
-        assert!(state_transaction.world.elections.iter().next().is_none());
-        state_transaction.world.account_permissions.insert(
-            authority.clone(),
-            BTreeSet::from([Permission::from(CanEnactGovernance)]),
-        );
-        let error = super::Executor::Initial
-            .execute_instruction(&mut state_transaction, &authority, instruction)
-            .expect_err("the exact permission must reach proposal validation");
-        assert!(
-            matches!(
-                error,
-                ValidationFail::InstructionFailed(
-                    InstructionExecutionError::InvariantViolation(ref message)
-                ) if message.as_ref() == "governance proposal not found"
-            ),
-            "exact enactment permission did not reach Core validation: {error:?}"
+            initial_native_instruction_is_explicitly_admitted(&instruction),
+            "signed public Ministry proposals must reach exact Core validation"
         );
     }
     #[test]
@@ -12009,30 +11994,6 @@ mod tests {
                 "{error:?}"
             );
         }
-        // Referendum finalization is intentionally permissionless once its
-        // authenticated governance records exist. A fabricated identifier must
-        // instead fail closed on the missing proposal before any finalization.
-        let forced_proposal_id = [0xA5; 32];
-        let error = super::Executor::Initial
-            .execute_instruction(
-                &mut state_transaction,
-                &attacker,
-                iroha_data_model::isi::governance::FinalizeReferendum {
-                    referendum_id: hex::encode(forced_proposal_id),
-                    proposal_id: forced_proposal_id,
-                }
-                .into(),
-            )
-            .expect_err("a fabricated referendum must not mutate governance state");
-        assert!(
-            matches!(
-                error,
-                ValidationFail::InstructionFailed(
-                    InstructionExecutionError::InvariantViolation(ref message)
-                ) if message.as_ref() == "governance proposal not found"
-            ),
-            "{error:?}"
-        );
         assert!(matches!(
             &*state_transaction.world.executor,
             super::Executor::Initial

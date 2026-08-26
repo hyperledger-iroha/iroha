@@ -5,7 +5,7 @@ use std::{
     thread,
     time::Duration,
 };
-const STUB_STATUS_BODY: &str = "{\"alias\":\"雅\",\"peers\":2,\"blocks\":5,\"blocks_non_empty\":4,\"commit_time_ms\":110,\"txs_approved\":20,\"txs_rejected\":1,\"queue_size\":1,\"uptime\":10,\"view_changes\":0,\"governance\":{\"proposals\":{\"proposed\":0,\"approved\":0,\"rejected\":0,\"enacted\":0},\"protected_namespace\":{\"total_checks\":0,\"allowed\":0,\"rejected\":0},\"manifest_quorum\":{\"total_checks\":0,\"satisfied\":0,\"rejected\":0},\"recent_manifest_activations\":[]}}";
+const STUB_STATUS_BODY: &str = "{\"alias\":\"雅\",\"peers\":2,\"blocks\":5,\"blocks_non_empty\":4,\"commit_time_ms\":110,\"txs_approved\":20,\"txs_rejected\":1,\"queue_size\":1,\"uptime\":10,\"view_changes\":0,\"governance\":{\"proposals\":{\"proposed\":0,\"rejected\":0,\"enacted\":0,\"superseded\":0,\"execution_failed\":0},\"protected_namespace\":{\"total_checks\":0,\"allowed\":0,\"rejected\":0},\"manifest_quorum\":{\"total_checks\":0,\"satisfied\":0,\"rejected\":0},\"recent_manifest_activations\":[]}}";
 fn monitor_bin() -> Option<PathBuf> {
     std::env::var_os("CARGO_BIN_EXE_iroha_monitor").map(PathBuf::from)
 }

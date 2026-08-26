@@ -34,8 +34,7 @@ use iroha_core::soracloud_runtime::{
     SoracloudHostedHttpRuntimeStateV1, SoracloudLocalReadRequest, SoracloudLocalReadResponse,
     SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
     SoracloudRuntime, SoracloudRuntimeApartmentPlan, SoracloudRuntimeArtifactPlan,
-    SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
-    SoracloudRuntimeHfSourcePlan, SoracloudRuntimeHfSourceStatus, SoracloudRuntimeInrouPlan,
+    SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind, SoracloudRuntimeInrouPlan,
     SoracloudRuntimeLeaseVolumePlan, SoracloudRuntimeMailboxPlan, SoracloudRuntimeReadHandle,
     SoracloudRuntimeReplicaPlan, SoracloudRuntimeRevisionRole, SoracloudRuntimeServicePlan,
     SoracloudRuntimeSnapshot,
@@ -44,9 +43,9 @@ use iroha_core::state::{State, StateView, WorldReadOnly};
 use iroha_core::{
     executor::quote_nexus_fee_admission_draft, queue::Queue, tx::AcceptedTransaction,
 };
+use iroha_crypto::Hash;
 #[cfg(test)]
 use iroha_crypto::KeyPair;
-use iroha_crypto::{Hash, sha256_reader_bounded};
 #[cfg(test)]
 use iroha_data_model::soracloud::SoraNetworkAllowlistEntryV1;
 #[cfg(test)]
@@ -63,34 +62,31 @@ use iroha_data_model::{
     nexus::PublicLaneValidatorStatus,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
-        SORA_HF_WEIGHT_FILE_EXTENSIONS_V1, SORA_HTTP_SERVICE_REPLICA_MAX_V1,
-        SORA_INROU_DATA_VOLUME_MOUNT_ROOT_V1, SORA_INROU_GUEST_IMAGE_MAX_MEMBERS_V1,
-        SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
-        SORA_INROU_MAX_VCPUS_V1, SORA_INROU_PORTABLE_PATH_MAX_COMPONENTS_V1,
-        SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1, SORA_RUNTIME_RECEIPT_VERSION_V1,
-        SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
+        SORA_HTTP_SERVICE_REPLICA_MAX_V1, SORA_INROU_DATA_VOLUME_MOUNT_ROOT_V1,
+        SORA_INROU_GUEST_IMAGE_MAX_MEMBERS_V1, SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+        SORA_INROU_HOSTED_REPLICA_CAPACITY_V1, SORA_INROU_MAX_VCPUS_V1,
+        SORA_INROU_PORTABLE_PATH_MAX_COMPONENTS_V1, SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
+        SORA_RUNTIME_RECEIPT_VERSION_V1, SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
         SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1, SORACLOUD_HOST_RESPONSE_VERSION_V1,
         SoraAgentApartmentRecordV1, SoraArtifactKindV1, SoraCertifiedResponsePolicyV1,
         SoraConfigExportTargetV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
-        SoraHfModelFormatV1, SoraHfResourceProfileV1, SoraHfSharedLeaseMemberStatusV1,
-        SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1, SoraHfWeightSelectionV1,
         SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1, SoraInrouReplicaPlacementV1,
-        SoraInrouReplicaRuntimeStateV1, SoraLeaseVolumeKindV1, SoraModelHostViolationKindV1,
-        SoraNetworkPolicyV1, SoraPublishedInrouGuestImageArtifactV1, SoraResourceLimitsV1,
-        SoraRolloutStageV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
-        SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-        SoraServiceHealthStatusV1, SoraServiceLeaseStatusV1, SoraServiceLifecycleActionV1,
-        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraServiceStateEntryV1,
-        SoraStateBindingV1, SoraStateMutationOperationV1, SoracloudAppendJournalResponseV1,
+        SoraInrouReplicaRuntimeStateV1, SoraLeaseVolumeKindV1, SoraNetworkPolicyV1,
+        SoraPublishedInrouGuestImageArtifactV1, SoraResourceLimitsV1, SoraRolloutStageV1,
+        SoraRouteVisibilityV1, SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1,
+        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceHealthStatusV1,
+        SoraServiceLeaseStatusV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
+        SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraStateBindingV1,
+        SoraStateMutationOperationV1, SoracloudAppendJournalResponseV1,
         SoracloudEmitMailboxMessageRequestV1, SoracloudEmitMailboxMessageResponseV1,
         SoracloudEmitStateMutationRequestV1, SoracloudEmitStateMutationResponseV1,
         SoracloudHostOperationV1, SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
         SoracloudHostResponseEnvelopeV1, SoracloudHostResponsePayloadV1,
         SoracloudPublishCheckpointResponseV1, SoracloudReadCommittedStateResponseV1,
         SoracloudReadConfigResponseV1, SoracloudReadSecretEnvelopeResponseV1,
-        derive_hf_weight_selection_v1, encode_inrou_host_advertise_provenance_payload,
-        encode_inrou_host_withdraw_provenance_payload, is_canonical_hf_commit_oid_v1,
-        is_canonical_hf_repo_id_v1, sora_inrou_data_volume_mount_path_v1,
+        derive_soracloud_local_read_receipt_id_v1, derive_soracloud_mailbox_message_id_v1,
+        encode_inrou_host_advertise_provenance_payload,
+        encode_inrou_host_withdraw_provenance_payload, sora_inrou_data_volume_mount_path_v1,
     },
     sorafs::pin_registry::ManifestDigest,
     transaction::{TransactionBuilder, TransactionPayload},
@@ -138,7 +134,7 @@ use std::os::unix::net::UnixStream;
 #[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt as _;
 use std::{
-    cmp::{Ordering, Reverse},
+    cmp::Reverse,
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
     fs,
@@ -150,7 +146,7 @@ use std::{
     process::{Command, Stdio},
     str::FromStr,
     sync::{
-        Arc, OnceLock, Weak,
+        Arc,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
         mpsc,
     },
@@ -235,8 +231,6 @@ fn inrou_stock_self_executable_custody_is_admitted(
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn dispatch_inrou_internal_launcher_if_requested() {}
 
-const MODEL_HOST_VIOLATION_REPORT_COOLDOWN_MS: u64 = 30_000;
-const SORACLOUD_COOLDOWN_TRACKER_MAX_ENTRIES: usize = 4_096;
 const INROU_HOST_ADVERT_ATTEMPT_COOLDOWN_MS: u64 = 10_000;
 const INROU_HOST_HEARTBEAT_TTL_FLOOR_MS: u64 = 300_000;
 // Avoid rewriting authoritative adverts just to push the same heartbeat expiry forward.
@@ -352,27 +346,10 @@ const SORACLOUD_INROU_QEMU_SANDBOX_POLICY: &str =
     "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny";
 const SORACLOUD_INROU_LOG_TRUNCATION_MARKER: &[u8] =
     b"\n[Inrou runtime log truncated at the configured safety limit]\n";
-const SORACLOUD_HF_IMPORT_MANIFEST_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_MAX_REPLICAS: usize = 4_096;
 const SORACLOUD_RUNTIME_STATE_MAX_STRING_BYTES: usize = 4 * 1024;
 const SORACLOUD_RUNTIME_STDERR_TAIL_BYTES: u64 = 64 * 1024;
-const SORACLOUD_HF_MODEL_INFO_MAX_TAGS: usize = 1_024;
-const SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES: usize = 4 * 1024;
-const SORACLOUD_HF_IMPORT_MAX_RECORDED_SKIPS: usize = 512;
-const SORACLOUD_HF_IMPORT_MANIFEST_MAX_FILES: usize = 128;
-const SORACLOUD_HF_IMPORT_MAX_PATH_COMPONENTS_V1: usize = 64;
-const SORACLOUD_HF_IMPORT_CACHE_MAX_ENTRIES_V1: usize =
-    SORACLOUD_HF_IMPORT_MANIFEST_MAX_FILES * (SORACLOUD_HF_IMPORT_MAX_PATH_COMPONENTS_V1 + 1) + 1;
-const SORACLOUD_HF_IMPORT_GENERATIONS_DIRECTORY_V1: &str = "generations";
-const SORACLOUD_HF_IMPORT_CURRENT_GENERATION_FILE_V1: &str = "current";
-const SORACLOUD_HF_IMPORT_GENERATION_MUTATION_LOCK_FILE_V1: &str = ".mutation.lock";
-const SORACLOUD_HF_IMPORT_GENERATION_PREFIX_V1: &str = "generation-";
-const SORACLOUD_HF_IMPORT_GENERATION_RANDOM_BYTES_V1: usize = 16;
-const SORACLOUD_HF_IMPORT_GENERATION_MAX_DIRECTORY_ENTRIES_V1: usize = 32;
-const SORACLOUD_HF_IMPORT_MANIFEST_MAX_TOTAL_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-const SORACLOUD_HF_IMPORT_MANIFEST_MAX_ERROR_BYTES: usize = 64 * 1024;
-const SORACLOUD_HF_IMPORT_MANIFEST_MAX_TEXT_BYTES: usize = 8 * 1024;
 const SORACLOUD_ARTIFACT_CACHE_MAX_DIRECTORY_ENTRIES: usize = 65_536;
 const SORACLOUD_HYDRATION_MAX_REQUIRED_ARTIFACTS: usize = 65_536;
 const SORACLOUD_RUNTIME_ARTIFACT_PATH_MAX_BYTES: usize = 4 * 1024;
@@ -657,11 +634,9 @@ pub(crate) struct SoracloudRuntimeManagerConfig {
     pub submission: iroha_config::parameters::actual::SoracloudRuntimeSubmission,
     /// Outbound egress policy for embedded runtimes.
     pub egress: iroha_config::parameters::actual::SoracloudRuntimeEgress,
-    /// Hugging Face import settings; imported model bytes remain inert outside Inrou V1.
-    pub hf: iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
-    /// Local validator account used to enforce authoritative HF placement assignments.
+    /// Local validator account used to enforce authoritative Inrou placement assignments.
     pub local_validator_account_id: Option<AccountId>,
-    /// Local peer identifier used to confirm authoritative HF placement assignments.
+    /// Local peer identifier used to confirm authoritative Inrou placement assignments.
     pub local_peer_id: Option<String>,
 }
 /// Internal sink used by the runtime manager to enqueue authoritative Soracloud mutations.
@@ -1009,17 +984,48 @@ fn inrou_startup_probe_resources(
         max_tasks: std::num::NonZeroU16::new(1).expect("fixed nonzero probe task budget"),
     }
 }
+#[cfg(any(target_os = "linux", test))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct InrouWorkerTeardownAttestations {
+    direct_child_exited: bool,
+    cgroup_empty: bool,
+}
+#[cfg(any(target_os = "linux", test))]
+impl InrouWorkerTeardownAttestations {
+    const fn release_authorized(self) -> bool {
+        self.direct_child_exited && self.cgroup_empty
+    }
+}
 #[cfg(target_os = "linux")]
-fn terminate_inrou_startup_probe_bounded(
+fn terminate_inrou_confined_child_bounded(
     child: &mut std::process::Child,
     worker_cgroup: &mut inrou_cgroup::InrouWorkerCgroup,
     firewall: &mut Option<InrouLoopbackOwnerFirewall>,
+    label: &str,
 ) -> eyre::Result<std::process::ExitStatus> {
     let termination = terminate_inrou_child_bounded(child);
-    let cgroup_cleanup = worker_cgroup.cleanup_bounded();
-    match (termination, cgroup_cleanup) {
-        (Ok(status), Ok(())) => Ok(status),
-        (termination, cgroup_cleanup) => {
+    let cgroup_empty = worker_cgroup.kill_and_attest_empty_bounded();
+    let attestations = InrouWorkerTeardownAttestations {
+        direct_child_exited: termination.is_ok(),
+        cgroup_empty: cgroup_empty.is_ok(),
+    };
+    match (termination, cgroup_empty) {
+        (Ok(status), Ok(empty)) => {
+            debug_assert!(attestations.release_authorized());
+            if let Err(error) = worker_cgroup.release_attested_empty(empty) {
+                if let Some(firewall) = firewall.take() {
+                    std::mem::forget(firewall);
+                }
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "{label} child exited with {status} and its cgroup was proved empty, but the confined cgroup could not be released"
+                    )
+                });
+            }
+            Ok(status)
+        }
+        (termination, cgroup_empty) => {
+            debug_assert!(!attestations.release_authorized());
             if let Some(firewall) = firewall.take() {
                 // Neither a direct-child termination error nor an uncleared
                 // worker cgroup is enough proof that every QEMU descendant is
@@ -1027,24 +1033,32 @@ fn terminate_inrou_startup_probe_bounded(
                 // supervisor exit instead of exposing either loopback port.
                 std::mem::forget(firewall);
             }
-            match (termination, cgroup_cleanup) {
-                (Err(termination), Ok(())) => Err(termination).wrap_err(
-                    "Inrou startup-probe cgroup is empty, but direct-child termination is unproven",
-                ),
-                (Ok(status), Err(cgroup_cleanup)) => Err(cgroup_cleanup).wrap_err_with(|| {
+            match (termination, cgroup_empty) {
+                (Err(termination), Ok(_)) => Err(termination).wrap_err(format!(
+                    "{label} cgroup is empty, but direct-child termination is unproven; retaining the cgroup"
+                )),
+                (Ok(status), Err(cgroup_empty)) => Err(cgroup_empty).wrap_err_with(|| {
                     format!(
-                        "Inrou startup-probe child exited with {status}, but its cgroup could not be proved empty"
+                        "{label} child exited with {status}, but its cgroup could not be proved empty"
                     )
                 }),
-                (Err(termination), Err(cgroup_cleanup)) => Err(termination).wrap_err_with(|| {
+                (Err(termination), Err(cgroup_empty)) => Err(termination).wrap_err_with(|| {
                     format!(
-                        "Inrou startup-probe direct-child termination and cgroup cleanup both failed: {cgroup_cleanup}"
+                        "{label} direct-child termination and empty-cgroup attestation both failed: {cgroup_empty}"
                     )
                 }),
-                (Ok(_), Ok(())) => unreachable!("successful teardown returned above"),
+                (Ok(_), Ok(_)) => unreachable!("successful teardown returned above"),
             }
         }
     }
+}
+#[cfg(target_os = "linux")]
+fn terminate_inrou_startup_probe_bounded(
+    child: &mut std::process::Child,
+    worker_cgroup: &mut inrou_cgroup::InrouWorkerCgroup,
+    firewall: &mut Option<InrouLoopbackOwnerFirewall>,
+) -> eyre::Result<std::process::ExitStatus> {
+    terminate_inrou_confined_child_bounded(child, worker_cgroup, firewall, "Inrou startup probe")
 }
 #[cfg(target_os = "linux")]
 fn portable_vm_backend_static_preflight(
@@ -1081,6 +1095,9 @@ fn ensure_portable_vm_backend_available(
     config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
 ) -> eyre::Result<()> {
     let preflight = portable_vm_backend_static_preflight(config)?;
+    inrou_cgroup::attest_inrou_worker_absence().wrap_err(
+        "require an empty root-custodied Inrou worker subtree before startup qualification",
+    )?;
     run_inrou_portable_vm_startup_probe(config, preflight)
         .wrap_err("exercise the authenticated Inrou QEMU/KVM startup boundary")
 }
@@ -1294,13 +1311,26 @@ fn run_inrou_portable_vm_startup_probe(
                 });
             }
         };
-    if let Err(error) = worker_cgroup.cleanup_bounded() {
+    let empty_cgroup = match worker_cgroup.kill_and_attest_empty_bounded() {
+        Ok(empty_cgroup) => empty_cgroup,
+        Err(error) => {
+            if let Some(firewall) = loopback_firewall.take() {
+                // QMP quit reaped the direct child, but an uncleared cgroup
+                // leaves descendant termination unproven. Keep the barrier
+                // fail-closed.
+                std::mem::forget(firewall);
+            }
+            return Err(error)
+                .wrap_err("prove the QMP-stopped Inrou startup-probe cgroup is empty");
+        }
+    };
+    if let Err(error) = worker_cgroup.release_attested_empty(empty_cgroup) {
         if let Some(firewall) = loopback_firewall.take() {
-            // QMP quit reaped the direct child, but an uncleared cgroup leaves
-            // descendant termination unproven. Keep the barrier fail-closed.
             std::mem::forget(firewall);
         }
-        return Err(error).wrap_err("prove the QMP-stopped Inrou startup-probe cgroup is empty");
+        return Err(error).wrap_err(
+            "release the empty Inrou startup-probe cgroup after direct-child exit attestation",
+        );
     }
     if !status.success() {
         eyre::bail!("Inrou startup probe exited with non-success status {status}");
@@ -1454,143 +1484,6 @@ fn ensure_inrou_portable_vm_statically_available(
     }
     Ok(())
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ModelHostViolationReportKey {
-    validator_account_id: AccountId,
-    kind: SoraModelHostViolationKindV1,
-    placement_id: Option<Hash>,
-}
-impl ModelHostViolationReportKey {
-    fn kind_sort_key(kind: SoraModelHostViolationKindV1) -> u8 {
-        match kind {
-            SoraModelHostViolationKindV1::WarmupNoShow => 0,
-            SoraModelHostViolationKindV1::AssignedHeartbeatMiss => 1,
-            SoraModelHostViolationKindV1::AdvertContradiction => 2,
-        }
-    }
-}
-impl PartialOrd for ModelHostViolationReportKey {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for ModelHostViolationReportKey {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.validator_account_id
-            .cmp(&other.validator_account_id)
-            .then_with(|| Self::kind_sort_key(self.kind).cmp(&Self::kind_sort_key(other.kind)))
-            .then_with(|| self.placement_id.cmp(&other.placement_id))
-    }
-}
-fn bounded_cooldown_allows_attempt<K: Clone + Ord>(
-    attempts_ms: &mut BTreeMap<K, u64>,
-    key: &K,
-    now_ms: u64,
-    cooldown_ms: u64,
-    max_entries: usize,
-) -> bool {
-    attempts_ms.retain(|_, attempted_at_ms| now_ms.saturating_sub(*attempted_at_ms) < cooldown_ms);
-    if attempts_ms.contains_key(key) || attempts_ms.len() >= max_entries {
-        return false;
-    }
-    attempts_ms.insert(key.clone(), now_ms);
-    true
-}
-struct SoracloudModelHostViolationReporter {
-    mutation_sink: Option<Arc<dyn SoracloudRuntimeMutationSink>>,
-    recent_attempts_ms: Mutex<BTreeMap<ModelHostViolationReportKey, u64>>,
-}
-impl SoracloudModelHostViolationReporter {
-    fn disabled() -> Arc<Self> {
-        Arc::new(Self {
-            mutation_sink: None,
-            recent_attempts_ms: Mutex::new(BTreeMap::new()),
-        })
-    }
-    fn with_mutation_sink(mutation_sink: Arc<dyn SoracloudRuntimeMutationSink>) -> Arc<Self> {
-        Arc::new(Self {
-            mutation_sink: Some(mutation_sink),
-            recent_attempts_ms: Mutex::new(BTreeMap::new()),
-        })
-    }
-    fn report(
-        &self,
-        view: &StateView<'_>,
-        validator_account_id: &AccountId,
-        kind: SoraModelHostViolationKindV1,
-        placement_id: Option<Hash>,
-        detail: Option<String>,
-    ) {
-        let Some(mutation_sink) = self.mutation_sink.as_ref() else {
-            return;
-        };
-        let key = ModelHostViolationReportKey {
-            validator_account_id: validator_account_id.clone(),
-            kind,
-            placement_id,
-        };
-        if self.authoritative_evidence_exists(view, &key) || !self.cooldown_allows_attempt(&key) {
-            return;
-        }
-        let log_key = key.clone();
-        let instruction = InstructionBox::from(isi::soracloud::ReportSoracloudModelHostViolation {
-            validator_account_id: key.validator_account_id.clone(),
-            kind: key.kind,
-            placement_id: key.placement_id,
-            detail,
-        });
-        if let Err(error) = mutation_sink.submit_instruction(
-            instruction,
-            "/internal/soracloud/runtime/model-host-violation",
-        ) {
-            iroha_logger::warn!(
-                ?error,
-                validator_account_id = %log_key.validator_account_id,
-                kind = ?log_key.kind,
-                placement_id = ?log_key.placement_id,
-                "failed to submit Soracloud model-host violation from runtime health"
-            );
-            return;
-        }
-        if let Err(error) = mutation_sink.submit_instruction(
-            InstructionBox::from(isi::soracloud::ReconcileSoracloudModelHosts),
-            "/internal/soracloud/runtime/model-host-reconcile",
-        ) {
-            iroha_logger::warn!(
-                ?error,
-                validator_account_id = %log_key.validator_account_id,
-                kind = ?log_key.kind,
-                placement_id = ?log_key.placement_id,
-                "failed to submit Soracloud model-host reconcile after runtime health report"
-            );
-        }
-    }
-    fn authoritative_evidence_exists(
-        &self,
-        view: &StateView<'_>,
-        key: &ModelHostViolationReportKey,
-    ) -> bool {
-        view.world()
-            .soracloud_model_host_violation_evidence()
-            .iter()
-            .any(|(_evidence_id, record)| {
-                record.validator_account_id == key.validator_account_id
-                    && record.kind == key.kind
-                    && record.placement_id == key.placement_id
-            })
-    }
-    fn cooldown_allows_attempt(&self, key: &ModelHostViolationReportKey) -> bool {
-        let now_ms = soracloud_runtime_observed_at_ms();
-        let mut recent_attempts_ms = self.recent_attempts_ms.lock();
-        bounded_cooldown_allows_attempt(
-            &mut recent_attempts_ms,
-            key,
-            now_ms,
-            MODEL_HOST_VIOLATION_REPORT_COOLDOWN_MS,
-            SORACLOUD_COOLDOWN_TRACKER_MAX_ENTRIES,
-        )
-    }
-}
 impl SoracloudRuntimeManagerConfig {
     /// Build a runtime-manager configuration from the parsed Soracloud runtime settings.
     #[must_use]
@@ -1607,7 +1500,6 @@ impl SoracloudRuntimeManagerConfig {
             inrou: config.inrou.clone(),
             submission: config.submission.clone(),
             egress: config.egress.clone(),
-            hf: config.hf.clone(),
             local_validator_account_id: None,
             local_peer_id: None,
         }
@@ -2495,7 +2387,7 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
             };
         let public_inputs = match ordered_mailbox_public_inputs(
             &mailbox_payload_tlv,
-            request.execution_sequence,
+            request.observed_sequence,
             request.observed_height,
         ) {
             Ok(public_inputs) => public_inputs,
@@ -2531,7 +2423,7 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                 ));
             }
         };
-        vm.set_register(11, request.execution_sequence);
+        vm.set_register(11, request.observed_sequence);
         vm.set_register(12, request.observed_height);
         if let Err(error) = vm.run() {
             return Ok(deterministic_mailbox_failure_result(
@@ -2602,8 +2494,18 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                 ),
             ));
         }
+        let runtime_status = record.runtime_status_at_current_height(committed_height(&view));
+        if runtime_status == iroha_data_model::soracloud::SoraAgentRuntimeStatusV1::LeaseExpired {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!(
+                    "apartment `{}` lease expired at consensus height {}; renew before execution",
+                    request.apartment_name, record.lease_expires_height
+                ),
+            ));
+        }
         Ok(SoracloudApartmentExecutionResult {
-            status: record.status,
+            status: runtime_status,
             checkpoint_artifact_hash: None,
             journal_artifact_hash: None,
             result_commitment: apartment_result_commitment(
@@ -2611,7 +2513,7 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                 request.process_generation,
                 &request.operation,
                 request.request_commitment,
-                record.status,
+                runtime_status,
             ),
         })
     }
@@ -3046,7 +2948,7 @@ impl SoracloudIvmHost {
                         fhe_public_key_digest: None,
                         fhe_residual_multiple_bound: None,
                         fhe_bound_mode: None,
-                        last_update_sequence: self.request.execution_sequence,
+                        last_update_sequence: self.request.observed_sequence,
                         governance_tx_hash: self.request.mailbox_message.payload_commitment,
                         source_action: SoraServiceLifecycleActionV1::StateMutation,
                     },
@@ -3111,7 +3013,7 @@ impl SoracloudIvmHost {
     ) -> Result<SoracloudEmitMailboxMessageResponseV1, VMError> {
         self.require_mutating_runtime(SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE)?;
         let payload_commitment = Hash::new(&request.payload_bytes);
-        let message_id = Hash::new(Encode::encode(&(
+        let staged_message_id = Hash::new(Encode::encode(&(
             "soracloud.host.mailbox.v1",
             self.request.mailbox_message.message_id,
             self.request.deployment.service_name.as_ref(),
@@ -3119,28 +3021,29 @@ impl SoracloudIvmHost {
             request.to_service.as_ref(),
             request.to_handler.as_ref(),
             payload_commitment,
-            request.available_after_sequence,
-            request.expires_at_sequence,
+            request.delivery_delay_blocks,
             u64::try_from(self.staged_outbound_mailbox_messages.len()).unwrap_or(u64::MAX),
         )));
         self.staged_outbound_mailbox_messages
             .push(SoraServiceMailboxMessageV1 {
                 schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
-                message_id,
+                message_id: Hash::prehashed([0; Hash::LENGTH]),
                 from_service: self.request.deployment.service_name.clone(),
+                from_service_version: String::new(),
                 from_handler: self.request.mailbox_message.to_handler.clone(),
                 to_service: request.to_service,
+                to_service_version: String::new(),
                 to_handler: request.to_handler,
                 payload_bytes: request.payload_bytes,
                 payload_commitment,
-                enqueue_sequence: self.request.execution_sequence,
-                available_after_sequence: request
-                    .available_after_sequence
-                    .max(self.request.execution_sequence),
-                expires_at_sequence: request.expires_at_sequence,
+                delivery_delay_blocks: request.delivery_delay_blocks,
+                enqueue_sequence: 0,
+                enqueue_height: 0,
+                available_after_height: 0,
+                expires_at_height: 0,
             });
         Ok(SoracloudEmitMailboxMessageResponseV1 {
-            message_id,
+            message_id: staged_message_id,
             payload_commitment,
         })
     }
@@ -3246,11 +3149,9 @@ impl SoracloudIvmHost {
             self.state_dir.join("checkpoints"),
             self.staged_checkpoint.as_ref(),
         )?;
-        let runtime_state = updated_runtime_state_with_outbound_mailbox(
+        let runtime_state = updated_runtime_state(
             self.request.runtime_state.clone(),
-            &self.request,
             SoraServiceHealthStatusV1::Healthy,
-            &self.staged_outbound_mailbox_messages,
         );
         let result_commitment = authoritative_mailbox_result_commitment(
             &self.request,
@@ -3262,39 +3163,32 @@ impl SoracloudIvmHost {
             journal_artifact_hash,
             checkpoint_artifact_hash,
         );
-        let receipt_id = Hash::new(Encode::encode(&(
-            "soracloud:runtime-receipt:v1",
-            self.request.mailbox_message.message_id,
-            self.request.deployment.service_name.as_ref(),
-            self.request.deployment.current_service_version.as_str(),
-            self.request.mailbox_message.to_handler.as_ref(),
-            self.request.execution_sequence,
+        let mut runtime_receipt = SoraRuntimeReceiptV1 {
+            schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
+            receipt_id: Hash::prehashed([0; Hash::LENGTH]),
+            service_name: self.request.deployment.service_name.clone(),
+            service_version: self.request.deployment.current_service_version.clone(),
+            handler_name: self.request.mailbox_message.to_handler.clone(),
+            handler_class,
+            request_commitment: self.request.mailbox_message.payload_commitment,
             result_commitment,
-        )));
+            certified_by: SoraCertifiedResponsePolicyV1::None,
+            emitted_sequence: 0,
+            execution_host: None,
+            mailbox_message_id: Some(self.request.mailbox_message.message_id),
+            journal_artifact_hash,
+            checkpoint_artifact_hash,
+        };
+        runtime_receipt.receipt_id =
+            iroha_core::soracloud_runtime::ordered_mailbox_runtime_receipt_id(&runtime_receipt)
+                .expect("ordered mailbox runtime receipt carries its source message");
         Ok(SoracloudOrderedMailboxExecutionResult {
             state_mutations: self.staged_state_mutations,
             outbound_mailbox_messages: self.staged_outbound_mailbox_messages,
             response_bytes,
             content_type,
             runtime_state: Some(runtime_state),
-            runtime_receipt: SoraRuntimeReceiptV1 {
-                schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
-                receipt_id,
-                service_name: self.request.deployment.service_name,
-                service_version: self.request.deployment.current_service_version,
-                handler_name: self.request.mailbox_message.to_handler.clone(),
-                handler_class,
-                request_commitment: self.request.mailbox_message.payload_commitment,
-                result_commitment,
-                certified_by: SoraCertifiedResponsePolicyV1::None,
-                emitted_sequence: self.request.execution_sequence,
-                mailbox_message_id: Some(self.request.mailbox_message.message_id),
-                journal_artifact_hash,
-                checkpoint_artifact_hash,
-                placement_id: None,
-                selected_validator_account_id: None,
-                selected_peer_id: None,
-            },
+            runtime_receipt,
         })
     }
     fn local_read_bindings(&self) -> Vec<iroha_core::soracloud_runtime::SoracloudLocalReadBinding> {
@@ -3597,98 +3491,9 @@ struct ResolvedLocalReadContext {
     bundle: SoraDeploymentBundleV1,
     handler: SoraServiceHandlerV1,
 }
-const HF_LOCAL_IMPORT_SCHEMA_VERSION_V1: u16 = 1;
-#[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-struct HfImportedFileV1 {
-    path: String,
-    content_length: u64,
-    payload_hash: String,
-    #[norito(required)]
-    lfs_sha256: Option<String>,
-}
-#[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-struct HfRequiredWeightFileV1 {
-    path: String,
-    content_length: u64,
-    lfs_sha256: String,
-}
-#[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-struct HfLocalImportManifestV1 {
-    schema_version: u16,
-    source_id: String,
-    repo_id: String,
-    requested_revision: String,
-    #[norito(required)]
-    resolved_commit: Option<String>,
-    model_name: String,
-    adapter_id: String,
-    #[norito(required)]
-    pipeline_tag: Option<String>,
-    #[norito(required)]
-    library_name: Option<String>,
-    tags: Vec<String>,
-    imported_at_ms: u64,
-    #[norito(required)]
-    model_info_content_length: Option<u64>,
-    #[norito(required)]
-    model_info_payload_hash: Option<String>,
-    #[norito(required)]
-    selected_weight_format: Option<SoraHfModelFormatV1>,
-    required_weight_files: Vec<HfRequiredWeightFileV1>,
-    #[norito(required)]
-    weight_selection_commitment: Option<String>,
-    imported_files: Vec<HfImportedFileV1>,
-    skipped_files: Vec<String>,
-    #[norito(required)]
-    import_error: Option<String>,
-}
-#[derive(Clone)]
-struct PinnedHfImportGeneration {
-    #[cfg(test)]
-    name: String,
-    root: PathBuf,
-    files_root: PathBuf,
-    manifest: HfLocalImportManifestV1,
-    _pin: Arc<()>,
-}
-struct HfImportGenerationStaging {
-    name: String,
-    source_root: PathBuf,
-    generations_root: PathBuf,
-    staging_root: PathBuf,
-    files_root: PathBuf,
-    published: bool,
-    _mutation_lock: fs::File,
-}
-impl Drop for HfImportGenerationStaging {
-    fn drop(&mut self) {
-        if self.published {
-            return;
-        }
-        if let Ok(metadata) = fs::symlink_metadata(&self.staging_root)
-            && metadata.is_dir()
-            && !metadata.file_type().is_symlink()
-        {
-            let _ = fs::remove_dir_all(&self.staging_root);
-            #[cfg(unix)]
-            let _ =
-                fs::File::open(&self.generations_root).and_then(|directory| directory.sync_all());
-        }
-    }
-}
-static HF_IMPORT_GENERATION_PINS_V1: OnceLock<Mutex<BTreeMap<PathBuf, Weak<()>>>> = OnceLock::new();
-type HostedHttpReporterKey = (String, String, u64, u16, String);
+type HostedHttpReporterKey = (String, String, u64, u64, u16, String);
 type HostedHttpReplicaStateKey = (String, String, u16, String);
-type HostedHttpRevisionKey = (String, String, u64);
+type HostedHttpRevisionKey = (String, String, u64, u64);
 type SharedHostedHttpWorkers =
     Arc<Mutex<BTreeMap<HostedHttpReporterKey, Arc<Mutex<HostedHttpWorker>>>>>;
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3735,17 +3540,20 @@ struct HostedHttpLeaseUsageSubmissionAttempt {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct HostedHttpReporterCheckpointState {
+    lease_started_height: u64,
     reporting_epoch: u64,
     accounted_egress_bytes: u64,
     finalize_reporter: bool,
 }
 fn hosted_http_reporter_checkpoint_is_current_open(
     authoritative: Option<HostedHttpReporterCheckpointState>,
+    lease_started_height: u64,
     reporting_epoch: u64,
     local_accounted_egress_bytes: u64,
 ) -> bool {
     authoritative
         == Some(HostedHttpReporterCheckpointState {
+            lease_started_height,
             reporting_epoch,
             accounted_egress_bytes: local_accounted_egress_bytes,
             finalize_reporter: false,
@@ -3828,7 +3636,6 @@ pub(crate) struct SoracloudRuntimeManager {
     state: Arc<State>,
     snapshot: Arc<RwLock<SoracloudRuntimeSnapshot>>,
     hosted_http_workers: SharedHostedHttpWorkers,
-    host_violation_reporter: Arc<SoracloudModelHostViolationReporter>,
     mutation_sink: Option<Arc<dyn SoracloudRuntimeMutationSink>>,
     last_inrou_host_advert_attempt_ms: Mutex<Option<u64>>,
     pending_inrou_host_capability_advert: Mutex<Option<SoraInrouHostCapabilityRecordV1>>,
@@ -4010,7 +3817,6 @@ impl SoracloudRuntimeManager {
             state,
             snapshot: Arc::new(RwLock::new(SoracloudRuntimeSnapshot::default())),
             hosted_http_workers: Arc::new(Mutex::new(BTreeMap::new())),
-            host_violation_reporter: SoracloudModelHostViolationReporter::disabled(),
             mutation_sink: None,
             last_inrou_host_advert_attempt_ms: Mutex::new(None),
             pending_inrou_host_capability_advert: Mutex::new(None),
@@ -4037,8 +3843,6 @@ impl SoracloudRuntimeManager {
         mut self,
         mutation_sink: Arc<dyn SoracloudRuntimeMutationSink>,
     ) -> Self {
-        self.host_violation_reporter =
-            SoracloudModelHostViolationReporter::with_mutation_sink(Arc::clone(&mutation_sink));
         self.mutation_sink = Some(mutation_sink);
         self
     }
@@ -4208,8 +4012,6 @@ impl SoracloudRuntimeManager {
             .wrap_err_with(|| format!("create {}", self.checkpoints_root().display()))?;
         fs::create_dir_all(self.credentials_root())
             .wrap_err_with(|| format!("create {}", self.credentials_root().display()))?;
-        fs::create_dir_all(self.hf_sources_root())
-            .wrap_err_with(|| format!("create {}", self.hf_sources_root().display()))?;
         fs::create_dir_all(self.service_data_root())
             .wrap_err_with(|| format!("create {}", self.service_data_root().display()))?;
         let inrou_hosting_available = self.inrou_startup_capability.is_some()
@@ -4234,7 +4036,6 @@ impl SoracloudRuntimeManager {
             inrou_placement_reconcile_needed,
         ) = {
             let view = self.state.view();
-            self.report_local_model_host_advert_contradictions(&view);
             let bundle_registry = collect_service_revision_registry(&view);
             let inrou_host_capability_refresh = inrou_hosting_available
                 .then(|| self.local_inrou_host_capability_refresh_candidate(&view))
@@ -4248,7 +4049,6 @@ impl SoracloudRuntimeManager {
                 &self.config.state_dir,
                 self.artifacts_root(),
                 &self.config.cache_budgets,
-                &self.config.hf,
                 self.config.local_validator_account_id.as_ref(),
                 self.config.local_peer_id.as_deref(),
                 inrou_hosting_available,
@@ -4271,10 +4071,6 @@ impl SoracloudRuntimeManager {
         self.prune_stale_apartment_materializations(&initial_snapshot)?;
         {
             let view = self.state.view();
-            self.import_hf_sources(&view, &initial_snapshot)?;
-        }
-        {
-            let view = self.state.view();
             self.hydrate_missing_artifacts(&view, &initial_snapshot)?;
         }
         {
@@ -4295,7 +4091,6 @@ impl SoracloudRuntimeManager {
                 &self.config.state_dir,
                 self.artifacts_root(),
                 &self.config.cache_budgets,
-                &self.config.hf,
                 self.config.local_validator_account_id.as_ref(),
                 self.config.local_peer_id.as_deref(),
                 inrou_hosting_available,
@@ -4474,8 +4269,8 @@ impl SoracloudRuntimeManager {
                         continue;
                     }
                 };
-                let Some(reporting_epoch) =
-                    self.authoritative_service_lease_reporting_epoch(view, service_name)
+                let Some((lease_started_height, reporting_epoch)) =
+                    self.authoritative_service_lease_identity(view, service_name)
                 else {
                     continue;
                 };
@@ -4493,6 +4288,7 @@ impl SoracloudRuntimeManager {
                         continue;
                     };
                     if !assignment.host_availability.is_available()
+                        || assignment.lease_started_height != lease_started_height
                         || replica.placement_incarnation
                             != assignment.placement_incarnation.to_string()
                         || replica.lease_started_height != assignment.lease_started_height
@@ -4506,6 +4302,7 @@ impl SoracloudRuntimeManager {
                         .authoritative_service_lease_reporter_target_epoch(
                             view,
                             service_name,
+                            lease_started_height,
                             service_version,
                             replica.replica_slot,
                             assignment.placement_incarnation,
@@ -4526,6 +4323,7 @@ impl SoracloudRuntimeManager {
                                 .get(&(
                                     service_name.clone(),
                                     service_version.clone(),
+                                    lease_started_height,
                                     reporter_target_epoch,
                                     replica.replica_slot,
                                     replica.placement_incarnation.clone(),
@@ -4535,6 +4333,7 @@ impl SoracloudRuntimeManager {
                                         self.authoritative_service_lease_reporter_checkpoint(
                                             view,
                                             service_name,
+                                            lease_started_height,
                                             reporter_target_epoch,
                                             service_version,
                                             replica.replica_slot,
@@ -4561,12 +4360,6 @@ impl SoracloudRuntimeManager {
                         materialized_bundle_hash: bundle.container.bundle_hash,
                         reporting_epoch,
                         accounted_egress_bytes: reporter_accounted_egress_bytes,
-                        pending_mailbox_message_count: 0,
-                        last_receipt_id: authoritative_state
-                            .filter(|state| {
-                                state.placement_incarnation == assignment.placement_incarnation
-                            })
-                            .and_then(|state| state.last_receipt_id),
                         updated_at_ms: soracloud_runtime_observed_at_ms(),
                         last_error: replica.last_error.clone(),
                     };
@@ -4629,6 +4422,7 @@ impl SoracloudRuntimeManager {
         view: &StateView<'_>,
         service_name: &str,
         service_version: &str,
+        lease_started_height: u64,
         reporting_epoch: u64,
     ) -> eyre::Result<u64> {
         let service_name_id = Name::from_str(service_name).wrap_err_with(|| {
@@ -4642,11 +4436,14 @@ impl SoracloudRuntimeManager {
                 deployment.current_service_version == service_version
                     || deployment.active_rollout.as_ref().is_some_and(|rollout| {
                         rollout.candidate_version == service_version
-                            || rollout.baseline_version.as_deref() == Some(service_version)
+                            || rollout.baseline_version == service_version
                     })
             })
             .and_then(|deployment| deployment.service_lease.as_ref())
-            .filter(|lease| lease.reporting_epoch == reporting_epoch)
+            .filter(|lease| {
+                lease.lease_started_height == lease_started_height
+                    && lease.reporting_epoch == reporting_epoch
+            })
             .ok_or_else(|| {
                 eyre::eyre!(
                     "service `{service_name}` revision `{service_version}` has no authoritative lease egress for reporting epoch `{reporting_epoch}`"
@@ -4661,7 +4458,9 @@ impl SoracloudRuntimeManager {
             .iter()
             .filter(|checkpoint| {
                 checkpoint.reporting_epoch == reporting_epoch
-                    && checkpoint.active_service_version == service_version
+                    && checkpoint.assignment.placement.lease_started_height
+                        == lease_started_height
+                    && checkpoint.assignment.service_version == service_version
             })
             .try_fold(0_u64, |total, checkpoint| {
                 total.checked_add(checkpoint.accounted_egress_bytes)
@@ -4672,22 +4471,23 @@ impl SoracloudRuntimeManager {
                 )
             })
     }
-    fn authoritative_service_lease_reporting_epoch(
+    fn authoritative_service_lease_identity(
         &self,
         view: &StateView<'_>,
         service_name: &str,
-    ) -> Option<u64> {
+    ) -> Option<(u64, u64)> {
         let service_name = Name::from_str(service_name).ok()?;
         view.world()
             .soracloud_service_deployments()
             .get(&service_name)
             .and_then(|deployment| deployment.service_lease.as_ref())
-            .map(|lease| lease.reporting_epoch)
+            .map(|lease| (lease.lease_started_height, lease.reporting_epoch))
     }
     fn authoritative_service_lease_reporter_target_epoch(
         &self,
         view: &StateView<'_>,
         service_name: &str,
+        lease_started_height: u64,
         service_version: &str,
         replica_slot: u16,
         placement_incarnation: Hash,
@@ -4698,14 +4498,17 @@ impl SoracloudRuntimeManager {
             .world()
             .soracloud_service_deployments()
             .get(&service_name)
-            .and_then(|deployment| deployment.service_lease.as_ref())?;
+            .and_then(|deployment| deployment.service_lease.as_ref())
+            .filter(|lease| lease.lease_started_height == lease_started_height)?;
         let current_identity_is_admitted =
             lease.egress_reporter_checkpoints.iter().any(|checkpoint| {
                 checkpoint.reporting_epoch == lease.reporting_epoch
-                    && checkpoint.active_service_version == service_version
-                    && checkpoint.replica_slot == replica_slot
-                    && checkpoint.placement_incarnation == placement_incarnation
-                    && checkpoint.validator_account_id == *validator_account_id
+                    && checkpoint.assignment.placement.lease_started_height == lease_started_height
+                    && checkpoint.assignment.service_version == service_version
+                    && checkpoint.assignment.placement.replica_slot == replica_slot
+                    && checkpoint.assignment.placement.placement_incarnation
+                        == placement_incarnation
+                    && checkpoint.assignment.placement.validator_account_id == *validator_account_id
             });
         if current_identity_is_admitted
             || lease.egress_reporter_checkpoints.len()
@@ -4720,6 +4523,7 @@ impl SoracloudRuntimeManager {
         &self,
         view: &StateView<'_>,
         service_name: &str,
+        lease_started_height: u64,
         reporting_epoch: u64,
         service_version: &str,
         replica_slot: u16,
@@ -4731,17 +4535,25 @@ impl SoracloudRuntimeManager {
             .soracloud_service_deployments()
             .get(&service_name)
             .and_then(|deployment| deployment.service_lease.as_ref())
-            .filter(|lease| lease.reporting_epoch == reporting_epoch)
+            .filter(|lease| {
+                lease.lease_started_height == lease_started_height
+                    && lease.reporting_epoch == reporting_epoch
+            })
             .and_then(|lease| {
                 lease.egress_reporter_checkpoints.iter().find(|checkpoint| {
                     checkpoint.reporting_epoch == reporting_epoch
-                        && checkpoint.active_service_version == service_version
-                        && checkpoint.replica_slot == replica_slot
-                        && checkpoint.placement_incarnation == placement_incarnation
-                        && checkpoint.validator_account_id == *validator_account_id
+                        && checkpoint.assignment.placement.lease_started_height
+                            == lease_started_height
+                        && checkpoint.assignment.service_version == service_version
+                        && checkpoint.assignment.placement.replica_slot == replica_slot
+                        && checkpoint.assignment.placement.placement_incarnation
+                            == placement_incarnation
+                        && checkpoint.assignment.placement.validator_account_id
+                            == *validator_account_id
                 })
             })
             .map(|checkpoint| HostedHttpReporterCheckpointState {
+                lease_started_height: checkpoint.assignment.placement.lease_started_height,
                 reporting_epoch: checkpoint.reporting_epoch,
                 accounted_egress_bytes: checkpoint.accounted_egress_bytes,
                 finalize_reporter: checkpoint.finalize_reporter,
@@ -4754,21 +4566,25 @@ impl SoracloudRuntimeManager {
                 continue;
             };
             for checkpoint in &lease.egress_reporter_checkpoints {
-                if checkpoint.reporting_epoch != lease.reporting_epoch {
+                if checkpoint.reporting_epoch != lease.reporting_epoch
+                    || checkpoint.assignment.placement.lease_started_height
+                        != lease.lease_started_height
+                {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!(
-                            "service `{service_name}` contains an Inrou reporter checkpoint from another reporting epoch"
+                            "service `{service_name}` contains an Inrou reporter checkpoint from another lease incarnation or reporting epoch"
                         ),
                     ));
                 }
                 retained_digests.insert(inrou_egress_reporter_key_digest(
                     service_name.as_ref(),
+                    lease.lease_started_height,
                     checkpoint.reporting_epoch,
-                    &checkpoint.active_service_version,
-                    checkpoint.replica_slot,
-                    &checkpoint.placement_incarnation,
-                    &checkpoint.validator_account_id,
+                    &checkpoint.assignment.service_version,
+                    checkpoint.assignment.placement.replica_slot,
+                    &checkpoint.assignment.placement.placement_incarnation,
+                    &checkpoint.assignment.placement.validator_account_id,
                 )?);
             }
         }
@@ -4783,29 +4599,31 @@ impl SoracloudRuntimeManager {
             for ((service_name, service_version), record) in
                 view.world().soracloud_inrou_service_placements().iter()
             {
-                if Name::from_str(service_name)
+                let Some(lease_started_height) = Name::from_str(service_name)
                     .ok()
                     .and_then(|name| view.world().soracloud_service_deployments().get(&name))
                     .filter(|deployment| {
                         deployment.current_service_version == *service_version
                             || deployment.active_rollout.as_ref().is_some_and(|rollout| {
                                 rollout.candidate_version == *service_version
-                                    || rollout.baseline_version.as_deref()
-                                        == Some(service_version.as_str())
+                                    || rollout.baseline_version == *service_version
                             })
                     })
-                    .is_none()
-                {
+                    .and_then(|deployment| deployment.service_lease.as_ref())
+                    .map(|lease| lease.lease_started_height)
+                else {
                     continue;
-                }
+                };
                 for placement in record.placements.iter().filter(|placement| {
-                    &placement.validator_account_id == validator_account_id
+                    placement.lease_started_height == lease_started_height
+                        && &placement.validator_account_id == validator_account_id
                         && placement.peer_id == local_peer_id
                 }) {
                     let Some(reporting_epoch) = self
                         .authoritative_service_lease_reporter_target_epoch(
                             view,
                             service_name,
+                            lease_started_height,
                             service_version,
                             placement.replica_slot,
                             placement.placement_incarnation,
@@ -4815,6 +4633,7 @@ impl SoracloudRuntimeManager {
                     };
                     retained_digests.insert(inrou_egress_reporter_key_digest(
                         service_name,
+                        lease_started_height,
                         reporting_epoch,
                         service_version,
                         placement.replica_slot,
@@ -4845,6 +4664,7 @@ impl SoracloudRuntimeManager {
             for (
                 service_name,
                 service_version,
+                lease_started_height,
                 reporting_epoch,
                 replica_slot,
                 placement_incarnation,
@@ -4859,6 +4679,7 @@ impl SoracloudRuntimeManager {
                     })?;
                 retained_digests.insert(inrou_egress_reporter_key_digest(
                     &service_name,
+                    lease_started_height,
                     reporting_epoch,
                     &service_version,
                     replica_slot,
@@ -4878,6 +4699,7 @@ impl SoracloudRuntimeManager {
         &self,
         view: &StateView<'_>,
         service_name: &str,
+        lease_started_height: u64,
         reporting_epoch: u64,
         service_version: &str,
         replica_slot: u16,
@@ -4891,6 +4713,7 @@ impl SoracloudRuntimeManager {
         let key = (
             service_name.to_owned(),
             service_version.to_owned(),
+            lease_started_height,
             reporting_epoch,
             replica_slot,
             placement_incarnation.to_string(),
@@ -4898,6 +4721,7 @@ impl SoracloudRuntimeManager {
         let authoritative_checkpoint = self.authoritative_service_lease_reporter_checkpoint(
             view,
             service_name,
+            lease_started_height,
             reporting_epoch,
             service_version,
             replica_slot,
@@ -4914,6 +4738,7 @@ impl SoracloudRuntimeManager {
                 replica_accounted_egress_bytes
             };
         let submitted_checkpoint = HostedHttpReporterCheckpointState {
+            lease_started_height,
             reporting_epoch,
             accounted_egress_bytes: submitted_accounted_egress_bytes,
             finalize_reporter,
@@ -4951,8 +4776,31 @@ impl SoracloudRuntimeManager {
                 return;
             }
         };
+        let lease_identity_matches = view
+            .world()
+            .soracloud_service_deployments()
+            .get(&service_name_id)
+            .and_then(|deployment| deployment.service_lease.as_ref())
+            .is_some_and(|lease| {
+                lease.lease_started_height == lease_started_height
+                    && (lease.reporting_epoch == reporting_epoch
+                        || (lease.reporting_epoch.checked_add(1) == Some(reporting_epoch)
+                            && submitted_accounted_egress_bytes == 0
+                            && !finalize_reporter))
+            });
+        if !lease_identity_matches {
+            iroha_logger::warn!(
+                service_name = %service_name,
+                service_version = %service_version,
+                lease_started_height,
+                reporting_epoch,
+                "refusing to submit Soracloud lease usage for a stale lease or invalid reporting-epoch transition"
+            );
+            return;
+        }
         let instruction = InstructionBox::from(isi::soracloud::ReportSoracloudServiceLeaseUsage {
             service_name: service_name_id,
+            lease_started_height,
             reporting_epoch,
             active_service_version: service_version.to_owned(),
             replica_slot,
@@ -4986,34 +4834,6 @@ impl SoracloudRuntimeManager {
                     attempted_at_ms,
                 },
             );
-    }
-    fn report_local_model_host_advert_contradictions(&self, view: &StateView<'_>) {
-        let Some(validator_account_id) = self.config.local_validator_account_id.as_ref() else {
-            return;
-        };
-        let Some(local_peer_id) = self.config.local_peer_id.as_deref() else {
-            return;
-        };
-        let Some(capability) = view
-            .world()
-            .soracloud_model_host_capabilities()
-            .get(validator_account_id)
-        else {
-            return;
-        };
-        if capability.peer_id == local_peer_id {
-            return;
-        }
-        self.host_violation_reporter.report(
-            view,
-            validator_account_id,
-            SoraModelHostViolationKindV1::AdvertContradiction,
-            None,
-            Some(format!(
-                "local runtime peer id `{local_peer_id}` does not match the authoritative model-host advert peer id `{}` for validator `{validator_account_id}`",
-                capability.peer_id
-            )),
-        );
     }
     fn build_local_inrou_host_capability_record(
         &self,
@@ -5419,6 +5239,7 @@ impl SoracloudRuntimeManager {
                         .authoritative_service_lease_reporter_target_epoch(
                             view,
                             service_name,
+                            replica.lease_started_height,
                             service_version,
                             replica.replica_slot,
                             placement_incarnation,
@@ -5429,6 +5250,7 @@ impl SoracloudRuntimeManager {
                     desired.insert((
                         service_name.clone(),
                         service_version.clone(),
+                        replica.lease_started_height,
                         reporting_epoch,
                         replica.replica_slot,
                         replica.placement_incarnation.clone(),
@@ -5451,6 +5273,7 @@ impl SoracloudRuntimeManager {
                 |(
                     service_name,
                     service_version,
+                    lease_started_height,
                     reporting_epoch,
                     _replica_slot,
                     _placement_incarnation,
@@ -5458,6 +5281,7 @@ impl SoracloudRuntimeManager {
                     (
                         service_name.clone(),
                         service_version.clone(),
+                        *lease_started_height,
                         *reporting_epoch,
                     )
                 },
@@ -5476,7 +5300,14 @@ impl SoracloudRuntimeManager {
                 .collect::<Vec<_>>()
         };
         for (
-            (service_name, service_version, reporting_epoch, replica_slot, placement_incarnation),
+            (
+                service_name,
+                service_version,
+                lease_started_height,
+                reporting_epoch,
+                replica_slot,
+                placement_incarnation,
+            ),
             worker,
         ) in stale_workers
         {
@@ -5494,6 +5325,7 @@ impl SoracloudRuntimeManager {
             self.submit_http_service_lease_usage_update(
                 view,
                 &service_name,
+                lease_started_height,
                 reporting_epoch,
                 &service_version,
                 replica_slot,
@@ -5511,16 +5343,42 @@ impl SoracloudRuntimeManager {
             .collect::<Vec<_>>();
         let mut finalized_reporters = Vec::new();
         for (
-            (service_name, service_version, reporting_epoch, replica_slot, placement_incarnation),
+            (
+                service_name,
+                service_version,
+                lease_started_height,
+                reporting_epoch,
+                replica_slot,
+                placement_incarnation,
+            ),
             accounting,
         ) in pending_terminal_reporters
         {
+            let lease_identity_is_current = self
+                .authoritative_service_lease_identity(view, &service_name)
+                .is_some_and(|(current_lease_started_height, current_reporting_epoch)| {
+                    current_lease_started_height == lease_started_height
+                        && (current_reporting_epoch == reporting_epoch
+                            || current_reporting_epoch.checked_add(1) == Some(reporting_epoch))
+                });
+            if !lease_identity_is_current {
+                finalized_reporters.push((
+                    service_name,
+                    service_version,
+                    lease_started_height,
+                    reporting_epoch,
+                    replica_slot,
+                    placement_incarnation,
+                ));
+                continue;
+            }
             let placement_incarnation_hash = Hash::from_str(&placement_incarnation)
                 .wrap_err("parse terminal Inrou reporter placement incarnation")?;
             let local_accounted_egress_bytes = accounting.accounted_egress_bytes();
             let authoritative = self.authoritative_service_lease_reporter_checkpoint(
                 view,
                 &service_name,
+                lease_started_height,
                 reporting_epoch,
                 &service_version,
                 replica_slot,
@@ -5539,6 +5397,7 @@ impl SoracloudRuntimeManager {
                     finalized_reporters.push((
                         service_name,
                         service_version,
+                        lease_started_height,
                         reporting_epoch,
                         replica_slot,
                         placement_incarnation.clone(),
@@ -5548,6 +5407,7 @@ impl SoracloudRuntimeManager {
                     .submit_http_service_lease_usage_update(
                     view,
                     &service_name,
+                    lease_started_height,
                     reporting_epoch,
                     &service_version,
                     replica_slot,
@@ -5604,8 +5464,8 @@ impl SoracloudRuntimeManager {
                     continue;
                 };
                 let runtime_label = "inrou";
-                let reporting_epoch = self
-                    .authoritative_service_lease_reporting_epoch(view, service_name)
+                let (lease_started_height, reporting_epoch) = self
+                    .authoritative_service_lease_identity(view, service_name)
                     .ok_or_else(|| {
                         eyre::eyre!(
                             "local Inrou service `{service_name}` revision `{service_version}` has no authoritative reporting epoch"
@@ -5623,6 +5483,7 @@ impl SoracloudRuntimeManager {
                         view,
                         service_name,
                         service_version,
+                        lease_started_height,
                         reporting_epoch,
                     )?;
                 let revision_reporting_epoch_accounting_offset_bytes =
@@ -5633,6 +5494,7 @@ impl SoracloudRuntimeManager {
                         .entry((
                             service_name.clone(),
                             service_version.clone(),
+                            lease_started_height,
                             reporting_epoch,
                         ))
                         .or_insert_with(|| {
@@ -5653,6 +5515,12 @@ impl SoracloudRuntimeManager {
                 for replica_slot in plan.local_replica_slots.iter().copied() {
                     let replica_plan = project_hosted_http_replica_plan(plan, replica_slot)?;
                     let placement = exact_inrou_replica_placement(&replica_plan)?;
+                    if placement.lease_started_height != lease_started_height {
+                        eyre::bail!(
+                            "local Inrou replica `{service_name}` revision `{service_version}` replica {replica_slot} belongs to lease height {} instead of authoritative height {lease_started_height}",
+                            placement.lease_started_height
+                        );
+                    }
                     let placement_incarnation =
                         Hash::from_str(&placement.placement_incarnation).wrap_err_with(|| {
                             format!(
@@ -5663,6 +5531,7 @@ impl SoracloudRuntimeManager {
                         .authoritative_service_lease_reporter_target_epoch(
                             view,
                             service_name,
+                            lease_started_height,
                             service_version,
                             replica_slot,
                             placement_incarnation,
@@ -5681,6 +5550,7 @@ impl SoracloudRuntimeManager {
                                 .entry((
                                     service_name.clone(),
                                     service_version.clone(),
+                                    lease_started_height,
                                     target_reporting_epoch,
                                 ))
                                 .or_insert_with(|| PortableVmEgressAccounting::new(0))
@@ -5689,6 +5559,7 @@ impl SoracloudRuntimeManager {
                     let key = (
                         service_name.clone(),
                         service_version.clone(),
+                        lease_started_height,
                         target_reporting_epoch,
                         replica_slot,
                         placement.placement_incarnation.clone(),
@@ -5697,6 +5568,7 @@ impl SoracloudRuntimeManager {
                         .authoritative_service_lease_reporter_checkpoint(
                             view,
                             service_name,
+                            lease_started_height,
                             target_reporting_epoch,
                             service_version,
                             replica_slot,
@@ -5725,6 +5597,7 @@ impl SoracloudRuntimeManager {
                         let durable_checkpoint = InrouDurableEgressCheckpoint::load_or_create(
                             &self.config.state_dir,
                             service_name,
+                            lease_started_height,
                             target_reporting_epoch,
                             service_version,
                             replica_slot,
@@ -5765,6 +5638,7 @@ impl SoracloudRuntimeManager {
                         self.submit_http_service_lease_usage_update(
                             view,
                             service_name,
+                            lease_started_height,
                             target_reporting_epoch,
                             service_version,
                             replica_slot,
@@ -5794,6 +5668,7 @@ impl SoracloudRuntimeManager {
                     let reporter_checkpoint_is_current =
                         hosted_http_reporter_checkpoint_is_current_open(
                             authoritative_reporter_checkpoint,
+                            lease_started_height,
                             target_reporting_epoch,
                             local_reporter_accounted_egress_bytes,
                         );
@@ -6568,8 +6443,12 @@ impl SoracloudRuntimeManager {
         drop(command);
         launch_barrier.child_spawned();
         if let Err(error) = worker_cgroup.place_launcher(child.id()) {
-            let termination = terminate_inrou_child_bounded(&mut child);
-            preserve_inrou_firewall_after_failed_termination(&termination, &mut loopback_firewall);
+            let termination = terminate_inrou_confined_child_bounded(
+                &mut child,
+                &mut worker_cgroup,
+                &mut loopback_firewall,
+                "Inrou PortableVM",
+            );
             return Err(error).wrap_err_with(|| {
                 format!(
                     "place and attest Inrou launcher before QEMU exec{}",
@@ -6578,8 +6457,12 @@ impl SoracloudRuntimeManager {
             });
         }
         if let Err(error) = launch_barrier.release() {
-            let termination = terminate_inrou_child_bounded(&mut child);
-            preserve_inrou_firewall_after_failed_termination(&termination, &mut loopback_firewall);
+            let termination = terminate_inrou_confined_child_bounded(
+                &mut child,
+                &mut worker_cgroup,
+                &mut loopback_firewall,
+                "Inrou PortableVM",
+            );
             return Err(error).wrap_err_with(|| {
                 format!(
                     "release Inrou QEMU only after cgroup placement{}",
@@ -6590,10 +6473,11 @@ impl SoracloudRuntimeManager {
         let mut log_drains = match attach_inrou_runtime_log_drains(&mut child, stderr_log) {
             Ok(log_drains) => log_drains,
             Err(error) => {
-                let termination = terminate_inrou_child_bounded(&mut child);
-                preserve_inrou_firewall_after_failed_termination(
-                    &termination,
+                let termination = terminate_inrou_confined_child_bounded(
+                    &mut child,
+                    &mut worker_cgroup,
                     &mut loopback_firewall,
+                    "Inrou PortableVM",
                 );
                 return Err(error).wrap_err_with(|| {
                     format!(
@@ -6613,10 +6497,11 @@ impl SoracloudRuntimeManager {
         ) {
             Ok(qemu_forward) => qemu_forward,
             Err(error) => {
-                let termination = terminate_inrou_child_bounded(&mut child);
-                preserve_inrou_firewall_after_failed_termination(
-                    &termination,
+                let termination = terminate_inrou_confined_child_bounded(
+                    &mut child,
+                    &mut worker_cgroup,
                     &mut loopback_firewall,
+                    "Inrou PortableVM",
                 );
                 join_inrou_log_drains_bounded(&mut log_drains);
                 return Err(error).wrap_err_with(|| {
@@ -6628,8 +6513,12 @@ impl SoracloudRuntimeManager {
             }
         };
         if qemu_forward != expected_backend {
-            let termination = terminate_inrou_child_bounded(&mut child);
-            preserve_inrou_firewall_after_failed_termination(&termination, &mut loopback_firewall);
+            let termination = terminate_inrou_confined_child_bounded(
+                &mut child,
+                &mut worker_cgroup,
+                &mut loopback_firewall,
+                "Inrou PortableVM",
+            );
             join_inrou_log_drains_bounded(&mut log_drains);
             eyre::bail!(
                 "QEMU published Inrou host forward {qemu_forward} instead of the reserved private-network endpoint {expected_backend}{}",
@@ -6648,10 +6537,11 @@ impl SoracloudRuntimeManager {
         ) {
             Ok(port_forward) => port_forward,
             Err(error) => {
-                let termination = terminate_inrou_child_bounded(&mut child);
-                preserve_inrou_firewall_after_failed_termination(
-                    &termination,
+                let termination = terminate_inrou_confined_child_bounded(
+                    &mut child,
+                    &mut worker_cgroup,
                     &mut loopback_firewall,
+                    "Inrou PortableVM",
                 );
                 join_inrou_log_drains_bounded(&mut log_drains);
                 return Err(error).wrap_err_with(|| {
@@ -6668,10 +6558,11 @@ impl SoracloudRuntimeManager {
                 Ok(status) => status,
                 Err(error) => {
                     port_forward.stop();
-                    let termination = terminate_inrou_child_bounded(&mut child);
-                    preserve_inrou_firewall_after_failed_termination(
-                        &termination,
+                    let termination = terminate_inrou_confined_child_bounded(
+                        &mut child,
+                        &mut worker_cgroup,
                         &mut loopback_firewall,
+                        "Inrou PortableVM",
                     );
                     join_inrou_log_drains_bounded(&mut log_drains);
                     return Err(error).wrap_err_with(|| {
@@ -6684,15 +6575,22 @@ impl SoracloudRuntimeManager {
             };
             if let Some(status) = child_status {
                 port_forward.stop();
+                let termination = terminate_inrou_confined_child_bounded(
+                    &mut child,
+                    &mut worker_cgroup,
+                    &mut loopback_firewall,
+                    "Inrou PortableVM",
+                );
                 join_inrou_log_drains_bounded(&mut log_drains);
                 let stderr = stderr_log_excerpt(&stderr_log_path);
                 eyre::bail!(
-                    "Inrou PortableVm process exited during startup with status {status}{}",
+                    "Inrou PortableVm process exited during startup with status {status}{}{}",
                     if stderr.is_empty() {
                         String::new()
                     } else {
                         format!(": {stderr}")
                     },
+                    inrou_termination_error_suffix(&termination),
                 );
             }
             match probe_hosted_http_health(
@@ -6721,10 +6619,11 @@ impl SoracloudRuntimeManager {
                     })();
                     if let Err(error) = disk_commit {
                         port_forward.stop();
-                        let termination = terminate_inrou_child_bounded(&mut child);
-                        preserve_inrou_firewall_after_failed_termination(
-                            &termination,
+                        let termination = terminate_inrou_confined_child_bounded(
+                            &mut child,
+                            &mut worker_cgroup,
                             &mut loopback_firewall,
+                            "Inrou PortableVM",
                         );
                         join_inrou_log_drains_bounded(&mut log_drains);
                         return Err(error).wrap_err_with(|| {
@@ -6756,10 +6655,11 @@ impl SoracloudRuntimeManager {
                 }
                 Err(error) => {
                     port_forward.stop();
-                    let termination = terminate_inrou_child_bounded(&mut child);
-                    preserve_inrou_firewall_after_failed_termination(
-                        &termination,
+                    let termination = terminate_inrou_confined_child_bounded(
+                        &mut child,
+                        &mut worker_cgroup,
                         &mut loopback_firewall,
+                        "Inrou PortableVM",
                     );
                     join_inrou_log_drains_bounded(&mut log_drains);
                     let stderr = stderr_log_excerpt(&stderr_log_path);
@@ -6801,9 +6701,6 @@ impl SoracloudRuntimeManager {
     }
     fn credentials_root(&self) -> PathBuf {
         self.config.state_dir.join("credentials")
-    }
-    fn hf_sources_root(&self) -> PathBuf {
-        self.config.state_dir.join("hf_sources")
     }
     fn service_data_root(&self) -> PathBuf {
         self.config.state_dir.join("service_data")
@@ -6919,342 +6816,6 @@ impl SoracloudRuntimeManager {
             .map(|name| storage_path_component(name))
             .collect();
         prune_flat_directory_tree(self.apartments_root().as_path(), &desired)?;
-        Ok(())
-    }
-    fn import_hf_sources(
-        &self,
-        view: &StateView<'_>,
-        snapshot: &SoracloudRuntimeSnapshot,
-    ) -> eyre::Result<()> {
-        let desired_sources = snapshot
-            .hf_sources
-            .iter()
-            .filter(|(_source_id, plan)| {
-                plan.active_pool_count > 0
-                    || plan.bound_service_count > 0
-                    || plan.bound_apartment_count > 0
-            })
-            .map(|(source_id, _plan)| storage_path_component(source_id))
-            .collect::<BTreeSet<_>>();
-        prune_flat_directory_tree(self.hf_sources_root().as_path(), &desired_sources)?;
-        if desired_sources.is_empty() {
-            return Ok(());
-        }
-        for (source_hash, source) in view.world().soracloud_hf_sources().iter() {
-            let source_id = source_hash.to_string();
-            if !snapshot.hf_sources.contains_key(&source_id)
-                || !desired_sources.contains(&storage_path_component(&source_id))
-                || matches!(
-                    source.status,
-                    SoraHfSourceStatusV1::Failed | SoraHfSourceStatusV1::Retired
-                )
-            {
-                continue;
-            }
-            if let Err(error) = self.import_one_hf_source(&source_id, source) {
-                iroha_logger::warn!(
-                    ?error,
-                    source_id = %source_id,
-                    repo_id = %source.repo_id,
-                    revision = %source.resolved_revision,
-                    "Soracloud HF source import failed"
-                );
-                self.write_hf_import_error_manifest(
-                    &source_id,
-                    source,
-                    error.to_string().as_str(),
-                )?;
-            }
-        }
-        Ok(())
-    }
-    fn import_one_hf_source(
-        &self,
-        source_id: &str,
-        source: &iroha_data_model::soracloud::SoraHfSourceRecordV1,
-    ) -> eyre::Result<()> {
-        let profile = source.resource_profile.as_ref().ok_or_else(|| {
-            eyre::eyre!("Hugging Face source `{source_id}` has no authoritative resource profile")
-        })?;
-        let existing = match read_hf_import_generation(&self.config.state_dir, source_id) {
-            Ok(existing) => existing,
-            Err(error) => {
-                iroha_logger::warn!(
-                    ?error,
-                    source_id = %source_id,
-                    "discarding an invalid Hugging Face import manifest before clean re-import"
-                );
-                None
-            }
-        };
-        if let Some(existing) = existing.as_ref()
-            && existing.manifest.source_id == source_id
-            && existing.manifest.repo_id == source.repo_id
-            && existing.manifest.requested_revision == source.resolved_revision
-            && existing.manifest.model_name == source.model_name
-            && existing.manifest.adapter_id == source.adapter_id
-            && existing.manifest.import_error.is_none()
-        {
-            match validate_hf_import_cache(
-                existing,
-                profile,
-                self.config.hf.import_max_files,
-                self.config.hf.import_max_file_bytes,
-                self.config.hf.import_max_total_bytes,
-            ) {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    iroha_logger::warn!(
-                        ?error,
-                        source_id = %source_id,
-                        "quarantining a drifted Hugging Face import cache before clean re-import"
-                    );
-                }
-            }
-        }
-        let info_url = hf_model_info_url(
-            &self.config.hf.api_base_url,
-            &source.repo_id,
-            &source.resolved_revision,
-        )?;
-        let response = send_hf_import_request_with_vetted_redirects(
-            &self.config.hf,
-            reqwest::Method::GET,
-            info_url.clone(),
-        )
-        .wrap_err_with(|| format!("fetch Hugging Face model info from {info_url}"))?;
-        if !response.status().is_success() {
-            eyre::bail!(
-                "HF model info request for `{}` revision `{}` returned {}",
-                source.repo_id,
-                source.resolved_revision,
-                response.status()
-            );
-        }
-        let model_info_bytes = read_soracloud_http_response_bounded(
-            response,
-            self.config.hf.model_info_max_response_bytes,
-            "Hugging Face model-info",
-        )
-        .wrap_err_with(|| format!("read Hugging Face model info response from {info_url}"))?;
-        let model_info_content_length = u64::try_from(model_info_bytes.len())
-            .wrap_err("Hugging Face model-info length does not fit u64")?;
-        let model_info_payload_hash = Hash::new(&model_info_bytes).to_string();
-        let model_info: norito::json::Value =
-            norito::json::from_slice(&model_info_bytes).wrap_err("decode HF model info JSON")?;
-        let resolved_commit = validate_hf_model_info_identity(
-            &model_info,
-            &source.repo_id,
-            &source.resolved_revision,
-        )?;
-        let selection = derive_hf_weight_selection_v1(
-            &model_info,
-            self.config.hf.import_max_files,
-            self.config.hf.import_max_file_bytes,
-            self.config.hf.import_max_total_bytes,
-        )
-        .wrap_err("derive canonical Hugging Face weight selection")?
-        .ok_or_else(|| {
-            eyre::eyre!(
-                "Hugging Face model `{}` revision `{}` exposes no supported weight files",
-                source.repo_id,
-                source.resolved_revision
-            )
-        })?;
-        validate_hf_weight_selection_against_profile(&selection, profile)?;
-        let pipeline_tag = bounded_hf_model_info_string(&model_info, "pipeline_tag")?;
-        let library_name = bounded_hf_model_info_string(&model_info, "library_name")?;
-        let tags =
-            bounded_hf_model_info_strings(&model_info, "tags", SORACLOUD_HF_MODEL_INFO_MAX_TAGS)?;
-        let mut imported_files = Vec::new();
-        let mut imported_total_bytes = 0_u64;
-        drop(model_info);
-        let required_weight_files = local_hf_required_weight_records(&selection);
-        let mut staging = begin_hf_import_generation(&self.config.state_dir, source_id)
-            .wrap_err("begin private Hugging Face import generation")?;
-        write_bytes_atomic(
-            &staging.staging_root.join("model_info.json"),
-            &model_info_bytes,
-        )
-        .wrap_err("write staged Hugging Face model-info")?;
-        drop(model_info_bytes);
-        let files_root = staging.files_root.clone();
-        for weight in &selection.required_weight_files {
-            let path = weight.path.clone();
-            let file_url = hf_repo_file_url(
-                &self.config.hf.hub_base_url,
-                &source.repo_id,
-                &source.resolved_revision,
-                &path,
-            )?;
-            let head = send_hf_import_request_with_vetted_redirects(
-                &self.config.hf,
-                reqwest::Method::HEAD,
-                file_url.clone(),
-            )
-            .wrap_err_with(|| format!("query HF file headers from {file_url}"))?;
-            if !head.status().is_success() {
-                eyre::bail!(
-                    "required Hugging Face model file `{path}` HEAD returned {}",
-                    head.status()
-                );
-            }
-            let Some(content_length) = head
-                .headers()
-                .get(reqwest::header::CONTENT_LENGTH)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse::<u64>().ok())
-            else {
-                eyre::bail!(
-                    "required Hugging Face model file `{path}` HEAD omitted a canonical Content-Length"
-                );
-            };
-            if content_length != weight.content_length {
-                eyre::bail!(
-                    "Hugging Face file `{path}` HEAD length {content_length} does not match authenticated LFS size {}",
-                    weight.content_length
-                );
-            }
-            if content_length > self.config.hf.import_max_file_bytes {
-                eyre::bail!(
-                    "required Hugging Face model file `{path}` has {content_length} bytes, exceeding the configured per-file cap {}",
-                    self.config.hf.import_max_file_bytes
-                );
-            }
-            let next_total = imported_total_bytes
-                .checked_add(content_length)
-                .ok_or_else(|| eyre::eyre!("Hugging Face import byte total overflow"))?;
-            if next_total > self.config.hf.import_max_total_bytes {
-                eyre::bail!(
-                    "required Hugging Face model file `{path}` would exceed the configured aggregate import cap {}",
-                    self.config.hf.import_max_total_bytes
-                );
-            }
-            let response = send_hf_import_request_with_vetted_redirects(
-                &self.config.hf,
-                reqwest::Method::GET,
-                file_url.clone(),
-            )
-            .wrap_err_with(|| format!("download HF file from {file_url}"))?;
-            if !response.status().is_success() {
-                eyre::bail!(
-                    "required Hugging Face model file `{path}` GET returned {}",
-                    response.status()
-                );
-            }
-            if response
-                .content_length()
-                .is_some_and(|declared| declared != content_length)
-            {
-                eyre::bail!(
-                    "required Hugging Face model file `{path}` GET Content-Length did not match HEAD length {content_length}"
-                );
-            }
-            let relative_path = hf_import_relative_path(&path)?;
-            let local_path = files_root.join(&relative_path);
-            if let Some(parent) = local_path.parent() {
-                fs::create_dir_all(parent)
-                    .wrap_err_with(|| format!("create {}", parent.display()))?;
-            }
-            let payload_hash = write_reader_atomic_bounded(
-                &local_path,
-                response,
-                content_length,
-                self.config.hf.import_max_file_bytes,
-                Some(
-                    parse_canonical_hf_lfs_sha256(&weight.lfs_sha256).ok_or_else(|| {
-                        eyre::eyre!("canonical Hugging Face selection contains an invalid SHA-256")
-                    })?,
-                ),
-            )
-            .wrap_err_with(|| format!("stream HF file response from {file_url}"))?;
-            imported_total_bytes = next_total;
-            imported_files.push(HfImportedFileV1 {
-                path,
-                content_length,
-                payload_hash: payload_hash.to_string(),
-                lfs_sha256: Some(weight.lfs_sha256.clone()),
-            });
-        }
-        if imported_files.len() != selection.required_weight_files.len()
-            || imported_total_bytes != selection.required_model_bytes
-        {
-            eyre::bail!(
-                "Hugging Face import did not produce the complete authenticated weight set of {} files and {} bytes",
-                selection.required_weight_files.len(),
-                selection.required_model_bytes
-            );
-        }
-        let manifest = HfLocalImportManifestV1 {
-            schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
-            source_id: source_id.to_owned(),
-            repo_id: source.repo_id.clone(),
-            requested_revision: source.resolved_revision.clone(),
-            resolved_commit: Some(resolved_commit),
-            model_name: source.model_name.clone(),
-            adapter_id: source.adapter_id.clone(),
-            pipeline_tag,
-            library_name,
-            tags,
-            imported_at_ms: source.updated_at_ms,
-            model_info_content_length: Some(model_info_content_length),
-            model_info_payload_hash: Some(model_info_payload_hash),
-            selected_weight_format: Some(selection.model_format),
-            required_weight_files,
-            weight_selection_commitment: Some(selection.weight_selection_commitment.to_string()),
-            imported_files,
-            skipped_files: Vec::new(),
-            import_error: None,
-        };
-        validate_hf_import_manifest_bounds(&manifest)
-            .wrap_err("validate bounded Hugging Face import manifest")?;
-        validate_hf_import_cache_at_generation(
-            &staging.staging_root,
-            &staging.files_root,
-            &manifest,
-            profile,
-            self.config.hf.import_max_files,
-            self.config.hf.import_max_file_bytes,
-            self.config.hf.import_max_total_bytes,
-        )
-        .wrap_err("verify staged Hugging Face import cache")?;
-        publish_hf_import_generation(&mut staging, &manifest)
-            .wrap_err("atomically publish complete Hugging Face import generation")?;
-        Ok(())
-    }
-    fn write_hf_import_error_manifest(
-        &self,
-        source_id: &str,
-        source: &iroha_data_model::soracloud::SoraHfSourceRecordV1,
-        error: &str,
-    ) -> eyre::Result<()> {
-        let mut staging = begin_hf_import_generation(&self.config.state_dir, source_id)
-            .wrap_err("begin private Hugging Face error generation")?;
-        let manifest = HfLocalImportManifestV1 {
-            schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
-            source_id: source_id.to_owned(),
-            repo_id: source.repo_id.clone(),
-            requested_revision: source.resolved_revision.clone(),
-            resolved_commit: None,
-            model_name: source.model_name.clone(),
-            adapter_id: source.adapter_id.clone(),
-            pipeline_tag: None,
-            library_name: None,
-            tags: Vec::new(),
-            imported_at_ms: source.updated_at_ms,
-            model_info_content_length: None,
-            model_info_payload_hash: None,
-            selected_weight_format: None,
-            required_weight_files: Vec::new(),
-            weight_selection_commitment: None,
-            imported_files: Vec::new(),
-            skipped_files: Vec::new(),
-            import_error: Some(error.to_owned()),
-        };
-        validate_hf_import_manifest_bounds(&manifest)
-            .wrap_err("validate bounded Hugging Face import error manifest")?;
-        publish_hf_import_generation(&mut staging, &manifest)
-            .wrap_err("atomically publish Hugging Face import error generation")?;
         Ok(())
     }
     fn hydrate_missing_artifacts(
@@ -7604,7 +7165,7 @@ impl SoracloudRuntimeManager {
             }
             if manifest.files().is_empty()
                 || manifest.files().len()
-                    > usize::try_from(self.config.hf.import_max_files).unwrap_or(usize::MAX)
+                    > usize::try_from(SORA_INROU_GUEST_IMAGE_MAX_MEMBERS_V1).unwrap_or(usize::MAX)
             {
                 eyre::bail!(
                     "local SoraFS guest-image manifest file count is outside the configured range"
@@ -7987,7 +7548,6 @@ impl SoracloudRuntimeManager {
             self.config.cache_budgets.checkpoint_bytes.get(),
             self.config.cache_budgets.model_artifact_bytes.get(),
             self.config.cache_budgets.model_weight_bytes.get(),
-            self.config.hf.import_max_total_bytes,
         ]
         .into_iter()
         .max()
@@ -8082,7 +7642,7 @@ impl SoracloudRuntimeManager {
             client,
             base_url,
             manifest,
-            self.config.hf.import_max_files,
+            SORA_INROU_GUEST_IMAGE_MAX_MEMBERS_V1,
         )
         .inspect_err(|error| {
             iroha_logger::debug!(
@@ -8721,7 +8281,7 @@ fn execute_query_local_read(
     let committed_entries =
         collect_committed_service_state_entries(view, request.service_name.as_str());
     let host = SoracloudIvmHost::new(
-        local_read_execution_request(request, context),
+        local_read_execution_request(view, request, context),
         state_dir.to_path_buf(),
         committed_entries,
     )
@@ -8840,36 +8400,34 @@ fn execute_query_local_read(
     })
 }
 fn local_read_execution_request(
+    view: &StateView<'_>,
     request: &SoracloudLocalReadRequest,
     context: &ResolvedLocalReadContext,
 ) -> SoracloudOrderedMailboxExecutionRequest {
-    let execution_sequence = next_authoritative_observation_sequence_from_view(
-        request.service_name.as_str(),
-        request.observed_height,
-    );
-    let mailbox_message = SoraServiceMailboxMessageV1 {
+    let observed_sequence =
+        iroha_core::soracloud_runtime::authoritative_soracloud_sequence(view.world());
+    let mut mailbox_message = SoraServiceMailboxMessageV1 {
         schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
-        message_id: Hash::new(Encode::encode(&(
-            "soracloud:local-read:v1",
-            request.service_name.as_str(),
-            request.service_version.as_str(),
-            request.handler_name.as_str(),
-            request.request_commitment,
-        ))),
+        message_id: Hash::prehashed([0; Hash::LENGTH]),
         from_service: context.deployment.service_name.clone(),
+        from_service_version: context.deployment.current_service_version.clone(),
         from_handler: context.handler.handler_name.clone(),
         to_service: context.deployment.service_name.clone(),
+        to_service_version: context.deployment.current_service_version.clone(),
         to_handler: context.handler.handler_name.clone(),
         payload_bytes: request.request_body.clone(),
         payload_commitment: request.request_commitment,
-        enqueue_sequence: execution_sequence,
-        available_after_sequence: execution_sequence,
-        expires_at_sequence: None,
+        delivery_delay_blocks: 0,
+        enqueue_sequence: observed_sequence,
+        enqueue_height: request.observed_height,
+        available_after_height: request.observed_height,
+        expires_at_height: request.observed_height.saturating_add(1),
     };
+    mailbox_message.message_id = derive_soracloud_mailbox_message_id_v1(&mailbox_message);
     SoracloudOrderedMailboxExecutionRequest {
         observed_height: request.observed_height,
         observed_block_hash: request.observed_block_hash,
-        execution_sequence,
+        observed_sequence,
         deployment: context.deployment.clone(),
         bundle: context.bundle.clone(),
         handler: Some(context.handler.clone()),
@@ -9047,7 +8605,7 @@ fn local_read_public_inputs(
 }
 fn ordered_mailbox_public_inputs(
     payload_tlv: &[u8],
-    execution_sequence: u64,
+    observed_sequence: u64,
     observed_height: u64,
 ) -> Result<BTreeMap<Name, Vec<u8>>, VMError> {
     let mut inputs = BTreeMap::new();
@@ -9057,8 +8615,8 @@ fn ordered_mailbox_public_inputs(
         norito::json::Value::from(hex::encode(pointer_tlv_payload(payload_tlv))),
     );
     trigger_event.insert(
-        "execution_sequence".to_owned(),
-        norito::json::Value::from(execution_sequence),
+        "observed_sequence".to_owned(),
+        norito::json::Value::from(observed_sequence),
     );
     trigger_event.insert(
         "observed_height".to_owned(),
@@ -9067,8 +8625,8 @@ fn ordered_mailbox_public_inputs(
     let trigger_event_tlv = trigger_event_json_tlv(trigger_event)?;
     insert_public_input(&mut inputs, "trigger_event_json", trigger_event_tlv)?;
     insert_public_input(&mut inputs, "_request_body", payload_tlv.to_vec())?;
-    let execution_sequence_tlv = public_input_int_tlv(execution_sequence)?;
-    insert_public_input(&mut inputs, "execution_sequence", execution_sequence_tlv)?;
+    let observed_sequence_tlv = public_input_int_tlv(observed_sequence)?;
+    insert_public_input(&mut inputs, "observed_sequence", observed_sequence_tlv)?;
     let observed_height_tlv = public_input_int_tlv(observed_height)?;
     insert_public_input(&mut inputs, "observed_height", observed_height_tlv)?;
     Ok(inputs)
@@ -9494,27 +9052,9 @@ fn local_read_receipt(
     certified_by: SoraCertifiedResponsePolicyV1,
     mailbox_message_id: Option<Hash>,
 ) -> SoraRuntimeReceiptV1 {
-    let placement_id: Option<Hash> = None;
-    let selected_validator_account_id: Option<AccountId> = None;
-    let selected_peer_id: Option<String> = None;
-    let emitted_sequence = next_authoritative_observation_sequence_from_view(
-        deployment.service_name.as_ref(),
-        request.observed_height,
-    );
-    SoraRuntimeReceiptV1 {
+    let mut receipt = SoraRuntimeReceiptV1 {
         schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
-        receipt_id: Hash::new(Encode::encode(&(
-            "soracloud:local-read",
-            deployment.service_name.as_ref(),
-            deployment.current_service_version.as_str(),
-            handler.handler_name.as_ref(),
-            request.request_commitment,
-            result_commitment,
-            certified_by,
-            placement_id,
-            selected_validator_account_id.clone(),
-            selected_peer_id.clone(),
-        ))),
+        receipt_id: Hash::new(b"soracloud:local-read-receipt:pending"),
         service_name: deployment.service_name.clone(),
         service_version: deployment.current_service_version.clone(),
         handler_name: handler.handler_name.clone(),
@@ -9522,20 +9062,14 @@ fn local_read_receipt(
         request_commitment: request.request_commitment,
         result_commitment,
         certified_by,
-        emitted_sequence,
+        emitted_sequence: 0,
+        execution_host: None,
         mailbox_message_id,
         journal_artifact_hash: None,
         checkpoint_artifact_hash: None,
-        placement_id,
-        selected_validator_account_id,
-        selected_peer_id,
-    }
-}
-fn next_authoritative_observation_sequence_from_view(
-    _service_name: &str,
-    observed_height: u64,
-) -> u64 {
-    observed_height.max(1)
+    };
+    receipt.receipt_id = derive_soracloud_local_read_receipt_id_v1(&receipt);
+    receipt
 }
 fn soracloud_runtime_observed_at_ms() -> u64 {
     std::time::SystemTime::now()
@@ -9661,11 +9195,6 @@ fn deployment_lifecycle_sequence_lower_bound(deployment: &SoraServiceDeploymentS
     for entry in deployment.service_secrets.values() {
         lower_bound = lower_bound.max(entry.last_update_sequence);
     }
-    for volume in &deployment.lease_volume_states {
-        if let Some(materialized_sequence) = volume.last_materialized_sequence {
-            lower_bound = lower_bound.max(materialized_sequence);
-        }
-    }
     for rollout in [
         deployment.active_rollout.as_ref(),
         deployment.last_rollout.as_ref(),
@@ -9746,9 +9275,6 @@ fn current_soracloud_audit_sequence(world: &impl WorldReadOnly) -> eyre::Result<
             *stored_sequence,
             event.sequence,
         )?;
-    }
-    for (_, record) in world.soracloud_model_host_violation_evidence().iter() {
-        observe_soracloud_audit_sequence(&mut audit_head, record.sequence);
     }
     for (stored_sequence, event) in world.soracloud_agent_apartment_audit_events().iter() {
         observe_keyed_soracloud_audit_sequence(
@@ -9977,7 +9503,6 @@ fn build_runtime_snapshot(
     state_dir: &Path,
     artifacts_root: PathBuf,
     cache_budgets: &iroha_config::parameters::actual::SoracloudRuntimeCacheBudgets,
-    hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
     local_validator_account_id: Option<&AccountId>,
     local_peer_id: Option<&str>,
     local_inrou_hosting_enabled: bool,
@@ -10203,8 +9728,6 @@ fn build_runtime_snapshot(
                     }
                 },
                 load_factor_bps: active_runtime_state.map_or(0, |state| state.load_factor_bps),
-                reported_pending_mailbox_messages: active_runtime_state
-                    .map_or(0, |state| state.pending_mailbox_message_count),
                 authoritative_pending_mailbox_messages: authoritative_pending
                     .get(&service_name)
                     .copied()
@@ -10268,11 +9791,10 @@ fn build_runtime_snapshot(
         .map(|(apartment_name, record)| {
             (
                 apartment_name.clone(),
-                build_apartment_plan(apartment_name, record, state_dir),
+                build_apartment_plan(apartment_name, record, committed_height(view), state_dir),
             )
         })
         .collect();
-    let hf_sources = build_hf_source_plans(world, &services, &apartments, state_dir, hf_config);
     Ok(SoracloudRuntimeSnapshot {
         schema_version: SoracloudRuntimeSnapshot::default().schema_version,
         observed_height: u64::try_from(view.height()).unwrap_or(u64::MAX),
@@ -10280,210 +9802,12 @@ fn build_runtime_snapshot(
         local_peer_id: local_peer_id.map(ToOwned::to_owned),
         services,
         apartments,
-        hf_sources,
     })
-}
-fn build_hf_source_plans(
-    world: &impl WorldReadOnly,
-    services: &BTreeMap<String, BTreeMap<String, SoracloudRuntimeServicePlan>>,
-    apartments: &BTreeMap<String, SoracloudRuntimeApartmentPlan>,
-    state_dir: &Path,
-    hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
-) -> BTreeMap<String, SoracloudRuntimeHfSourcePlan> {
-    let mut plans = BTreeMap::new();
-    for (source_id, source) in world.soracloud_hf_sources().iter() {
-        let source_id_string = source_id.to_string();
-        let (import_manifest, import_integrity_error) = match read_hf_import_generation(
-            state_dir,
-            &source_id_string,
-        ) {
-            Ok(Some(generation)) => {
-                let import_integrity_error = if generation.manifest.import_error.is_none() {
-                    source.resource_profile.as_ref().map_or_else(
-                        || {
-                            Some(
-                                "authoritative Hugging Face source omits its resource profile"
-                                    .to_owned(),
-                            )
-                        },
-                        |profile| {
-                            validate_hf_import_cache(
-                                &generation,
-                                profile,
-                                hf_config.import_max_files,
-                                hf_config.import_max_file_bytes,
-                                hf_config.import_max_total_bytes,
-                            )
-                            .err()
-                            .map(|error| {
-                                format!(
-                                    "local Hugging Face import failed integrity validation: {error}"
-                                )
-                            })
-                        },
-                    )
-                } else {
-                    None
-                };
-                (Some(generation.manifest.clone()), import_integrity_error)
-            }
-            Ok(None) => (None, None),
-            Err(error) => {
-                iroha_logger::warn!(
-                    ?error,
-                    source_id = %source_id_string,
-                    "failed to read a coherent local HF import generation while building runtime snapshot"
-                );
-                (
-                    None,
-                    Some(format!(
-                        "local Hugging Face import generation is invalid: {error}"
-                    )),
-                )
-            }
-        };
-        let pool_records = world
-            .soracloud_hf_shared_lease_pools()
-            .iter()
-            .filter_map(|(_pool_id, pool)| (pool.source_id == *source_id).then_some(pool))
-            .collect::<Vec<_>>();
-        let pool_count = u32::try_from(pool_records.len()).unwrap_or(u32::MAX);
-        let active_pool_count = u32::try_from(
-            pool_records
-                .iter()
-                .filter(|pool| {
-                    matches!(
-                        pool.status,
-                        SoraHfSharedLeaseStatusV1::Active | SoraHfSharedLeaseStatusV1::Draining
-                    )
-                })
-                .count(),
-        )
-        .unwrap_or(u32::MAX);
-        let mut active_member_count = 0_u32;
-        let mut queued_window_count = 0_u32;
-        let mut bound_service_names = BTreeSet::new();
-        let mut bound_apartment_names = BTreeSet::new();
-        for pool in &pool_records {
-            active_member_count = active_member_count.saturating_add(pool.active_member_count);
-            if let Some(next_window) = pool.queued_next_window.as_ref() {
-                queued_window_count = queued_window_count.saturating_add(1);
-                bound_service_names.insert(next_window.service_name.to_string());
-                if let Some(apartment_name) = next_window.apartment_name.as_ref() {
-                    bound_apartment_names.insert(apartment_name.to_string());
-                }
-            }
-            let pool_key = pool.pool_id.to_string();
-            for ((member_pool_id, _account_id), member) in
-                world.soracloud_hf_shared_lease_members().iter()
-            {
-                if member_pool_id != &pool_key
-                    || member.status != SoraHfSharedLeaseMemberStatusV1::Active
-                {
-                    continue;
-                }
-                bound_service_names.extend(member.service_bindings.iter().cloned());
-                bound_apartment_names.extend(member.apartment_bindings.iter().cloned());
-            }
-        }
-        let bound_service_names = bound_service_names.into_iter().collect::<Vec<_>>();
-        let bound_apartment_names = bound_apartment_names.into_iter().collect::<Vec<_>>();
-        let mut materialized_service_names = Vec::new();
-        let mut materialized_apartment_names = Vec::new();
-        let mut hydrating_service_count = 0_u32;
-        let mut bundle_cache_miss_count = 0_u32;
-        let mut artifact_cache_miss_count = 0_u32;
-        for service_name in &bound_service_names {
-            let Some(version_plans) = services.get(service_name) else {
-                continue;
-            };
-            materialized_service_names.push(service_name.clone());
-            let mut service_hydrating = false;
-            for plan in version_plans.values() {
-                if !plan.bundle_available_locally {
-                    service_hydrating = true;
-                    bundle_cache_miss_count = bundle_cache_miss_count.saturating_add(1);
-                }
-                for artifact in &plan.artifacts {
-                    if artifact.available_locally {
-                        continue;
-                    }
-                    service_hydrating = true;
-                    artifact_cache_miss_count = artifact_cache_miss_count.saturating_add(1);
-                }
-            }
-            if service_hydrating {
-                hydrating_service_count = hydrating_service_count.saturating_add(1);
-            }
-        }
-        for apartment_name in &bound_apartment_names {
-            if apartments.contains_key(apartment_name) {
-                materialized_apartment_names.push(apartment_name.clone());
-            }
-        }
-        let bound_service_count = u32::try_from(bound_service_names.len()).unwrap_or(u32::MAX);
-        let materialized_service_count =
-            u32::try_from(materialized_service_names.len()).unwrap_or(u32::MAX);
-        let bound_apartment_count = u32::try_from(bound_apartment_names.len()).unwrap_or(u32::MAX);
-        let materialized_apartment_count =
-            u32::try_from(materialized_apartment_names.len()).unwrap_or(u32::MAX);
-        let import_failed = import_manifest
-            .as_ref()
-            .is_some_and(|manifest| manifest.import_error.is_some())
-            || import_integrity_error.is_some();
-        let runtime_status = derive_hf_runtime_status(source.status, import_failed);
-        plans.insert(
-            source_id_string,
-            SoracloudRuntimeHfSourcePlan {
-                source_id: source_id.to_string(),
-                repo_id: source.repo_id.clone(),
-                resolved_revision: source.resolved_revision.clone(),
-                model_name: source.model_name.clone(),
-                adapter_id: source.adapter_id.clone(),
-                authoritative_status: source.status,
-                runtime_status,
-                pool_count,
-                active_pool_count,
-                active_member_count,
-                queued_window_count,
-                bound_service_count,
-                bound_service_names,
-                materialized_service_count,
-                materialized_service_names,
-                hydrating_service_count,
-                bound_apartment_count,
-                bound_apartment_names,
-                materialized_apartment_count,
-                materialized_apartment_names,
-                bundle_cache_miss_count,
-                artifact_cache_miss_count,
-                last_error: import_integrity_error.or_else(|| {
-                    import_manifest
-                        .as_ref()
-                        .and_then(|manifest| manifest.import_error.clone())
-                        .or_else(|| source.last_error.clone())
-                }),
-            },
-        );
-    }
-    plans
-}
-fn derive_hf_runtime_status(
-    authoritative_status: SoraHfSourceStatusV1,
-    import_failed: bool,
-) -> SoracloudRuntimeHfSourceStatus {
-    match authoritative_status {
-        SoraHfSourceStatusV1::Failed => SoracloudRuntimeHfSourceStatus::Failed,
-        SoraHfSourceStatusV1::Retired => SoracloudRuntimeHfSourceStatus::Retired,
-        SoraHfSourceStatusV1::PendingImport if import_failed => {
-            SoracloudRuntimeHfSourceStatus::Failed
-        }
-        SoraHfSourceStatusV1::PendingImport => SoracloudRuntimeHfSourceStatus::PendingImport,
-    }
 }
 fn build_apartment_plan(
     apartment_name: &str,
     record: &SoraAgentApartmentRecordV1,
+    current_height: u64,
     state_dir: &Path,
 ) -> SoracloudRuntimeApartmentPlan {
     let apartment_root = state_dir
@@ -10492,9 +9816,9 @@ fn build_apartment_plan(
     SoracloudRuntimeApartmentPlan {
         apartment_name: apartment_name.to_string(),
         manifest_hash: record.manifest_hash.to_string(),
-        status: record.status,
+        status: record.runtime_status_at_current_height(current_height),
         process_generation: record.process_generation,
-        lease_expires_sequence: record.lease_expires_sequence,
+        lease_expires_height: record.lease_expires_height,
         last_active_sequence: record.last_active_sequence,
         materialization_dir: apartment_root.display().to_string(),
         pending_wallet_request_count: u32::try_from(record.pending_wallet_requests.len())
@@ -10601,12 +9925,7 @@ fn collect_active_versions(
                 deployment.current_service_version
             );
         }
-        let baseline_version = rollout.baseline_version.as_ref().ok_or_else(|| {
-            eyre::eyre!(
-                "deployment for service `{}` carries an active rollout without a baseline revision",
-                deployment.service_name
-            )
-        })?;
+        let baseline_version = &rollout.baseline_version;
         if baseline_version == &rollout.candidate_version {
             eyre::bail!(
                 "deployment for service `{}` carries identical active rollout baseline and candidate revision `{}`",
@@ -10703,65 +10022,44 @@ fn deterministic_mailbox_failure_result_with_message(
         request.deployment.service_name.as_ref(),
         request.deployment.current_service_version.as_str(),
         request.mailbox_message.to_handler.as_ref(),
-        request.execution_sequence,
+        request.observed_sequence,
         outcome_label,
         detail,
     )));
-    let receipt_id = mailbox_receipt_id(
-        request.mailbox_message.message_id,
-        request.deployment.service_name.as_ref(),
-        &request.deployment.current_service_version,
-        request.execution_sequence,
-        outcome_label,
-    );
+    let mut runtime_receipt = SoraRuntimeReceiptV1 {
+        schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
+        receipt_id: Hash::prehashed([0; Hash::LENGTH]),
+        service_name: request.deployment.service_name.clone(),
+        service_version: request.deployment.current_service_version.clone(),
+        handler_name: request.mailbox_message.to_handler.clone(),
+        handler_class: request
+            .handler
+            .as_ref()
+            .map(|handler| handler.class)
+            .unwrap_or(SoraServiceHandlerClassV1::Update),
+        request_commitment: request.mailbox_message.payload_commitment,
+        result_commitment,
+        certified_by: SoraCertifiedResponsePolicyV1::None,
+        emitted_sequence: 0,
+        execution_host: None,
+        mailbox_message_id: Some(request.mailbox_message.message_id),
+        journal_artifact_hash: None,
+        checkpoint_artifact_hash: None,
+    };
+    runtime_receipt.receipt_id =
+        iroha_core::soracloud_runtime::ordered_mailbox_runtime_receipt_id(&runtime_receipt)
+            .expect("ordered mailbox runtime receipt carries its source message");
     SoracloudOrderedMailboxExecutionResult {
         state_mutations: Vec::new(),
         outbound_mailbox_messages: Vec::new(),
         response_bytes: Vec::new(),
         content_type: None,
-        runtime_state: Some(updated_runtime_state_with_outbound_mailbox(
+        runtime_state: Some(updated_runtime_state(
             request.runtime_state.clone(),
-            &request,
             health_status,
-            &[],
         )),
-        runtime_receipt: SoraRuntimeReceiptV1 {
-            schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
-            receipt_id,
-            service_name: request.deployment.service_name,
-            service_version: request.deployment.current_service_version,
-            handler_name: request.mailbox_message.to_handler.clone(),
-            handler_class: request
-                .handler
-                .as_ref()
-                .map(|handler| handler.class)
-                .unwrap_or(SoraServiceHandlerClassV1::Update),
-            request_commitment: request.mailbox_message.payload_commitment,
-            result_commitment,
-            certified_by: SoraCertifiedResponsePolicyV1::None,
-            emitted_sequence: request.execution_sequence,
-            mailbox_message_id: Some(request.mailbox_message.message_id),
-            journal_artifact_hash: None,
-            checkpoint_artifact_hash: None,
-            placement_id: None,
-            selected_validator_account_id: None,
-            selected_peer_id: None,
-        },
+        runtime_receipt,
     }
-}
-fn mailbox_receipt_id(
-    message_id: Hash,
-    service_name: &str,
-    service_version: &str,
-    execution_sequence: u64,
-    outcome_label: &str,
-) -> Hash {
-    Hash::new(
-        format!(
-            "soracloud:runtime-receipt:{message_id}:{service_name}:{service_version}:{execution_sequence}:{outcome_label}"
-        )
-        .as_bytes(),
-    )
 }
 fn validate_authoritative_mailbox_runtime_state(
     request: &SoracloudOrderedMailboxExecutionRequest,
@@ -10784,11 +10082,6 @@ fn validate_authoritative_mailbox_runtime_state(
             ),
         )
     })?;
-    let expected_rollout_handle = request
-        .deployment
-        .active_rollout
-        .as_ref()
-        .map(|rollout| rollout.rollout_handle.as_str());
     for (field, matches) in [
         (
             "service_name",
@@ -10801,10 +10094,6 @@ fn validate_authoritative_mailbox_runtime_state(
         (
             "materialized_bundle_hash",
             state.materialized_bundle_hash == request.bundle.container.bundle_hash,
-        ),
-        (
-            "rollout_handle",
-            state.rollout_handle.as_deref() == expected_rollout_handle,
         ),
     ] {
         if !matches {
@@ -10819,23 +10108,13 @@ fn validate_authoritative_mailbox_runtime_state(
     }
     Ok(())
 }
-fn updated_runtime_state_with_outbound_mailbox(
+fn updated_runtime_state(
     runtime_state: Option<iroha_data_model::soracloud::SoraServiceRuntimeStateV1>,
-    request: &SoracloudOrderedMailboxExecutionRequest,
     health_status: SoraServiceHealthStatusV1,
-    outbound_mailbox_messages: &[SoraServiceMailboxMessageV1],
 ) -> iroha_data_model::soracloud::SoraServiceRuntimeStateV1 {
     let mut runtime_state = runtime_state
         .expect("ordered mailbox runtime state must be validated before result construction");
-    let self_requeued = outbound_mailbox_messages
-        .iter()
-        .filter(|message| message.to_service == request.deployment.service_name)
-        .count();
     runtime_state.health_status = health_status;
-    runtime_state.pending_mailbox_message_count = request
-        .authoritative_pending_mailbox_messages
-        .saturating_sub(1)
-        .saturating_add(u32::try_from(self_requeued).unwrap_or(u32::MAX));
     runtime_state
 }
 fn ensure_ivm_runtime(
@@ -10893,8 +10172,9 @@ fn authoritative_mailbox_result_commitment(
                 message.to_service.as_ref(),
                 message.to_handler.as_ref(),
                 message.payload_commitment,
-                message.available_after_sequence,
-                message.expires_at_sequence,
+                message.delivery_delay_blocks,
+                message.available_after_height,
+                message.expires_at_height,
             )
         })
         .collect::<Vec<_>>();
@@ -10911,7 +10191,7 @@ fn authoritative_mailbox_result_commitment(
         request.deployment.service_name.as_ref(),
         request.deployment.current_service_version.as_str(),
         request.mailbox_message.to_handler.as_ref(),
-        request.execution_sequence,
+        request.observed_sequence,
         mutation_fingerprints,
         outbound_fingerprints,
         response_fingerprint,
@@ -11287,1491 +10567,6 @@ fn provider_advert_is_fresh(advert: &sorafs_manifest::ProviderAdvertV1, now: u64
         && advert.validate_with_body(now).is_ok()
         && advert.verify_signature().is_ok()
 }
-fn parse_exact_hf_base_url(raw: &str) -> eyre::Result<reqwest::Url> {
-    if raw.is_empty() {
-        eyre::bail!("empty Hugging Face base URL");
-    }
-    if raw.trim() != raw {
-        eyre::bail!("Hugging Face base URL must not contain surrounding whitespace");
-    }
-    let url = reqwest::Url::parse(raw).wrap_err("parse exact Hugging Face base URL")?;
-    validate_hf_import_url_transport(&url)?;
-    if url.query().is_some() || url.fragment().is_some() {
-        eyre::bail!("Hugging Face base URL must not contain a query or fragment");
-    }
-    let canonical = url.as_str().trim_end_matches('/');
-    if raw != canonical {
-        eyre::bail!("Hugging Face base URL `{raw}` is not canonical; expected `{canonical}`");
-    }
-    Ok(url)
-}
-fn validate_hf_import_url_transport(url: &reqwest::Url) -> eyre::Result<()> {
-    if !url.username().is_empty()
-        || url.password().is_some()
-        || url.host_str().is_none()
-        || url.port() == Some(0)
-        || url.fragment().is_some()
-    {
-        eyre::bail!("Hugging Face importer URL must have one credential-free network authority");
-    }
-    if url.scheme() == "https" {
-        return Ok(());
-    }
-    #[cfg(test)]
-    if url.scheme() == "http"
-        && url
-            .host_str()
-            .and_then(parse_url_host_ip_literal)
-            .is_some_and(|address| address.is_loopback())
-    {
-        return Ok(());
-    }
-    eyre::bail!("Hugging Face importer URLs must use HTTPS");
-}
-fn hf_import_url_origin(url: &reqwest::Url) -> eyre::Result<String> {
-    validate_hf_import_url_transport(url)?;
-    let origin = url.origin().ascii_serialization();
-    if origin == "null" {
-        eyre::bail!("Hugging Face importer URL must have a tuple origin");
-    }
-    Ok(origin)
-}
-fn hf_import_allowed_redirect_origins(
-    config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
-) -> eyre::Result<BTreeSet<String>> {
-    if config.import_redirect_allowed_origins.len()
-        > iroha_config::parameters::defaults::soracloud_runtime::hf::IMPORT_REDIRECT_ALLOWED_ORIGINS_LIMIT
-    {
-        eyre::bail!(
-            "Hugging Face importer redirect-origin allowlist exceeds its fixed {}-entry bound",
-            iroha_config::parameters::defaults::soracloud_runtime::hf::IMPORT_REDIRECT_ALLOWED_ORIGINS_LIMIT
-        );
-    }
-    let mut allowed = BTreeSet::new();
-    for base in [&config.hub_base_url, &config.api_base_url] {
-        let base = parse_exact_hf_base_url(base)?;
-        allowed.insert(hf_import_url_origin(&base)?);
-    }
-    for raw in &config.import_redirect_allowed_origins {
-        if raw.is_empty() || raw.trim() != raw {
-            eyre::bail!("Hugging Face redirect allowlist entry `{raw}` must be one exact origin");
-        }
-        let url = reqwest::Url::parse(raw)
-            .wrap_err_with(|| format!("parse Hugging Face redirect origin `{raw}`"))?;
-        validate_hf_import_url_transport(&url)?;
-        if url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
-            eyre::bail!("Hugging Face redirect allowlist entry `{raw}` must be one exact origin");
-        }
-        let origin = hf_import_url_origin(&url)?;
-        if origin != *raw {
-            eyre::bail!(
-                "Hugging Face redirect allowlist entry `{raw}` is not canonical; expected `{origin}`"
-            );
-        }
-        allowed.insert(origin);
-    }
-    Ok(allowed)
-}
-fn send_hf_import_request_with_vetted_redirects(
-    config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
-    method: reqwest::Method,
-    initial_url: reqwest::Url,
-) -> eyre::Result<reqwest::blocking::Response> {
-    if method != reqwest::Method::GET && method != reqwest::Method::HEAD {
-        eyre::bail!("Hugging Face importer permits only GET and HEAD requests");
-    }
-    let allowed_origins = hf_import_allowed_redirect_origins(config)?;
-    let mut pinned_addresses = BTreeMap::<(String, u16), Vec<SocketAddr>>::new();
-    let mut url = initial_url;
-    for redirect_count in
-        0..=iroha_config::parameters::defaults::soracloud_runtime::hf::IMPORT_MAX_REDIRECTS
-    {
-        let origin = hf_import_url_origin(&url)?;
-        if !allowed_origins.contains(&origin) {
-            eyre::bail!("Hugging Face importer redirect targeted unapproved origin `{origin}`");
-        }
-        let host = url
-            .host_str()
-            .ok_or_else(|| eyre::eyre!("Hugging Face importer URL has no host"))?
-            .to_owned();
-        let port = url
-            .port_or_known_default()
-            .ok_or_else(|| eyre::eyre!("Hugging Face importer URL has no port"))?;
-        let address_key = (host.clone(), port);
-        let addresses = if let Some(addresses) = pinned_addresses.get(&address_key) {
-            addresses.clone()
-        } else {
-            let addresses = resolve_soracloud_egress_socket_addrs(&url).ok_or_else(|| {
-                eyre::eyre!(
-                    "Hugging Face importer origin `{origin}` did not resolve exclusively to bounded public addresses"
-                )
-            })?;
-            pinned_addresses.insert(address_key, addresses.clone());
-            addresses
-        };
-        let client = build_soracloud_direct_http_client(
-            &host,
-            &addresses,
-            Duration::from_secs(5).min(config.request_timeout),
-            config.request_timeout,
-        )
-        .wrap_err("build pinned Hugging Face importer HTTP client")?;
-        // Build every hop from only the method and URL. In particular, no
-        // authorization or cookie header can cross an origin boundary.
-        let response = client
-            .request(method.clone(), url.clone())
-            .send()
-            .wrap_err_with(|| format!("send Hugging Face importer request to {url}"))?;
-        let status = response.status();
-        if !matches!(
-            status,
-            reqwest::StatusCode::MOVED_PERMANENTLY
-                | reqwest::StatusCode::FOUND
-                | reqwest::StatusCode::SEE_OTHER
-                | reqwest::StatusCode::TEMPORARY_REDIRECT
-                | reqwest::StatusCode::PERMANENT_REDIRECT
-        ) {
-            return Ok(response);
-        }
-        if redirect_count
-            == iroha_config::parameters::defaults::soracloud_runtime::hf::IMPORT_MAX_REDIRECTS
-        {
-            eyre::bail!("Hugging Face importer exceeded its fixed redirect bound");
-        }
-        let mut locations = response.headers().get_all(reqwest::header::LOCATION).iter();
-        let location = locations
-            .next()
-            .ok_or_else(|| eyre::eyre!("Hugging Face redirect omitted Location"))?
-            .to_str()
-            .wrap_err("Hugging Face redirect Location is not visible ASCII")?;
-        if locations.next().is_some() {
-            eyre::bail!("Hugging Face redirect returned multiple Location headers");
-        }
-        url = url
-            .join(location)
-            .wrap_err("resolve Hugging Face redirect Location")?;
-    }
-    unreachable!("bounded Hugging Face redirect loop always returns or errors")
-}
-fn hf_model_info_url(
-    api_base_url: &str,
-    repo_id: &str,
-    requested_revision: &str,
-) -> eyre::Result<reqwest::Url> {
-    let mut url = parse_exact_hf_base_url(api_base_url)?;
-    {
-        let mut segments = url
-            .path_segments_mut()
-            .map_err(|_| eyre::eyre!("Hugging Face API base URL cannot be a base"))?;
-        for component in ["models"]
-            .into_iter()
-            .chain(repo_id.split('/'))
-            .chain(["revision", requested_revision].into_iter())
-        {
-            segments.push(component);
-        }
-    }
-    // The Hub only returns immutable LFS object digests/sizes when blob
-    // metadata is requested explicitly. Those values authenticate subsequent
-    // CDN payloads independently of redirect routing and Content-Length.
-    url.query_pairs_mut().append_pair("blobs", "true");
-    Ok(url)
-}
-fn hf_repo_file_url(
-    hub_base_url: &str,
-    repo_id: &str,
-    requested_revision: &str,
-    file_path: &str,
-) -> eyre::Result<reqwest::Url> {
-    let mut url = parse_exact_hf_base_url(hub_base_url)?;
-    {
-        let mut segments = url
-            .path_segments_mut()
-            .map_err(|_| eyre::eyre!("Hugging Face Hub base URL cannot be a base"))?;
-        for component in repo_id
-            .split('/')
-            .chain(["resolve", requested_revision].into_iter())
-            .chain(file_path.split('/'))
-        {
-            segments.push(component);
-        }
-    }
-    Ok(url)
-}
-fn bounded_hf_model_info_string(
-    model_info: &norito::json::Value,
-    field: &str,
-) -> eyre::Result<Option<String>> {
-    let Some(value) = model_info.get(field).and_then(norito::json::Value::as_str) else {
-        return Ok(None);
-    };
-    if value.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES {
-        eyre::bail!(
-            "Hugging Face model-info field `{field}` exceeds the {}-byte string limit",
-            SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES
-        );
-    }
-    Ok(Some(value.to_owned()))
-}
-fn validate_hf_model_info_resolved_commit(
-    model_info: &norito::json::Value,
-    expected_commit: &str,
-) -> eyre::Result<String> {
-    if !is_canonical_hf_commit_oid_v1(expected_commit) {
-        eyre::bail!("authoritative Hugging Face revision is not a full lowercase commit OID");
-    }
-    let resolved_commit = bounded_hf_model_info_string(model_info, "sha")?
-        .ok_or_else(|| eyre::eyre!("Hugging Face model-info response omitted `sha`"))?;
-    if !is_canonical_hf_commit_oid_v1(&resolved_commit) {
-        eyre::bail!("Hugging Face model-info `sha` is not a full lowercase commit OID");
-    }
-    if resolved_commit != expected_commit {
-        eyre::bail!(
-            "Hugging Face model-info resolved commit `{resolved_commit}` does not match authoritative commit `{expected_commit}`"
-        );
-    }
-    Ok(resolved_commit)
-}
-fn validate_hf_model_info_identity(
-    model_info: &norito::json::Value,
-    expected_repo_id: &str,
-    expected_commit: &str,
-) -> eyre::Result<String> {
-    if !is_canonical_hf_repo_id_v1(expected_repo_id) {
-        eyre::bail!("authoritative Hugging Face repository ID is not canonical");
-    }
-    let model_id = bounded_hf_model_info_string(model_info, "modelId")?
-        .ok_or_else(|| eyre::eyre!("Hugging Face model-info response omitted `modelId`"))?;
-    if model_id != expected_repo_id {
-        eyre::bail!(
-            "Hugging Face model-info `modelId` `{model_id}` does not exactly match authoritative repository `{expected_repo_id}`"
-        );
-    }
-    validate_hf_model_info_resolved_commit(model_info, expected_commit)
-}
-fn bounded_hf_model_info_strings(
-    model_info: &norito::json::Value,
-    field: &str,
-    maximum_items: usize,
-) -> eyre::Result<Vec<String>> {
-    let Some(values) = model_info
-        .get(field)
-        .and_then(norito::json::Value::as_array)
-    else {
-        return Ok(Vec::new());
-    };
-    if values.len() > maximum_items {
-        eyre::bail!(
-            "Hugging Face model-info field `{field}` contains {} items, exceeding the {maximum_items}-item limit",
-            values.len()
-        );
-    }
-    let mut strings = Vec::new();
-    strings
-        .try_reserve_exact(values.len())
-        .wrap_err_with(|| format!("reserve bounded Hugging Face model-info `{field}` values"))?;
-    for value in values {
-        let Some(value) = value.as_str() else {
-            continue;
-        };
-        if value.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES {
-            eyre::bail!(
-                "Hugging Face model-info field `{field}` contains a string exceeding the {}-byte limit",
-                SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES
-            );
-        }
-        strings.push(value.to_owned());
-    }
-    Ok(strings)
-}
-fn parse_canonical_hf_lfs_sha256(value: &str) -> Option<[u8; 32]> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return None;
-    }
-    let mut digest = [0_u8; 32];
-    hex::decode_to_slice(value, &mut digest).ok()?;
-    Some(digest)
-}
-fn hf_path_has_extension(path: &str, extensions: &[&str]) -> bool {
-    extensions.iter().any(|extension| {
-        path.get(path.len().saturating_sub(extension.len())..)
-            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(extension))
-    })
-}
-fn local_hf_required_weight_records(
-    selection: &SoraHfWeightSelectionV1,
-) -> Vec<HfRequiredWeightFileV1> {
-    selection
-        .required_weight_files
-        .iter()
-        .map(|weight| HfRequiredWeightFileV1 {
-            path: weight.path.clone(),
-            content_length: weight.content_length,
-            lfs_sha256: weight.lfs_sha256.clone(),
-        })
-        .collect()
-}
-fn validate_hf_weight_selection_against_profile(
-    selection: &SoraHfWeightSelectionV1,
-    profile: &SoraHfResourceProfileV1,
-) -> eyre::Result<()> {
-    profile
-        .validate()
-        .wrap_err("validate authoritative Hugging Face resource profile")?;
-    let selected_weight_file_count = u32::try_from(selection.required_weight_files.len())
-        .wrap_err("selected Hugging Face weight-file count does not fit u32")?;
-    if selection.required_model_bytes != profile.required_model_bytes
-        || selection.backend_family != profile.backend_family
-        || selection.model_format != profile.model_format
-        || selected_weight_file_count != profile.selected_weight_file_count
-        || selection.weight_selection_commitment != profile.weight_selection_commitment
-    {
-        eyre::bail!(
-            "Hugging Face model-info weight selection does not exactly match the authoritative resource profile"
-        );
-    }
-    Ok(())
-}
-fn hf_import_file_requires_lfs_integrity(path: &str) -> bool {
-    hf_path_has_extension(path, SORA_HF_WEIGHT_FILE_EXTENSIONS_V1)
-}
-fn hf_import_relative_path(path: &str) -> io::Result<PathBuf> {
-    if path.split('/').count() > SORACLOUD_HF_IMPORT_MAX_PATH_COMPONENTS_V1 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "Hugging Face import path `{path}` exceeds the {}-component limit",
-                SORACLOUD_HF_IMPORT_MAX_PATH_COMPONENTS_V1
-            ),
-        ));
-    }
-    sanitized_relative_material_path(path).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("invalid Hugging Face import path `{path}`: {error}"),
-        )
-    })
-}
-fn hf_local_source_root(state_dir: &Path, source_id: &str) -> PathBuf {
-    state_dir
-        .join("hf_sources")
-        .join(storage_path_component(source_id))
-}
-fn hf_local_generations_root(state_dir: &Path, source_id: &str) -> PathBuf {
-    hf_local_source_root(state_dir, source_id).join(SORACLOUD_HF_IMPORT_GENERATIONS_DIRECTORY_V1)
-}
-fn hf_local_current_generation_path(state_dir: &Path, source_id: &str) -> PathBuf {
-    hf_local_source_root(state_dir, source_id).join(SORACLOUD_HF_IMPORT_CURRENT_GENERATION_FILE_V1)
-}
-fn valid_hf_import_generation_name(name: &str) -> bool {
-    name.strip_prefix(SORACLOUD_HF_IMPORT_GENERATION_PREFIX_V1)
-        .is_some_and(|suffix| {
-            suffix.len() == SORACLOUD_HF_IMPORT_GENERATION_RANDOM_BYTES_V1 * 2
-                && suffix
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        })
-}
-fn read_hf_current_generation_name(
-    state_dir: &Path,
-    source_id: &str,
-) -> io::Result<Option<String>> {
-    let path = hf_local_current_generation_path(state_dir, source_id);
-    let metadata = match fs::symlink_metadata(&path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    validate_hf_cache_entry_custody(&path, &metadata, true)?;
-    let name =
-        read_soracloud_regular_text_bounded(&path, 128, "Hugging Face current-generation pointer")?;
-    if !valid_hf_import_generation_name(&name) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Hugging Face current-generation pointer is not canonical",
-        ));
-    }
-    Ok(Some(name))
-}
-fn hf_generation_pin(root: &Path) -> Arc<()> {
-    let pins = HF_IMPORT_GENERATION_PINS_V1.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let mut pins = pins.lock();
-    pins.retain(|_, pin| pin.strong_count() != 0);
-    if let Some(pin) = pins.get(root).and_then(Weak::upgrade) {
-        return pin;
-    }
-    let pin = Arc::new(());
-    pins.insert(root.to_path_buf(), Arc::downgrade(&pin));
-    pin
-}
-fn read_hf_import_generation(
-    state_dir: &Path,
-    source_id: &str,
-) -> io::Result<Option<PinnedHfImportGeneration>> {
-    for _ in 0..4 {
-        let Some(name) = read_hf_current_generation_name(state_dir, source_id)? else {
-            return Ok(None);
-        };
-        let root = hf_local_generations_root(state_dir, source_id).join(&name);
-        let pin = hf_generation_pin(&root);
-        let metadata = match fs::symlink_metadata(&root) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                if read_hf_current_generation_name(state_dir, source_id)?.as_deref()
-                    != Some(name.as_str())
-                {
-                    continue;
-                }
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Hugging Face current-generation pointer names a missing generation",
-                ));
-            }
-            Err(error) => return Err(error),
-        };
-        validate_hf_cache_entry_custody(&root, &metadata, false)?;
-        let manifest_path = root.join("import_manifest.json");
-        let manifest: HfLocalImportManifestV1 = read_json_optional(
-            &manifest_path,
-            SORACLOUD_HF_IMPORT_MANIFEST_MAX_BYTES,
-            "Hugging Face import manifest",
-        )?
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "published Hugging Face generation omits its import manifest",
-            )
-        })?;
-        if manifest.schema_version != HF_LOCAL_IMPORT_SCHEMA_VERSION_V1 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "Hugging Face import manifest schema version {} does not match V1",
-                    manifest.schema_version
-                ),
-            ));
-        }
-        if manifest.source_id != source_id {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "Hugging Face import manifest source `{}` does not match requested source `{source_id}`",
-                    manifest.source_id
-                ),
-            ));
-        }
-        validate_hf_import_manifest_bounds(&manifest)?;
-        if read_hf_current_generation_name(state_dir, source_id)?.as_deref() != Some(name.as_str())
-        {
-            continue;
-        }
-        return Ok(Some(PinnedHfImportGeneration {
-            #[cfg(test)]
-            name,
-            files_root: root.join("files"),
-            root,
-            manifest,
-            _pin: pin,
-        }));
-    }
-    Err(io::Error::new(
-        io::ErrorKind::WouldBlock,
-        "Hugging Face current generation changed repeatedly while being pinned",
-    ))
-}
-#[cfg(test)]
-fn read_hf_import_manifest(
-    state_dir: &Path,
-    source_id: &str,
-) -> io::Result<Option<HfLocalImportManifestV1>> {
-    Ok(
-        read_hf_import_generation(state_dir, source_id)?.map(|generation| {
-            debug_assert!(valid_hf_import_generation_name(&generation.name));
-            generation.manifest.clone()
-        }),
-    )
-}
-fn validate_hf_import_manifest_bounds(manifest: &HfLocalImportManifestV1) -> io::Result<()> {
-    if manifest.tags.len() > SORACLOUD_HF_MODEL_INFO_MAX_TAGS
-        || manifest.required_weight_files.len() > SORACLOUD_HF_IMPORT_MANIFEST_MAX_FILES
-        || manifest.imported_files.len() > SORACLOUD_HF_IMPORT_MANIFEST_MAX_FILES
-        || manifest.skipped_files.len() > SORACLOUD_HF_IMPORT_MAX_RECORDED_SKIPS
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Hugging Face import manifest collection count exceeds its fixed limit",
-        ));
-    }
-    let fixed_text = [
-        manifest.source_id.as_str(),
-        manifest.repo_id.as_str(),
-        manifest.requested_revision.as_str(),
-        manifest.model_name.as_str(),
-        manifest.adapter_id.as_str(),
-    ];
-    if fixed_text
-        .into_iter()
-        .chain(manifest.resolved_commit.as_deref())
-        .chain(manifest.pipeline_tag.as_deref())
-        .chain(manifest.library_name.as_deref())
-        .chain(manifest.model_info_payload_hash.as_deref())
-        .chain(manifest.weight_selection_commitment.as_deref())
-        .chain(manifest.tags.iter().map(String::as_str))
-        .any(|value| value.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES)
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Hugging Face import manifest contains an oversized string",
-        ));
-    }
-    if manifest
-        .skipped_files
-        .iter()
-        .any(|value| value.len() > SORACLOUD_HF_IMPORT_MANIFEST_MAX_TEXT_BYTES)
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Hugging Face import manifest skip record contains an oversized string",
-        ));
-    }
-    if manifest
-        .import_error
-        .as_ref()
-        .is_some_and(|error| error.len() > SORACLOUD_HF_IMPORT_MANIFEST_MAX_ERROR_BYTES)
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Hugging Face import manifest error exceeds its fixed byte limit",
-        ));
-    }
-    if !is_canonical_hf_repo_id_v1(&manifest.repo_id)
-        || !is_canonical_hf_commit_oid_v1(&manifest.requested_revision)
-        || manifest.resolved_commit.as_deref().is_some_and(|commit| {
-            !is_canonical_hf_commit_oid_v1(commit) || commit != manifest.requested_revision
-        })
-        || (manifest.import_error.is_none() && manifest.resolved_commit.is_none())
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Hugging Face import manifest does not bind one canonical requested/resolved commit",
-        ));
-    }
-    if manifest.import_error.is_some() {
-        if manifest.model_info_content_length.is_some()
-            || manifest.model_info_payload_hash.is_some()
-            || manifest.selected_weight_format.is_some()
-            || !manifest.required_weight_files.is_empty()
-            || manifest.weight_selection_commitment.is_some()
-            || !manifest.imported_files.is_empty()
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "failed Hugging Face import manifest retains executable model state",
-            ));
-        }
-        return Ok(());
-    }
-    let model_info_content_length = manifest.model_info_content_length.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "successful Hugging Face import manifest omits model-info length",
-        )
-    })?;
-    let maximum_model_info_bytes = iroha_config::parameters::defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT;
-    if model_info_content_length == 0 || model_info_content_length > maximum_model_info_bytes {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Hugging Face import manifest model-info length exceeds its fixed bound",
-        ));
-    }
-    let model_info_payload_hash = manifest.model_info_payload_hash.as_deref().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "successful Hugging Face import manifest omits model-info payload hash",
-        )
-    })?;
-    Hash::from_str(model_info_payload_hash).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("invalid Hugging Face model-info payload hash: {error}"),
-        )
-    })?;
-    manifest.selected_weight_format.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "successful Hugging Face import manifest omits its selected weight format",
-        )
-    })?;
-    if manifest.required_weight_files.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "successful Hugging Face import manifest has no required weight set",
-        ));
-    }
-    let mut required_weights = BTreeMap::<&str, &HfRequiredWeightFileV1>::new();
-    let mut previous_required_path: Option<&str> = None;
-    for weight in &manifest.required_weight_files {
-        if weight.path.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES
-            || weight.lfs_sha256.len() != 64
-            || weight.content_length == 0
-            || parse_canonical_hf_lfs_sha256(&weight.lfs_sha256).is_none()
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Hugging Face import manifest contains an invalid required weight record",
-            ));
-        }
-        hf_import_relative_path(&weight.path)?;
-        if previous_required_path.is_some_and(|previous| previous >= weight.path.as_str())
-            || required_weights
-                .insert(weight.path.as_str(), weight)
-                .is_some()
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Hugging Face import manifest required weight paths are not unique canonical order",
-            ));
-        }
-        previous_required_path = Some(weight.path.as_str());
-    }
-    let recorded_selection_commitment = manifest
-        .weight_selection_commitment
-        .as_deref()
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "successful Hugging Face import manifest omits its weight selection commitment",
-            )
-        })?;
-    Hash::from_str(recorded_selection_commitment).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("invalid Hugging Face weight selection commitment: {error}"),
-        )
-    })?;
-    let mut total_file_bytes = 0_u64;
-    let mut imported_paths = BTreeSet::new();
-    for file in &manifest.imported_files {
-        if file.path.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES
-            || file.payload_hash.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES
-            || file
-                .lfs_sha256
-                .as_ref()
-                .is_some_and(|digest| digest.len() > 64)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Hugging Face import manifest file record contains an oversized string",
-            ));
-        }
-        hf_import_relative_path(&file.path)?;
-        if !imported_paths.insert(file.path.clone()) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Hugging Face import manifest contains a duplicate file path",
-            ));
-        }
-        Hash::from_str(&file.payload_hash).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Hugging Face import manifest contains an invalid payload hash: {error}"),
-            )
-        })?;
-        if let Some(lfs_sha256) = file.lfs_sha256.as_deref()
-            && parse_canonical_hf_lfs_sha256(lfs_sha256).is_none()
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Hugging Face import manifest contains a noncanonical LFS SHA-256",
-            ));
-        }
-        if hf_import_file_requires_lfs_integrity(&file.path) {
-            let required = required_weights.remove(file.path.as_str()).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "Hugging Face import manifest contains unselected model weight `{}`",
-                        file.path
-                    ),
-                )
-            })?;
-            if file.content_length != required.content_length
-                || file.lfs_sha256.as_deref() != Some(required.lfs_sha256.as_str())
-            {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "Hugging Face imported model weight `{}` differs from its authenticated required record",
-                        file.path
-                    ),
-                ));
-            }
-        }
-        total_file_bytes = total_file_bytes
-            .checked_add(file.content_length)
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Hugging Face import manifest file byte count overflow",
-                )
-            })?;
-        if total_file_bytes > SORACLOUD_HF_IMPORT_MANIFEST_MAX_TOTAL_FILE_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Hugging Face import manifest file bytes exceed the fixed aggregate limit",
-            ));
-        }
-    }
-    if let Some((missing, _)) = required_weights.into_iter().next() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Hugging Face import manifest is missing required model weight `{missing}`"),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn validate_hf_cache_entry_custody(
-    path: &Path,
-    metadata: &fs::Metadata,
-    require_regular_file: bool,
-) -> io::Result<()> {
-    let expected_type = if require_regular_file {
-        metadata.is_file()
-    } else {
-        metadata.is_dir()
-    };
-    if metadata.file_type().is_symlink()
-        || !expected_type
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.mode() & 0o022 != 0
-        || (require_regular_file && metadata.nlink() != 1)
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "Hugging Face cache entry {} lost owner-only regular-file custody",
-                path.display()
-            ),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn validate_hf_cache_entry_custody(
-    path: &Path,
-    metadata: &fs::Metadata,
-    require_regular_file: bool,
-) -> io::Result<()> {
-    let expected_type = if require_regular_file {
-        metadata.is_file()
-    } else {
-        metadata.is_dir()
-    };
-    if metadata.file_type().is_symlink() || !expected_type {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!("invalid Hugging Face cache entry {}", path.display()),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_hf_cached_import_file(
-    path: &Path,
-    record: &HfImportedFileV1,
-    maximum_bytes: u64,
-) -> io::Result<()> {
-    if record.content_length > maximum_bytes {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "cached Hugging Face file `{}` exceeds its configured byte limit",
-                record.path
-            ),
-        ));
-    }
-    let expected_payload_hash = Hash::from_str(&record.payload_hash).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("invalid cached Hugging Face payload hash: {error}"),
-        )
-    })?;
-    let expected_lfs_sha256 = record
-        .lfs_sha256
-        .as_deref()
-        .map(|digest| {
-            parse_canonical_hf_lfs_sha256(digest).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "invalid cached Hugging Face LFS SHA-256",
-                )
-            })
-        })
-        .transpose()?;
-    let (mut file, before) =
-        open_soracloud_regular_file_no_follow(path, "cached Hugging Face import payload")?;
-    validate_hf_cache_entry_custody(path, &before, true)?;
-    if before.len() != record.content_length {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "cached Hugging Face file `{}` has {} bytes instead of {}",
-                record.path,
-                before.len(),
-                record.content_length
-            ),
-        ));
-    }
-    let (payload_hash, payload_bytes) = Hash::new_from_reader_bounded(&mut file, maximum_bytes)?;
-    if payload_bytes != record.content_length || payload_hash != expected_payload_hash {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "cached Hugging Face file `{}` failed its payload hash",
-                record.path
-            ),
-        ));
-    }
-    if let Some(expected_lfs_sha256) = expected_lfs_sha256 {
-        file.rewind()?;
-        let (observed_sha256, observed_bytes) = sha256_reader_bounded(&mut file, maximum_bytes)?;
-        if observed_bytes != record.content_length || observed_sha256 != expected_lfs_sha256 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "cached Hugging Face file `{}` failed its authenticated LFS SHA-256",
-                    record.path
-                ),
-            ));
-        }
-    }
-    let opened_after = file.metadata()?;
-    let named_after = fs::symlink_metadata(path)?;
-    validate_hf_cache_entry_custody(path, &opened_after, true)?;
-    validate_hf_cache_entry_custody(path, &named_after, true)?;
-    if !same_soracloud_regular_file(&before, &opened_after)
-        || !same_soracloud_regular_file(&opened_after, &named_after)
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "cached Hugging Face file `{}` changed while verified",
-                record.path
-            ),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_hf_cached_model_info(
-    generation_root: &Path,
-    manifest: &HfLocalImportManifestV1,
-    profile: &SoraHfResourceProfileV1,
-    maximum_files: u32,
-    maximum_file_bytes: u64,
-    maximum_total_bytes: u64,
-) -> io::Result<()> {
-    let expected_length = manifest.model_info_content_length.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Hugging Face cache manifest omits model-info length",
-        )
-    })?;
-    let expected_hash = manifest
-        .model_info_payload_hash
-        .as_deref()
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Hugging Face cache manifest omits model-info payload hash",
-            )
-        })?
-        .parse::<Hash>()
-        .map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid Hugging Face model-info payload hash: {error}"),
-            )
-        })?;
-    let path = generation_root.join("model_info.json");
-    let metadata = fs::symlink_metadata(&path)?;
-    validate_hf_cache_entry_custody(&path, &metadata, true)?;
-    let maximum_bytes =
-        iroha_config::parameters::defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT;
-    let payload = read_soracloud_regular_file_bounded(
-        &path,
-        maximum_bytes,
-        "cached Hugging Face model-info",
-    )?;
-    if u64::try_from(payload.len()).unwrap_or(u64::MAX) != expected_length
-        || Hash::new(&payload) != expected_hash
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "cached Hugging Face model-info differs from its committed payload",
-        ));
-    }
-    let model_info: norito::json::Value = norito::json::from_slice(&payload).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("decode cached Hugging Face model-info JSON: {error}"),
-        )
-    })?;
-    validate_hf_model_info_identity(&model_info, &manifest.repo_id, &manifest.requested_revision)
-        .map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("validate cached Hugging Face model-info identity: {error}"),
-        )
-    })?;
-    let selection = derive_hf_weight_selection_v1(
-        &model_info,
-        maximum_files,
-        maximum_file_bytes,
-        maximum_total_bytes,
-    )
-    .map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("derive cached Hugging Face weight selection: {error}"),
-        )
-    })?
-    .ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "cached Hugging Face model-info has no supported weight files",
-        )
-    })?;
-    validate_hf_weight_selection_against_profile(&selection, profile).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("validate cached Hugging Face resource profile: {error}"),
-        )
-    })?;
-    let required_weights = local_hf_required_weight_records(&selection);
-    let expected_selection_commitment = selection.weight_selection_commitment.to_string();
-    if manifest.selected_weight_format != Some(selection.model_format)
-        || manifest.required_weight_files != required_weights
-        || manifest.weight_selection_commitment.as_deref()
-            != Some(expected_selection_commitment.as_str())
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Hugging Face cache manifest does not equal the complete model-info weight selection",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_hf_import_cache(
-    generation: &PinnedHfImportGeneration,
-    profile: &SoraHfResourceProfileV1,
-    maximum_files: u32,
-    maximum_file_bytes: u64,
-    maximum_total_bytes: u64,
-) -> io::Result<()> {
-    validate_hf_import_cache_at_generation(
-        &generation.root,
-        &generation.files_root,
-        &generation.manifest,
-        profile,
-        maximum_files,
-        maximum_file_bytes,
-        maximum_total_bytes,
-    )
-}
-fn validate_hf_import_cache_at_generation(
-    generation_root: &Path,
-    files_root: &Path,
-    manifest: &HfLocalImportManifestV1,
-    profile: &SoraHfResourceProfileV1,
-    maximum_files: u32,
-    maximum_file_bytes: u64,
-    maximum_total_bytes: u64,
-) -> io::Result<()> {
-    validate_hf_import_manifest_bounds(manifest)?;
-    if manifest.import_error.is_some() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Hugging Face import manifest records a failed import",
-        ));
-    }
-    validate_hf_cached_model_info(
-        generation_root,
-        manifest,
-        profile,
-        maximum_files,
-        maximum_file_bytes,
-        maximum_total_bytes,
-    )?;
-    let root_metadata = fs::symlink_metadata(files_root)?;
-    validate_hf_cache_entry_custody(files_root, &root_metadata, false)?;
-    let mut expected = BTreeMap::<PathBuf, &HfImportedFileV1>::new();
-    for record in &manifest.imported_files {
-        let relative = hf_import_relative_path(&record.path)?;
-        if expected.insert(relative, record).is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Hugging Face import manifest aliases one cache path",
-            ));
-        }
-    }
-    let mut stack = vec![files_root.to_path_buf()];
-    let mut visited_entries = 0_usize;
-    while let Some(directory) = stack.pop() {
-        let metadata = fs::symlink_metadata(&directory)?;
-        validate_hf_cache_entry_custody(&directory, &metadata, false)?;
-        let mut entries = fs::read_dir(&directory)?.collect::<Result<Vec<_>, _>>()?;
-        entries.sort_by_key(fs::DirEntry::file_name);
-        for entry in entries {
-            visited_entries = visited_entries.checked_add(1).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Hugging Face cache entry count overflow",
-                )
-            })?;
-            if visited_entries > SORACLOUD_HF_IMPORT_CACHE_MAX_ENTRIES_V1 {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "Hugging Face cache exceeds its {}-entry verification bound",
-                        SORACLOUD_HF_IMPORT_CACHE_MAX_ENTRIES_V1
-                    ),
-                ));
-            }
-            let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)?;
-            if metadata.file_type().is_symlink() {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!("Hugging Face cache contains symlink {}", path.display()),
-                ));
-            }
-            if metadata.is_dir() {
-                validate_hf_cache_entry_custody(&path, &metadata, false)?;
-                stack.push(path);
-                continue;
-            }
-            validate_hf_cache_entry_custody(&path, &metadata, true)?;
-            let relative = path.strip_prefix(files_root).map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Hugging Face cache entry escaped its anchored root",
-                )
-            })?;
-            let record = expected.remove(relative).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("unexpected file in Hugging Face cache: {}", path.display()),
-                )
-            })?;
-            validate_hf_cached_import_file(&path, record, maximum_file_bytes)?;
-        }
-    }
-    if let Some((missing, _)) = expected.into_iter().next() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!(
-                "Hugging Face cache is missing imported file {}",
-                missing.display()
-            ),
-        ));
-    }
-    Ok(())
-}
-// HF cache generations are immutable after the `current` pointer publishes them.
-fn create_hf_private_directory_all(path: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt as _;
-        builder.mode(0o700);
-    }
-    builder.create(path)?;
-    validate_hf_cache_entry_custody(path, &fs::symlink_metadata(path)?, false)
-}
-fn remove_hf_generation_directory(path: &Path) -> io::Result<()> {
-    validate_hf_cache_entry_custody(path, &fs::symlink_metadata(path)?, false)?;
-    let mut stack = vec![path.to_path_buf()];
-    let mut visited = 0_usize;
-    while let Some(directory) = stack.pop() {
-        for entry in fs::read_dir(&directory)? {
-            let entry = entry?;
-            visited = visited.checked_add(1).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Hugging Face generation cleanup entry count overflow",
-                )
-            })?;
-            if visited > SORACLOUD_HF_IMPORT_CACHE_MAX_ENTRIES_V1.saturating_add(4) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Hugging Face generation cleanup exceeded its fixed entry bound",
-                ));
-            }
-            let entry_path = entry.path();
-            let metadata = fs::symlink_metadata(&entry_path)?;
-            if metadata.file_type().is_symlink() {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!(
-                        "Hugging Face generation cleanup rejected symlink {}",
-                        entry_path.display()
-                    ),
-                ));
-            }
-            if metadata.is_dir() {
-                validate_hf_cache_entry_custody(&entry_path, &metadata, false)?;
-                stack.push(entry_path);
-            } else {
-                validate_hf_cache_entry_custody(&entry_path, &metadata, true)?;
-            }
-        }
-    }
-    fs::remove_dir_all(path)
-}
-
-fn validate_hf_generation_mutation_lock(path: &Path, file: &fs::File) -> io::Result<()> {
-    let named = fs::symlink_metadata(path)?;
-    let opened = file.metadata()?;
-    if named.file_type().is_symlink()
-        || !same_soracloud_regular_file(&named, &opened)
-        || named.len() != 0
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "Hugging Face generation mutation lock {} changed custody",
-                path.display()
-            ),
-        ));
-    }
-    #[cfg(unix)]
-    if named.uid() != rustix::process::geteuid().as_raw()
-        || named.nlink() != 1
-        || named.mode() & 0o777 != 0o600
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "Hugging Face generation mutation lock {} must be runtime-owned, singly linked, and mode 0600",
-                path.display()
-            ),
-        ));
-    }
-    Ok(())
-}
-
-fn acquire_hf_generation_mutation_lock(source_root: &Path) -> io::Result<fs::File> {
-    let path = source_root.join(SORACLOUD_HF_IMPORT_GENERATION_MUTATION_LOCK_FILE_V1);
-    let before = match fs::symlink_metadata(&path) {
-        Ok(metadata) => Some(metadata),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error),
-    };
-    if before
-        .as_ref()
-        .is_some_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_file())
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "Hugging Face generation mutation lock {} must be a regular file",
-                path.display()
-            ),
-        ));
-    }
-    let mut options = fs::OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600).custom_flags(
-            (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32,
-        );
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    let file = options.open(&path)?;
-    if let Some(before) = before.as_ref()
-        && !same_soracloud_regular_file(before, &file.metadata()?)
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "Hugging Face generation mutation lock {} changed while it was opened",
-                path.display()
-            ),
-        ));
-    }
-    validate_hf_generation_mutation_lock(&path, &file)?;
-    file.try_lock().map_err(|error| match error {
-        fs::TryLockError::WouldBlock => io::Error::new(
-            io::ErrorKind::WouldBlock,
-            format!(
-                "another Hugging Face generation mutation owns {}",
-                path.display()
-            ),
-        ),
-        fs::TryLockError::Error(error) => error,
-    })?;
-    validate_hf_generation_mutation_lock(&path, &file)?;
-    file.sync_all()?;
-    #[cfg(unix)]
-    fs::File::open(source_root)?.sync_all()?;
-    Ok(file)
-}
-
-fn prepare_hf_generation_container(
-    state_dir: &Path,
-    source_id: &str,
-) -> io::Result<(PathBuf, fs::File)> {
-    let source_root = hf_local_source_root(state_dir, source_id);
-    create_hf_private_directory_all(&source_root)?;
-    let mutation_lock = acquire_hf_generation_mutation_lock(&source_root)?;
-    let generations_root = hf_local_generations_root(state_dir, source_id);
-    create_hf_private_directory_all(&generations_root)?;
-    for entry in fs::read_dir(&source_root)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name == SORACLOUD_HF_IMPORT_GENERATIONS_DIRECTORY_V1
-            || name == SORACLOUD_HF_IMPORT_CURRENT_GENERATION_FILE_V1
-        {
-            continue;
-        }
-        if name == SORACLOUD_HF_IMPORT_GENERATION_MUTATION_LOCK_FILE_V1 {
-            validate_hf_generation_mutation_lock(&entry.path(), &mutation_lock)?;
-            continue;
-        }
-        if name.starts_with(&format!(
-            ".{}.",
-            SORACLOUD_HF_IMPORT_CURRENT_GENERATION_FILE_V1
-        )) && name.ends_with(".tmp")
-        {
-            let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)?;
-            validate_hf_cache_entry_custody(&path, &metadata, true)?;
-            fs::remove_file(path)?;
-            continue;
-        }
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Hugging Face source cache contains an unrecognized entry `{name}`"),
-        ));
-    }
-    let current = read_hf_current_generation_name(state_dir, source_id)?;
-    let pins = HF_IMPORT_GENERATION_PINS_V1.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let mut pins = pins.lock();
-    pins.retain(|_, pin| pin.strong_count() != 0);
-    let mut entries = Vec::new();
-    for entry in fs::read_dir(&generations_root)? {
-        if entries.len() == SORACLOUD_HF_IMPORT_GENERATION_MAX_DIRECTORY_ENTRIES_V1 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Hugging Face source cache exceeds its fixed generation bound",
-            ));
-        }
-        entries.push(entry?);
-    }
-    entries.sort_by_key(fs::DirEntry::file_name);
-    let mut retained_entries = 0_usize;
-    for entry in entries {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let path = entry.path();
-        let metadata = fs::symlink_metadata(&path)?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "Hugging Face generation root contains an invalid entry {}",
-                    path.display()
-                ),
-            ));
-        }
-        validate_hf_cache_entry_custody(&path, &metadata, false)?;
-        let canonical_generation = valid_hf_import_generation_name(&name);
-        let stale_staging = name.starts_with(".generation-") && name.ends_with(".staging");
-        if !canonical_generation && !stale_staging {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unrecognized Hugging Face generation entry `{name}`"),
-            ));
-        }
-        if current.as_deref() == Some(name.as_str()) {
-            retained_entries = retained_entries.saturating_add(1);
-            continue;
-        }
-        if pins.get(&path).and_then(Weak::upgrade).is_some() {
-            retained_entries = retained_entries.saturating_add(1);
-            continue;
-        }
-        remove_hf_generation_directory(&path)?;
-    }
-    #[cfg(unix)]
-    {
-        fs::File::open(&generations_root)?.sync_all()?;
-        fs::File::open(&source_root)?.sync_all()?;
-    }
-    if retained_entries >= SORACLOUD_HF_IMPORT_GENERATION_MAX_DIRECTORY_ENTRIES_V1 {
-        return Err(io::Error::new(
-            io::ErrorKind::WouldBlock,
-            "Hugging Face source cache has no bounded slot for a private staging generation",
-        ));
-    }
-    Ok((generations_root, mutation_lock))
-}
-fn begin_hf_import_generation(
-    state_dir: &Path,
-    source_id: &str,
-) -> io::Result<HfImportGenerationStaging> {
-    let source_root = hf_local_source_root(state_dir, source_id);
-    let (generations_root, mutation_lock) = prepare_hf_generation_container(state_dir, source_id)?;
-    for _ in 0..128 {
-        let mut random = [0_u8; SORACLOUD_HF_IMPORT_GENERATION_RANDOM_BYTES_V1];
-        OsRng
-            .try_fill_bytes(&mut random)
-            .map_err(|error| io::Error::other(format!("HF generation OS RNG failed: {error}")))?;
-        let name = format!(
-            "{SORACLOUD_HF_IMPORT_GENERATION_PREFIX_V1}{}",
-            hex::encode(random)
-        );
-        let staging_root = generations_root.join(format!(".{name}.staging"));
-        let mut builder = fs::DirBuilder::new();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt as _;
-            builder.mode(0o700);
-        }
-        match builder.create(&staging_root) {
-            Ok(()) => {
-                let files_root = staging_root.join("files");
-                create_hf_private_directory_all(&files_root)?;
-                return Ok(HfImportGenerationStaging {
-                    name,
-                    source_root,
-                    generations_root,
-                    staging_root,
-                    files_root,
-                    published: false,
-                    _mutation_lock: mutation_lock,
-                });
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "exhausted exclusive Hugging Face generation names",
-    ))
-}
-fn sync_hf_generation_tree_bottom_up(root: &Path) -> io::Result<()> {
-    let mut stack = vec![root.to_path_buf()];
-    let mut directories = Vec::new();
-    let mut visited = 0_usize;
-    while let Some(directory) = stack.pop() {
-        validate_hf_cache_entry_custody(&directory, &fs::symlink_metadata(&directory)?, false)?;
-        directories.push(directory.clone());
-        for entry in fs::read_dir(&directory)? {
-            let entry = entry?;
-            visited = visited.checked_add(1).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Hugging Face generation sync entry count overflow",
-                )
-            })?;
-            if visited > SORACLOUD_HF_IMPORT_CACHE_MAX_ENTRIES_V1.saturating_add(4) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Hugging Face generation sync exceeded its fixed entry bound",
-                ));
-            }
-            let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)?;
-            if metadata.file_type().is_symlink() {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!(
-                        "Hugging Face generation contains symlink {}",
-                        path.display()
-                    ),
-                ));
-            }
-            if metadata.is_dir() {
-                validate_hf_cache_entry_custody(&path, &metadata, false)?;
-                stack.push(path);
-            } else {
-                validate_hf_cache_entry_custody(&path, &metadata, true)?;
-                fs::File::open(&path)?.sync_all()?;
-            }
-        }
-    }
-    #[cfg(unix)]
-    for directory in directories.into_iter().rev() {
-        fs::File::open(directory)?.sync_all()?;
-    }
-    Ok(())
-}
-fn publish_hf_import_generation(
-    staging: &mut HfImportGenerationStaging,
-    manifest: &HfLocalImportManifestV1,
-) -> io::Result<()> {
-    validate_hf_import_manifest_bounds(manifest)?;
-    write_json_atomic_bounded(
-        &staging.staging_root.join("import_manifest.json"),
-        manifest,
-        SORACLOUD_HF_IMPORT_MANIFEST_MAX_BYTES,
-        "Hugging Face import manifest",
-    )?;
-    sync_hf_generation_tree_bottom_up(&staging.staging_root)?;
-    let final_root = staging.generations_root.join(&staging.name);
-    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
-    rustix::fs::renameat_with(
-        rustix::fs::CWD,
-        &staging.staging_root,
-        rustix::fs::CWD,
-        &final_root,
-        rustix::fs::RenameFlags::NOREPLACE,
-    )
-    .map_err(io::Error::from)?;
-    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
-    {
-        if fs::symlink_metadata(&final_root).is_ok() {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "Hugging Face generation destination already exists",
-            ));
-        }
-        fs::rename(&staging.staging_root, &final_root)?;
-    }
-    staging.staging_root = final_root.clone();
-    #[cfg(unix)]
-    fs::File::open(&staging.generations_root)?.sync_all()?;
-    let pointer_path = staging
-        .source_root
-        .join(SORACLOUD_HF_IMPORT_CURRENT_GENERATION_FILE_V1);
-    if let Err(error) = write_bytes_atomic(&pointer_path, staging.name.as_bytes()) {
-        remove_hf_generation_directory(&final_root)?;
-        #[cfg(unix)]
-        fs::File::open(&staging.generations_root)?.sync_all()?;
-        return Err(error);
-    }
-    staging.published = true;
-    Ok(())
-}
-#[cfg(unix)]
 fn open_inrou_runtime_log(
     directory: &PinnedInrouDirectory,
     name: &OsStr,
@@ -13012,20 +10807,6 @@ fn inrou_termination_error_suffix(termination: &eyre::Result<std::process::ExitS
             format!("; bounded child termination also failed: {error}")
         })
 }
-#[cfg(target_os = "linux")]
-fn preserve_inrou_firewall_after_failed_termination(
-    termination: &eyre::Result<std::process::ExitStatus>,
-    firewall: &mut Option<InrouLoopbackOwnerFirewall>,
-) {
-    if termination.is_err()
-        && let Some(firewall) = firewall.take()
-    {
-        // A child that survived SIGKILL must never outlive the loopback owner
-        // barrier. Leaking the lock/rules makes the supervisor fail closed
-        // until process exit, when the kernel releases the lock descriptor.
-        std::mem::forget(firewall);
-    }
-}
 fn join_inrou_log_drains_bounded(log_drains: &mut Vec<thread::JoinHandle<()>>) {
     let deadline = std::time::Instant::now() + SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT;
     while log_drains.iter().any(|drain| !drain.is_finished())
@@ -13202,7 +10983,29 @@ impl HostedHttpWorker {
         };
         #[cfg(target_os = "linux")]
         let cgroup_cleanup = self.cgroup.take().map(|mut cgroup| {
-            let result = cgroup.cleanup_bounded();
+            let cgroup_empty = cgroup.kill_and_attest_empty_bounded();
+            let result: eyre::Result<()> = match (&termination, cgroup_empty) {
+                (Ok(status), Ok(empty)) => cgroup.release_attested_empty(empty).wrap_err_with(|| {
+                    format!(
+                        "release the empty Inrou worker cgroup after direct child exited with {status}"
+                    )
+                }),
+                (Err(termination), Ok(_)) => Err(eyre::eyre!(
+                    "Inrou worker cgroup is empty, but direct-child termination is unproven: {termination}"
+                )),
+                (Ok(status), Err(cgroup_empty)) => Err(cgroup_empty).wrap_err_with(|| {
+                    format!(
+                        "Inrou direct child exited with {status}, but its cgroup could not be proved empty"
+                    )
+                }),
+                (Err(termination), Err(cgroup_empty)) => {
+                    Err(cgroup_empty).wrap_err_with(|| {
+                        format!(
+                            "Inrou direct-child termination and empty-cgroup attestation both failed: {termination}"
+                        )
+                    })
+                }
+            };
             if result.is_err() {
                 // Retain the live object and its deterministic path. A
                 // subsequent launch with this worker identity must fail
@@ -13725,6 +11528,7 @@ impl InrouDurableEgressCheckpoint {
     fn load_or_create(
         state_dir: &Path,
         service_name: &str,
+        lease_started_height: u64,
         reporting_epoch: u64,
         service_version: &str,
         replica_slot: u16,
@@ -13732,12 +11536,13 @@ impl InrouDurableEgressCheckpoint {
         validator_account_id: &AccountId,
         authoritative_checkpoint: Option<HostedHttpReporterCheckpointState>,
     ) -> io::Result<Arc<Self>> {
-        if authoritative_checkpoint
-            .is_some_and(|checkpoint| checkpoint.reporting_epoch != reporting_epoch)
-        {
+        if authoritative_checkpoint.is_some_and(|checkpoint| {
+            checkpoint.lease_started_height != lease_started_height
+                || checkpoint.reporting_epoch != reporting_epoch
+        }) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "authoritative Inrou reporter checkpoint belongs to another reporting epoch",
+                "authoritative Inrou reporter checkpoint belongs to another lease incarnation or reporting epoch",
             ));
         }
         let directory = prepare_inrou_egress_checkpoint_dir(
@@ -13745,6 +11550,7 @@ impl InrouDurableEgressCheckpoint {
         )?;
         let reporter_key_digest = inrou_egress_reporter_key_digest(
             service_name,
+            lease_started_height,
             reporting_epoch,
             service_version,
             replica_slot,
@@ -13820,6 +11626,7 @@ impl InrouDurableEgressCheckpoint {
 
 fn inrou_egress_reporter_key_digest(
     service_name: &str,
+    lease_started_height: u64,
     reporting_epoch: u64,
     service_version: &str,
     replica_slot: u16,
@@ -13829,6 +11636,7 @@ fn inrou_egress_reporter_key_digest(
     let encoded = norito::to_bytes(&(
         "soracloud:inrou-egress-reporter-key:v1",
         service_name.to_owned(),
+        lease_started_height,
         reporting_epoch,
         service_version.to_owned(),
         replica_slot,
@@ -22571,56 +20379,6 @@ fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         Ok(((), u64::try_from(bytes.len()).unwrap_or(u64::MAX)))
     })
 }
-fn write_reader_atomic_bounded(
-    path: &Path,
-    mut reader: impl io::Read,
-    exact_bytes: u64,
-    maximum_bytes: u64,
-    expected_sha256: Option<[u8; 32]>,
-) -> io::Result<Hash> {
-    if maximum_bytes == 0 || exact_bytes > maximum_bytes {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "atomic Soracloud stream length {exact_bytes} is outside the 0..={maximum_bytes} byte limit"
-            ),
-        ));
-    }
-    write_atomic_file(path, |file| {
-        let read_limit = exact_bytes
-            .saturating_add(1)
-            .min(maximum_bytes.saturating_add(1));
-        let observed = io::copy(&mut reader.by_ref().take(read_limit), &mut *file)?;
-        if observed != exact_bytes {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "atomic Soracloud stream yielded {observed} bytes instead of the declared {exact_bytes}"
-                ),
-            ));
-        }
-        if let Some(expected_sha256) = expected_sha256 {
-            file.rewind()?;
-            let (observed_sha256, hashed_bytes) = sha256_reader_bounded(&mut *file, maximum_bytes)?;
-            if hashed_bytes != exact_bytes || observed_sha256 != expected_sha256 {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "atomic Hugging Face stream failed its authenticated LFS SHA-256",
-                ));
-            }
-        }
-        file.rewind()?;
-        let (payload_hash, hashed_bytes) = Hash::new_from_reader_bounded(&mut *file, maximum_bytes)
-            .map_err(|error| io::Error::other(format!("hash atomic Soracloud stream: {error}")))?;
-        if hashed_bytes != exact_bytes {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "atomic Soracloud stream changed while it was hashed",
-            ));
-        }
-        Ok((payload_hash, observed))
-    })
-}
 fn write_atomic_file<T>(
     path: &Path,
     write: impl FnOnce(&mut fs::File) -> io::Result<(T, u64)>,
@@ -22878,9 +20636,6 @@ where
 mod tests {
     //! Tests for the embedded Soracloud runtime manager.
     use super::*;
-    const TEST_HF_COMMIT_OID: &str = "0123456789abcdef0123456789abcdef01234567";
-    const OTHER_TEST_HF_COMMIT_OID: &str = "1123456789abcdef0123456789abcdef01234567";
-    const TEST_HF_WEIGHT_PAYLOAD: &[u8] = b"authenticated injected-test-runner model weights";
     use eyre::Result;
     use iroha_core::{
         kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::World,
@@ -22888,7 +20643,6 @@ mod tests {
     use iroha_crypto::{
         Algorithm, BlsNormal, KeyGenOption, KeyPair, PrivateKey, PublicKey, Signature,
     };
-    use iroha_data_model::asset::AssetDefinitionId;
     use iroha_data_model::{
         Level,
         block::BlockHeader,
@@ -22897,24 +20651,14 @@ mod tests {
         smart_contract::manifest::EntryPointKind,
         soracloud::{
             AgentApartmentManifestV1, SECRET_ENVELOPE_VERSION_V1,
-            SORA_AGENT_APARTMENT_RECORD_VERSION_V1, SORA_HF_GGUF_WEIGHT_FILE_EXTENSIONS_V1,
-            SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_PYTORCH_WEIGHT_FILE_EXTENSIONS_V1,
-            SORA_HF_SAFETENSORS_WEIGHT_FILE_EXTENSIONS_V1, SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
-            SORA_HF_SHARED_LEASE_POOL_VERSION_V1, SORA_HF_SOURCE_RECORD_VERSION_V1,
-            SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+            SORA_AGENT_APARTMENT_RECORD_VERSION_V1, SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
             SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1, SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
             SORA_SERVICE_RUNTIME_STATE_VERSION_V1, SecretEnvelopeEncryptionV1, SecretEnvelopeV1,
-            SoraAgentPersistentStateV1, SoraAgentRuntimeStatusV1, SoraContainerRuntimeV1,
-            SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
-            SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1,
-            SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1, SoraHfPlacementStatusV1,
-            SoraHfResourceProfileV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1,
-            SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1,
-            SoraHfSourceStatusV1, SoraInrouGuestImageV1, SoraModelHostCapabilityRecordV1,
-            SoraPublishedInrouGuestImageArtifactV1, SoraRolloutStageV1, SoraServiceConfigEntryV1,
-            SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
-            SoraServiceLeaseClockV1, SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1,
-            SoraServiceRuntimeStateV1, SoraServiceSecretEntryV1,
+            SoraAgentPersistentStateV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
+            SoraInrouGuestImageV1, SoraPublishedInrouGuestImageArtifactV1, SoraRolloutStageV1,
+            SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1,
+            SoraServiceHealthStatusV1, SoraServiceLeaseClockV1, SoraServiceMailboxMessageV1,
+            SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1, SoraServiceSecretEntryV1,
         },
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinFeePayment,
@@ -22975,6 +20719,25 @@ mod tests {
     }
 
     #[test]
+    fn inrou_cgroup_release_requires_both_teardown_attestations() {
+        for (direct_child_exited, cgroup_empty, expected) in [
+            (false, false, false),
+            (false, true, false),
+            (true, false, false),
+            (true, true, true),
+        ] {
+            assert_eq!(
+                InrouWorkerTeardownAttestations {
+                    direct_child_exited,
+                    cgroup_empty,
+                }
+                .release_authorized(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn storage_path_components_are_deterministic_and_collision_resistant() {
         let slash = storage_path_component("tenant/service");
         let question = storage_path_component("tenant?service");
@@ -23025,47 +20788,6 @@ mod tests {
         }
     }
     #[test]
-    fn cooldown_tracker_expires_history_and_fails_closed_at_its_hard_cap() {
-        let mut attempts = BTreeMap::new();
-        assert!(bounded_cooldown_allows_attempt(
-            &mut attempts,
-            &1_u8,
-            100,
-            10,
-            2,
-        ));
-        assert!(!bounded_cooldown_allows_attempt(
-            &mut attempts,
-            &1_u8,
-            109,
-            10,
-            2,
-        ));
-        assert!(bounded_cooldown_allows_attempt(
-            &mut attempts,
-            &2_u8,
-            109,
-            10,
-            2,
-        ));
-        assert!(!bounded_cooldown_allows_attempt(
-            &mut attempts,
-            &3_u8,
-            109,
-            10,
-            2,
-        ));
-        assert_eq!(attempts.len(), 2);
-        assert!(bounded_cooldown_allows_attempt(
-            &mut attempts,
-            &3_u8,
-            110,
-            10,
-            2,
-        ));
-        assert_eq!(attempts, BTreeMap::from([(2, 109), (3, 110)]));
-    }
-    #[test]
     fn bounded_soracloud_http_response_accepts_exact_limit() -> Result<()> {
         for declared_length in [None, Some(8)] {
             let mut reader = io::Cursor::new(b"12345678");
@@ -23096,458 +20818,6 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn atomic_stream_write_hashes_exact_bounded_payload() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let path = temp_dir.path().join("model.bin");
-        let payload = b"streamed-model";
-        let hash = write_reader_atomic_bounded(
-            &path,
-            io::Cursor::new(payload),
-            u64::try_from(payload.len())?,
-            1024,
-            Some(iroha_crypto::sha256(payload)),
-        )?;
-        assert_eq!(hash, Hash::new(payload));
-        assert_eq!(fs::read(&path)?, payload);
-        let mismatch_path = temp_dir.path().join("mismatch.bin");
-        write_reader_atomic_bounded(&mismatch_path, io::Cursor::new(b"too-long"), 3, 1024, None)
-            .expect_err("misreported streamed payload must fail");
-        assert!(!mismatch_path.exists());
-        let digest_mismatch_path = temp_dir.path().join("digest-mismatch.bin");
-        write_reader_atomic_bounded(
-            &digest_mismatch_path,
-            io::Cursor::new(payload),
-            u64::try_from(payload.len())?,
-            1024,
-            Some(iroha_crypto::sha256(b"different payload")),
-        )
-        .expect_err("payload with the wrong authenticated LFS SHA-256 must not publish");
-        assert!(!digest_mismatch_path.exists());
-        Ok(())
-    }
-    fn failed_hf_import_manifest_fixture(source_id: &str) -> HfLocalImportManifestV1 {
-        HfLocalImportManifestV1 {
-            schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
-            source_id: source_id.to_owned(),
-            repo_id: "openai-community/gpt2".to_owned(),
-            requested_revision: TEST_HF_COMMIT_OID.to_owned(),
-            resolved_commit: None,
-            model_name: "gpt2".to_owned(),
-            adapter_id: "hf.shared.v1".to_owned(),
-            pipeline_tag: None,
-            library_name: None,
-            tags: Vec::new(),
-            imported_at_ms: 1,
-            model_info_content_length: None,
-            model_info_payload_hash: None,
-            selected_weight_format: None,
-            required_weight_files: Vec::new(),
-            weight_selection_commitment: None,
-            imported_files: Vec::new(),
-            skipped_files: Vec::new(),
-            import_error: Some("fixture import failure".to_owned()),
-        }
-    }
-    #[test]
-    fn hf_import_manifest_json_requires_the_exact_v1_field_set() -> Result<()> {
-        let source_id = Hash::new(b"strict-hf-import-manifest").to_string();
-        let manifest = failed_hf_import_manifest_fixture(&source_id);
-        let canonical = norito::json::to_value(&manifest)?;
-        norito::json::from_value::<HfLocalImportManifestV1>(canonical.clone())?;
-
-        for nullable_field in [
-            "resolved_commit",
-            "pipeline_tag",
-            "library_name",
-            "model_info_content_length",
-            "model_info_payload_hash",
-            "selected_weight_format",
-            "weight_selection_commitment",
-            "import_error",
-        ] {
-            let mut missing = canonical.clone();
-            missing
-                .as_object_mut()
-                .expect("HF import manifest JSON object")
-                .remove(nullable_field);
-            assert!(
-                norito::json::from_value::<HfLocalImportManifestV1>(missing).is_err(),
-                "HF import manifest must require explicit nullable field {nullable_field}"
-            );
-        }
-        for collection_field in [
-            "tags",
-            "required_weight_files",
-            "imported_files",
-            "skipped_files",
-        ] {
-            let mut missing = canonical.clone();
-            missing
-                .as_object_mut()
-                .expect("HF import manifest JSON object")
-                .remove(collection_field);
-            assert!(
-                norito::json::from_value::<HfLocalImportManifestV1>(missing).is_err(),
-                "HF import manifest must require collection field {collection_field}"
-            );
-        }
-        let mut unknown_manifest = canonical;
-        unknown_manifest
-            .as_object_mut()
-            .expect("HF import manifest JSON object")
-            .insert("legacy_files".to_owned(), norito::json::Value::Null);
-        assert!(
-            norito::json::from_value::<HfLocalImportManifestV1>(unknown_manifest).is_err(),
-            "HF import manifest must reject unknown fields"
-        );
-
-        let imported = HfImportedFileV1 {
-            path: "model.safetensors".to_owned(),
-            content_length: 1,
-            payload_hash: Hash::new(b"weight").to_string(),
-            lfs_sha256: None,
-        };
-        let imported_value = norito::json::to_value(&imported)?;
-        let mut missing_lfs = imported_value.clone();
-        missing_lfs
-            .as_object_mut()
-            .expect("HF imported file JSON object")
-            .remove("lfs_sha256");
-        assert!(norito::json::from_value::<HfImportedFileV1>(missing_lfs).is_err());
-        let mut unknown_imported = imported_value;
-        unknown_imported
-            .as_object_mut()
-            .expect("HF imported file JSON object")
-            .insert("local_path".to_owned(), norito::json::Value::Null);
-        assert!(norito::json::from_value::<HfImportedFileV1>(unknown_imported).is_err());
-
-        let required = HfRequiredWeightFileV1 {
-            path: "model.safetensors".to_owned(),
-            content_length: 1,
-            lfs_sha256: hex::encode(iroha_crypto::sha256(b"weight")),
-        };
-        let mut unknown_required = norito::json::to_value(&required)?;
-        unknown_required
-            .as_object_mut()
-            .expect("HF required weight JSON object")
-            .insert("optional".to_owned(), norito::json::Value::Null);
-        assert!(norito::json::from_value::<HfRequiredWeightFileV1>(unknown_required).is_err());
-
-        let mut unknown_format = norito::json::to_value(&SoraHfModelFormatV1::Safetensors)?;
-        unknown_format
-            .as_object_mut()
-            .expect("HF import weight format JSON object")
-            .insert("legacy_format".to_owned(), norito::json::Value::Null);
-        assert!(norito::json::from_value::<SoraHfModelFormatV1>(unknown_format).is_err());
-
-        Ok(())
-    }
-    #[test]
-    fn read_hf_import_manifest_requires_exact_v1_schema_and_source() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let source_id = Hash::new(b"bound-hf-import-manifest").to_string();
-        let canonical = failed_hf_import_manifest_fixture(&source_id);
-        let mut staging = begin_hf_import_generation(temp_dir.path(), &source_id)?;
-        publish_hf_import_generation(&mut staging, &canonical)?;
-        let generation = read_hf_import_generation(temp_dir.path(), &source_id)?
-            .expect("published test generation");
-        let manifest_path = generation.root.join("import_manifest.json");
-        assert_eq!(
-            read_hf_import_manifest(temp_dir.path(), &source_id)?,
-            Some(canonical.clone())
-        );
-
-        let mut wrong_schema = canonical.clone();
-        wrong_schema.schema_version = HF_LOCAL_IMPORT_SCHEMA_VERSION_V1.saturating_add(1);
-        write_json_atomic(&manifest_path, &wrong_schema)?;
-        let error = read_hf_import_manifest(temp_dir.path(), &source_id)
-            .expect_err("non-V1 HF import manifest must fail");
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-
-        let mut wrong_source = canonical;
-        wrong_source.source_id = Hash::new(b"different-hf-source").to_string();
-        write_json_atomic(&manifest_path, &wrong_source)?;
-        let error = read_hf_import_manifest(temp_dir.path(), &source_id)
-            .expect_err("HF import manifest bound to another source must fail");
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        Ok(())
-    }
-    fn hf_import_cache_revalidates_anchored_files_before_reuse() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let source_id = Hash::new(b"hf-cache-integrity-source").to_string();
-        let payload = b"authenticated model weights";
-        let relative_path = "model.safetensors";
-        let model_info = test_hf_model_info(
-            "openai-community/gpt2",
-            TEST_HF_COMMIT_OID,
-            &[(relative_path, payload)],
-        );
-        let selection = test_hf_selection(&model_info);
-        let profile = test_hf_resource_profile(&selection);
-        let model_info_payload = norito::json::to_vec(&model_info)?;
-        let mut staging = begin_hf_import_generation(temp_dir.path(), &source_id)?;
-        let files_root = staging.files_root.clone();
-        let local_path = files_root.join(relative_path);
-        write_bytes_atomic(&local_path, payload)?;
-        write_bytes_atomic(
-            &staging.staging_root.join("model_info.json"),
-            &model_info_payload,
-        )?;
-        let manifest = HfLocalImportManifestV1 {
-            schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
-            source_id: source_id.clone(),
-            repo_id: "openai-community/gpt2".to_owned(),
-            requested_revision: TEST_HF_COMMIT_OID.to_owned(),
-            resolved_commit: Some(TEST_HF_COMMIT_OID.to_owned()),
-            model_name: "gpt2".to_owned(),
-            adapter_id: "hf.shared.v1".to_owned(),
-            pipeline_tag: Some("text-generation".to_owned()),
-            library_name: Some("transformers".to_owned()),
-            tags: Vec::new(),
-            imported_at_ms: 1,
-            model_info_content_length: Some(u64::try_from(model_info_payload.len())?),
-            model_info_payload_hash: Some(Hash::new(&model_info_payload).to_string()),
-            selected_weight_format: Some(selection.model_format),
-            weight_selection_commitment: Some(selection.weight_selection_commitment.to_string()),
-            required_weight_files: local_hf_required_weight_records(&selection),
-            imported_files: vec![HfImportedFileV1 {
-                path: relative_path.to_owned(),
-                content_length: payload.len() as u64,
-                payload_hash: Hash::new(payload).to_string(),
-                lfs_sha256: Some(hex::encode(iroha_crypto::sha256(payload))),
-            }],
-            skipped_files: Vec::new(),
-            import_error: None,
-        };
-        validate_hf_import_cache_at_generation(
-            &staging.staging_root,
-            &staging.files_root,
-            &manifest,
-            &profile,
-            16,
-            1_024,
-            4_096,
-        )?;
-        publish_hf_import_generation(&mut staging, &manifest)?;
-        let generation = read_hf_import_generation(temp_dir.path(), &source_id)?
-            .expect("published test generation");
-        validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096)?;
-
-        let second_payload = b"authenticated second shard";
-        let expanded_model_info_payload = norito::json::to_vec(&test_hf_model_info(
-            "openai-community/gpt2",
-            TEST_HF_COMMIT_OID,
-            &[
-                (relative_path, payload.as_slice()),
-                ("model-00002.safetensors", second_payload.as_slice()),
-            ],
-        ))?;
-        let mut incomplete = manifest.clone();
-        incomplete.model_info_content_length =
-            Some(u64::try_from(expanded_model_info_payload.len())?);
-        incomplete.model_info_payload_hash =
-            Some(Hash::new(&expanded_model_info_payload).to_string());
-        write_bytes_atomic(
-            &generation.root.join("model_info.json"),
-            &expanded_model_info_payload,
-        )?;
-        validate_hf_import_cache_at_generation(
-            &generation.root,
-            &generation.files_root,
-            &incomplete,
-            &profile,
-            16,
-            1_024,
-            4_096,
-        )
-        .expect_err("one-shard manifest must not satisfy a two-shard model-info commitment");
-        write_bytes_atomic(
-            &generation.root.join("model_info.json"),
-            &model_info_payload,
-        )?;
-
-        fs::write(&local_path, b"tampered model weight bytes")?;
-        validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096)
-            .expect_err("same-path cache payload drift must fail closed");
-        write_bytes_atomic(&local_path, payload)?;
-        let unexpected = files_root.join("unexpected.py");
-        write_bytes_atomic(&unexpected, b"untrusted")?;
-        validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096)
-            .expect_err("unmanifested cache entries must fail closed");
-        fs::remove_file(&unexpected)?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::symlink;
-            fs::remove_file(&local_path)?;
-            symlink(temp_dir.path().join("outside"), &local_path)?;
-            validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096)
-                .expect_err("symlinked cache payloads must fail without following them");
-        }
-        Ok(())
-    }
-    #[test]
-    fn hf_import_generation_reader_pin_prevents_mixed_generation_cleanup() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let source_id = Hash::new(b"hf-generation-reader-pin").to_string();
-        let first = publish_single_weight_hf_test_generation(
-            temp_dir.path(),
-            &source_id,
-            "openai-community/gpt2",
-            "gpt2",
-            TEST_HF_WEIGHT_PAYLOAD,
-        )?;
-        let first_root = first.root.clone();
-        let first_weight = first.files_root.join("model.safetensors");
-        let second = publish_single_weight_hf_test_generation(
-            temp_dir.path(),
-            &source_id,
-            "openai-community/gpt2",
-            "gpt2",
-            TEST_HF_WEIGHT_PAYLOAD,
-        )?;
-        assert_ne!(first.name, second.name);
-        assert_eq!(
-            read_hf_import_generation(temp_dir.path(), &source_id)?
-                .expect("current generation")
-                .name,
-            second.name,
-        );
-        assert_eq!(fs::read(&first_weight)?, TEST_HF_WEIGHT_PAYLOAD);
-        assert!(
-            first_root.exists(),
-            "a pinned reader generation must survive publication"
-        );
-
-        drop(first);
-        let staging = begin_hf_import_generation(temp_dir.path(), &source_id)?;
-        assert!(
-            !first_root.exists(),
-            "an unpinned non-current generation should be reclaimed deterministically"
-        );
-        assert!(
-            second.root.exists(),
-            "the current generation must be retained"
-        );
-        drop(staging);
-        Ok(())
-    }
-    #[test]
-    fn hf_import_generation_cap_reserves_staging_slot_and_recovers_after_unpin() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let source_id = Hash::new(b"hf-generation-cap").to_string();
-        let mut pins = Vec::new();
-        for _ in 0..SORACLOUD_HF_IMPORT_GENERATION_MAX_DIRECTORY_ENTRIES_V1 {
-            pins.push(publish_single_weight_hf_test_generation(
-                temp_dir.path(),
-                &source_id,
-                "openai-community/gpt2",
-                "gpt2",
-                TEST_HF_WEIGHT_PAYLOAD,
-            )?);
-        }
-        let generations_root = hf_local_generations_root(temp_dir.path(), &source_id);
-        assert_eq!(
-            fs::read_dir(&generations_root)?.count(),
-            SORACLOUD_HF_IMPORT_GENERATION_MAX_DIRECTORY_ENTRIES_V1,
-        );
-
-        let error = match begin_hf_import_generation(temp_dir.path(), &source_id) {
-            Ok(staging) => {
-                drop(staging);
-                panic!("the fixed generation cap must reserve the staging slot");
-            }
-            Err(error) => error,
-        };
-        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-        assert_eq!(
-            fs::read_dir(&generations_root)?.count(),
-            SORACLOUD_HF_IMPORT_GENERATION_MAX_DIRECTORY_ENTRIES_V1,
-            "a rejected begin must not create an uncollectable extra entry",
-        );
-
-        let released_root = pins.remove(0).root.clone();
-        let staging = begin_hf_import_generation(temp_dir.path(), &source_id)?;
-        assert!(!released_root.exists());
-        assert_eq!(
-            fs::read_dir(&generations_root)?.count(),
-            SORACLOUD_HF_IMPORT_GENERATION_MAX_DIRECTORY_ENTRIES_V1,
-            "one released pin should be collected before the reserved staging slot is used",
-        );
-        drop(staging);
-        Ok(())
-    }
-    #[test]
-    fn hf_import_generation_concurrent_begin_preserves_live_staging() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let state_dir = temp_dir.path().to_path_buf();
-        let source_id = Hash::new(b"hf-generation-concurrent-begin").to_string();
-        let first = begin_hf_import_generation(&state_dir, &source_id)?;
-        let first_staging_root = first.staging_root.clone();
-        let contender_state_dir = state_dir.clone();
-        let contender_source_id = source_id.clone();
-        let error = thread::spawn(move || {
-            match begin_hf_import_generation(&contender_state_dir, &contender_source_id) {
-                Ok(staging) => {
-                    drop(staging);
-                    None
-                }
-                Err(error) => Some(error),
-            }
-        })
-        .join()
-        .expect("concurrent generation begin thread")
-        .expect("a concurrent generation begin must be rejected");
-        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-        assert!(
-            first_staging_root.is_dir(),
-            "a rejected concurrent begin must not collect the live staging generation"
-        );
-        #[cfg(unix)]
-        {
-            let lock_metadata = fs::symlink_metadata(
-                hf_local_source_root(&state_dir, &source_id)
-                    .join(SORACLOUD_HF_IMPORT_GENERATION_MUTATION_LOCK_FILE_V1),
-            )?;
-            assert_eq!(lock_metadata.mode() & 0o777, 0o600);
-            assert_eq!(lock_metadata.nlink(), 1);
-        }
-
-        drop(first);
-        assert!(!first_staging_root.exists());
-        let successor = begin_hf_import_generation(&state_dir, &source_id)?;
-        assert!(successor.staging_root.is_dir());
-        drop(successor);
-        Ok(())
-    }
-    #[test]
-    fn hf_import_error_generation_hides_prior_executable_state_atomically() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let source_id = Hash::new(b"hf-error-generation").to_string();
-        let success = publish_single_weight_hf_test_generation(
-            temp_dir.path(),
-            &source_id,
-            "openai-community/gpt2",
-            "gpt2",
-            TEST_HF_WEIGHT_PAYLOAD,
-        )?;
-        let mut error_staging = begin_hf_import_generation(temp_dir.path(), &source_id)?;
-        let error_manifest = failed_hf_import_manifest_fixture(&source_id);
-        publish_hf_import_generation(&mut error_staging, &error_manifest)?;
-
-        let current = read_hf_import_generation(temp_dir.path(), &source_id)?
-            .expect("current error generation");
-        assert_ne!(current.name, success.name);
-        assert_eq!(current.manifest.import_error, error_manifest.import_error);
-        assert_eq!(fs::read_dir(&current.files_root)?.count(), 0);
-        assert!(!current.root.join("model_info.json").exists());
-        assert!(
-            success.files_root.join("model.safetensors").exists(),
-            "the prior pinned reader remains coherent but is no longer current"
-        );
-        Ok(())
-    }
-    #[test]
     fn remote_hydration_http_client_does_not_follow_redirects() -> Result<()> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr()?;
@@ -23568,122 +20838,6 @@ mod tests {
         handle.join().expect("redirect fixture thread");
         assert_eq!(response.status(), reqwest::StatusCode::FOUND);
         Ok(())
-    }
-    #[test]
-    fn hf_importer_follows_bounded_same_origin_redirect_without_forwarding_auth() -> Result<()> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let address = listener.local_addr()?;
-        let worker = thread::spawn(move || -> io::Result<()> {
-            let (mut first, _) = listener.accept()?;
-            let mut request = [0_u8; 2_048];
-            let request_bytes = first.read(&mut request)?;
-            let request_text = String::from_utf8_lossy(&request[..request_bytes]);
-            assert!(request_text.starts_with("GET /source HTTP/1.1"));
-            assert!(!request_text.to_ascii_lowercase().contains("authorization:"));
-            write!(
-                first,
-                "HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            )?;
-            drop(first);
-            let (mut second, _) = listener.accept()?;
-            let request_bytes = second.read(&mut request)?;
-            let request_text = String::from_utf8_lossy(&request[..request_bytes]);
-            assert!(request_text.starts_with("GET /final HTTP/1.1"));
-            assert!(!request_text.to_ascii_lowercase().contains("authorization:"));
-            write!(
-                second,
-                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
-            )?;
-            Ok(())
-        });
-        let origin = format!("http://{address}");
-        let mut config = iroha_config::parameters::actual::SoracloudRuntimeHuggingFace::default();
-        config.hub_base_url = origin.clone();
-        config.api_base_url = origin.clone();
-        config.import_redirect_allowed_origins.clear();
-        config.request_timeout = Duration::from_secs(2);
-        let response = send_hf_import_request_with_vetted_redirects(
-            &config,
-            reqwest::Method::GET,
-            reqwest::Url::parse(&format!("{origin}/source"))?,
-        )?;
-        assert_eq!(response.status(), reqwest::StatusCode::OK);
-        assert_eq!(response.text()?, "ok");
-        worker.join().expect("HF redirect fixture")?;
-        Ok(())
-    }
-    #[test]
-    fn hf_importer_cross_origin_redirect_requires_explicit_config() -> Result<()> {
-        let source = TcpListener::bind("127.0.0.1:0")?;
-        let source_address = source.local_addr()?;
-        let target = TcpListener::bind("127.0.0.1:0")?;
-        target.set_nonblocking(true)?;
-        let target_address = target.local_addr()?;
-        let worker = thread::spawn(move || -> io::Result<()> {
-            let (mut stream, _) = source.accept()?;
-            let mut request = [0_u8; 1_024];
-            let _ = stream.read(&mut request)?;
-            write!(
-                stream,
-                "HTTP/1.1 302 Found\r\nLocation: http://{target_address}/target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            )
-        });
-        let origin = format!("http://{source_address}");
-        let mut config = iroha_config::parameters::actual::SoracloudRuntimeHuggingFace::default();
-        config.hub_base_url = origin.clone();
-        config.api_base_url = origin.clone();
-        config.import_redirect_allowed_origins.clear();
-        config.request_timeout = Duration::from_secs(2);
-        send_hf_import_request_with_vetted_redirects(
-            &config,
-            reqwest::Method::GET,
-            reqwest::Url::parse(&format!("{origin}/source"))?,
-        )
-        .expect_err("an unconfigured cross-origin redirect must fail closed");
-        worker.join().expect("HF cross-origin fixture")?;
-        assert_eq!(
-            target
-                .accept()
-                .expect_err("unapproved redirect target must not be contacted")
-                .kind(),
-            io::ErrorKind::WouldBlock
-        );
-        config.import_redirect_allowed_origins = vec![format!("http://{target_address}")];
-        assert!(
-            hf_import_allowed_redirect_origins(&config)?
-                .contains(&format!("http://{target_address}"))
-        );
-        Ok(())
-    }
-    #[test]
-    fn hf_default_redirect_origins_cover_the_live_aws_download_origin() -> Result<()> {
-        let config = iroha_config::parameters::actual::SoracloudRuntimeHuggingFace::default();
-        let allowed = hf_import_allowed_redirect_origins(&config)?;
-        assert!(allowed.contains("https://us.aws.cdn.hf.co"));
-        assert!(allowed.iter().all(|origin| !origin.contains('*')));
-        Ok(())
-    }
-    #[test]
-    fn hf_redirect_origins_reject_noncanonical_aliases() {
-        let mut config = iroha_config::parameters::actual::SoracloudRuntimeHuggingFace::default();
-        for invalid in [
-            "us.aws.cdn.hf.co",
-            " https://us.aws.cdn.hf.co",
-            "https://us.aws.cdn.hf.co ",
-            "HTTPS://us.aws.cdn.hf.co",
-            "https://US.AWS.CDN.HF.CO",
-            "https://us.aws.cdn.hf.co:443",
-            "https://us.aws.cdn.hf.co/",
-            "https://user@us.aws.cdn.hf.co",
-            "https://us.aws.cdn.hf.co/path",
-            "https://us.aws.cdn.hf.co?query=1",
-            "https://us.aws.cdn.hf.co#fragment",
-            "http://us.aws.cdn.hf.co",
-        ] {
-            config.import_redirect_allowed_origins = vec![invalid.to_owned()];
-            hf_import_allowed_redirect_origins(&config)
-                .expect_err("noncanonical HF redirect-origin aliases must fail closed");
-        }
     }
     #[test]
     fn soracloud_egress_url_rejects_ambiguous_or_credentialed_targets() {
@@ -24935,163 +22089,15 @@ mod tests {
         assert_eq!(intent.program_id, program_id);
         assert_eq!(intent.program_revision, 7);
     }
-    fn test_hf_model_info(
-        repo_id: &str,
-        resolved_commit: &str,
-        weight_files: &[(&str, &[u8])],
-    ) -> norito::json::Value {
-        let siblings = weight_files
-            .iter()
-            .map(|(path, payload)| {
-                norito::json!({
-                    "rfilename": (*path),
-                    "lfs": {
-                        "sha256": (hex::encode(iroha_crypto::sha256(payload))),
-                        "size": (u64::try_from(payload.len()).expect("test weight length fits u64"))
-                    }
-                })
-            })
-            .collect::<Vec<_>>();
-        norito::json!({
-            "modelId": repo_id,
-            "sha": resolved_commit,
-            "pipeline_tag": "text-generation",
-            "library_name": "transformers",
-            "tags": ["text-generation"],
-            "siblings": siblings,
-        })
-    }
-    fn test_hf_selection(model_info: &norito::json::Value) -> SoraHfWeightSelectionV1 {
-        derive_hf_weight_selection_v1(model_info, 128, u64::MAX, u64::MAX)
-            .expect("test model-info selection is valid")
-            .expect("test model-info contains weights")
-    }
-    fn test_hf_resource_profile(selection: &SoraHfWeightSelectionV1) -> SoraHfResourceProfileV1 {
-        SoraHfResourceProfileV1 {
-            required_model_bytes: selection.required_model_bytes,
-            backend_family: selection.backend_family,
-            model_format: selection.model_format,
-            selected_weight_file_count: u32::try_from(selection.required_weight_files.len())
-                .expect("test weight-file count fits u32"),
-            weight_selection_commitment: selection.weight_selection_commitment,
-            disk_cache_bytes_floor: selection.required_model_bytes,
-            ram_bytes_floor: 1,
-            vram_bytes_floor: 0,
-        }
-    }
-    fn sample_hf_resource_profile_for_tests() -> SoraHfResourceProfileV1 {
-        let model_info = test_hf_model_info(
-            "openai-community/gpt2",
-            TEST_HF_COMMIT_OID,
-            &[("model.safetensors", TEST_HF_WEIGHT_PAYLOAD)],
-        );
-        test_hf_resource_profile(&test_hf_selection(&model_info))
-    }
-    fn publish_single_weight_hf_test_generation(
-        state_dir: &Path,
-        source_id: &str,
-        repo_id: &str,
-        model_name: &str,
-        payload: &[u8],
-    ) -> Result<PinnedHfImportGeneration> {
-        let model_info = test_hf_model_info(
-            repo_id,
-            TEST_HF_COMMIT_OID,
-            &[("model.safetensors", payload)],
-        );
-        let model_info_payload = norito::json::to_vec(&model_info)?;
-        let selection = test_hf_selection(&model_info);
-        let profile = test_hf_resource_profile(&selection);
-        let mut staging = begin_hf_import_generation(state_dir, source_id)?;
-        write_bytes_atomic(
-            &staging.staging_root.join("model_info.json"),
-            &model_info_payload,
-        )?;
-        write_bytes_atomic(&staging.files_root.join("model.safetensors"), payload)?;
-        let manifest = HfLocalImportManifestV1 {
-            schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
-            source_id: source_id.to_owned(),
-            repo_id: repo_id.to_owned(),
-            requested_revision: TEST_HF_COMMIT_OID.to_owned(),
-            resolved_commit: Some(TEST_HF_COMMIT_OID.to_owned()),
-            model_name: model_name.to_owned(),
-            adapter_id: "hf.shared.v1".to_owned(),
-            pipeline_tag: Some("text-generation".to_owned()),
-            library_name: Some("transformers".to_owned()),
-            tags: vec!["text-generation".to_owned()],
-            imported_at_ms: 20,
-            model_info_content_length: Some(u64::try_from(model_info_payload.len())?),
-            model_info_payload_hash: Some(Hash::new(&model_info_payload).to_string()),
-            selected_weight_format: Some(selection.model_format),
-            required_weight_files: local_hf_required_weight_records(&selection),
-            weight_selection_commitment: Some(selection.weight_selection_commitment.to_string()),
-            imported_files: vec![HfImportedFileV1 {
-                path: "model.safetensors".to_owned(),
-                content_length: u64::try_from(payload.len())?,
-                payload_hash: Hash::new(payload).to_string(),
-                lfs_sha256: Some(hex::encode(iroha_crypto::sha256(payload))),
-            }],
-            skipped_files: Vec::new(),
-            import_error: None,
-        };
-        validate_hf_import_cache_at_generation(
-            &staging.staging_root,
-            &staging.files_root,
-            &manifest,
-            &profile,
-            16,
-            1_024 * 1_024,
-            16 * 1_024 * 1_024,
-        )?;
-        publish_hf_import_generation(&mut staging, &manifest)?;
-        read_hf_import_generation(state_dir, source_id)?
-            .ok_or_else(|| eyre::eyre!("published Hugging Face test generation is missing"))
-    }
-    #[test]
-    fn hf_import_selection_requires_full_authoritative_profile_equality() {
-        let model_info = test_hf_model_info(
-            "openai-community/gpt2",
-            TEST_HF_COMMIT_OID,
-            &[("model.safetensors", TEST_HF_WEIGHT_PAYLOAD)],
-        );
-        let selection = test_hf_selection(&model_info);
-        let profile = test_hf_resource_profile(&selection);
-        validate_hf_weight_selection_against_profile(&selection, &profile)
-            .expect("matching selection and profile");
-
-        let mut mismatches = Vec::new();
-        let mut bytes = profile;
-        bytes.required_model_bytes = bytes.required_model_bytes.saturating_add(1);
-        bytes.disk_cache_bytes_floor = bytes.required_model_bytes;
-        mismatches.push(bytes);
-        let mut backend = profile;
-        backend.backend_family = SoraHfBackendFamilyV1::Gguf;
-        mismatches.push(backend);
-        let mut format = profile;
-        format.model_format = SoraHfModelFormatV1::PyTorch;
-        mismatches.push(format);
-        let mut count = profile;
-        count.selected_weight_file_count = count.selected_weight_file_count.saturating_add(1);
-        mismatches.push(count);
-        let mut commitment = profile;
-        commitment.weight_selection_commitment = Hash::new(b"different weight selection");
-        mismatches.push(commitment);
-
-        for mismatch in mismatches {
-            validate_hf_weight_selection_against_profile(&selection, &mismatch)
-                .expect_err("every authoritative selection field must match exactly");
-        }
-    }
     fn sample_agent_record() -> Result<SoraAgentApartmentRecordV1> {
         let manifest = load_agent_manifest_fixture()?;
         Ok(SoraAgentApartmentRecordV1 {
             schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
             manifest_hash: Hash::prehashed([0xAA; Hash::LENGTH]),
-            status: SoraAgentRuntimeStatusV1::Running,
             deployed_sequence: 1,
-            lease_started_sequence: 1,
-            lease_expires_sequence: 42,
-            last_renewed_sequence: 1,
+            lease_started_height: 1,
+            lease_expires_height: 42,
+            last_renewed_height: 1,
             restart_count: 0,
             last_restart_sequence: None,
             last_restart_reason: None,
@@ -25123,9 +22129,6 @@ mod tests {
             health_status: SoraServiceHealthStatusV1::Healthy,
             load_factor_bps: 425,
             materialized_bundle_hash: bundle.container.bundle_hash,
-            rollout_handle: None,
-            pending_mailbox_message_count: 3,
-            last_receipt_id: None,
         }
     }
     fn sample_deployment_state(bundle: &SoraDeploymentBundleV1) -> SoraServiceDeploymentStateV1 {
@@ -25169,7 +22172,6 @@ mod tests {
                         lease_started_height: lease.lease_started_height,
                         lease_expires_height: lease.lease_expires_height,
                         authoritative_generation: 1,
-                        last_materialized_sequence: None,
                     },
                 )
                 .collect()
@@ -25194,6 +22196,39 @@ mod tests {
             lease_volume_states,
         }
     }
+    fn sample_lease_egress_checkpoint(
+        reporting_epoch: u64,
+        service_version: String,
+        lease_started_height: u64,
+        replica_slot: u16,
+        placement_incarnation: Hash,
+        validator_account_id: AccountId,
+        accounted_egress_bytes: u64,
+        finalize_reporter: bool,
+    ) -> iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
+        iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
+            reporting_epoch,
+            assignment: iroha_data_model::soracloud::SoraServiceLeaseReporterAssignmentV1 {
+                schema_version:
+                    iroha_data_model::soracloud::SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
+                service_version,
+                placement: SoraInrouReplicaPlacementV1 {
+                    replica_slot,
+                    economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+                    lease_started_height,
+                    placement_incarnation,
+                    host_availability: SoraInrouReplicaHostAvailabilityV1::Available,
+                    validator_account_id,
+                    peer_id: canonical_inrou_test_peer_id().to_owned(),
+                    selected_guest_isa: SoraInrouGuestIsaV1::X8664,
+                },
+                placement_reconciled_at_ms: 1,
+            },
+            accounted_egress_bytes,
+            last_updated_height: lease_started_height,
+            finalize_reporter,
+        }
+    }
     fn sample_service_audit_event(
         bundle: &SoraDeploymentBundleV1,
         sequence: u64,
@@ -25201,24 +22236,39 @@ mod tests {
         iroha_data_model::soracloud::SoraServiceAuditEventV1 {
             schema_version: iroha_data_model::soracloud::SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
             sequence,
+            block_height: sequence,
+            block_timestamp_ms: sequence.saturating_mul(1_000),
             action: SoraServiceLifecycleActionV1::Deploy,
             service_name: bundle.service.service_name.clone(),
             from_version: None,
             to_version: bundle.service.service_version.clone(),
             service_manifest_hash: Hash::new(b"runtime-test-service-manifest"),
             container_manifest_hash: Hash::new(b"runtime-test-container-manifest"),
+            process_generation: 1,
+            config_generation: 0,
+            secret_generation: 0,
+            config_snapshot_hash:
+                iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                    &BTreeMap::new(),
+                ),
+            secret_snapshot_hash:
+                iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                    &BTreeMap::new(),
+                ),
             governance_tx_hash: None,
             binding_name: None,
             state_key: None,
-            config_name: None,
-            secret_name: None,
-            rollout_handle: None,
+            config_mutations: Vec::new(),
+            secret_mutations: Vec::new(),
+            rollout_state: None,
             policy_name: None,
             policy_snapshot_hash: None,
             jurisdiction_tag: None,
             consent_evidence_hash: None,
             break_glass: None,
             break_glass_reason: None,
+            lease_usage: None,
+            service_lease_commitment: None,
             lease_reporting_epoch_rollover: None,
             signer: ALICE_KEYPAIR.public_key().clone(),
         }
@@ -25504,40 +22554,43 @@ mod tests {
         let mut deployment = sample_deployment_state(&bundle);
         let lease = deployment.service_lease.as_mut().expect("service lease");
         let reporting_epoch = lease.reporting_epoch;
+        let lease_started_height = lease.lease_started_height;
         lease.egress_reporter_checkpoints = vec![
-            iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
+            sample_lease_egress_checkpoint(
                 reporting_epoch,
-                active_service_version: bundle.service.service_version.clone(),
-                replica_slot: 1,
-                placement_incarnation: Hash::new(b"former-placement"),
-                validator_account_id: BOB_ID.clone(),
-                accounted_egress_bytes: 11,
-                finalize_reporter: true,
-            },
-            iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
+                bundle.service.service_version.clone(),
+                lease_started_height,
+                1,
+                Hash::new(b"former-placement"),
+                BOB_ID.clone(),
+                11,
+                true,
+            ),
+            sample_lease_egress_checkpoint(
                 reporting_epoch,
-                active_service_version: bundle.service.service_version.clone(),
-                replica_slot: 1,
-                placement_incarnation: Hash::new(b"placement-1"),
-                validator_account_id: ALICE_ID.clone(),
-                accounted_egress_bytes: 37,
-                finalize_reporter: false,
-            },
+                bundle.service.service_version.clone(),
+                lease_started_height,
+                1,
+                Hash::new(b"placement-1"),
+                ALICE_ID.clone(),
+                37,
+                false,
+            ),
         ];
         lease.egress_reporter_checkpoints.sort_by(|left, right| {
             (
                 left.reporting_epoch,
-                left.active_service_version.as_str(),
-                left.replica_slot,
-                left.placement_incarnation,
-                &left.validator_account_id,
+                left.assignment.service_version.as_str(),
+                left.assignment.placement.replica_slot,
+                left.assignment.placement.placement_incarnation,
+                &left.assignment.placement.validator_account_id,
             )
                 .cmp(&(
                     right.reporting_epoch,
-                    right.active_service_version.as_str(),
-                    right.replica_slot,
-                    right.placement_incarnation,
-                    &right.validator_account_id,
+                    right.assignment.service_version.as_str(),
+                    right.assignment.placement.replica_slot,
+                    right.assignment.placement.placement_incarnation,
+                    &right.assignment.placement.validator_account_id,
                 ))
         });
         lease
@@ -25570,6 +22623,7 @@ mod tests {
                     &view,
                     bundle.service.service_name.as_ref(),
                     &bundle.service.service_version,
+                    1,
                     reporting_epoch,
                 )?,
             48
@@ -25584,6 +22638,7 @@ mod tests {
                     &view,
                     bundle.service.service_name.as_ref(),
                     service_version,
+                    1,
                     candidate_epoch,
                 )
                 .expect_err("non-exact authoritative lease egress must fail closed");
@@ -25601,40 +22656,43 @@ mod tests {
         let mut deployment = sample_deployment_state(&bundle);
         let lease = deployment.service_lease.as_mut().expect("service lease");
         let reporting_epoch = lease.reporting_epoch;
+        let lease_started_height = lease.lease_started_height;
         lease.egress_reporter_checkpoints = vec![
-            iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
+            sample_lease_egress_checkpoint(
                 reporting_epoch,
-                active_service_version: bundle.service.service_version.clone(),
-                replica_slot: 1,
-                placement_incarnation: Hash::new(b"former-placement"),
-                validator_account_id: BOB_ID.clone(),
-                accounted_egress_bytes: u64::MAX,
-                finalize_reporter: true,
-            },
-            iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
+                bundle.service.service_version.clone(),
+                lease_started_height,
+                1,
+                Hash::new(b"former-placement"),
+                BOB_ID.clone(),
+                u64::MAX,
+                true,
+            ),
+            sample_lease_egress_checkpoint(
                 reporting_epoch,
-                active_service_version: bundle.service.service_version.clone(),
-                replica_slot: 1,
-                placement_incarnation: Hash::new(b"placement-1"),
-                validator_account_id: ALICE_ID.clone(),
-                accounted_egress_bytes: 1,
-                finalize_reporter: false,
-            },
+                bundle.service.service_version.clone(),
+                lease_started_height,
+                1,
+                Hash::new(b"placement-1"),
+                ALICE_ID.clone(),
+                1,
+                false,
+            ),
         ];
         lease.egress_reporter_checkpoints.sort_by(|left, right| {
             (
                 left.reporting_epoch,
-                left.active_service_version.as_str(),
-                left.replica_slot,
-                left.placement_incarnation,
-                &left.validator_account_id,
+                left.assignment.service_version.as_str(),
+                left.assignment.placement.replica_slot,
+                left.assignment.placement.placement_incarnation,
+                &left.assignment.placement.validator_account_id,
             )
                 .cmp(&(
                     right.reporting_epoch,
-                    right.active_service_version.as_str(),
-                    right.replica_slot,
-                    right.placement_incarnation,
-                    &right.validator_account_id,
+                    right.assignment.service_version.as_str(),
+                    right.assignment.placement.replica_slot,
+                    right.assignment.placement.placement_incarnation,
+                    &right.assignment.placement.validator_account_id,
                 ))
         });
         lease
@@ -25666,6 +22724,7 @@ mod tests {
                 &view,
                 bundle.service.service_name.as_ref(),
                 &bundle.service.service_version,
+                1,
                 reporting_epoch,
             )
             .expect_err("the local u64 revision counter must fail closed on overflow");
@@ -25684,25 +22743,27 @@ mod tests {
         let mut deployment = sample_deployment_state(&bundle);
         let lease = deployment.service_lease.as_mut().expect("service lease");
         let reporting_epoch = lease.reporting_epoch;
+        let lease_started_height = lease.lease_started_height;
         lease.egress_reporter_checkpoints = (0
             ..SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1)
-            .map(
-                |index| iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
+            .map(|index| {
+                sample_lease_egress_checkpoint(
                     reporting_epoch,
-                    active_service_version: format!("retired-{index:04}"),
-                    replica_slot: 1,
-                    placement_incarnation: Hash::new(Encode::encode(&("retired-placement", index))),
-                    validator_account_id: BOB_ID.clone(),
-                    accounted_egress_bytes: 1,
-                    finalize_reporter: true,
-                },
-            )
+                    format!("retired-{index:04}"),
+                    lease_started_height,
+                    1,
+                    Hash::new(Encode::encode(&("retired-placement", index))),
+                    BOB_ID.clone(),
+                    1,
+                    true,
+                )
+            })
             .collect();
         let exact = &mut lease.egress_reporter_checkpoints[0];
-        exact.active_service_version = bundle.service.service_version.clone();
-        exact.replica_slot = 1;
-        exact.placement_incarnation = Hash::new(b"placement-1");
-        exact.validator_account_id = ALICE_ID.clone();
+        exact.assignment.service_version = bundle.service.service_version.clone();
+        exact.assignment.placement.replica_slot = 1;
+        exact.assignment.placement.placement_incarnation = Hash::new(b"placement-1");
+        exact.assignment.placement.validator_account_id = ALICE_ID.clone();
         lease
             .refresh_accounted_egress_bytes()
             .expect("exact capped reporter aggregate");
@@ -25719,6 +22780,7 @@ mod tests {
                 .authoritative_service_lease_reporter_target_epoch(
                     &view,
                     bundle.service.service_name.as_ref(),
+                    1,
                     &bundle.service.service_version,
                     1,
                     Hash::new(b"placement-1"),
@@ -25732,12 +22794,28 @@ mod tests {
                 .authoritative_service_lease_reporter_target_epoch(
                     &view,
                     bundle.service.service_name.as_ref(),
+                    1,
                     &bundle.service.service_version,
                     2,
                     Hash::new(b"placement-2"),
                 ),
             reporting_epoch.checked_add(1),
             "only a missing identity at the exact cap may request the checked successor"
+        );
+        assert!(
+            fixture
+                .manager
+                .authoritative_service_lease_reporter_checkpoint(
+                    &view,
+                    bundle.service.service_name.as_ref(),
+                    2,
+                    reporting_epoch,
+                    &bundle.service.service_version,
+                    1,
+                    Hash::new(b"placement-1"),
+                )
+                .is_none(),
+            "a checkpoint from another lease incarnation must not be reused"
         );
         Ok(())
     }
@@ -25749,7 +22827,7 @@ mod tests {
         deployment.active_rollout = Some(SoraServiceRolloutStateV1 {
             schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
             rollout_handle: "rollout-7".to_owned(),
-            baseline_version: Some(bundle.service.service_version.clone()),
+            baseline_version: bundle.service.service_version.clone(),
             candidate_version: "2099.1.0".to_owned(),
             canary_percent: 25,
             traffic_percent: 101,
@@ -25777,7 +22855,7 @@ mod tests {
         deployment.active_rollout = Some(SoraServiceRolloutStateV1 {
             schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
             rollout_handle: "rollout-8".to_owned(),
-            baseline_version: Some("2026.1.0".to_owned()),
+            baseline_version: "2026.1.0".to_owned(),
             candidate_version: bundle.service.service_version.clone(),
             canary_percent: 25,
             traffic_percent: 25,
@@ -25818,7 +22896,7 @@ mod tests {
         deployment.active_rollout = Some(SoraServiceRolloutStateV1 {
             schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
             rollout_handle: "rollout-explicit-baseline".to_owned(),
-            baseline_version: Some(baseline.service.service_version.clone()),
+            baseline_version: baseline.service.service_version.clone(),
             candidate_version: candidate.service.service_version.clone(),
             canary_percent: 25,
             traffic_percent: 25,
@@ -25992,24 +23070,25 @@ mod tests {
         payload_bytes: Vec<u8>,
     ) -> SoraServiceMailboxMessageV1 {
         let payload_commitment = Hash::new(&payload_bytes);
-        SoraServiceMailboxMessageV1 {
+        let mut message = SoraServiceMailboxMessageV1 {
             schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
-            message_id: Hash::new(Encode::encode(&(
-                "soracloud.runtime.tests.mailbox",
-                bundle.service.service_name.as_ref(),
-                handler_name,
-                payload_commitment,
-            ))),
+            message_id: Hash::prehashed([0; Hash::LENGTH]),
             from_service: "scheduler".parse().expect("literal name"),
+            from_service_version: "scheduler-v1".to_owned(),
             from_handler: "dispatch".parse().expect("literal name"),
             to_service: bundle.service.service_name.clone(),
+            to_service_version: bundle.service.service_version.clone(),
             to_handler: handler_name.parse().expect("fixture handler name"),
             payload_bytes,
             payload_commitment,
+            delivery_delay_blocks: 0,
             enqueue_sequence: 6,
-            available_after_sequence: 6,
-            expires_at_sequence: None,
-        }
+            enqueue_height: 5,
+            available_after_height: 5,
+            expires_at_height: 6,
+        };
+        message.message_id = derive_soracloud_mailbox_message_id_v1(&message);
+        message
     }
     fn sample_ordered_mailbox_request(
         bundle: &SoraDeploymentBundleV1,
@@ -26017,9 +23096,9 @@ mod tests {
         mailbox_message: SoraServiceMailboxMessageV1,
     ) -> SoracloudOrderedMailboxExecutionRequest {
         SoracloudOrderedMailboxExecutionRequest {
-            observed_height: 0,
+            observed_height: 5,
             observed_block_hash: None,
-            execution_sequence: 7,
+            observed_sequence: 7,
             deployment: sample_deployment_state(bundle),
             bundle: bundle.clone(),
             handler: Some(bundle_handler(bundle, handler_name)),
@@ -26270,7 +23349,6 @@ mod tests {
                 &manager.config.state_dir,
                 manager.artifacts_root(),
                 &manager.config.cache_budgets,
-                &manager.config.hf,
                 manager.config.local_validator_account_id.as_ref(),
                 manager.config.local_peer_id.as_deref(),
                 true,
@@ -27598,7 +24676,6 @@ mod tests {
         );
         exact_config.inrou.guest_image_max_bytes =
             std::num::NonZeroU64::new(guest_image_bytes).expect("guest image fixture is nonempty");
-        exact_config.hf.import_max_files = 1;
         exact_config.inrou.max_storage_bytes =
             std::num::NonZeroU64::new(SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1)
                 .expect("minimum writable storage capacity");
@@ -28183,71 +25260,6 @@ mod tests {
             captured,
         ))
     }
-    fn generated_hf_config_routes(
-        resolved_commit: &str,
-        config_json: &[u8],
-    ) -> Result<BTreeMap<(String, String), HttpFixtureResponse>> {
-        let weights = TEST_HF_WEIGHT_PAYLOAD;
-        let mut model_info = test_hf_model_info(
-            "openai-community/gpt2",
-            resolved_commit,
-            &[("model.safetensors", weights)],
-        );
-        model_info
-            .get_mut("siblings")
-            .and_then(norito::json::Value::as_array_mut)
-            .expect("test model-info siblings")
-            .insert(0, norito::json!({"rfilename": "config.json"}));
-        Ok(BTreeMap::from([
-            (
-                (
-                    "GET".to_owned(),
-                    format!(
-                        "/api/models/openai-community/gpt2/revision/{TEST_HF_COMMIT_OID}?blobs=true"
-                    ),
-                ),
-                HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
-            ),
-            (
-                (
-                    "HEAD".to_owned(),
-                    format!("/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/config.json"),
-                ),
-                HttpFixtureResponse::head_ok(
-                    "application/json",
-                    u64::try_from(config_json.len()).expect("fixture length fits in u64"),
-                ),
-            ),
-            (
-                (
-                    "GET".to_owned(),
-                    format!("/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/config.json"),
-                ),
-                HttpFixtureResponse::json(config_json.to_vec()),
-            ),
-            (
-                (
-                    "HEAD".to_owned(),
-                    format!(
-                        "/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/model.safetensors"
-                    ),
-                ),
-                HttpFixtureResponse::head_ok(
-                    "application/octet-stream",
-                    u64::try_from(weights.len()).expect("fixture length fits in u64"),
-                ),
-            ),
-            (
-                (
-                    "GET".to_owned(),
-                    format!(
-                        "/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/model.safetensors"
-                    ),
-                ),
-                HttpFixtureResponse::binary(weights.to_vec()),
-            ),
-        ]))
-    }
     fn spawn_remote_hydration_fixture(
         fixtures: &[RemoteManifestFixture],
     ) -> Result<HttpRouteFixture> {
@@ -28422,7 +25434,7 @@ mod tests {
             .verify_signature()
             .wrap_err("verify Soracloud provider advert fixture signature")?;
         let (vrf_public, vrf_private) =
-            BlsNormal::keypair(KeyGenOption::UseSeed(provider_id.to_vec()))
+            BlsNormal::try_keypair(KeyGenOption::UseSeed(provider_id.to_vec()))
                 .wrap_err("derive Soracloud provider VRF fixture key")?;
         let vrf_pair: KeyPair = (vrf_public, vrf_private).into();
         let proposal = ProviderAdmissionProposalV1 {
@@ -28883,7 +25895,8 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    instruction
+                        .as_any()
                         .downcast_ref::<iroha_data_model::isi::soracloud::AdvertiseSoracloudInrouHost>()
                         .cloned()
                 })
@@ -28896,7 +25909,8 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    instruction
+                        .as_any()
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::SetSoracloudInrouReplicaRuntimeState,
                         >()
@@ -28911,7 +25925,8 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    instruction
+                        .as_any()
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::ReportSoracloudServiceLeaseUsage,
                         >()
@@ -28919,39 +25934,14 @@ mod tests {
                 })
                 .collect()
         }
-        fn submitted_violation_reports(
-            &self,
-        ) -> Vec<iroha_data_model::isi::soracloud::ReportSoracloudModelHostViolation> {
-            self.instructions
-                .lock()
-                .iter()
-                .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
-                        .downcast_ref::<
-                            iroha_data_model::isi::soracloud::ReportSoracloudModelHostViolation,
-                        >()
-                        .cloned()
-                })
-                .collect()
-        }
-        fn submitted_model_host_reconciles(&self) -> usize {
-            self.instructions
-                .lock()
-                .iter()
-                .filter(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(*instruction)
-                        .downcast_ref::<iroha_data_model::isi::soracloud::ReconcileSoracloudModelHosts>()
-                        .is_some()
-                })
-                .count()
-        }
         #[allow(dead_code)]
         fn submitted_inrou_placement_reconciles(&self) -> usize {
             self.instructions
                 .lock()
                 .iter()
                 .filter(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(*instruction)
+                    instruction
+                        .as_any()
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::ReconcileSoracloudInrouPlacements,
                         >()
@@ -28964,7 +25954,8 @@ mod tests {
                 .lock()
                 .iter()
                 .filter(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(*instruction)
+                    instruction
+                        .as_any()
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::WithdrawSoracloudInrouHost,
                         >()
@@ -29055,63 +26046,6 @@ mod tests {
                 .submit_inrou_host_withdrawal(validator_account_id)
         }
     }
-    #[derive(Clone)]
-    struct GeneratedHfServiceFixture {
-        source_id: Hash,
-        pool_id: Hash,
-        bundle: SoraDeploymentBundleV1,
-    }
-    struct GeneratedHfTestFixture {
-        service: GeneratedHfServiceFixture,
-        state: Arc<State>,
-    }
-    impl GeneratedHfTestFixture {
-        fn new(service_name: &str) -> Result<Self> {
-            let mut state = test_state()?;
-            let service = insert_generated_hf_service_fixture(
-                &mut state,
-                service_name,
-                "openai-community/gpt2",
-                TEST_HF_COMMIT_OID,
-                "gpt2",
-            )?;
-            Ok(Self { service, state })
-        }
-        fn insert_placement(
-            &mut self,
-            local_role: SoraHfPlacementHostRoleV1,
-            local_status: SoraHfPlacementHostStatusV1,
-            local_peer_id: &str,
-        ) -> Hash {
-            insert_generated_hf_placement_fixture(
-                &mut self.state,
-                &self.service,
-                local_role,
-                local_status,
-                local_peer_id,
-            )
-        }
-        fn set_resource_profile_from_model_info(&mut self, model_info: &norito::json::Value) {
-            let profile = test_hf_resource_profile(&test_hf_selection(model_info));
-            let world = &mut Arc::get_mut(&mut self.state)
-                .expect("unique generated HF test state")
-                .world;
-            let sources = world.soracloud_hf_sources_mut_for_testing();
-            let mut source = sources
-                .view()
-                .get(&self.service.source_id)
-                .cloned()
-                .expect("generated HF source record");
-            source.resource_profile = Some(profile);
-            sources.insert(self.service.source_id, source);
-        }
-    }
-    impl std::ops::Deref for GeneratedHfTestFixture {
-        type Target = GeneratedHfServiceFixture;
-        fn deref(&self) -> &Self::Target {
-            &self.service
-        }
-    }
     fn insert_service_revision_fixture(world: &mut World, bundle: &SoraDeploymentBundleV1) {
         world.soracloud_service_revisions_mut_for_testing().insert(
             (
@@ -29155,137 +26089,6 @@ mod tests {
             .soracloud_service_runtime_mut_for_testing()
             .insert(bundle.service.service_name.clone(), runtime);
     }
-    struct HfRegistryFixture<'a> {
-        source_id: Hash,
-        pool_id: Hash,
-        lease_asset_definition_id: AssetDefinitionId,
-        repo_id: &'a str,
-        resolved_revision: &'a str,
-        model_name: &'a str,
-        normalized_runtime_hash: Hash,
-        apartment_bindings: BTreeSet<String>,
-    }
-    fn insert_hf_registry_fixture(
-        world: &mut World,
-        bundle: &SoraDeploymentBundleV1,
-        fixture: HfRegistryFixture<'_>,
-    ) {
-        let HfRegistryFixture {
-            source_id,
-            pool_id,
-            lease_asset_definition_id,
-            repo_id,
-            resolved_revision,
-            model_name,
-            normalized_runtime_hash,
-            apartment_bindings,
-        } = fixture;
-        world.soracloud_hf_sources_mut_for_testing().insert(
-            source_id,
-            SoraHfSourceRecordV1 {
-                schema_version: SORA_HF_SOURCE_RECORD_VERSION_V1,
-                source_id,
-                repo_id: repo_id.to_owned(),
-                resolved_revision: resolved_revision.to_owned(),
-                model_name: model_name.to_owned(),
-                adapter_id: "hf.shared.v1".to_owned(),
-                normalized_runtime_hash,
-                resource_profile: Some(sample_hf_resource_profile_for_tests()),
-                status: SoraHfSourceStatusV1::PendingImport,
-                created_at_ms: 10,
-                updated_at_ms: 20,
-                last_error: None,
-            },
-        );
-        world
-            .soracloud_hf_shared_lease_pools_mut_for_testing()
-            .insert(
-                pool_id,
-                SoraHfSharedLeasePoolV1 {
-                    schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
-                    pool_id,
-                    source_id,
-                    storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
-                    lease_asset_definition_id,
-                    base_fee: "0.00001".parse().expect("base fee"),
-                    lease_term_ms: 60_000,
-                    window_started_at_ms: 10,
-                    window_expires_at_ms: 60_010,
-                    active_member_count: 1,
-                    status: SoraHfSharedLeaseStatusV1::Active,
-                    queued_next_window: None,
-                },
-            );
-        world
-            .soracloud_hf_shared_lease_members_mut_for_testing()
-            .insert(
-                (pool_id.to_string(), ALICE_ID.to_string()),
-                SoraHfSharedLeaseMemberV1 {
-                    schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
-                    pool_id,
-                    source_id,
-                    account_id: ALICE_ID.clone(),
-                    status: SoraHfSharedLeaseMemberStatusV1::Active,
-                    joined_at_ms: 10,
-                    updated_at_ms: 20,
-                    total_paid: "0.00001".parse().expect("total paid"),
-                    total_refunded: Quantity::zero(),
-                    last_charge: "0.00001".parse().expect("last charge"),
-                    total_compute_paid: Quantity::zero(),
-                    total_compute_refunded: Quantity::zero(),
-                    last_compute_charge: Quantity::zero(),
-                    service_bindings: BTreeSet::from([bundle.service.service_name.to_string()]),
-                    apartment_bindings,
-                },
-            );
-    }
-    fn insert_generated_hf_service_fixture(
-        state: &mut Arc<State>,
-        service_name: &str,
-        repo_id: &str,
-        resolved_revision: &str,
-        model_name: &str,
-    ) -> Result<GeneratedHfServiceFixture> {
-        let source_id = Hash::new(format!("generated-hf-source:{service_name}").as_bytes());
-        let pool_id = Hash::new(format!("generated-hf-pool:{service_name}").as_bytes());
-        let lease_asset_definition_id = AssetDefinitionId::from_uuid_bytes([
-            0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4, 0xa7, 0x16, 0x44, 0x66, 0x55, 0x44,
-            0x00, 0x09,
-        ])
-        .expect("fixture asset definition");
-        let bundle = iroha_core::soracloud_runtime::build_soracloud_hf_generated_service_bundle(
-            service_name.parse().expect("valid generated service name"),
-            &source_id.to_string(),
-            repo_id,
-            resolved_revision,
-            model_name,
-        )
-        .expect("valid generated HF service fixture");
-        let world = &mut Arc::get_mut(state).expect("unique test state").world;
-        insert_service_revision_fixture(world, &bundle);
-        insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
-        insert_hf_registry_fixture(
-            world,
-            &bundle,
-            HfRegistryFixture {
-                source_id,
-                pool_id,
-                lease_asset_definition_id,
-                repo_id,
-                resolved_revision,
-                model_name,
-                normalized_runtime_hash: Hash::new(
-                    format!("generated-hf-runtime:{service_name}").as_bytes(),
-                ),
-                apartment_bindings: BTreeSet::new(),
-            },
-        );
-        Ok(GeneratedHfServiceFixture {
-            source_id,
-            pool_id,
-            bundle,
-        })
-    }
     fn assign_fixture_artifact_hashes(
         bundle: &mut SoraDeploymentBundleV1,
         bundle_bytes: &[u8],
@@ -29301,113 +26104,6 @@ mod tests {
             payloads.push(payload);
         }
         payloads
-    }
-    fn insert_generated_hf_placement_fixture(
-        state: &mut Arc<State>,
-        fixture: &GeneratedHfServiceFixture,
-        local_role: SoraHfPlacementHostRoleV1,
-        local_status: SoraHfPlacementHostStatusV1,
-        local_peer_id: &str,
-    ) -> Hash {
-        let placement_id = Hash::new(
-            format!(
-                "generated-hf-placement:{}",
-                fixture.bundle.service.service_name
-            )
-            .as_bytes(),
-        );
-        let mut assigned_hosts = Vec::new();
-        if local_role == SoraHfPlacementHostRoleV1::Replica {
-            assigned_hosts.push(SoraHfPlacementHostAssignmentV1 {
-                validator_account_id: BOB_ID.clone(),
-                peer_id: BOB_ID.expect_single_signatory().to_string(),
-                role: SoraHfPlacementHostRoleV1::Primary,
-                status: SoraHfPlacementHostStatusV1::Warm,
-                host_class: "cpu.large".to_owned(),
-            });
-        }
-        assigned_hosts.push(SoraHfPlacementHostAssignmentV1 {
-            validator_account_id: ALICE_ID.clone(),
-            peer_id: local_peer_id.to_owned(),
-            role: local_role,
-            status: local_status,
-            host_class: "cpu.large".to_owned(),
-        });
-        if local_role == SoraHfPlacementHostRoleV1::Primary {
-            assigned_hosts.push(SoraHfPlacementHostAssignmentV1 {
-                validator_account_id: BOB_ID.clone(),
-                peer_id: BOB_ID.expect_single_signatory().to_string(),
-                role: SoraHfPlacementHostRoleV1::Replica,
-                status: SoraHfPlacementHostStatusV1::Warm,
-                host_class: "cpu.large".to_owned(),
-            });
-        }
-        Arc::get_mut(state)
-            .expect("unique test state")
-            .world
-            .soracloud_hf_placements_mut_for_testing()
-            .insert(
-                fixture.pool_id,
-                SoraHfPlacementRecordV1 {
-                    schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-                    placement_id,
-                    source_id: fixture.source_id,
-                    pool_id: fixture.pool_id,
-                    status: if local_role == SoraHfPlacementHostRoleV1::Primary
-                        && local_status == SoraHfPlacementHostStatusV1::Warm
-                    {
-                        SoraHfPlacementStatusV1::Ready
-                    } else {
-                        SoraHfPlacementStatusV1::Degraded
-                    },
-                    selection_seed_hash: Hash::new(
-                        format!(
-                            "generated-hf-placement-seed:{}",
-                            fixture.bundle.service.service_name
-                        )
-                        .as_bytes(),
-                    ),
-                    resource_profile: sample_hf_resource_profile_for_tests(),
-                    eligible_validator_count: u32::try_from(assigned_hosts.len())
-                        .expect("assigned host count fits in u32"),
-                    adaptive_target_host_count: u16::try_from(assigned_hosts.len())
-                        .expect("assigned host count fits in u16"),
-                    assigned_hosts,
-                    total_reservation_fee: "0.00002".parse().expect("total reservation fee"),
-                    last_rebalance_at_ms: 20,
-                    last_error: None,
-                },
-            );
-        placement_id
-    }
-    fn insert_local_model_host_capability_fixture(
-        state: &mut Arc<State>,
-        validator_account_id: &AccountId,
-        peer_id: &str,
-        heartbeat_expires_at_ms: u64,
-    ) {
-        Arc::get_mut(state)
-            .expect("unique test state")
-            .world
-            .soracloud_model_host_capabilities_mut_for_testing()
-            .insert(
-                validator_account_id.clone(),
-                SoraModelHostCapabilityRecordV1 {
-                    schema_version: SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
-                    validator_account_id: validator_account_id.clone(),
-                    peer_id: peer_id.to_owned(),
-                    supported_backends: BTreeSet::from([SoraHfBackendFamilyV1::Transformers]),
-                    supported_formats: BTreeSet::from([SoraHfModelFormatV1::Safetensors]),
-                    max_model_bytes: 8 * 1024 * 1024 * 1024,
-                    max_disk_cache_bytes: 32 * 1024 * 1024 * 1024,
-                    max_ram_bytes: 32 * 1024 * 1024 * 1024,
-                    max_vram_bytes: 0,
-                    max_concurrent_resident_models: 2,
-                    host_class: "cpu.large".to_owned(),
-                    advertised_at_ms: 10,
-                    heartbeat_expires_at_ms,
-                },
-            );
     }
     fn seed_local_artifact_cache(
         artifacts_root: &Path,
@@ -29562,16 +26258,6 @@ mod tests {
     }
     #[test]
     fn manager_config_uses_explicit_soracloud_runtime_settings() {
-        let mut hf = iroha_config::parameters::actual::SoracloudRuntimeHuggingFace::default();
-        hf.hub_base_url = "https://models.sora.test".to_owned();
-        hf.api_base_url = "https://models.sora.test/api".to_owned();
-        hf.request_timeout = Duration::from_secs(9);
-        hf.import_redirect_allowed_origins = vec!["https://downloads.sora.test".to_owned()];
-        hf.import_max_files = 12;
-        hf.import_max_file_bytes = 32 * 1024 * 1024;
-        hf.import_max_total_bytes = 256 * 1024 * 1024;
-        hf.model_info_max_response_bytes = 4 * 1024 * 1024;
-        hf.import_file_allowlist = vec!["config.json".to_owned(), "*.safetensors".to_owned()];
         let runtime = iroha_config::parameters::actual::SoracloudRuntime {
             production_mode: false,
             state_dir: PathBuf::from("/tmp/iroha-soracloud-runtime-config"),
@@ -29630,7 +26316,6 @@ mod tests {
                 rate_per_minute: std::num::NonZeroU32::new(120),
                 max_bytes_per_minute: std::num::NonZeroU64::new(262_144),
             },
-            hf,
         };
         let manager = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
         assert_eq!(manager.state_dir, runtime.state_dir);
@@ -29641,7 +26326,6 @@ mod tests {
         assert_eq!(manager.inrou, runtime.inrou);
         assert_eq!(manager.submission, runtime.submission);
         assert_eq!(manager.egress, runtime.egress);
-        assert_eq!(manager.hf, runtime.hf);
     }
     #[test]
     #[should_panic(expected = "egress.default_allow = false")]
@@ -30011,7 +26695,7 @@ mod tests {
             cpu_millis: std::num::NonZeroU32::new(4_010).expect("nonzero CPU"),
             ..baseline
         };
-        portable_vm_vcpu_count(&above_v1)
+        let _ = portable_vm_vcpu_count(&above_v1)
             .expect_err("Inrou V1 CPU values above the qualified boundary must fail closed");
         Ok(())
     }
@@ -30028,7 +26712,7 @@ mod tests {
             norito::json!({"enabled": true, "present": true, "fallback": "tcg"}),
             norito::json!([true, true]),
         ] {
-            validate_inrou_qmp_kvm_info(&rejected)
+            let _ = validate_inrou_qmp_kvm_info(&rejected)
                 .expect_err("non-exact KVM status must fail qualification");
         }
         Ok(())
@@ -30043,7 +26727,7 @@ mod tests {
 
         validate_inrou_portable_vm_v1_config(&config)?;
         config.portable_vm_gid = std::num::NonZeroU32::new(70_001);
-        validate_inrou_portable_vm_v1_config(&config)
+        let _ = validate_inrou_portable_vm_v1_config(&config)
             .expect_err("PortableVM uid/gid must select the same canonical slot");
         Ok(())
     }
@@ -30389,25 +27073,6 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn derive_hf_runtime_status_preserves_metadata_only_source_truth() {
-        assert_eq!(
-            derive_hf_runtime_status(SoraHfSourceStatusV1::PendingImport, false),
-            SoracloudRuntimeHfSourceStatus::PendingImport
-        );
-        assert_eq!(
-            derive_hf_runtime_status(SoraHfSourceStatusV1::PendingImport, true),
-            SoracloudRuntimeHfSourceStatus::Failed
-        );
-        assert_eq!(
-            derive_hf_runtime_status(SoraHfSourceStatusV1::Failed, false),
-            SoracloudRuntimeHfSourceStatus::Failed
-        );
-        assert_eq!(
-            derive_hf_runtime_status(SoraHfSourceStatusV1::Retired, false),
-            SoracloudRuntimeHfSourceStatus::Retired
-        );
-    }
-    #[test]
     fn reconcile_once_persists_active_service_and_apartment_materializations() -> Result<()> {
         let mut state = test_state()?;
         let mut bundle = load_deployment_bundle_fixture()?;
@@ -30694,761 +27359,6 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn reconcile_once_keeps_hf_source_metadata_only_when_services_are_bound() -> Result<()> {
-        let mut state = test_state()?;
-        let mut bundle = load_deployment_bundle_fixture()?;
-        let bundle_bytes = simple_soracloud_contract_artifact(&["update", "query"]);
-        let artifact_payloads =
-            assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "hf-runtime-ready");
-        let source_id = Hash::new(b"hf-source");
-        let pool_id = Hash::new(b"hf-pool");
-        let lease_asset_definition_id = AssetDefinitionId::from_uuid_bytes([
-            0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4, 0xa7, 0x16, 0x44, 0x66, 0x55, 0x44,
-            0x00, 0x00,
-        ])
-        .expect("asset definition");
-        {
-            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            insert_service_revision_fixture(world, &bundle);
-            insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
-            insert_service_runtime_fixture(world, &bundle, sample_runtime_state(&bundle));
-            insert_hf_registry_fixture(
-                world,
-                &bundle,
-                HfRegistryFixture {
-                    source_id,
-                    pool_id,
-                    lease_asset_definition_id,
-                    repo_id: "openai/gpt-oss",
-                    resolved_revision: TEST_HF_COMMIT_OID,
-                    model_name: "gpt_oss_20b",
-                    normalized_runtime_hash: Hash::new(b"hf-runtime"),
-                    apartment_bindings: BTreeSet::new(),
-                },
-            );
-        }
-        let temp_dir = tempfile::tempdir()?;
-        seed_local_artifact_cache(
-            &temp_dir.path().join("artifacts"),
-            bundle.container.bundle_hash,
-            &bundle_bytes,
-            bundle
-                .service
-                .artifacts
-                .iter()
-                .zip(artifact_payloads)
-                .map(|(artifact, payload)| (artifact.artifact_hash, payload)),
-        )?;
-        let _generation = publish_single_weight_hf_test_generation(
-            temp_dir.path(),
-            &source_id.to_string(),
-            "openai/gpt-oss",
-            "gpt_oss_20b",
-            TEST_HF_WEIGHT_PAYLOAD,
-        )?;
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(temp_dir.path().to_path_buf())
-                .with_local_host_identity(ALICE_ID.clone(), "12D3KooWUsageReporter"),
-            Arc::clone(&state),
-        );
-        manager.reconcile_once()?;
-        let projection = manager
-            .snapshot
-            .read()
-            .hf_sources
-            .get(&source_id.to_string())
-            .cloned()
-            .expect("hf runtime projection");
-        assert_eq!(
-            projection.runtime_status,
-            SoracloudRuntimeHfSourceStatus::PendingImport
-        );
-        assert!(projection.last_error.is_none());
-        assert_eq!(
-            projection.bound_service_names,
-            vec!["web_portal".to_owned()]
-        );
-        assert_eq!(
-            projection.materialized_service_names,
-            vec!["web_portal".to_owned()]
-        );
-        assert_eq!(projection.bundle_cache_miss_count, 0);
-        assert_eq!(projection.artifact_cache_miss_count, 0);
-        Ok(())
-    }
-    fn hf_model_info_commit_must_match_authoritative_revision() -> Result<()> {
-        let matching = norito::json!({"sha": TEST_HF_COMMIT_OID});
-        assert_eq!(
-            validate_hf_model_info_resolved_commit(&matching, TEST_HF_COMMIT_OID)?,
-            TEST_HF_COMMIT_OID
-        );
-        let mismatch = norito::json!({"sha": OTHER_TEST_HF_COMMIT_OID});
-        validate_hf_model_info_resolved_commit(&mismatch, TEST_HF_COMMIT_OID)
-            .expect_err("provider commit mismatch must fail before import");
-        validate_hf_model_info_resolved_commit(&norito::json!({"sha": "main"}), TEST_HF_COMMIT_OID)
-            .expect_err("noncanonical provider commit must fail before import");
-        validate_hf_model_info_resolved_commit(
-            &norito::json!({"sha": "0123456789ABCDEF0123456789ABCDEF01234567"}),
-            TEST_HF_COMMIT_OID,
-        )
-        .expect_err("uppercase provider commit must fail before import");
-        validate_hf_model_info_resolved_commit(&norito::json!({}), TEST_HF_COMMIT_OID)
-            .expect_err("missing provider commit must fail before import");
-        validate_hf_model_info_resolved_commit(&matching, "main")
-            .expect_err("mutable authoritative revision must fail closed");
-        Ok(())
-    }
-    #[test]
-    fn hf_model_info_identity_requires_exact_canonical_repo_and_commit() -> Result<()> {
-        let matching = norito::json!({
-            "modelId": "OpenAI-Community/GPT2",
-            "sha": TEST_HF_COMMIT_OID,
-        });
-        assert_eq!(
-            validate_hf_model_info_identity(
-                &matching,
-                "OpenAI-Community/GPT2",
-                TEST_HF_COMMIT_OID,
-            )?,
-            TEST_HF_COMMIT_OID,
-        );
-        for invalid in [
-            norito::json!({"sha": TEST_HF_COMMIT_OID}),
-            norito::json!({"modelId": "openai-community/gpt2", "sha": TEST_HF_COMMIT_OID}),
-            norito::json!({"modelId": "OpenAI-Community/GPT2", "sha": OTHER_TEST_HF_COMMIT_OID}),
-        ] {
-            validate_hf_model_info_identity(&invalid, "OpenAI-Community/GPT2", TEST_HF_COMMIT_OID)
-                .expect_err("provider identity aliases and substitutions must fail closed");
-        }
-        validate_hf_model_info_identity(&matching, "bad../repo", TEST_HF_COMMIT_OID)
-            .expect_err("authoritative repository ID must use the shared canonical grammar");
-        Ok(())
-    }
-    #[test]
-    fn hf_model_info_lfs_integrity_is_canonical_and_bounded() -> Result<()> {
-        let payload = b"authenticated model weights";
-        let digest = hex::encode(iroha_crypto::sha256(payload));
-        let model_info = norito::json!({
-            "siblings": [{
-                "rfilename": "model.safetensors",
-                "lfs": {"sha256": (digest), "size": (payload.len() as u64)}
-            }]
-        });
-        let selection = derive_hf_weight_selection_v1(&model_info, 8, 1_024, 8 * 1_024)?
-            .expect("model-info contains a supported weight");
-        assert_eq!(selection.required_weight_files.len(), 1);
-        assert_eq!(selection.required_weight_files[0].path, "model.safetensors");
-        assert_eq!(
-            selection.required_weight_files[0].content_length,
-            payload.len() as u64
-        );
-        assert_eq!(
-            selection.required_weight_files[0].lfs_sha256,
-            hex::encode(iroha_crypto::sha256(payload))
-        );
-        for malformed in [
-            norito::json!({"siblings": [{"rfilename": "model.safetensors", "lfs": {"size": 1}}]}),
-            norito::json!({"siblings": [{"rfilename": "model.safetensors", "lfs": {"sha256": "ABC", "size": 1}}]}),
-            norito::json!({"siblings": [{"rfilename": "model.safetensors", "lfs": {"sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "size": 0}}]}),
-        ] {
-            derive_hf_weight_selection_v1(&malformed, 8, 1_024, 8 * 1_024)
-                .expect_err("malformed LFS integrity metadata must fail closed");
-        }
-        let format_contract = [
-            ("weights.gguf", SoraHfModelFormatV1::Gguf),
-            ("weights.safetensors", SoraHfModelFormatV1::Safetensors),
-            ("pytorch_model.bin", SoraHfModelFormatV1::PyTorch),
-            ("weights.pt", SoraHfModelFormatV1::PyTorch),
-            ("weights.pth", SoraHfModelFormatV1::PyTorch),
-            ("rust_model.ot", SoraHfModelFormatV1::PyTorch),
-        ];
-        for (path, expected_format) in format_contract {
-            assert!(
-                hf_import_file_requires_lfs_integrity(path),
-                "supported weight file `{path}` must require LFS integrity"
-            );
-            let selection = test_hf_selection(&test_hf_model_info(
-                "openai-community/gpt2",
-                TEST_HF_COMMIT_OID,
-                &[(path, TEST_HF_WEIGHT_PAYLOAD)],
-            ));
-            assert_eq!(selection.model_format, expected_format);
-            assert!(hf_import_file_requires_lfs_integrity(
-                path.to_ascii_uppercase().as_str()
-            ));
-        }
-        let grouped_extensions = SORA_HF_GGUF_WEIGHT_FILE_EXTENSIONS_V1
-            .iter()
-            .chain(SORA_HF_SAFETENSORS_WEIGHT_FILE_EXTENSIONS_V1)
-            .chain(SORA_HF_PYTORCH_WEIGHT_FILE_EXTENSIONS_V1)
-            .copied()
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            grouped_extensions,
-            SORA_HF_WEIGHT_FILE_EXTENSIONS_V1
-                .iter()
-                .copied()
-                .collect::<BTreeSet<_>>(),
-            "profile selection and importer integrity extension contracts must remain identical"
-        );
-        assert!(!hf_import_file_requires_lfs_integrity("config.json"));
-        assert!(!hf_import_file_requires_lfs_integrity(
-            "model.safetensors.index.json"
-        ));
-        Ok(())
-    }
-    #[test]
-    fn hf_url_helpers_require_exact_canonical_base_urls() -> Result<()> {
-        let info = hf_model_info_url(
-            "https://huggingface.co/api",
-            "openai-community/gpt2",
-            TEST_HF_COMMIT_OID,
-        )?;
-        let file = hf_repo_file_url(
-            "https://huggingface.co",
-            "openai-community/gpt2",
-            TEST_HF_COMMIT_OID,
-            "config.json",
-        )?;
-        assert_eq!(
-            info.as_str(),
-            format!(
-                "https://huggingface.co/api/models/openai-community/gpt2/revision/{TEST_HF_COMMIT_OID}?blobs=true"
-            )
-        );
-        assert_eq!(
-            file.as_str(),
-            format!(
-                "https://huggingface.co/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/config.json"
-            )
-        );
-        for invalid in [
-            "huggingface.co/api",
-            " https://huggingface.co/api",
-            "https://huggingface.co/api ",
-            "HTTPS://huggingface.co/api",
-            "https://HUGGINGFACE.CO/api",
-            "https://huggingface.co:443/api",
-            "https://huggingface.co/api/",
-            "https://user@huggingface.co/api",
-            "https://huggingface.co/api?mutable=1",
-            "https://huggingface.co/api#mutable",
-            "http://huggingface.co/api",
-        ] {
-            hf_model_info_url(invalid, "openai-community/gpt2", TEST_HF_COMMIT_OID)
-                .expect_err("noncanonical HF base URL aliases must fail closed");
-        }
-        Ok(())
-    }
-    #[test]
-    fn reconcile_once_imports_hf_source_into_shared_local_cache() -> Result<()> {
-        let mut fixture = GeneratedHfTestFixture::new("hf_import_service")?;
-        let config_json = br#"{"model_type":"gpt2"}"#.to_vec();
-        let tokenizer_json = br#"{"version":"1.0"}"#.to_vec();
-        let weights = b"authenticated safetensors weights".to_vec();
-        let weight_sha256 = hex::encode(iroha_crypto::sha256(&weights));
-        let model_info = norito::json!({
-            "modelId": "openai-community/gpt2",
-            "sha": TEST_HF_COMMIT_OID,
-            "pipeline_tag": "text-generation",
-            "library_name": "transformers",
-            "tags": ["text-generation", "causal-lm"],
-            "siblings": [
-                {"rfilename": "config.json"},
-                {"rfilename": "tokenizer.json"},
-                {
-                    "rfilename": "weights.safetensors",
-                    "lfs": {
-                        "sha256": (weight_sha256),
-                        "size": (u64::try_from(weights.len()).expect("fixture length fits in u64"))
-                    }
-                },
-                {"rfilename": "README.md"}
-            ]
-        });
-        fixture.set_resource_profile_from_model_info(&model_info);
-        let model_info_body = norito::json::to_vec(&model_info)?;
-        let mut routes = BTreeMap::new();
-        routes.insert(
-            (
-                "GET".to_owned(),
-                format!(
-                    "/api/models/openai-community/gpt2/revision/{TEST_HF_COMMIT_OID}?blobs=true"
-                ),
-            ),
-            HttpFixtureResponse::json(model_info_body),
-        );
-        routes.insert(
-            (
-                "HEAD".to_owned(),
-                format!("/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/config.json"),
-            ),
-            HttpFixtureResponse::head_ok(
-                "application/json",
-                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
-            ),
-        );
-        routes.insert(
-            (
-                "GET".to_owned(),
-                format!("/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/config.json"),
-            ),
-            HttpFixtureResponse::json(config_json.clone()),
-        );
-        routes.insert(
-            (
-                "HEAD".to_owned(),
-                format!("/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/tokenizer.json"),
-            ),
-            HttpFixtureResponse::head_ok(
-                "application/json",
-                u64::try_from(tokenizer_json.len()).expect("fixture length fits in u64"),
-            ),
-        );
-        routes.insert(
-            (
-                "GET".to_owned(),
-                format!("/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/tokenizer.json"),
-            ),
-            HttpFixtureResponse::json(tokenizer_json.clone()),
-        );
-        routes.insert(
-            (
-                "HEAD".to_owned(),
-                format!("/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/weights.safetensors"),
-            ),
-            HttpFixtureResponse::head_ok(
-                "application/octet-stream",
-                u64::try_from(weights.len()).expect("fixture length fits in u64"),
-            ),
-        );
-        routes.insert(
-            (
-                "GET".to_owned(),
-                format!("/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/weights.safetensors"),
-            ),
-            HttpFixtureResponse::binary(weights.clone()),
-        );
-        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
-        let temp_dir = tempfile::tempdir()?;
-        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
-        config.hf.hub_base_url = server.base_url.clone();
-        config.hf.api_base_url = format!("{}/api", server.base_url);
-        config.hf.import_file_allowlist = vec![
-            "config.json".to_owned(),
-            "tokenizer.json".to_owned(),
-            "*.safetensors".to_owned(),
-        ];
-        config.hf.import_max_file_bytes = 128;
-        config.hf.import_max_total_bytes = 512;
-        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&fixture.state));
-        manager.reconcile_once()?;
-        let source_id = fixture.source_id.to_string();
-        let generation = read_hf_import_generation(temp_dir.path(), &source_id)?
-            .expect("reconcile should publish an HF import generation");
-        let manifest = &generation.manifest;
-        assert_eq!(manifest.source_id, source_id);
-        assert_eq!(manifest.repo_id, "openai-community/gpt2");
-        assert_eq!(manifest.requested_revision, TEST_HF_COMMIT_OID);
-        assert_eq!(
-            manifest.resolved_commit.as_deref(),
-            Some(TEST_HF_COMMIT_OID)
-        );
-        assert_eq!(manifest.pipeline_tag.as_deref(), Some("text-generation"));
-        assert_eq!(manifest.library_name.as_deref(), Some("transformers"));
-        assert_eq!(manifest.imported_files.len(), 1);
-        assert_eq!(
-            manifest
-                .imported_files
-                .iter()
-                .map(|file| file.path.clone())
-                .collect::<Vec<_>>(),
-            vec!["weights.safetensors".to_owned()]
-        );
-        assert!(manifest.skipped_files.is_empty());
-        let imported_root = generation.files_root.clone();
-        assert_eq!(
-            fs::read(imported_root.join("weights.safetensors"))?,
-            weights
-        );
-        fs::write(
-            imported_root.join("weights.safetensors"),
-            b"tampered model weights",
-        )?;
-        manager.reconcile_once()?;
-        let repaired = read_hf_import_generation(temp_dir.path(), &source_id)?
-            .expect("re-import should publish a replacement generation");
-        assert_ne!(generation.name, repaired.name);
-        assert_eq!(
-            fs::read(repaired.files_root.join("weights.safetensors"))?,
-            weights,
-            "cache reuse must detect payload drift and publish a clean authenticated generation"
-        );
-        let projection = manager
-            .snapshot
-            .read()
-            .hf_sources
-            .get(&fixture.source_id.to_string())
-            .cloned()
-            .expect("runtime snapshot should include the imported HF source");
-        assert_eq!(
-            projection.runtime_status,
-            SoracloudRuntimeHfSourceStatus::PendingImport
-        );
-        assert!(projection.last_error.is_none());
-        Ok(())
-    }
-    #[test]
-    fn reconcile_once_authenticates_lfs_model_bytes_before_publication() -> Result<()> {
-        let mut fixture = GeneratedHfTestFixture::new("hf_lfs_integrity_service")?;
-        let weights = b"authenticated safetensors fixture".to_vec();
-        let lfs_sha256 = hex::encode(iroha_crypto::sha256(&weights));
-        let model_info = norito::json!({
-            "modelId": "openai-community/gpt2",
-            "sha": TEST_HF_COMMIT_OID,
-            "siblings": [{
-                "rfilename": "model.safetensors",
-                "lfs": {"sha256": (lfs_sha256), "size": (weights.len() as u64)}
-            }]
-        });
-        fixture.set_resource_profile_from_model_info(&model_info);
-        let routes = BTreeMap::from([
-            (
-                (
-                    "GET".to_owned(),
-                    format!(
-                        "/api/models/openai-community/gpt2/revision/{TEST_HF_COMMIT_OID}?blobs=true"
-                    ),
-                ),
-                HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
-            ),
-            (
-                (
-                    "HEAD".to_owned(),
-                    format!(
-                        "/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/model.safetensors"
-                    ),
-                ),
-                HttpFixtureResponse::head_ok("application/octet-stream", weights.len() as u64),
-            ),
-            (
-                (
-                    "GET".to_owned(),
-                    format!(
-                        "/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/model.safetensors"
-                    ),
-                ),
-                HttpFixtureResponse::binary(weights.clone()),
-            ),
-        ]);
-        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
-        let temp_dir = tempfile::tempdir()?;
-        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
-        config.hf.hub_base_url = server.base_url.clone();
-        config.hf.api_base_url = format!("{}/api", server.base_url);
-        config.hf.import_file_allowlist = vec!["*.safetensors".to_owned()];
-        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&fixture.state));
-        manager.reconcile_once()?;
-        let source_id = fixture.source_id.to_string();
-        let generation = read_hf_import_generation(temp_dir.path(), &source_id)?
-            .expect("authenticated LFS import generation");
-        let manifest = &generation.manifest;
-        assert!(manifest.import_error.is_none());
-        assert_eq!(manifest.imported_files.len(), 1);
-        assert_eq!(
-            manifest.imported_files[0].lfs_sha256.as_deref(),
-            Some(lfs_sha256.as_str())
-        );
-        assert_eq!(
-            fs::read(generation.files_root.join("model.safetensors"))?,
-            weights
-        );
-        Ok(())
-    }
-    #[test]
-    fn reconcile_once_rejects_required_weight_set_above_file_limit_before_download() -> Result<()> {
-        let mut fixture = GeneratedHfTestFixture::new("hf_required_weight_count_limit")?;
-        let first = b"authenticated shard one";
-        let second = b"authenticated shard two";
-        let model_info = norito::json!({
-            "modelId": "openai-community/gpt2",
-            "sha": TEST_HF_COMMIT_OID,
-            "siblings": [
-                {
-                    "rfilename": "model-00001.safetensors",
-                    "lfs": {
-                        "sha256": (hex::encode(iroha_crypto::sha256(first))),
-                        "size": (u64::try_from(first.len())?)
-                    }
-                },
-                {
-                    "rfilename": "model-00002.safetensors",
-                    "lfs": {
-                        "sha256": (hex::encode(iroha_crypto::sha256(second))),
-                        "size": (u64::try_from(second.len())?)
-                    }
-                }
-            ]
-        });
-        fixture.set_resource_profile_from_model_info(&model_info);
-        let routes = BTreeMap::from([(
-            (
-                "GET".to_owned(),
-                format!(
-                    "/api/models/openai-community/gpt2/revision/{TEST_HF_COMMIT_OID}?blobs=true"
-                ),
-            ),
-            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
-        )]);
-        let (server, captured) = spawn_recording_http_route_fixture(routes)?;
-        let temp_dir = tempfile::tempdir()?;
-        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
-        config.hf.hub_base_url = server.base_url.clone();
-        config.hf.api_base_url = format!("{}/api", server.base_url);
-        config.hf.import_max_files = 1;
-        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&fixture.state));
-        manager.reconcile_once()?;
-        let source_id = fixture.source_id.to_string();
-        let manifest = read_hf_import_manifest(temp_dir.path(), &source_id)?
-            .expect("failed import must publish an error manifest");
-        assert!(manifest.imported_files.is_empty());
-        assert!(
-            manifest
-                .import_error
-                .as_deref()
-                .is_some_and(|error| error.contains("selected weight set has 2 files"))
-        );
-        assert_eq!(
-            captured.lock().expect("captured requests").len(),
-            1,
-            "required weight count must be rejected before ancillary or shard downloads"
-        );
-        assert_eq!(
-            fs::read_dir(
-                read_hf_import_generation(temp_dir.path(), &source_id)?
-                    .expect("failed import generation")
-                    .files_root,
-            )?
-            .count(),
-            0,
-            "failed import must not retain a partial executable cache"
-        );
-        Ok(())
-    }
-    #[test]
-    fn reconcile_once_rejects_incomplete_weight_shards_atomically() -> Result<()> {
-        let mut fixture = GeneratedHfTestFixture::new("hf_incomplete_weight_shards")?;
-        let first = b"authenticated shard one".to_vec();
-        let second = b"authenticated shard two".to_vec();
-        let model_info = norito::json!({
-            "modelId": "openai-community/gpt2",
-            "sha": TEST_HF_COMMIT_OID,
-            "siblings": [
-                {
-                    "rfilename": "model-00001.safetensors",
-                    "lfs": {
-                        "sha256": (hex::encode(iroha_crypto::sha256(&first))),
-                        "size": (u64::try_from(first.len())?)
-                    }
-                },
-                {
-                    "rfilename": "model-00002.safetensors",
-                    "lfs": {
-                        "sha256": (hex::encode(iroha_crypto::sha256(&second))),
-                        "size": (u64::try_from(second.len())?)
-                    }
-                }
-            ]
-        });
-        fixture.set_resource_profile_from_model_info(&model_info);
-        let first_path =
-            format!("/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/model-00001.safetensors");
-        let second_path =
-            format!("/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/model-00002.safetensors");
-        let routes = BTreeMap::from([
-            (
-                (
-                    "GET".to_owned(),
-                    format!(
-                        "/api/models/openai-community/gpt2/revision/{TEST_HF_COMMIT_OID}?blobs=true"
-                    ),
-                ),
-                HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
-            ),
-            (
-                ("HEAD".to_owned(), first_path.clone()),
-                HttpFixtureResponse::head_ok(
-                    "application/octet-stream",
-                    u64::try_from(first.len())?,
-                ),
-            ),
-            (
-                ("GET".to_owned(), first_path),
-                HttpFixtureResponse::binary(first),
-            ),
-            (
-                ("HEAD".to_owned(), second_path.clone()),
-                HttpFixtureResponse::head_ok(
-                    "application/octet-stream",
-                    u64::try_from(second.len())?,
-                ),
-            ),
-            (
-                ("GET".to_owned(), second_path),
-                HttpFixtureResponse::text(503, "missing shard"),
-            ),
-        ]);
-        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
-        let temp_dir = tempfile::tempdir()?;
-        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
-        config.hf.hub_base_url = server.base_url.clone();
-        config.hf.api_base_url = format!("{}/api", server.base_url);
-        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&fixture.state));
-        manager.reconcile_once()?;
-        let source_id = fixture.source_id.to_string();
-        let manifest = read_hf_import_manifest(temp_dir.path(), &source_id)?
-            .expect("failed shard import must publish an error manifest");
-        assert!(manifest.import_error.as_deref().is_some_and(|error| {
-            error.contains("model-00002.safetensors") && error.contains("GET returned 503")
-        }));
-        assert!(manifest.imported_files.is_empty());
-        assert_eq!(
-            fs::read_dir(
-                read_hf_import_generation(temp_dir.path(), &source_id)?
-                    .expect("failed import generation")
-                    .files_root,
-            )?
-            .count(),
-            0,
-            "terminal shard failure must discard every previously downloaded shard"
-        );
-        Ok(())
-    }
-    #[test]
-    fn reconcile_once_records_hf_import_error_manifest_on_failure() -> Result<()> {
-        let fixture = GeneratedHfTestFixture::new("hf_import_failure_service")?;
-        let mut routes = BTreeMap::new();
-        routes.insert(
-            (
-                "GET".to_owned(),
-                format!(
-                    "/api/models/openai-community/gpt2/revision/{TEST_HF_COMMIT_OID}?blobs=true"
-                ),
-            ),
-            HttpFixtureResponse::text(500, "boom"),
-        );
-        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
-        let temp_dir = tempfile::tempdir()?;
-        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
-        config.hf.hub_base_url = server.base_url.clone();
-        config.hf.api_base_url = format!("{}/api", server.base_url);
-        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&fixture.state));
-        manager.reconcile_once()?;
-        let manifest = read_hf_import_manifest(temp_dir.path(), &fixture.source_id.to_string())?
-            .expect("failed imports should still leave an HF error manifest");
-        assert!(manifest.imported_files.is_empty());
-        assert!(manifest.import_error.is_some());
-        assert!(
-            manifest
-                .import_error
-                .as_deref()
-                .is_some_and(|message| message.contains("returned 500"))
-        );
-        let projection = manager
-            .snapshot
-            .read()
-            .hf_sources
-            .get(&fixture.source_id.to_string())
-            .cloned()
-            .expect("runtime snapshot should include the failed HF source");
-        assert_eq!(
-            projection.runtime_status,
-            SoracloudRuntimeHfSourceStatus::Failed
-        );
-        assert!(
-            projection
-                .last_error
-                .as_deref()
-                .is_some_and(|message| message.contains("returned 500"))
-        );
-        Ok(())
-    }
-    #[tokio::test(flavor = "multi_thread")]
-    async fn reconcile_task_imports_generated_hf_source_without_panicking() -> Result<()> {
-        let mut fixture = GeneratedHfTestFixture::new("hf_async_reconcile_import")?;
-        let local_peer_id = canonical_inrou_test_peer_id();
-        fixture.insert_placement(
-            SoraHfPlacementHostRoleV1::Primary,
-            SoraHfPlacementHostStatusV1::Warm,
-            local_peer_id,
-        );
-        let config_json = br#"{"model_type":"gpt2"}"#.to_vec();
-
-        let routes = generated_hf_config_routes(TEST_HF_COMMIT_OID, &config_json)?;
-        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
-        let temp_dir = tempfile::tempdir()?;
-        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
-        config.hf.hub_base_url = server.base_url.clone();
-        config.hf.api_base_url = format!("{}/api", server.base_url);
-        config.hf.import_file_allowlist = vec!["config.json".to_owned()];
-        let manager = Arc::new(SoracloudRuntimeManager::new(
-            config.with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&fixture.state),
-        ));
-        let shutdown = ShutdownSignal::new();
-        let task = Arc::clone(&manager).spawn_reconcile_task(shutdown.clone());
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if read_hf_import_manifest(temp_dir.path(), &fixture.source_id.to_string())?
-                    .is_some()
-                {
-                    break Ok::<(), eyre::Report>(());
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .map_err(|_| eyre::eyre!("timed out waiting for background HF import manifest"))??;
-        shutdown.send();
-        task.await.expect("reconcile task should shut down cleanly");
-        assert!(
-            read_hf_import_manifest(temp_dir.path(), &fixture.source_id.to_string())?.is_some(),
-            "background reconcile should import the assigned HF source without panicking",
-        );
-        Ok(())
-    }
-    #[test]
-    fn reconcile_once_reports_advert_contradiction_for_local_peer_mismatch() -> Result<()> {
-        let mut state = test_state()?;
-        insert_local_model_host_capability_fixture(
-            &mut state,
-            &ALICE_ID,
-            "12D3KooWAdvertisedDifferentPeer",
-            soracloud_runtime_observed_at_ms().saturating_add(30_000),
-        );
-        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
-                .with_local_host_identity(ALICE_ID.clone(), "12D3KooWActualLocalPeer"),
-            Arc::clone(&state),
-        )
-        .with_mutation_sink(mutation_sink.clone());
-        manager.reconcile_once()?;
-        let reports = mutation_sink.submitted_violation_reports();
-        assert_eq!(reports.len(), 1);
-        assert_eq!(reports[0].validator_account_id, *ALICE_ID);
-        assert_eq!(
-            reports[0].kind,
-            SoraModelHostViolationKindV1::AdvertContradiction
-        );
-        assert_eq!(reports[0].placement_id, None);
-        assert!(reports[0].detail.as_deref().is_some_and(|detail| {
-            detail.contains("does not match the authoritative model-host advert peer id")
-        }));
-        assert_eq!(mutation_sink.submitted_model_host_reconciles(), 1);
-        Ok(())
-    }
-    #[test]
     fn reconcile_once_prunes_stale_materializations_and_reports_missing_bundle_cache() -> Result<()>
     {
         let mut state = test_state()?;
@@ -31565,7 +27475,6 @@ mod tests {
             &config.state_dir,
             config.state_dir.join("artifacts"),
             &config.cache_budgets,
-            &config.hf,
             config.local_validator_account_id.as_ref(),
             config.local_peer_id.as_deref(),
             true,
@@ -31655,7 +27564,6 @@ mod tests {
             &config.state_dir,
             config.state_dir.join("artifacts"),
             &config.cache_budgets,
-            &config.hf,
             config.local_validator_account_id.as_ref(),
             config.local_peer_id.as_deref(),
             true,
@@ -31712,7 +27620,7 @@ mod tests {
         deployment.active_rollout = Some(SoraServiceRolloutStateV1 {
             schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
             rollout_handle: "rollout-2026-03".to_string(),
-            baseline_version: Some(active_bundle.service.service_version.clone()),
+            baseline_version: active_bundle.service.service_version.clone(),
             candidate_version: canary_bundle.service.service_version.clone(),
             canary_percent: 20,
             traffic_percent: 20,
@@ -31745,7 +27653,6 @@ mod tests {
             &config.state_dir,
             config.state_dir.join("artifacts"),
             &config.cache_budgets,
-            &config.hf,
             config.local_validator_account_id.as_ref(),
             config.local_peer_id.as_deref(),
             true,
@@ -31796,7 +27703,6 @@ mod tests {
                 &config.state_dir,
                 config.state_dir.join("artifacts"),
                 &config.cache_budgets,
-                &config.hf,
                 config.local_validator_account_id.as_ref(),
                 config.local_peer_id.as_deref(),
                 true,
@@ -31875,8 +27781,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn submit_http_service_lease_usage_opens_zero_before_preserved_usage_and_retries() -> Result<()>
-    {
+    fn submit_http_service_lease_usage_binds_lease_opens_zero_and_retries() -> Result<()> {
         let mut state = test_state()?;
         let mut bundle = load_deployment_bundle_fixture()?;
         bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
@@ -31890,6 +27795,11 @@ mod tests {
             .as_ref()
             .expect("hosted service lease")
             .reporting_epoch;
+        let lease_started_height = deployment_state
+            .service_lease
+            .as_ref()
+            .expect("hosted service lease")
+            .lease_started_height;
         let placement_incarnation = Hash::new(b"placement-1");
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
@@ -31903,9 +27813,47 @@ mod tests {
         )
         .with_mutation_sink(mutation_sink.clone());
         let view = state.view();
+        let stale_lease_started_height = lease_started_height.saturating_add(1);
         manager.submit_http_service_lease_usage_update(
             &view,
             bundle.service.service_name.as_ref(),
+            stale_lease_started_height,
+            reporting_epoch,
+            &bundle.service.service_version,
+            1,
+            placement_incarnation,
+            8 * 1024 * 1024,
+            false,
+        );
+        assert!(mutation_sink.submitted_service_lease_usage().is_empty());
+        assert!(
+            manager
+                .last_service_lease_usage_submission_bytes
+                .lock()
+                .is_empty()
+        );
+        manager
+            .last_service_lease_usage_submission_bytes
+            .lock()
+            .insert(
+                (
+                    bundle.service.service_name.as_ref().to_owned(),
+                    bundle.service.service_version.clone(),
+                    stale_lease_started_height,
+                    reporting_epoch,
+                    1,
+                    placement_incarnation.to_string(),
+                ),
+                HostedHttpLeaseUsageSubmissionAttempt {
+                    accounted_egress_bytes: 0,
+                    finalize_reporter: false,
+                    attempted_at_ms: soracloud_runtime_observed_at_ms(),
+                },
+            );
+        manager.submit_http_service_lease_usage_update(
+            &view,
+            bundle.service.service_name.as_ref(),
+            lease_started_height,
             reporting_epoch,
             &bundle.service.service_version,
             1,
@@ -31916,6 +27864,7 @@ mod tests {
         manager.submit_http_service_lease_usage_update(
             &view,
             bundle.service.service_name.as_ref(),
+            lease_started_height,
             reporting_epoch,
             &bundle.service.service_version,
             1,
@@ -31926,6 +27875,7 @@ mod tests {
         let submission_key = (
             bundle.service.service_name.as_ref().to_owned(),
             bundle.service.service_version.clone(),
+            lease_started_height,
             reporting_epoch,
             1,
             placement_incarnation.to_string(),
@@ -31939,6 +27889,7 @@ mod tests {
         manager.submit_http_service_lease_usage_update(
             &view,
             bundle.service.service_name.as_ref(),
+            lease_started_height,
             reporting_epoch,
             &bundle.service.service_version,
             1,
@@ -31954,6 +27905,10 @@ mod tests {
             "identical lease-usage reports should retry after the bounded suppression window"
         );
         assert_eq!(submitted_usage[0].replica_slot, 1);
+        assert_eq!(
+            submitted_usage[0].lease_started_height,
+            lease_started_height
+        );
         assert_eq!(submitted_usage[0].reporting_epoch, reporting_epoch);
         assert!(!submitted_usage[0].finalize_reporter);
         assert_eq!(
@@ -31963,17 +27918,16 @@ mod tests {
         let mut opened_state = test_state()?;
         let mut opened_deployment = deployment_state.clone();
         let opened_lease = opened_deployment.service_lease.as_mut().expect("lease");
-        opened_lease.egress_reporter_checkpoints = vec![
-            iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
-                reporting_epoch,
-                active_service_version: bundle.service.service_version.clone(),
-                replica_slot: 1,
-                placement_incarnation,
-                validator_account_id: ALICE_ID.clone(),
-                accounted_egress_bytes: 0,
-                finalize_reporter: false,
-            },
-        ];
+        opened_lease.egress_reporter_checkpoints = vec![sample_lease_egress_checkpoint(
+            reporting_epoch,
+            bundle.service.service_version.clone(),
+            lease_started_height,
+            1,
+            placement_incarnation,
+            ALICE_ID.clone(),
+            0,
+            false,
+        )];
         opened_lease
             .refresh_accounted_egress_bytes()
             .expect("exact opened reporter aggregate");
@@ -31993,6 +27947,7 @@ mod tests {
         opened_manager.submit_http_service_lease_usage_update(
             &opened_view,
             bundle.service.service_name.as_ref(),
+            lease_started_height,
             reporting_epoch,
             &bundle.service.service_version,
             1,
@@ -32012,17 +27967,16 @@ mod tests {
         let mut caught_up_state = test_state()?;
         let mut caught_up_deployment = deployment_state;
         let caught_up_lease = caught_up_deployment.service_lease.as_mut().expect("lease");
-        caught_up_lease.egress_reporter_checkpoints = vec![
-            iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
-                reporting_epoch,
-                active_service_version: bundle.service.service_version.clone(),
-                replica_slot: 1,
-                placement_incarnation,
-                validator_account_id: ALICE_ID.clone(),
-                accounted_egress_bytes: 8 * 1024 * 1024,
-                finalize_reporter: false,
-            },
-        ];
+        caught_up_lease.egress_reporter_checkpoints = vec![sample_lease_egress_checkpoint(
+            reporting_epoch,
+            bundle.service.service_version.clone(),
+            lease_started_height,
+            1,
+            placement_incarnation,
+            ALICE_ID.clone(),
+            8 * 1024 * 1024,
+            false,
+        )];
         caught_up_lease
             .refresh_accounted_egress_bytes()
             .expect("exact caught-up reporter aggregate");
@@ -32042,6 +27996,7 @@ mod tests {
         caught_up_manager.submit_http_service_lease_usage_update(
             &caught_up_view,
             bundle.service.service_name.as_ref(),
+            lease_started_height,
             reporting_epoch,
             &bundle.service.service_version,
             1,
@@ -32080,7 +28035,7 @@ mod tests {
         deployment.active_rollout = Some(SoraServiceRolloutStateV1 {
             schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
             rollout_handle: "rollout-2026-03".to_string(),
-            baseline_version: Some(active_bundle.service.service_version.clone()),
+            baseline_version: active_bundle.service.service_version.clone(),
             candidate_version: canary_bundle.service.service_version.clone(),
             canary_percent: 20,
             traffic_percent: 20,
@@ -32092,8 +28047,7 @@ mod tests {
             updated_sequence: 29,
         });
         deployment.last_rollout = deployment.active_rollout.clone();
-        let mut runtime = sample_runtime_state(&active_bundle);
-        runtime.rollout_handle = Some("rollout-2026-03".to_string());
+        let runtime = sample_runtime_state(&active_bundle);
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             insert_service_revision_fixture(world, &active_bundle);
@@ -32713,7 +28667,6 @@ mod tests {
                         local_replicas: Vec::new(),
                         health_status: SoraServiceHealthStatusV1::Healthy,
                         load_factor_bps: 250,
-                        reported_pending_mailbox_messages: 2,
                         authoritative_pending_mailbox_messages: 2,
                         rollout_handle: None,
                         config_generation: 0,
@@ -32760,7 +28713,6 @@ mod tests {
                 )]),
             )]),
             apartments: BTreeMap::new(),
-            hf_sources: BTreeMap::new(),
         };
         write_json_atomic(
             temp_dir.path().join("runtime_snapshot.json").as_path(),
@@ -33173,7 +29125,6 @@ mod tests {
             runtime_state.health_status,
             SoraServiceHealthStatusV1::Healthy
         );
-        assert_eq!(runtime_state.pending_mailbox_message_count, 0);
         assert_eq!(
             result.runtime_receipt.handler_class,
             SoraServiceHandlerClassV1::Update
@@ -33405,7 +29356,7 @@ mod tests {
             actual_names,
             [
                 "_request_body",
-                "execution_sequence",
+                "observed_sequence",
                 "observed_height",
                 "trigger_event_json",
             ]
@@ -33421,6 +29372,7 @@ mod tests {
             "payload",
             "arg0",
             "param0",
+            "execution_sequence",
             "sequence",
             "arg1",
             "param1",
@@ -33664,9 +29616,9 @@ mod tests {
     }
     #[test]
     fn inrou_v1_network_policy_accepts_only_isolated() -> Result<()> {
-        validate_inrou_v1_network_policy(&SoraNetworkPolicyV1::Open)
+        let _ = validate_inrou_v1_network_policy(&SoraNetworkPolicyV1::Open)
             .expect_err("Inrou V1 must reject unrestricted egress");
-        validate_inrou_v1_network_policy(&SoraNetworkPolicyV1::Allowlist(vec![
+        let _ = validate_inrou_v1_network_policy(&SoraNetworkPolicyV1::Allowlist(vec![
             SoraNetworkAllowlistEntryV1::new("8.8.8.8", [443]),
         ]))
         .expect_err("Inrou V1 must reject unmetered allowlist egress");
@@ -34113,34 +30065,46 @@ mod tests {
     #[test]
     fn hosted_http_worker_launch_requires_exact_open_reporter_checkpoint() {
         let open = |accounted_egress_bytes| HostedHttpReporterCheckpointState {
+            lease_started_height: 11,
             reporting_epoch: 17,
             accounted_egress_bytes,
             finalize_reporter: false,
         };
         assert!(hosted_http_reporter_checkpoint_is_current_open(
             Some(open(100)),
+            11,
             17,
             100
         ));
         assert!(!hosted_http_reporter_checkpoint_is_current_open(
-            None, 17, 0
+            None, 11, 17, 0
         ));
         assert!(!hosted_http_reporter_checkpoint_is_current_open(
             Some(open(50)),
+            11,
             17,
             100
         ));
         assert!(!hosted_http_reporter_checkpoint_is_current_open(
             Some(open(100)),
+            11,
             18,
             100
         ));
         assert!(!hosted_http_reporter_checkpoint_is_current_open(
+            Some(open(100)),
+            12,
+            17,
+            100
+        ));
+        assert!(!hosted_http_reporter_checkpoint_is_current_open(
             Some(HostedHttpReporterCheckpointState {
+                lease_started_height: 11,
                 reporting_epoch: 17,
                 accounted_egress_bytes: 100,
                 finalize_reporter: true,
             }),
+            11,
             17,
             100
         ));
@@ -34156,6 +30120,7 @@ mod tests {
         assert_eq!(
             hosted_http_terminal_reporter_action(
                 Some(HostedHttpReporterCheckpointState {
+                    lease_started_height: 11,
                     reporting_epoch: 17,
                     accounted_egress_bytes: 4,
                     finalize_reporter: false,
@@ -34168,6 +30133,7 @@ mod tests {
         assert_eq!(
             hosted_http_terminal_reporter_action(
                 Some(HostedHttpReporterCheckpointState {
+                    lease_started_height: 11,
                     reporting_epoch: 17,
                     accounted_egress_bytes: 5,
                     finalize_reporter: true,
@@ -34179,6 +30145,7 @@ mod tests {
         );
         hosted_http_terminal_reporter_action(
             Some(HostedHttpReporterCheckpointState {
+                lease_started_height: 11,
                 reporting_epoch: 17,
                 accounted_egress_bytes: 4,
                 finalize_reporter: true,
@@ -34195,6 +30162,7 @@ mod tests {
         let durable = InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
             "portal",
+            11,
             17,
             "1.0.0",
             1,
@@ -34231,12 +30199,14 @@ mod tests {
         let recovered = InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
             "portal",
+            11,
             17,
             "1.0.0",
             1,
             &Hash::new(b"placement-1"),
             &ALICE_ID,
             Some(HostedHttpReporterCheckpointState {
+                lease_started_height: 11,
                 reporting_epoch: 17,
                 accounted_egress_bytes: 0,
                 finalize_reporter: false,
@@ -34248,12 +30218,14 @@ mod tests {
         InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
             "portal",
+            11,
             17,
             "1.0.0",
             1,
             &Hash::new(b"placement-1"),
             &ALICE_ID,
             Some(HostedHttpReporterCheckpointState {
+                lease_started_height: 11,
                 reporting_epoch: 17,
                 accounted_egress_bytes: 0,
                 finalize_reporter: true,
@@ -34264,12 +30236,13 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn durable_inrou_egress_checkpoint_separates_epochs_and_placement_incarnations() -> Result<()> {
+    fn durable_inrou_egress_checkpoint_separates_leases_epochs_and_placements() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let first = InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
             "portal",
+            11,
             17,
             "1.0.0",
             1,
@@ -34278,9 +30251,21 @@ mod tests {
             None,
         )?;
         first.advance_to(9)?;
+        let renewed = InrouDurableEgressCheckpoint::load_or_create(
+            &state_dir,
+            "portal",
+            12,
+            17,
+            "1.0.0",
+            1,
+            &Hash::new(b"placement-1"),
+            &ALICE_ID,
+            None,
+        )?;
         let second = InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
             "portal",
+            11,
             18,
             "1.0.0",
             1,
@@ -34291,6 +30276,7 @@ mod tests {
         let replacement = InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
             "portal",
+            11,
             17,
             "1.0.0",
             1,
@@ -34299,19 +30285,23 @@ mod tests {
             None,
         )?;
         assert_ne!(first.path, second.path);
+        assert_ne!(first.path, renewed.path);
         assert_ne!(first.path, replacement.path);
         assert_eq!(first.accounted_egress_bytes(), 9);
+        assert_eq!(renewed.accounted_egress_bytes(), 0);
         assert_eq!(second.accounted_egress_bytes(), 0);
         assert_eq!(replacement.accounted_egress_bytes(), 0);
         InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
             "portal",
+            11,
             19,
             "1.0.0",
             1,
             &Hash::new(b"placement-1"),
             &ALICE_ID,
             Some(HostedHttpReporterCheckpointState {
+                lease_started_height: 11,
                 reporting_epoch: 17,
                 accounted_egress_bytes: 0,
                 finalize_reporter: false,
@@ -34328,6 +30318,7 @@ mod tests {
         let durable = InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
             "portal",
+            11,
             17,
             "1.0.0",
             1,
@@ -34378,6 +30369,7 @@ mod tests {
         let durable = InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
             "portal",
+            11,
             17,
             "1.0.0",
             1,
@@ -34392,12 +30384,14 @@ mod tests {
         InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
             "portal",
+            11,
             17,
             "1.0.0",
             1,
             &Hash::new(b"placement-1"),
             &ALICE_ID,
             Some(HostedHttpReporterCheckpointState {
+                lease_started_height: 11,
                 reporting_epoch: 17,
                 accounted_egress_bytes: 10,
                 finalize_reporter: false,
@@ -34408,12 +30402,14 @@ mod tests {
         InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
             "portal",
+            11,
             17,
             "1.0.0",
             1,
             &Hash::new(b"placement-1"),
             &ALICE_ID,
             Some(HostedHttpReporterCheckpointState {
+                lease_started_height: 11,
                 reporting_epoch: 17,
                 accounted_egress_bytes: 0,
                 finalize_reporter: false,
@@ -34436,6 +30432,7 @@ mod tests {
         let error = InrouDurableEgressCheckpoint::load_or_create(
             &state_link,
             "portal",
+            11,
             17,
             "1.0.0",
             1,
@@ -34508,6 +30505,11 @@ mod tests {
             .as_ref()
             .expect("hosted service lease")
             .reporting_epoch;
+        let lease_started_height = deployment
+            .service_lease
+            .as_ref()
+            .expect("hosted service lease")
+            .lease_started_height;
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             insert_service_deployment_fixture(world, &bundle, deployment);
@@ -34520,6 +30522,7 @@ mod tests {
         let current = InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
             bundle.service.service_name.as_ref(),
+            lease_started_height,
             reporting_epoch,
             &bundle.service.service_version,
             1,
@@ -34533,6 +30536,7 @@ mod tests {
         let obsolete = InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
             bundle.service.service_name.as_ref(),
+            lease_started_height,
             reporting_epoch.checked_add(1).expect("successor epoch"),
             &bundle.service.service_version,
             1,
@@ -34560,6 +30564,7 @@ mod tests {
                 &current_path,
                 &inrou_egress_reporter_key_digest(
                     bundle.service.service_name.as_ref(),
+                    lease_started_height,
                     reporting_epoch,
                     &bundle.service.service_version,
                     1,
@@ -35139,9 +31144,9 @@ mod tests {
                 gid: id,
                 ..accepted.clone()
             };
-            validate_portable_vm_child_identity_values(&rejected)
+            let _ = validate_portable_vm_child_identity_values(&rejected)
                 .expect_err("primary ids outside the canonical four slots must fail closed");
-            inrou_firewall_identity_slot(&rejected)
+            let _ = inrou_firewall_identity_slot(&rejected)
                 .expect_err("firewall custody must reject identities outside canonical slots");
         }
         for (uid, gid) in [(70_000, 70_001), (70_003, 70_002)] {
@@ -35150,9 +31155,9 @@ mod tests {
                 gid,
                 ..accepted.clone()
             };
-            validate_portable_vm_child_identity_values(&rejected)
+            let _ = validate_portable_vm_child_identity_values(&rejected)
                 .expect_err("uid and primary gid must select the same canonical slot");
-            inrou_firewall_identity_slot(&rejected)
+            let _ = inrou_firewall_identity_slot(&rejected)
                 .expect_err("firewall custody must reject mismatched uid/gid slots");
         }
         for gid in [60_001, 65_534, 524_288, 2_147_483_648, u32::MAX] {

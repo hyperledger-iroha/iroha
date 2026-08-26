@@ -462,6 +462,85 @@ fn newly_installed_decision_holds_apply_until_runner_cleanup_acknowledges_exact_
     assert!(executor.pending_runner_decision_cleanup.is_none());
 }
 #[test]
+fn live_decision_installed_before_apply_step_still_waits_for_runner_cleanup() {
+    let mut fixture = Fixture::new();
+    fixture.manifest = canonical_payload_manifest(
+        &fixture.context,
+        round(&fixture.context, 3),
+        fixture.manifest.subject,
+        &fixture.body,
+    );
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    install_fsynced_validation_fixture(
+        &mut executor,
+        &mut services,
+        &fixture,
+        fixture.manifest.clone(),
+    );
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let decision = (
+        commit.round,
+        commit.proposal_round,
+        commit.subject,
+        commit.execution_commitment,
+    );
+    let apply = AdapterEffect::Apply {
+        tag: tag(0),
+        subject: commit.subject,
+        certificate: commit,
+    };
+    executor.runtime.decided_body = Some(decision);
+    assert!(
+        executor
+            .plan_runner_decision_cleanup(Some(decision), Some(decision))
+            .expect("inspect the cold recovered Decision")
+            .is_none(),
+        "an unarmed cold recovery has no process-local proposal owner to clean up"
+    );
+    executor.runtime.live_clocks_armed = true;
+    executor
+        .runtime
+        .steps
+        .push_back(Ok(RuntimeStep::Advanced(vec![apply.clone()])));
+
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("retain Apply for a Decision installed before this live step"),
+        EffectExecutorStep::Advanced { effects: 0 }
+    );
+    assert_eq!(executor.protected_decision, Some(decision));
+    assert_eq!(
+        executor
+            .pending_runner_decision_cleanup
+            .map(|pending| pending.decision),
+        Some(decision)
+    );
+    assert!(services.apply_tasks.is_empty());
+    assert_eq!(
+        executor
+            .retained_effect_batch
+            .as_ref()
+            .and_then(|batch| batch.effects.front())
+            .map(|owned| &owned.effect),
+        Some(&apply)
+    );
+
+    executor
+        .acknowledge_runner_decision_cleanup(tag(0), Some(decision.2))
+        .expect("acknowledge the exact live Decision after runner owner cleanup");
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("dispatch retained Apply after runner cleanup"),
+        EffectExecutorStep::Advanced { effects: 1 }
+    );
+    assert_eq!(services.apply_tasks.len(), 1);
+    assert_eq!(services.apply_tasks[0].subject(), decision.2);
+    assert!(executor.pending_runner_decision_cleanup.is_none());
+}
+#[test]
 fn decision_cleanup_batch_accepts_zero_or_one_exact_apply_only() {
     let fixture = Fixture::new();
     let commit = fixture.qc(wire::GlobalPhase::Commit);
@@ -673,6 +752,155 @@ fn pacemaker_decision_holds_apply_until_runner_cleanup_acknowledges() {
     assert_eq!(services.apply_tasks.len(), 1);
     assert_eq!(services.apply_tasks[0].subject(), decision.2);
 }
+
+#[test]
+fn later_decision_apply_uses_its_runtime_owner_after_terminal_validate() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    install_fsynced_validation_fixture(
+        &mut executor,
+        &mut services,
+        &fixture,
+        fixture.manifest.clone(),
+    );
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let durable = executor.durable_bodies[&key].clone();
+
+    // Retain the inert retry marker left by an old-view lifecycle Validate
+    // which durably terminalized without a successor.
+    let old_tag = tag(0);
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let fetch = AdapterEffect::FetchBody {
+        tag: old_tag,
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let store = AdapterEffect::StoreBody {
+        tag: old_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let validate = AdapterEffect::ValidateBody {
+        tag: old_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let terminal_validate_ordinal = 9_028;
+    let store_ownership = bound_test_effect_ownership(&fetch, old_tag, terminal_validate_ordinal)
+        .rebind_as_inherited_adapter_effect(&store)
+        .expect("project the terminal Validate Store predecessor");
+    let store_pending = store_ownership
+        .exact_pending_adapter_effect_binding(&store)
+        .expect("seal the terminal Validate Store predecessor");
+    let prepared_store = executor
+        .prepare_published_lifecycle_store_retry_marker(&durable)
+        .expect("preflight the terminal Validate Store marker")
+        .bind_store_successor(&store, &store_pending)
+        .expect("bind the terminal Validate Store marker");
+    executor.commit_published_lifecycle_store_retry_marker(prepared_store);
+    let validate_ownership = store_ownership
+        .rebind_as_inherited_adapter_effect(&validate)
+        .expect("project the terminal Validate owner");
+    let validate_pending = validate_ownership
+        .exact_pending_adapter_effect_binding(&validate)
+        .expect("seal the terminal Validate owner");
+    let prepared_validate = executor
+        .prepare_published_lifecycle_validate_retry_marker(&durable)
+        .expect("preflight the terminal Validate marker")
+        .bind_validate_successor(&validate, &validate_pending)
+        .expect("bind the terminal Validate marker");
+    executor.commit_published_lifecycle_validate_retry_marker(
+        prepared_validate,
+        terminal_validate_ordinal,
+    );
+    assert!(
+        executor
+            .release_validate_retry_lifecycle_ordinal(key, terminal_validate_ordinal)
+            .expect("release the durably terminal Validate ordinal")
+    );
+
+    // EnterView is outside this focused fixture. Synchronize both sides of
+    // its already-settled reconciliation frontier before the later Decision
+    // emits its ordinary Apply-only macro-step.
+    let current_tag = tag(1);
+    executor.runtime.round_tag = Some(current_tag);
+    executor.reconciled_tag = Some(current_tag);
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let decision = (
+        commit.round,
+        commit.proposal_round,
+        commit.subject,
+        commit.execution_commitment,
+    );
+    let apply = AdapterEffect::Apply {
+        tag: current_tag,
+        subject: commit.subject,
+        certificate: commit.clone(),
+    };
+    let decision_apply_ordinal = 9_029;
+    let decision_apply_ownership = bound_test_apply_ownership(
+        current_tag,
+        commit.subject,
+        &commit,
+        current_tag,
+        decision_apply_ordinal,
+    );
+    assert_ne!(decision_apply_ordinal, terminal_validate_ordinal);
+    executor.runtime.decision_on_next_step = Some(decision);
+    executor
+        .runtime
+        .steps
+        .push_back(Ok(RuntimeStep::Advanced(vec![apply.clone()])));
+    executor.runtime.exact_effect_ownership =
+        Some((apply.clone(), decision_apply_ownership.clone()));
+
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("retain the later Decision Apply behind runner cleanup"),
+        EffectExecutorStep::Advanced { effects: 0 }
+    );
+    assert!(executor.pending_applications.is_empty());
+    assert!(!executor.published_lifecycle_validate_retry_markers[&key].owns_live_lifecycle_row());
+    executor
+        .acknowledge_runner_decision_cleanup(current_tag, Some(decision.2))
+        .expect("acknowledge the later Decision cleanup");
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("dispatch the ordinary Decision Apply"),
+        EffectExecutorStep::Advanced { effects: 1 }
+    );
+
+    let pending = executor
+        .pending_applications
+        .values()
+        .next()
+        .expect("the ordinary Decision Apply remains pending");
+    assert_eq!(pending.task.lifecycle_ordinal(), decision_apply_ordinal);
+    assert_eq!(pending.task.authorized_owner_tag(), current_tag);
+    assert_eq!(pending.ownership.owner(), decision_apply_ownership.owner());
+    assert!(pending.ownership.exactly_binds_adapter_effect(&apply));
+    assert!(
+        !executor
+            .published_lifecycle_validate_retry_markers
+            .contains_key(&key),
+        "Decision cleanup must retire the inert terminal Validate marker"
+    );
+    assert!(executor.live_lifecycle_decision_apply.is_none());
+    assert_eq!(services.apply_tasks.len(), 1);
+    assert_eq!(
+        services.apply_tasks[0].lifecycle_ordinal(),
+        decision_apply_ordinal
+    );
+    assert!(!executor.status().fail_closed);
+    assert!(services.closed.is_empty());
+}
+
 #[test]
 fn commit_fetch_adopts_and_replaces_matching_parked_physical_lineage() {
     let fixture = Fixture::new();
@@ -1244,6 +1472,265 @@ fn install_stored_remote_proposal_replay(
     store_ownership
 }
 
+#[test]
+fn stored_proposal_replay_projects_store_owner_before_terminal_coalescing() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let incumbent = install_stored_remote_proposal_replay(&mut executor, &fixture, tag(0), 9_022);
+    let later_store = AdapterEffect::StoreBody {
+        tag: tag(1),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let foreign_ordinary = bound_test_effect_ownership(&later_store, tag(1), 9_023);
+    assert_ne!(foreign_ordinary.owner(), incumbent.owner());
+    let projected = executor
+        .stored_replay_incumbent_store_ownership(key, &later_store, &foreign_ordinary)
+        .expect("inspect exact durable Proposal replay")
+        .expect("the Stored Proposal projects its physical Store owner");
+    assert_eq!(projected.owner(), incumbent.owner());
+    assert!(projected.exactly_binds_adapter_effect(&later_store));
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let certified_fetch = AdapterEffect::FetchBody {
+        tag: tag(1),
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let certified_store = bound_test_effect_ownership(&certified_fetch, tag(1), 9_024)
+        .rebind_as_inherited_adapter_effect(&later_store)
+        .expect("carry Prepare authority into the later Store");
+    let strengthened = executor
+        .stored_replay_incumbent_store_ownership(key, &later_store, &certified_store)
+        .expect("inspect exact durable Proposal replay")
+        .expect("the Stored Proposal adopts comparable Prepare authority");
+    assert_eq!(strengthened.owner(), incumbent.owner());
+    assert_ne!(
+        strengthened.candidate_semantic_identity(),
+        incumbent.candidate_semantic_identity(),
+        "authority strengthening remains visible without replacing the physical owner",
+    );
+
+    let mismatched_store = AdapterEffect::StoreBody {
+        tag: tag(1),
+        round: fixture.manifest.round,
+        subject: wire::BlockSubject {
+            payload_hash: Hash::new(b"foreign durable Store payload"),
+            ..fixture.manifest.subject
+        },
+    };
+    let mismatched_owner = bound_test_effect_ownership(&mismatched_store, tag(1), 9_025);
+    assert!(matches!(
+        executor.stored_replay_incumbent_store_ownership(
+            key,
+            &mismatched_store,
+            &mismatched_owner,
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("incumbent Store owner")
+    ));
+    assert!(matches!(
+        executor.remote_proposal_replay.get(&key),
+        Some(RemoteProposalReplayStageV1::Stored { .. })
+    ));
+    assert!(!executor.status().fail_closed);
+}
+
+#[test]
+fn stored_proposal_validate_owner_reaches_terminal_query_before_late_carrier() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let store_incumbent =
+        install_stored_remote_proposal_replay(&mut executor, &fixture, tag(0), 9_030);
+    let later_validate = AdapterEffect::ValidateBody {
+        tag: tag(1),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let foreign_later = bound_test_effect_ownership(&later_validate, tag(1), 9_031);
+    assert_ne!(foreign_later.owner(), store_incumbent.owner());
+
+    executor
+        .retain_effect_batch(vec![later_validate.clone()], vec![foreign_later])
+        .expect("Stored replay adopts Validate before the runtime terminal query");
+    let [queried] = executor.runtime.terminal_body_candidate_queries.as_slice() else {
+        panic!("one Validate carrier must reach one runtime terminal query")
+    };
+    assert_eq!(queried.owner(), store_incumbent.owner());
+    assert!(queried.exactly_binds_adapter_effect(&later_validate));
+    assert!(!executor.status().fail_closed);
+}
+
+#[test]
+fn post_validate_proposal_seal_projects_late_store_before_terminal_coalescing() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let store_incumbent =
+        install_stored_remote_proposal_replay(&mut executor, &fixture, tag(0), 9_026);
+    let validate_effect = AdapterEffect::ValidateBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let validate_ownership = store_incumbent
+        .rebind_as_inherited_adapter_effect(&validate_effect)
+        .expect("derive the exact Proposal Validate owner");
+    assert!(
+        executor
+            .validate_body(
+                tag(0),
+                fixture.manifest.round,
+                fixture.manifest.subject,
+                validate_ownership.clone(),
+                &mut services,
+            )
+            .expect("consume Stored replay into durable Validate admission")
+            .is_none()
+    );
+    assert!(executor.remote_proposal_replay.is_empty());
+    let DurableValidateRetrySealV1::Live {
+        ownership,
+        store_terminal: Some(_),
+        ..
+    } = &executor.durable_validate_retry_seals[&key]
+    else {
+        panic!("live Validate admission must retain its inert Store terminal owner")
+    };
+    assert_eq!(ownership.owner(), validate_ownership.owner());
+
+    let later_store = AdapterEffect::StoreBody {
+        tag: tag(1),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let ordinary_retry = bound_test_effect_ownership(&later_store, tag(1), 9_027);
+    assert_ne!(ordinary_retry.owner(), store_incumbent.owner());
+    let sealed_stale = executor
+        .stored_replay_incumbent_store_ownership(key, &later_store, &ordinary_retry)
+        .expect("inspect the post-Validate Store terminal seal")
+        .expect("the seal projects its immutable physical Store owner");
+    assert_eq!(sealed_stale.owner(), store_incumbent.owner());
+    assert!(sealed_stale.exactly_binds_adapter_effect(&later_store));
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let prepare_fetch = AdapterEffect::FetchBody {
+        tag: tag(1),
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let stronger_foreign = bound_test_effect_ownership(&prepare_fetch, tag(1), 9_029)
+        .rebind_as_inherited_adapter_effect(&later_store)
+        .expect("carry Prepare authority into the late Store");
+    let strengthened = executor
+        .stored_replay_incumbent_store_ownership(key, &later_store, &stronger_foreign)
+        .expect("inspect the post-Validate Store terminal seal")
+        .expect("the seal strengthens its immutable physical Store owner");
+    assert_eq!(strengthened.owner(), store_incumbent.owner());
+    assert_ne!(
+        strengthened.candidate_semantic_identity(),
+        sealed_stale.candidate_semantic_identity(),
+        "Prepare authority must remain distinct from the sealed ordinary retry"
+    );
+    assert_eq!(strengthened.owner(), sealed_stale.owner());
+    assert!(!executor.status().fail_closed);
+
+    let foreign_effect = AdapterEffect::StoreBody {
+        tag: tag(2),
+        round: fixture.manifest.round,
+        subject: wire::BlockSubject {
+            payload_hash: Hash::new(b"foreign post-Validate Store payload"),
+            ..fixture.manifest.subject
+        },
+    };
+    let foreign_owner = bound_test_effect_ownership(&foreign_effect, tag(2), 9_028);
+    assert!(matches!(
+        executor.stored_replay_incumbent_store_ownership(
+            key,
+            &foreign_effect,
+            &foreign_owner,
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("post-Validate Store terminal changed")
+    ));
+    assert!(!executor.status().fail_closed);
+}
+
+fn install_inflight_remote_proposal_store(
+    executor: &mut V2EffectExecutor<FakeRuntime>,
+    services: &mut FakeServices,
+    fixture: &Fixture,
+    replay_tag: EventTag,
+    ordinal: u128,
+) -> EffectWorkId {
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let ready = ReadyBody::derive(
+        &fixture.context,
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        fixture.body.clone(),
+    )
+    .expect("derive the authenticated Proposal body");
+    executor.ready_body_bytes =
+        u64::try_from(ready.bytes.len()).expect("fixture body length is representable");
+    assert!(executor.ready_bodies.insert(key, ready).is_none());
+    assert!(
+        executor
+            .body_pipeline_owners
+            .insert(
+                key,
+                BodyPipelineOwner {
+                    tag: replay_tag,
+                    manifest_hash: Some(HashOf::new(&fixture.manifest)),
+                },
+            )
+            .is_none()
+    );
+    let (_fetch_effect, fetch_ownership, fetch_replay) =
+        prepared_remote_proposal_fetch_replay(fixture, replay_tag, ordinal);
+    assert!(
+        executor
+            .remote_proposal_replay
+            .insert(
+                key,
+                RemoteProposalReplayStageV1::BodyAvailable(fetch_replay),
+            )
+            .is_none()
+    );
+    let store_effect = AdapterEffect::StoreBody {
+        tag: replay_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let store_ownership = fetch_ownership
+        .rebind_as_inherited_adapter_effect(&store_effect)
+        .expect("project the exact authenticated Proposal Store owner");
+    executor
+        .retain_effect_batch(vec![store_effect], vec![store_ownership])
+        .expect("retain the authenticated Proposal Store");
+    assert_eq!(
+        executor
+            .drain_retained_effect_batch(services, true)
+            .expect("start the protected durable Store"),
+        1
+    );
+    let store_id = services.store_tasks[0].id();
+    assert!(matches!(
+        executor.remote_proposal_replay.get(&key),
+        Some(RemoteProposalReplayStageV1::Store { work_id, .. })
+            if *work_id == store_id
+    ));
+    store_id
+}
+
 fn install_recovered_validate_retry_seal(
     executor: &mut V2EffectExecutor<FakeRuntime>,
     fixture: &Fixture,
@@ -1277,6 +1764,7 @@ fn install_recovered_validate_retry_seal(
         effect.clone(),
         durable.clone(),
         pending,
+        ordinal,
         None,
     )
     .expect("seal recovered Validate retry owner");
@@ -1334,6 +1822,554 @@ fn assert_recovered_validate_retry_stutter_is_inert(executor: &V2EffectExecutor<
     assert_eq!(executor.pending_work(), 0);
 }
 
+fn install_exact_recovered_body_without_lifecycle_replay(
+    executor: &mut V2EffectExecutor<FakeRuntime>,
+    fixture: &Fixture,
+) -> (
+    (wire::ConsensusRound, wire::BlockSubject),
+    DurableBodyReceipt,
+) {
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        HashOf::new(&fixture.manifest),
+    );
+    assert!(
+        executor
+            .durable_bodies
+            .insert(key, durable.clone())
+            .is_none()
+    );
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(key, (fixture.manifest.clone(), durable.clone()))
+            .is_none()
+    );
+    assert!(executor.remote_proposal_replay.is_empty());
+    assert!(executor.authenticated_genesis_replay.is_empty());
+    (key, durable)
+}
+
+fn protected_prepare_validate_fixture(
+    fixture: &Fixture,
+    ordinal: u128,
+) -> (
+    wire::QuorumCertificate,
+    AdapterEffect,
+    RuntimeEffectOwnership,
+) {
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let effect = AdapterEffect::ValidateBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let ownership =
+        recovered_validate_retry_ownership(fixture, &effect, Some(prepare.clone()), ordinal);
+    (prepare, effect, ownership)
+}
+
+fn assert_missing_replay_validate_fails_closed_without_body_mutation(
+    executor: &mut V2EffectExecutor<FakeRuntime>,
+    services: &mut FakeServices,
+    effect: AdapterEffect,
+    ownership: RuntimeEffectOwnership,
+    expected_reason: &str,
+) {
+    executor.runtime.exact_effect_ownership = Some((effect.clone(), ownership));
+    let before = executor.body_ownership_projection();
+    assert!(matches!(
+        executor.consume_effects(vec![effect], services),
+        Err(EffectExecutorError::Contract(reason)) if reason.contains(expected_reason)
+    ));
+    assert_eq!(executor.body_ownership_projection(), before);
+    assert!(executor.pending_durable_validate_admissions.is_empty());
+    assert!(executor.durable_validate_retry_seals.is_empty());
+    assert!(executor.remote_proposal_replay.is_empty());
+    assert!(executor.authenticated_genesis_replay.is_empty());
+    assert!(services.fetch_tasks.is_empty());
+    assert!(services.store_tasks.is_empty());
+    assert!(services.apply_tasks.is_empty());
+    assert!(executor.status().fail_closed);
+    assert!(executor.output_guard.restart_required());
+    assert_eq!(services.closed.len(), 1);
+}
+
+#[test]
+fn protected_prepare_validate_reseeds_missing_replay_from_exact_recovered_body() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let (key, durable) =
+        install_exact_recovered_body_without_lifecycle_replay(&mut executor, &fixture);
+    let (prepare, effect, ownership) = protected_prepare_validate_fixture(&fixture, 9_100);
+    executor.protected_lock = Some(key);
+    executor.runtime.locked_body = Some(key);
+    executor.runtime.durable_body_authority_certificate = Some(prepare);
+    executor.runtime.exact_effect_ownership = Some((effect.clone(), ownership.clone()));
+
+    assert_eq!(
+        executor
+            .consume_effects(vec![effect.clone()], &mut services)
+            .expect("the exact protected PrepareQC reseeds one durable Validate owner"),
+        1
+    );
+    let pending = executor
+        .pending_durable_validate_admissions
+        .get(&key)
+        .expect("missing Proposal replay is replaced by one normal pending admission");
+    assert!(pending.exactly_retains_for_test(&effect, false));
+    assert!(pending.exactly_matches_retry(&effect, &ownership));
+    assert!(
+        !pending.projects_local_proposal_handoff_for_test(),
+        "historical protected-lock replay cannot become a local proposal producer",
+    );
+    assert_eq!(
+        executor
+            .durable_validate_retry_seals
+            .keys()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![key]
+    );
+    let DurableValidateRetrySealV1::Live {
+        ownership: validate_incumbent,
+        store_terminal: Some(_),
+        ..
+    } = &executor.durable_validate_retry_seals[&key]
+    else {
+        panic!("protected-lock Validate must retain its inert Store predecessor")
+    };
+    assert_eq!(validate_incumbent.owner(), ownership.owner());
+    let validate_incumbent_owner = validate_incumbent.owner().clone();
+
+    let later_store = AdapterEffect::StoreBody {
+        tag: tag(1),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let later_ordinary = bound_test_effect_ownership(&later_store, tag(1), 9_107);
+    assert_ne!(later_ordinary.owner(), &validate_incumbent_owner);
+    let adopted = executor
+        .stored_replay_incumbent_store_ownership(key, &later_store, &later_ordinary)
+        .expect("inspect the protected-lock Store predecessor seal")
+        .expect("the replay-retired Validate adopts a later stale Store carrier");
+    assert_eq!(adopted.owner(), &validate_incumbent_owner);
+    assert!(adopted.exactly_binds_adapter_effect(&later_store));
+    executor.runtime.terminal_body_candidate_queries.clear();
+    let terminal_identity = adopted
+        .candidate_semantic_identity()
+        .expect("the protected-lock Store predecessor has one candidate identity");
+    assert!(
+        executor
+            .runtime
+            .terminal_body_candidate_owners
+            .insert(terminal_identity, adopted.clone())
+            .is_none()
+    );
+    executor
+        .retain_effect_batch(vec![later_store], vec![later_ordinary])
+        .expect("the protected-lock predecessor adopts Store before terminal comparison");
+    assert!(executor.retained_effect_batch.is_none());
+    let [queried] = executor.runtime.terminal_body_candidate_queries.as_slice() else {
+        panic!("the later Store must reach one terminal query under the predecessor owner")
+    };
+    assert_eq!(queried.owner(), &validate_incumbent_owner);
+    assert_eq!(executor.runtime.terminal_body_candidate_commits, 1);
+    assert_eq!(
+        executor.durable_bodies.get(&key),
+        Some(&durable),
+        "Store retry projection cannot replace the durable receipt",
+    );
+    assert!(executor.remote_proposal_replay.is_empty());
+    assert!(executor.authenticated_genesis_replay.is_empty());
+    assert!(services.fetch_tasks.is_empty());
+    assert!(services.store_tasks.is_empty());
+    assert!(services.apply_tasks.is_empty());
+    assert!(!executor.status().fail_closed);
+    assert!(services.closed.is_empty());
+}
+
+#[test]
+fn missing_replay_validate_rejects_absent_protected_lock_or_durable_prepare_qc() {
+    let fixture = Fixture::new();
+
+    {
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let _recovered =
+            install_exact_recovered_body_without_lifecycle_replay(&mut executor, &fixture);
+        let (prepare, effect, ownership) = protected_prepare_validate_fixture(&fixture, 9_101);
+        executor.runtime.durable_body_authority_certificate = Some(prepare);
+        assert_missing_replay_validate_fails_closed_without_body_mutation(
+            &mut executor,
+            &mut services,
+            effect,
+            ownership,
+            "is not the protected durable body",
+        );
+    }
+
+    {
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let (key, _) =
+            install_exact_recovered_body_without_lifecycle_replay(&mut executor, &fixture);
+        let (_prepare, effect, ownership) = protected_prepare_validate_fixture(&fixture, 9_102);
+        executor.protected_lock = Some(key);
+        executor.runtime.locked_body = Some(key);
+        assert_missing_replay_validate_fails_closed_without_body_mutation(
+            &mut executor,
+            &mut services,
+            effect,
+            ownership,
+            "omitted its durable QC",
+        );
+    }
+}
+
+#[test]
+fn missing_replay_validate_rejects_mismatched_durable_prepare_commitment() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let (key, _) = install_exact_recovered_body_without_lifecycle_replay(&mut executor, &fixture);
+    let (prepare, effect, ownership) = protected_prepare_validate_fixture(&fixture, 9_103);
+    let mut mismatched = prepare;
+    mismatched.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"foreign protected-lock parent state"),
+        Hash::new(b"foreign protected-lock post state"),
+        Hash::new(b"foreign protected-lock ordinary writes"),
+        1,
+        Hash::new(b"foreign protected-lock executed block"),
+    );
+    assert!(mismatched.validate(&fixture.context).is_ok());
+    executor.protected_lock = Some(key);
+    executor.runtime.locked_body = Some(key);
+    executor.runtime.durable_body_authority_certificate = Some(mismatched);
+    assert_missing_replay_validate_fails_closed_without_body_mutation(
+        &mut executor,
+        &mut services,
+        effect,
+        ownership,
+        "changed its durable QC coordinates",
+    );
+}
+
+#[test]
+fn missing_replay_validate_rejects_wrong_recovered_manifest_or_receipt() {
+    let fixture = Fixture::new();
+
+    {
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let (key, durable) =
+            install_exact_recovered_body_without_lifecycle_replay(&mut executor, &fixture);
+        let foreign_manifest = deliberately_conflicting_payload_manifest(
+            &fixture.context,
+            fixture.manifest.round,
+            fixture.manifest.subject,
+            b"foreign recovered protected-lock body",
+        );
+        assert_ne!(HashOf::new(&foreign_manifest), durable.manifest_hash());
+        assert!(
+            executor
+                .recovered_bodies
+                .insert(key, (foreign_manifest, durable))
+                .is_some()
+        );
+        let (prepare, effect, ownership) = protected_prepare_validate_fixture(&fixture, 9_104);
+        executor.protected_lock = Some(key);
+        executor.runtime.locked_body = Some(key);
+        executor.runtime.durable_body_authority_certificate = Some(prepare);
+        assert_missing_replay_validate_fails_closed_without_body_mutation(
+            &mut executor,
+            &mut services,
+            effect,
+            ownership,
+            "could not reseal exact lifecycle replay",
+        );
+    }
+
+    {
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let (key, durable) =
+            install_exact_recovered_body_without_lifecycle_replay(&mut executor, &fixture);
+        let foreign_manifest = deliberately_conflicting_payload_manifest(
+            &fixture.context,
+            fixture.manifest.round,
+            fixture.manifest.subject,
+            b"foreign recovered protected-lock receipt",
+        );
+        let foreign_receipt = DurableBodyReceipt::for_test(
+            fixture.context.id(),
+            fixture.manifest.round,
+            fixture.manifest.subject,
+            HashOf::new(&foreign_manifest),
+        );
+        assert_ne!(foreign_receipt, durable);
+        assert!(
+            executor
+                .recovered_bodies
+                .insert(key, (fixture.manifest.clone(), foreign_receipt))
+                .is_some()
+        );
+        let (prepare, effect, ownership) = protected_prepare_validate_fixture(&fixture, 9_105);
+        executor.protected_lock = Some(key);
+        executor.runtime.locked_body = Some(key);
+        executor.runtime.durable_body_authority_certificate = Some(prepare);
+        assert_missing_replay_validate_fails_closed_without_body_mutation(
+            &mut executor,
+            &mut services,
+            effect,
+            ownership,
+            "changed its durable body receipt",
+        );
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BoundValidateRetryAuthorityKind {
+    Live,
+    Recovered,
+    Published,
+}
+
+fn install_bound_validate_retry_authority_for_cleanup(
+    executor: &mut V2EffectExecutor<FakeRuntime>,
+    fixture: &Fixture,
+    key: (wire::ConsensusRound, wire::BlockSubject),
+    kind: BoundValidateRetryAuthorityKind,
+    lifecycle_ordinal: u128,
+) {
+    let effect = AdapterEffect::ValidateBody {
+        tag: tag(0),
+        round: key.0,
+        subject: key.1,
+    };
+    let fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: key.0,
+        subject: key.1,
+        manifest: None,
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let ownership = bound_test_effect_ownership(&fetch, tag(0), lifecycle_ordinal + 1)
+        .rebind_as_inherited_adapter_effect(&effect)
+        .expect("project exact cleanup Validate owner");
+    let pending = ownership
+        .exact_pending_adapter_effect_binding(&effect)
+        .expect("seal exact cleanup Validate binding");
+    let durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        key.0,
+        key.1,
+        HashOf::new(&fixture.manifest),
+    );
+    match kind {
+        BoundValidateRetryAuthorityKind::Live => {
+            assert!(
+                executor
+                    .durable_validate_retry_seals
+                    .insert(
+                        key,
+                        DurableValidateRetrySealV1::Live {
+                            effect,
+                            ownership,
+                            store_terminal: None,
+                            lifecycle_ordinal: Some(lifecycle_ordinal),
+                        },
+                    )
+                    .is_none()
+            );
+        }
+        BoundValidateRetryAuthorityKind::Recovered => {
+            let owner = RecoveredDurableValidateRetryOwnerV1::for_test(
+                effect,
+                durable,
+                pending,
+                lifecycle_ordinal,
+                None,
+            )
+            .expect("seal recovered cleanup Validate owner");
+            let frontier = owner
+                .initial_retry_frontier()
+                .expect("recovered cleanup owner retains its initial frontier");
+            assert!(
+                executor
+                    .durable_validate_retry_seals
+                    .insert(
+                        key,
+                        DurableValidateRetrySealV1::Recovered {
+                            owner: Arc::new(owner),
+                            frontier,
+                            lifecycle_ordinal: Some(lifecycle_ordinal),
+                        },
+                    )
+                    .is_none()
+            );
+        }
+        BoundValidateRetryAuthorityKind::Published => {
+            let mut marker =
+                PublishedLifecycleValidateRetryMarkerV1::prepare(&effect, &durable, &pending)
+                    .expect("seal published cleanup Validate marker");
+            marker
+                .bind_lifecycle_ordinal(lifecycle_ordinal)
+                .expect("bind published cleanup Validate ordinal");
+            assert!(
+                executor
+                    .published_lifecycle_validate_retry_markers
+                    .insert(key, marker)
+                    .is_none()
+            );
+        }
+    }
+}
+
+fn bound_validate_retry_ordinal_for_cleanup(
+    executor: &V2EffectExecutor<FakeRuntime>,
+    key: (wire::ConsensusRound, wire::BlockSubject),
+    kind: BoundValidateRetryAuthorityKind,
+) -> Option<u128> {
+    match kind {
+        BoundValidateRetryAuthorityKind::Live | BoundValidateRetryAuthorityKind::Recovered => {
+            executor
+                .durable_validate_retry_seals
+                .get(&key)
+                .and_then(DurableValidateRetrySealV1::lifecycle_ordinal)
+        }
+        BoundValidateRetryAuthorityKind::Published => executor
+            .published_lifecycle_validate_retry_markers
+            .get(&key)
+            .and_then(|marker| marker.lifecycle_ordinal),
+    }
+}
+
+#[test]
+fn missing_replay_validate_rejects_ordinary_phase_none_binding() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let (key, _) = install_exact_recovered_body_without_lifecycle_replay(&mut executor, &fixture);
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let effect = AdapterEffect::ValidateBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let ownership = recovered_validate_retry_ownership(&fixture, &effect, None, 9_106);
+    executor.protected_lock = Some(key);
+    executor.runtime.locked_body = Some(key);
+    executor.runtime.durable_body_authority_certificate = Some(prepare);
+    assert_missing_replay_validate_fails_closed_without_body_mutation(
+        &mut executor,
+        &mut services,
+        effect,
+        ownership,
+        "omitted its mandatory lifecycle replay owner",
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn decision_cleanup_defers_live_validate_authority_retirement_until_exact_resolution() {
+    let fixture = Fixture::new();
+    let (foreign_subject, _) = distinct_body(&fixture);
+    let selected_key = (fixture.manifest.round, fixture.manifest.subject);
+    let foreign_key = (fixture.manifest.round, foreign_subject);
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let decision = (
+        commit.round,
+        commit.proposal_round,
+        commit.subject,
+        commit.execution_commitment,
+    );
+    let kinds = [
+        BoundValidateRetryAuthorityKind::Live,
+        BoundValidateRetryAuthorityKind::Recovered,
+        BoundValidateRetryAuthorityKind::Published,
+    ];
+
+    for (kind_index, kind) in kinds.into_iter().enumerate() {
+        for authority_is_selected in [false, true] {
+            for drain_decision_body in [false, true] {
+                let mut executor = fixture.executor(EffectQueueConfig::default());
+                let mut services = fixture.services();
+                let key = if authority_is_selected {
+                    selected_key
+                } else {
+                    foreign_key
+                };
+                let lifecycle_ordinal = 40_000_u128
+                    + u128::try_from(kind_index).expect("kind index fits u128") * 100
+                    + if authority_is_selected { 10 } else { 0 }
+                    + if drain_decision_body { 1 } else { 0 };
+                install_bound_validate_retry_authority_for_cleanup(
+                    &mut executor,
+                    &fixture,
+                    key,
+                    kind,
+                    lifecycle_ordinal,
+                );
+
+                executor
+                    .reconcile_decision_work(decision, drain_decision_body, &mut services)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "{kind:?} Decision cleanup failed for selected={authority_is_selected}, drain={drain_decision_body}: {error:?}"
+                        )
+                    });
+                assert_eq!(
+                    bound_validate_retry_ordinal_for_cleanup(&executor, key, kind),
+                    Some(lifecycle_ordinal),
+                    "{kind:?} cleanup retired a live row for selected={authority_is_selected}, drain={drain_decision_body}",
+                );
+                assert!(!executor.durable_validate_retry_seals_are_finalization_inert());
+
+                let wrong_ordinal = lifecycle_ordinal + 1;
+                assert!(matches!(
+                    executor.release_validate_retry_lifecycle_ordinal(key, wrong_ordinal),
+                    Err(EffectExecutorError::Contract(reason)) if reason.contains("ordinal")
+                ));
+                assert_eq!(
+                    bound_validate_retry_ordinal_for_cleanup(&executor, key, kind),
+                    Some(lifecycle_ordinal),
+                    "{kind:?} wrong-ordinal release mutated the live authority",
+                );
+
+                assert_eq!(
+                    executor
+                        .release_validate_retry_lifecycle_ordinal(key, lifecycle_ordinal)
+                        .expect("release exact cleanup Validate authority"),
+                    true,
+                );
+                let retains_selected_tombstone = authority_is_selected && !drain_decision_body;
+                assert_eq!(
+                    bound_validate_retry_ordinal_for_cleanup(&executor, key, kind),
+                    None,
+                    "{kind:?} exact release retained the live ordinal",
+                );
+                let authority_still_present = match kind {
+                    BoundValidateRetryAuthorityKind::Live
+                    | BoundValidateRetryAuthorityKind::Recovered => {
+                        executor.durable_validate_retry_seals.contains_key(&key)
+                    }
+                    BoundValidateRetryAuthorityKind::Published => executor
+                        .published_lifecycle_validate_retry_markers
+                        .contains_key(&key),
+                };
+                assert_eq!(authority_still_present, retains_selected_tombstone);
+                assert!(executor.durable_validate_retry_seals_are_finalization_inert());
+            }
+        }
+    }
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner() {
@@ -1346,6 +2382,7 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
     let DurableValidateRetrySealV1::Recovered {
         owner: initial_owner,
         frontier: initial_frontier,
+        ..
     } = &executor.durable_validate_retry_seals[&key]
     else {
         panic!("cold installation must retain Recovered lineage")
@@ -1366,8 +2403,9 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
     executor
         .retain_effect_batch(vec![prepare_effect.clone()], vec![prepare_ownership])
         .expect("None-to-Prepare retry advances only the inert frontier");
-    let DurableValidateRetrySealV1::Recovered { owner, frontier } =
-        &executor.durable_validate_retry_seals[&key]
+    let DurableValidateRetrySealV1::Recovered {
+        owner, frontier, ..
+    } = &executor.durable_validate_retry_seals[&key]
     else {
         panic!("authority refinement changed Recovered lineage")
     };
@@ -1389,8 +2427,9 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
     executor
         .retain_effect_batch(vec![prepare_effect], vec![same_ownership])
         .expect("same authority from a distinct causal root remains an inert stutter");
-    let DurableValidateRetrySealV1::Recovered { owner, frontier } =
-        &executor.durable_validate_retry_seals[&key]
+    let DurableValidateRetrySealV1::Recovered {
+        owner, frontier, ..
+    } = &executor.durable_validate_retry_seals[&key]
     else {
         panic!("same retry changed Recovered lineage")
     };
@@ -1407,8 +2446,9 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
     executor
         .retain_effect_batch(vec![stale_effect], vec![stale_ownership])
         .expect("stale weaker retry stutters without downgrading authority");
-    let DurableValidateRetrySealV1::Recovered { owner, frontier } =
-        &executor.durable_validate_retry_seals[&key]
+    let DurableValidateRetrySealV1::Recovered {
+        owner, frontier, ..
+    } = &executor.durable_validate_retry_seals[&key]
     else {
         panic!("stale retry changed Recovered lineage")
     };
@@ -1428,7 +2468,10 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
         .retain_effect_batch(vec![commit_effect], vec![commit_ownership])
         .expect("Prepare-to-Commit retry advances the same inert frontier");
     let accepted = executor.durable_validate_retry_seals[&key].clone();
-    let DurableValidateRetrySealV1::Recovered { owner, frontier } = &accepted else {
+    let DurableValidateRetrySealV1::Recovered {
+        owner, frontier, ..
+    } = &accepted
+    else {
         panic!("Commit refinement changed Recovered lineage")
     };
     assert!(Arc::ptr_eq(owner, &initial_owner));
@@ -2052,7 +3095,13 @@ fn enter_view_preserves_stored_proposal_replay_for_prepare_refined_validate() {
     executor.runtime.round_tag = Some(next_tag);
     executor.runtime.locked_body = Some(key);
     executor
-        .install_view(next_tag, timeout, Some(prepare.clone()), &mut services)
+        .install_view(
+            next_tag,
+            timeout,
+            Some(prepare.clone()),
+            None,
+            &mut services,
+        )
         .expect("EnterView preserves the protected fsynced Proposal Store lineage");
     assert!(matches!(
         executor.remote_proposal_replay.get(&key),
@@ -2092,6 +3141,140 @@ fn enter_view_preserves_stored_proposal_replay_for_prepare_refined_validate() {
             .contains_key(&key)
     );
     assert!(executor.durable_validate_retry_seals.contains_key(&key));
+    assert!(!executor.status().fail_closed);
+    assert!(services.closed.is_empty());
+}
+
+#[test]
+fn enter_view_preserves_inflight_proposal_store_replay_through_late_completion() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let original_tag = tag(0);
+    let next_tag = tag(1);
+    let store_id = install_inflight_remote_proposal_store(
+        &mut executor,
+        &mut services,
+        &fixture,
+        original_tag,
+        9_019,
+    );
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let mut timeout = timeout_certificate(&fixture);
+    timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+    executor.runtime.round_tag = Some(next_tag);
+    executor.runtime.locked_body = Some(key);
+    executor
+        .install_view(
+            next_tag,
+            timeout,
+            Some(prepare.clone()),
+            None,
+            &mut services,
+        )
+        .expect("EnterView detaches but preserves the protected in-flight Store");
+    assert!(executor.pending_stores[&store_id].consumer.is_none());
+    assert!(matches!(
+        executor.remote_proposal_replay.get(&key),
+        Some(RemoteProposalReplayStageV1::Store { work_id, .. })
+            if *work_id == store_id
+    ));
+
+    executor
+        .consume_effects(
+            vec![AdapterEffect::StoreBody {
+                tag: next_tag,
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            }],
+            &mut services,
+        )
+        .expect("current StoreBody adopts the detached protected Store");
+    assert_eq!(
+        executor
+            .body_pipeline_owners
+            .get(&key)
+            .map(|owner| owner.tag),
+        Some(next_tag)
+    );
+    assert_eq!(
+        services.store_tasks.len(),
+        1,
+        "protected Store handoff must not duplicate physical I/O",
+    );
+
+    let completion = services.execute_store(store_id);
+    assert_eq!(
+        executor
+            .complete_body_store(completion, &mut services)
+            .expect("late Store completion advances the retained replay owner"),
+        CompletionDisposition::Accepted
+    );
+    assert!(matches!(
+        executor.remote_proposal_replay.get(&key),
+        Some(RemoteProposalReplayStageV1::Stored { .. })
+    ));
+    executor
+        .consume_effects(
+            vec![AdapterEffect::StoreBody {
+                tag: next_tag,
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            }],
+            &mut services,
+        )
+        .expect("current StoreBody adopts the durable old-view replay owner");
+    assert_eq!(
+        services.store_tasks.len(),
+        1,
+        "the durable retry must not duplicate Store I/O"
+    );
+    assert!(matches!(
+        executor.runtime.completions.last(),
+        Some(RuntimeCompletion::BodyStored(completion_tag, round, subject, _))
+            if *completion_tag == next_tag
+                && *round == fixture.manifest.round
+                && *subject == fixture.manifest.subject
+    ));
+    assert!(matches!(
+        executor.remote_proposal_replay.get(&key),
+        Some(RemoteProposalReplayStageV1::Stored { .. })
+    ));
+
+    let validate_effect = AdapterEffect::ValidateBody {
+        tag: next_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let prepare_fetch = AdapterEffect::FetchBody {
+        tag: next_tag,
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare.clone()),
+    };
+    let prepare_validate_ownership = bound_test_effect_ownership(&prepare_fetch, next_tag, 9_020)
+        .rebind_as_inherited_adapter_effect(&validate_effect)
+        .expect("carry Prepare authority into the protected Validate");
+    executor.runtime.durable_body_authority_certificate = Some(prepare);
+    executor
+        .retain_effect_batch(vec![validate_effect], vec![prepare_validate_ownership])
+        .expect("adopt the late Stored Proposal root under Prepare authority");
+    assert_eq!(
+        executor
+            .drain_retained_effect_batch(&mut services, true)
+            .expect("consume the late replay-authorized protected Validate"),
+        1
+    );
+    assert!(executor.remote_proposal_replay.is_empty());
+    assert!(
+        executor
+            .pending_durable_validate_admissions
+            .contains_key(&key)
+    );
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
@@ -2216,14 +3399,31 @@ fn published_lifecycle_validate_marker_coalesces_timer_authority_upgrade() {
         subject: prepare.subject,
         manifest: Some(fixture.manifest.clone()),
         certified_sources: certified_sources(&fixture, &prepare),
-        certificate: Some(prepare),
+        certificate: Some(prepare.clone()),
+    };
+    let initial_store = AdapterEffect::StoreBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
     };
     let initial_validate = AdapterEffect::ValidateBody {
         tag: tag(0),
         round: fixture.manifest.round,
         subject: fixture.manifest.subject,
     };
-    let initial_validate_ownership = bound_test_effect_ownership(&initial_fetch, tag(0), 9_022)
+    let initial_store_ownership = bound_test_effect_ownership(&initial_fetch, tag(0), 9_022)
+        .rebind_as_inherited_adapter_effect(&initial_store)
+        .expect("project the lifecycle-published Prepare Store owner");
+    let initial_store_pending = initial_store_ownership
+        .exact_pending_adapter_effect_binding(&initial_store)
+        .expect("seal the lifecycle-published Store binding");
+    let prepared_store = executor
+        .prepare_published_lifecycle_store_retry_marker(&durable)
+        .expect("preflight the direct lifecycle Store marker catalog")
+        .bind_store_successor(&initial_store, &initial_store_pending)
+        .expect("bind the exact lifecycle-published Store successor");
+    executor.commit_published_lifecycle_store_retry_marker(prepared_store);
+    let initial_validate_ownership = initial_store_ownership
         .rebind_as_inherited_adapter_effect(&initial_validate)
         .expect("project the lifecycle-published Prepare Validate owner");
     let initial_pending = initial_validate_ownership
@@ -2234,10 +3434,177 @@ fn published_lifecycle_validate_marker_coalesces_timer_authority_upgrade() {
         .expect("preflight the direct lifecycle marker catalog")
         .bind_validate_successor(&initial_validate, &initial_pending)
         .expect("bind the exact lifecycle-published Validate successor");
-    executor.commit_published_lifecycle_validate_retry_marker(prepared);
+    executor.commit_published_lifecycle_validate_retry_marker(prepared, 9_022);
 
     let next_tag = tag(1);
+    let retry_fetch = AdapterEffect::FetchBody {
+        tag: next_tag,
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let retry_store = AdapterEffect::StoreBody {
+        tag: next_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let retry_store_ownership = bound_test_effect_ownership(&retry_fetch, next_tag, 9_023)
+        .rebind_as_inherited_adapter_effect(&retry_store)
+        .expect("carry Prepare authority into the later Store retry");
+    assert_ne!(
+        retry_store_ownership.owner(),
+        initial_store_ownership.owner(),
+        "the regression needs a fresh lifecycle owner"
+    );
+    let terminal_identity = initial_store_ownership
+        .candidate_semantic_identity()
+        .expect("the original Store has one candidate identity");
+    assert_eq!(
+        retry_store_ownership.candidate_semantic_identity(),
+        Some(terminal_identity),
+        "the later Store must collide with the queued terminal's exact candidate"
+    );
+    assert!(
+        executor
+            .runtime
+            .terminal_body_candidate_owners
+            .insert(terminal_identity, initial_store_ownership.clone())
+            .is_none()
+    );
+    let queued_terminal = RuntimeCompletion::BodyStored(
+        tag(0),
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        durable.clone(),
+    );
+    executor.runtime.completions.push(queued_terminal.clone());
+    let accepted_marker = executor.published_lifecycle_validate_retry_markers[&key].clone();
+    let terminal_owners_before = executor.runtime.terminal_body_candidate_owners.clone();
+    let terminal_queries_before = executor.runtime.terminal_body_candidate_queries.clone();
+    let terminal_commits_before = executor.runtime.terminal_body_candidate_commits;
+
+    let conflicting_manifest = deliberately_conflicting_payload_manifest(
+        &fixture.context,
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        b"foreign direct-lifecycle Store receipt",
+    );
+    let conflicting_receipt = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        HashOf::new(&conflicting_manifest),
+    );
+    assert_eq!(
+        executor
+            .durable_bodies
+            .insert(key, conflicting_receipt.clone()),
+        Some(durable.clone())
+    );
+    assert!(matches!(
+        executor.retain_effect_batch(
+            vec![retry_store.clone()],
+            vec![retry_store_ownership.clone()],
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("changed its durable body or regressed its tag")
+    ));
+    assert_eq!(
+        executor.durable_bodies.insert(key, durable.clone()),
+        Some(conflicting_receipt)
+    );
+    assert_eq!(
+        executor.published_lifecycle_validate_retry_markers[&key],
+        accepted_marker
+    );
+    assert!(executor.pending_stores.is_empty());
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_owners,
+        terminal_owners_before
+    );
+    assert_eq!(executor.runtime.completions, vec![queued_terminal.clone()]);
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_queries,
+        terminal_queries_before
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_commits,
+        terminal_commits_before
+    );
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
+
     let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let stronger_fetch = AdapterEffect::FetchBody {
+        tag: next_tag,
+        round: commit.proposal_round,
+        subject: commit.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &commit),
+        certificate: Some(commit.clone()),
+    };
+    let stronger_store_ownership = bound_test_effect_ownership(&stronger_fetch, next_tag, 9_024)
+        .rebind_as_inherited_adapter_effect(&retry_store)
+        .expect("carry Commit authority into the stronger Store retry");
+    assert!(matches!(
+        executor.retain_effect_batch(
+            vec![retry_store.clone()],
+            vec![stronger_store_ownership],
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("outran its published Validate authority")
+    ));
+    assert_eq!(
+        executor.published_lifecycle_validate_retry_markers[&key],
+        accepted_marker
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_owners,
+        terminal_owners_before
+    );
+    assert_eq!(executor.runtime.completions, vec![queued_terminal.clone()]);
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_queries,
+        terminal_queries_before
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_commits,
+        terminal_commits_before
+    );
+
+    executor
+        .retain_effect_batch(vec![retry_store], vec![retry_store_ownership])
+        .expect("the published Validate marker stutters the exact later Store retry");
+    assert!(executor.retained_effect_batch.is_none());
+    assert_eq!(
+        executor.published_lifecycle_validate_retry_markers[&key],
+        accepted_marker
+    );
+    assert!(executor.pending_stores.is_empty());
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_owners,
+        terminal_owners_before
+    );
+    assert_eq!(executor.runtime.completions, vec![queued_terminal]);
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_queries, terminal_queries_before,
+        "the marker must stutter before runtime terminal-owner comparison"
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_commits,
+        terminal_commits_before
+    );
+    let mut services = fixture.services();
+    assert_eq!(
+        executor
+            .drain_retained_effect_batch(&mut services, true)
+            .expect("no later Store dispatch remains"),
+        0
+    );
+    assert!(services.store_tasks.is_empty());
+
     let commit_fetch = AdapterEffect::FetchBody {
         tag: next_tag,
         round: commit.proposal_round,
@@ -2251,7 +3618,7 @@ fn published_lifecycle_validate_marker_coalesces_timer_authority_upgrade() {
         round: fixture.manifest.round,
         subject: fixture.manifest.subject,
     };
-    let timer_ownership = bound_test_effect_ownership(&commit_fetch, next_tag, 9_023)
+    let timer_ownership = bound_test_effect_ownership(&commit_fetch, next_tag, 9_025)
         .rebind_as_inherited_adapter_effect(&timer_validate)
         .expect("carry Commit authority into the periodic Validate retry");
     executor
@@ -2264,6 +3631,1147 @@ fn published_lifecycle_validate_marker_coalesces_timer_authority_upgrade() {
     let marker = &executor.published_lifecycle_validate_retry_markers[&key];
     assert_eq!(marker.effect, timer_validate);
     assert_eq!(marker.statement.phase(), Some(wire::GlobalPhase::Commit));
+    assert_eq!(executor.pending_work(), 0);
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
+}
+
+#[test]
+fn terminal_published_validate_retry_does_not_bypass_live_wal_apply_admission() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let durable = services
+        .body_store
+        .as_mut()
+        .expect("body store service")
+        .store(fixture.manifest.clone(), fixture.body.clone())
+        .expect("persist the exact pre-view-change body");
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(key, (fixture.manifest.clone(), durable.clone()),)
+            .is_none()
+    );
+    assert!(
+        executor
+            .durable_bodies
+            .insert(key, durable.clone())
+            .is_none()
+    );
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let old_tag = tag(0);
+    let initial_fetch = AdapterEffect::FetchBody {
+        tag: old_tag,
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let initial_store = AdapterEffect::StoreBody {
+        tag: old_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let initial_validate = AdapterEffect::ValidateBody {
+        tag: old_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let initial_store_ownership = bound_test_effect_ownership(&initial_fetch, old_tag, 9_026)
+        .rebind_as_inherited_adapter_effect(&initial_store)
+        .expect("project the lifecycle-published Store owner");
+    let initial_store_pending = initial_store_ownership
+        .exact_pending_adapter_effect_binding(&initial_store)
+        .expect("seal the lifecycle-published Store binding");
+    let prepared_store = executor
+        .prepare_published_lifecycle_store_retry_marker(&durable)
+        .expect("preflight the direct lifecycle Store marker")
+        .bind_store_successor(&initial_store, &initial_store_pending)
+        .expect("bind the exact lifecycle-published Store successor");
+    executor.commit_published_lifecycle_store_retry_marker(prepared_store);
+    let initial_validate_ownership = initial_store_ownership
+        .rebind_as_inherited_adapter_effect(&initial_validate)
+        .expect("project the lifecycle-published Validate owner");
+    let initial_validate_pending = initial_validate_ownership
+        .exact_pending_adapter_effect_binding(&initial_validate)
+        .expect("seal the lifecycle-published Validate binding");
+    let prepared_validate = executor
+        .prepare_published_lifecycle_validate_retry_marker(&durable)
+        .expect("preflight the direct lifecycle Validate marker")
+        .bind_validate_successor(&initial_validate, &initial_validate_pending)
+        .expect("bind the exact lifecycle-published Validate successor");
+    executor.commit_published_lifecycle_validate_retry_marker(prepared_validate, 9_026);
+
+    let validated =
+        validate_durable_body_fixture(&mut services, &fixture.manifest, durable.clone());
+    executor
+        .record_lifecycle_validated_body(ReadyValidatedExecutorCatalogAuthorityV1::for_test(
+            validated.clone(),
+        ))
+        .expect("cache the physically completed validation receipt");
+    assert!(
+        executor
+            .release_validate_retry_lifecycle_ordinal(key, 9_026)
+            .expect("release the terminal Validate row's exact retry ordinal"),
+        "the terminal Validate row must release its inert marker"
+    );
+
+    // Model the executor projection after EnterView won the publication race:
+    // the old Ready row sealed ValidateNoSuccessor, leaving only its inert
+    // marker and independently fsynced validated receipt. There is no live
+    // validation admission or service work left to satisfy a later retry.
+    let current_tag = tag(1);
+    executor.runtime.round_tag = Some(current_tag);
+    executor.reconciled_tag = Some(current_tag);
+    assert_eq!(
+        executor.published_lifecycle_validate_retry_markers[&key].effect,
+        initial_validate
+    );
+    assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
+    assert!(executor.pending_durable_validate_admissions.is_empty());
+    assert_eq!(executor.pending_work(), 0);
+
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let decision = (
+        commit.round,
+        commit.proposal_round,
+        commit.subject,
+        commit.execution_commitment,
+    );
+    let current_fetch = AdapterEffect::FetchBody {
+        tag: current_tag,
+        round: commit.proposal_round,
+        subject: commit.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &commit),
+        certificate: Some(commit.clone()),
+    };
+    let current_validate = AdapterEffect::ValidateBody {
+        tag: current_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let current_validate_ownership =
+        bound_test_effect_ownership(&current_fetch, current_tag, 9_027)
+            .rebind_as_inherited_adapter_effect(&current_validate)
+            .expect("carry current-view Commit authority into Validate");
+    assert!(
+        current_validate_ownership
+            .binds_durable_decision_authority(decision.0, decision.1, decision.2, decision.3,)
+    );
+    executor.runtime.decided_body = Some(decision);
+    executor.runtime.durable_body_authority_certificate = Some(commit);
+    executor.runtime.exact_effect_ownership =
+        Some((current_validate.clone(), current_validate_ownership));
+
+    assert_eq!(
+        executor
+            .consume_effects(vec![current_validate.clone()], &mut services)
+            .expect("keep the cached marker inert without live WAL Apply authority"),
+        0,
+        "a terminal marker cannot manufacture an Apply outside lifecycle admission",
+    );
+    assert_eq!(executor.protected_decision, Some(decision));
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(executor.parked_effect_batch.is_none());
+    let marker = &executor.published_lifecycle_validate_retry_markers[&key];
+    assert_eq!(
+        marker.effect, current_validate,
+        "the inert marker must refine to the exact current-view retry"
+    );
+    assert_eq!(marker.statement.phase(), Some(wire::GlobalPhase::Commit));
+    assert_eq!(marker.statement.round(), decision.0);
+    assert_eq!(marker.statement.proposal_round(), decision.1);
+    assert_eq!(marker.statement.subject(), Some(decision.2));
+    assert_eq!(marker.statement.execution_commitment(), Some(decision.3));
+    assert!(!marker.owns_live_lifecycle_row());
+    assert!(executor.pending_durable_validate_admissions.is_empty());
+    assert!(executor.durable_validate_retry_seals.is_empty());
+    assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
+    assert!(executor.pending_applications.is_empty());
+    assert!(executor.live_lifecycle_decision_apply.is_none());
+    assert_eq!(executor.pending_work(), 0);
+    assert!(services.apply_tasks.is_empty());
+    assert_eq!(executor.status().pending_applications, 0);
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
+    assert!(services.closed.is_empty());
+}
+
+#[test]
+fn published_store_marker_carries_stronger_authority_through_validate_handoff() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        HashOf::new(&fixture.manifest),
+    );
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(key, (fixture.manifest.clone(), durable.clone()))
+            .is_none()
+    );
+    assert!(
+        executor
+            .durable_bodies
+            .insert(key, durable.clone())
+            .is_none()
+    );
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let initial_fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare.clone()),
+    };
+    let initial_store = AdapterEffect::StoreBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let initial_ownership = bound_test_effect_ownership(&initial_fetch, tag(0), 9_028)
+        .rebind_as_inherited_adapter_effect(&initial_store)
+        .expect("project the published Prepare Store owner");
+    let initial_pending = initial_ownership
+        .exact_pending_adapter_effect_binding(&initial_store)
+        .expect("seal the published Prepare Store binding");
+    let marker = executor
+        .prepare_published_lifecycle_store_retry_marker(&durable)
+        .expect("preflight the published Store marker")
+        .bind_store_successor(&initial_store, &initial_pending)
+        .expect("bind the published Prepare Store successor");
+    executor.commit_published_lifecycle_store_retry_marker(marker);
+    let immutable_publication =
+        PublishedLifecycleStoreRetryCensusEntryV1::from_exact_published_store(
+            &initial_store,
+            &initial_pending,
+            &durable,
+        )
+        .expect("reconstruct the registry-side immutable Store publication");
+    let immutable_census = BTreeMap::from([(key, immutable_publication.clone())]);
+    assert_eq!(
+        executor
+            .published_lifecycle_store_retry_census()
+            .expect("project the initial executor Store census"),
+        immutable_census,
+    );
+    assert_eq!(
+        executor.published_lifecycle_store_retry_markers[&key]
+            .statement
+            .phase(),
+        Some(wire::GlobalPhase::Prepare),
+    );
+
+    let initial_terminal_identity = initial_ownership
+        .candidate_semantic_identity()
+        .expect("the published Store has one candidate identity");
+    assert!(
+        executor
+            .runtime
+            .terminal_body_candidate_owners
+            .insert(initial_terminal_identity, initial_ownership.clone())
+            .is_none()
+    );
+
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let stronger_fetch = AdapterEffect::FetchBody {
+        tag: tag(1),
+        round: commit.proposal_round,
+        subject: commit.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &commit),
+        certificate: Some(commit.clone()),
+    };
+    let stronger_store = AdapterEffect::StoreBody {
+        tag: tag(1),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let stronger_ownership = bound_test_effect_ownership(&stronger_fetch, tag(1), 9_029)
+        .rebind_as_inherited_adapter_effect(&stronger_store)
+        .expect("project the stronger Commit Store retry owner");
+    let stronger_pending = stronger_ownership
+        .exact_pending_adapter_effect_binding(&stronger_store)
+        .expect("seal the stronger Commit Store retry binding");
+    assert_ne!(initial_ownership.owner(), stronger_ownership.owner());
+    assert_eq!(
+        initial_pending
+            .candidate_statement()
+            .zip(stronger_pending.candidate_statement())
+            .and_then(|(initial, stronger)| initial.body_stage_authority_relation_to(stronger)),
+        Some(RuntimeFetchAuthorityRelation::Upgrade),
+        "the first retry must strengthen Prepare authority to Commit",
+    );
+    let stronger_terminal_ownership = bound_test_effect_ownership(&stronger_fetch, tag(1), 9_031)
+        .rebind_as_inherited_adapter_effect(&stronger_store)
+        .expect("project the foreign Commit Store terminal owner");
+    assert_ne!(
+        stronger_ownership.owner(),
+        stronger_terminal_ownership.owner(),
+    );
+    let stronger_terminal_identity = stronger_ownership
+        .candidate_semantic_identity()
+        .expect("the stronger Store retry has one candidate identity");
+    assert_ne!(
+        stronger_terminal_identity, initial_terminal_identity,
+        "the exact candidate identity retains the inherited authority statement",
+    );
+    assert_eq!(
+        stronger_terminal_ownership.candidate_semantic_identity(),
+        Some(stronger_terminal_identity),
+    );
+    assert!(
+        executor
+            .runtime
+            .terminal_body_candidate_owners
+            .insert(stronger_terminal_identity, stronger_terminal_ownership)
+            .is_none()
+    );
+    let terminal_owners_before = executor.runtime.terminal_body_candidate_owners.clone();
+    let terminal_queries_before = executor.runtime.terminal_body_candidate_queries.clone();
+    let terminal_commits_before = executor.runtime.terminal_body_candidate_commits;
+
+    executor
+        .retain_effect_batch(
+            vec![stronger_store.clone()],
+            vec![stronger_ownership.clone()],
+        )
+        .expect("the active Store marker stutters and records the Commit upgrade");
+
+    assert!(executor.retained_effect_batch.is_none());
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_queries, terminal_queries_before,
+        "the stronger Store retry must stutter before runtime terminal-owner comparison",
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_commits,
+        terminal_commits_before,
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_owners,
+        terminal_owners_before,
+    );
+    let strongest_store_marker = executor.published_lifecycle_store_retry_markers[&key].clone();
+    assert_eq!(
+        strongest_store_marker.statement.phase(),
+        Some(wire::GlobalPhase::Commit),
+        "the active Store marker must retain its strongest accepted authority",
+    );
+    let upgraded_census = executor
+        .published_lifecycle_store_retry_census()
+        .expect("project the authority-upgraded executor Store census");
+    assert_eq!(
+        upgraded_census, immutable_census,
+        "the mutable strongest-authority overlay must not rewrite registry publication identity",
+    );
+    let wrong_immutable_publication =
+        PublishedLifecycleStoreRetryCensusEntryV1::from_exact_published_store(
+            &stronger_store,
+            &stronger_pending,
+            &durable,
+        )
+        .expect("reconstruct a distinct same-body Store publication");
+    assert_eq!(wrong_immutable_publication.key(), key);
+    assert_ne!(
+        wrong_immutable_publication, immutable_publication,
+        "same body key must not hide a changed immutable Store publication",
+    );
+    let wrong_immutable_census = BTreeMap::from([(key, wrong_immutable_publication)]);
+    assert_ne!(
+        upgraded_census, wrong_immutable_census,
+        "finalization must reject a same-key immutable publication mismatch",
+    );
+    assert_ne!(
+        upgraded_census,
+        BTreeMap::new(),
+        "finalization must reject an executor-only Store publication",
+    );
+    assert_ne!(
+        BTreeMap::new(),
+        immutable_census,
+        "finalization must reject a registry-only Store publication",
+    );
+
+    let validate = AdapterEffect::ValidateBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let validate_ownership = initial_ownership
+        .rebind_as_inherited_adapter_effect(&validate)
+        .expect("project Validate from the immutable published Store row");
+    let validate_pending = validate_ownership
+        .exact_pending_adapter_effect_binding(&validate)
+        .expect("seal the immutable published Validate binding");
+    let validate_marker = executor
+        .prepare_published_lifecycle_validate_retry_marker(&durable)
+        .expect("preflight the live Store-to-Validate marker handoff")
+        .bind_validate_successor(&validate, &validate_pending)
+        .expect("bind Validate to the strongest published Store marker");
+    executor.commit_published_lifecycle_validate_retry_marker(validate_marker, 9_034);
+
+    assert!(
+        !executor
+            .published_lifecycle_store_retry_markers
+            .contains_key(&key)
+    );
+    let accepted_validate_marker =
+        executor.published_lifecycle_validate_retry_markers[&key].clone();
+    assert_eq!(
+        accepted_validate_marker.statement.phase(),
+        Some(wire::GlobalPhase::Commit),
+    );
+    assert_eq!(
+        accepted_validate_marker
+            .store_terminal
+            .pending
+            .candidate_statement()
+            .and_then(RuntimeCandidateSemanticStatement::phase),
+        Some(wire::GlobalPhase::Prepare),
+        "the reverse Store fingerprint remains the immutable Prepare publication",
+    );
+    assert_eq!(
+        accepted_validate_marker.store_terminal, strongest_store_marker,
+        "Store-to-Validate publication must transfer the strongest Store authority unchanged",
+    );
+
+    let weaker_fetch = AdapterEffect::FetchBody {
+        tag: tag(2),
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let weaker_store = AdapterEffect::StoreBody {
+        tag: tag(2),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let weaker_ownership = bound_test_effect_ownership(&weaker_fetch, tag(2), 9_030)
+        .rebind_as_inherited_adapter_effect(&weaker_store)
+        .expect("project the later weaker Prepare Store retry owner");
+    let weaker_pending = weaker_ownership
+        .exact_pending_adapter_effect_binding(&weaker_store)
+        .expect("seal the later weaker Prepare Store retry binding");
+    assert_ne!(initial_ownership.owner(), weaker_ownership.owner());
+    assert_eq!(
+        accepted_validate_marker
+            .store_terminal
+            .statement
+            .body_stage_authority_relation_to(
+                weaker_pending
+                    .candidate_statement()
+                    .expect("the weaker retry retains one body statement"),
+            ),
+        Some(RuntimeFetchAuthorityRelation::Stale),
+        "the post-Validate retry must be weaker than the retained Commit Store authority",
+    );
+    assert_eq!(
+        weaker_ownership.candidate_semantic_identity(),
+        Some(initial_terminal_identity),
+    );
+
+    executor
+        .retain_effect_batch(vec![weaker_store], vec![weaker_ownership])
+        .expect("the Validate marker stutters the later weaker Store retry");
+
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(executor.pending_stores.is_empty());
+    assert_eq!(
+        executor.published_lifecycle_validate_retry_markers[&key], accepted_validate_marker,
+        "the weaker retry must not downgrade transferred Store authority",
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_queries, terminal_queries_before,
+        "the weaker post-Validate retry must also stutter before terminal-owner comparison",
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_commits,
+        terminal_commits_before,
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_owners,
+        terminal_owners_before,
+    );
+    assert_eq!(executor.pending_work(), 0);
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
+}
+
+#[test]
+fn active_published_store_marker_absorbs_stale_inflight_store_completion() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let store_id = install_inflight_remote_proposal_store(
+        &mut executor,
+        &mut services,
+        &fixture,
+        tag(0),
+        9_033,
+    );
+    let completion = services.execute_store(store_id);
+    let durable = completion.receipt().clone();
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(key, (fixture.manifest.clone(), durable.clone()))
+            .is_none()
+    );
+    assert!(
+        executor
+            .durable_bodies
+            .insert(key, durable.clone())
+            .is_none()
+    );
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let published_fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let published_store = AdapterEffect::StoreBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let published_ownership = bound_test_effect_ownership(&published_fetch, tag(0), 9_034)
+        .rebind_as_inherited_adapter_effect(&published_store)
+        .expect("project the lifecycle-published Prepare Store owner");
+    let published_pending = published_ownership
+        .exact_pending_adapter_effect_binding(&published_store)
+        .expect("seal the lifecycle-published Store binding");
+    let marker = executor
+        .prepare_published_lifecycle_store_retry_marker(&durable)
+        .expect("preflight the overlapping published Store marker")
+        .bind_store_successor(&published_store, &published_pending)
+        .expect("bind the overlapping published Store marker");
+    executor.commit_published_lifecycle_store_retry_marker(marker);
+    let accepted_marker = executor.published_lifecycle_store_retry_markers[&key].clone();
+    let terminal_identity = published_ownership
+        .candidate_semantic_identity()
+        .expect("the published Store has one terminal candidate identity");
+    assert!(
+        executor
+            .runtime
+            .terminal_body_candidate_owners
+            .insert(terminal_identity, published_ownership.clone())
+            .is_none()
+    );
+    let queued_terminal = RuntimeCompletion::BodyStored(
+        tag(0),
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        durable.clone(),
+    );
+    executor.runtime.completions.push(queued_terminal.clone());
+    let terminal_owners_before = executor.runtime.terminal_body_candidate_owners.clone();
+    let terminal_queries_before = executor.runtime.terminal_body_candidate_queries.clone();
+    let terminal_commits_before = executor.runtime.terminal_body_candidate_commits;
+
+    assert_eq!(
+        executor
+            .complete_body_store(completion, &mut services)
+            .expect("published Store absorbs the stale physical completion"),
+        CompletionDisposition::Accepted,
+    );
+
+    assert!(executor.pending_stores.is_empty());
+    assert_eq!(executor.pending_store_bytes, 0);
+    assert!(executor.remote_proposal_replay.is_empty());
+    assert!(!executor.body_pipeline_owners.contains_key(&key));
+    assert_eq!(
+        executor.recovered_bodies.get(&key),
+        Some(&(fixture.manifest.clone(), durable.clone())),
+    );
+    assert_eq!(executor.durable_bodies.get(&key), Some(&durable));
+    assert_eq!(
+        executor.published_lifecycle_store_retry_markers[&key], accepted_marker,
+        "the stale completion cannot downgrade the active marker authority",
+    );
+    assert_eq!(executor.runtime.completions, vec![queued_terminal]);
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_owners, terminal_owners_before,
+        "completion settlement must not rewrite the published terminal owner",
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_queries, terminal_queries_before,
+        "completion settlement must stutter before runtime terminal-owner comparison",
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_commits,
+        terminal_commits_before,
+    );
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
+    assert!(services.closed.is_empty());
+}
+
+#[test]
+fn published_validate_marker_absorbs_stale_inflight_store_completion() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let store_id = install_inflight_remote_proposal_store(
+        &mut executor,
+        &mut services,
+        &fixture,
+        tag(0),
+        9_035,
+    );
+    let completion = services.execute_store(store_id);
+    let durable = completion.receipt().clone();
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(key, (fixture.manifest.clone(), durable.clone()))
+            .is_none()
+    );
+    assert!(
+        executor
+            .durable_bodies
+            .insert(key, durable.clone())
+            .is_none()
+    );
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let published_fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let published_store = AdapterEffect::StoreBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let published_store_ownership = bound_test_effect_ownership(&published_fetch, tag(0), 9_036)
+        .rebind_as_inherited_adapter_effect(&published_store)
+        .expect("project the lifecycle-published Prepare Store owner");
+    let published_store_pending = published_store_ownership
+        .exact_pending_adapter_effect_binding(&published_store)
+        .expect("seal the lifecycle-published Store binding");
+    let store_marker = executor
+        .prepare_published_lifecycle_store_retry_marker(&durable)
+        .expect("preflight the overlapping published Store marker")
+        .bind_store_successor(&published_store, &published_store_pending)
+        .expect("bind the overlapping published Store marker");
+    executor.commit_published_lifecycle_store_retry_marker(store_marker);
+
+    let published_validate = AdapterEffect::ValidateBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let published_validate_ownership = published_store_ownership
+        .rebind_as_inherited_adapter_effect(&published_validate)
+        .expect("project the lifecycle-published Prepare Validate owner");
+    let published_validate_pending = published_validate_ownership
+        .exact_pending_adapter_effect_binding(&published_validate)
+        .expect("seal the lifecycle-published Validate binding");
+    let validate_marker = executor
+        .prepare_published_lifecycle_validate_retry_marker(&durable)
+        .expect("preflight the overlapping Store-to-Validate marker handoff")
+        .bind_validate_successor(&published_validate, &published_validate_pending)
+        .expect("bind the overlapping published Validate marker");
+    executor.commit_published_lifecycle_validate_retry_marker(validate_marker, 9_036);
+    let accepted_marker = executor.published_lifecycle_validate_retry_markers[&key].clone();
+    let terminal_identity = published_store_ownership
+        .candidate_semantic_identity()
+        .expect("the published Store has one terminal candidate identity");
+    assert!(
+        executor
+            .runtime
+            .terminal_body_candidate_owners
+            .insert(terminal_identity, published_store_ownership.clone())
+            .is_none()
+    );
+    let queued_terminal = RuntimeCompletion::BodyStored(
+        tag(0),
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        durable.clone(),
+    );
+    executor.runtime.completions.push(queued_terminal.clone());
+    let terminal_owners_before = executor.runtime.terminal_body_candidate_owners.clone();
+    let terminal_queries_before = executor.runtime.terminal_body_candidate_queries.clone();
+    let terminal_commits_before = executor.runtime.terminal_body_candidate_commits;
+
+    assert_eq!(
+        executor
+            .complete_body_store(completion, &mut services)
+            .expect("published Validate absorbs its stale Store predecessor completion"),
+        CompletionDisposition::Accepted,
+    );
+
+    assert!(executor.pending_stores.is_empty());
+    assert_eq!(executor.pending_store_bytes, 0);
+    assert!(executor.remote_proposal_replay.is_empty());
+    assert!(!executor.body_pipeline_owners.contains_key(&key));
+    assert_eq!(
+        executor.recovered_bodies.get(&key),
+        Some(&(fixture.manifest.clone(), durable.clone())),
+    );
+    assert_eq!(executor.durable_bodies.get(&key), Some(&durable));
+    assert_eq!(
+        executor.published_lifecycle_validate_retry_markers[&key],
+        accepted_marker,
+    );
+    assert_eq!(executor.runtime.completions, vec![queued_terminal]);
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_owners, terminal_owners_before,
+        "completion settlement must not rewrite the published terminal owner",
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_queries, terminal_queries_before,
+        "completion settlement must not query the foreign runtime terminal owner",
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_commits,
+        terminal_commits_before,
+    );
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
+    assert!(services.closed.is_empty());
+}
+
+fn assert_published_marker_absorbs_detached_store_completion(publish_validate: bool) {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let original_tag = tag(0);
+    let published_tag = tag(1);
+    let store_id = install_inflight_remote_proposal_store(
+        &mut executor,
+        &mut services,
+        &fixture,
+        original_tag,
+        9_037,
+    );
+    let completion = services.execute_store(store_id);
+    let durable = completion.receipt().clone();
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let mut timeout = timeout_certificate(&fixture);
+    timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+    executor.runtime.round_tag = Some(published_tag);
+    executor.runtime.locked_body = Some(key);
+    executor
+        .install_view(
+            published_tag,
+            timeout,
+            Some(prepare.clone()),
+            None,
+            &mut services,
+        )
+        .expect("EnterView detaches the exact protected Store task");
+    assert!(executor.pending_stores[&store_id].consumer.is_none());
+    assert!(matches!(
+        executor.remote_proposal_replay.get(&key),
+        Some(RemoteProposalReplayStageV1::Store { work_id, .. })
+            if *work_id == store_id
+    ));
+    assert!(executor.body_pipeline_owners.contains_key(&key));
+
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(key, (fixture.manifest.clone(), durable.clone()))
+            .is_none()
+    );
+    assert!(
+        executor
+            .durable_bodies
+            .insert(key, durable.clone())
+            .is_none()
+    );
+    let published_fetch = AdapterEffect::FetchBody {
+        tag: published_tag,
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let published_store = AdapterEffect::StoreBody {
+        tag: published_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let published_store_ownership =
+        bound_test_effect_ownership(&published_fetch, published_tag, 9_038)
+            .rebind_as_inherited_adapter_effect(&published_store)
+            .expect("project the later published Store owner");
+    let published_store_pending = published_store_ownership
+        .exact_pending_adapter_effect_binding(&published_store)
+        .expect("seal the later published Store binding");
+    let store_marker = executor
+        .prepare_published_lifecycle_store_retry_marker(&durable)
+        .expect("preflight the Store marker beside detached physical work")
+        .bind_store_successor(&published_store, &published_store_pending)
+        .expect("bind the later published Store marker");
+    executor.commit_published_lifecycle_store_retry_marker(store_marker);
+
+    let accepted_validate_marker = if publish_validate {
+        let published_validate = AdapterEffect::ValidateBody {
+            tag: published_tag,
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+        };
+        let published_validate_ownership = published_store_ownership
+            .rebind_as_inherited_adapter_effect(&published_validate)
+            .expect("project the later published Validate owner");
+        let published_validate_pending = published_validate_ownership
+            .exact_pending_adapter_effect_binding(&published_validate)
+            .expect("seal the later published Validate binding");
+        let validate_marker = executor
+            .prepare_published_lifecycle_validate_retry_marker(&durable)
+            .expect("preflight the Store-to-Validate marker handoff")
+            .bind_validate_successor(&published_validate, &published_validate_pending)
+            .expect("bind the later published Validate marker");
+        executor.commit_published_lifecycle_validate_retry_marker(validate_marker, 9_038);
+        Some(executor.published_lifecycle_validate_retry_markers[&key].clone())
+    } else {
+        None
+    };
+    let accepted_store_marker = executor
+        .published_lifecycle_store_retry_markers
+        .get(&key)
+        .cloned();
+
+    let terminal_identity = published_store_ownership
+        .candidate_semantic_identity()
+        .expect("the published Store has one terminal candidate identity");
+    assert!(
+        executor
+            .runtime
+            .terminal_body_candidate_owners
+            .insert(terminal_identity, published_store_ownership)
+            .is_none()
+    );
+    executor.runtime.completions.clear();
+    let queued_terminal = RuntimeCompletion::BodyStored(
+        published_tag,
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        durable.clone(),
+    );
+    executor.runtime.completions.push(queued_terminal.clone());
+    let terminal_owners_before = executor.runtime.terminal_body_candidate_owners.clone();
+    let terminal_queries_before = executor.runtime.terminal_body_candidate_queries.clone();
+    let terminal_commits_before = executor.runtime.terminal_body_candidate_commits;
+
+    assert_eq!(
+        executor
+            .complete_body_store(completion, &mut services)
+            .expect("the published marker absorbs the detached physical completion"),
+        CompletionDisposition::Accepted,
+    );
+
+    assert!(executor.pending_stores.is_empty());
+    assert_eq!(executor.pending_store_bytes, 0);
+    assert!(executor.remote_proposal_replay.is_empty());
+    assert!(!executor.body_pipeline_owners.contains_key(&key));
+    assert_eq!(
+        executor.recovered_bodies.get(&key),
+        Some(&(fixture.manifest.clone(), durable.clone())),
+    );
+    assert_eq!(executor.durable_bodies.get(&key), Some(&durable));
+    if let Some(accepted) = accepted_validate_marker {
+        assert!(
+            !executor
+                .published_lifecycle_store_retry_markers
+                .contains_key(&key)
+        );
+        assert_eq!(
+            executor.published_lifecycle_validate_retry_markers[&key], accepted,
+            "a historical Store completion cannot mutate its Validate successor",
+        );
+    } else {
+        assert_eq!(
+            executor.published_lifecycle_store_retry_markers.get(&key),
+            accepted_store_marker.as_ref(),
+            "weaker historical authority cannot downgrade the Store marker",
+        );
+    }
+    assert_eq!(executor.runtime.completions, vec![queued_terminal]);
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_owners,
+        terminal_owners_before,
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_queries,
+        terminal_queries_before,
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_commits,
+        terminal_commits_before,
+    );
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
+    assert!(services.closed.is_empty());
+}
+
+#[test]
+fn active_published_store_marker_absorbs_detached_inflight_store_completion() {
+    assert_published_marker_absorbs_detached_store_completion(false);
+}
+
+#[test]
+fn published_validate_marker_absorbs_detached_inflight_store_completion() {
+    assert_published_marker_absorbs_detached_store_completion(true);
+}
+
+#[test]
+fn published_store_marker_atomically_absorbs_local_proposal_store_completion() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    executor
+        .admit_local_proposal(
+            tag(0),
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            &mut services,
+        )
+        .expect("start the exact local-proposal Store");
+    let store_id = services.store_tasks[0].id();
+    assert!(matches!(
+        &executor.pending_stores[&store_id].consumer,
+        Some(StoreConsumer::LocalProposal { .. })
+    ));
+    assert!(executor.local_store_replay.contains_key(&store_id));
+    let completion = services.execute_store(store_id);
+    let durable = completion.receipt().clone();
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(key, (fixture.manifest.clone(), durable.clone()))
+            .is_none()
+    );
+    assert!(
+        executor
+            .durable_bodies
+            .insert(key, durable.clone())
+            .is_none()
+    );
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let published_fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let published_store = AdapterEffect::StoreBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let published_ownership = bound_test_effect_ownership(&published_fetch, tag(0), 9_039)
+        .rebind_as_inherited_adapter_effect(&published_store)
+        .expect("project the published Store owner");
+    let published_pending = published_ownership
+        .exact_pending_adapter_effect_binding(&published_store)
+        .expect("seal the published Store binding");
+    let marker = executor
+        .prepare_published_lifecycle_store_retry_marker(&durable)
+        .expect("preflight the Store marker beside local physical work")
+        .bind_store_successor(&published_store, &published_pending)
+        .expect("bind the Store marker beside local physical work");
+    executor.commit_published_lifecycle_store_retry_marker(marker);
+    let accepted_marker = executor.published_lifecycle_store_retry_markers[&key].clone();
+    let body_projection_before = executor.body_ownership_projection();
+
+    assert_eq!(
+        executor
+            .complete_body_store(completion, &mut services)
+            .expect("the published Store atomically absorbs local physical completion"),
+        CompletionDisposition::Accepted,
+    );
+
+    assert!(executor.pending_stores.is_empty());
+    assert_eq!(executor.pending_store_bytes, 0);
+    assert!(executor.local_store_replay.is_empty());
+    assert!(executor.pending_durable_validate_admissions.is_empty());
+    assert!(!executor.body_pipeline_owners.contains_key(&key));
+    assert_eq!(
+        executor.published_lifecycle_store_retry_markers[&key],
+        accepted_marker,
+    );
+    assert_eq!(
+        executor.recovered_bodies.get(&key),
+        Some(&(fixture.manifest.clone(), durable.clone())),
+    );
+    assert_eq!(executor.durable_bodies.get(&key), Some(&durable));
+    assert!(executor.runtime.completions.is_empty());
+    assert_ne!(
+        executor.body_ownership_projection(),
+        body_projection_before,
+        "physical task and replay owners must retire after successful coalescence",
+    );
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
+    assert!(services.closed.is_empty());
+}
+
+#[test]
+fn cold_recovered_lifecycle_store_marker_stutters_stale_foreign_owner_before_terminal_query() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        HashOf::new(&fixture.manifest),
+    );
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(key, (fixture.manifest.clone(), durable.clone()))
+            .is_none()
+    );
+    assert!(
+        executor
+            .durable_bodies
+            .insert(key, durable.clone())
+            .is_none()
+    );
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let recovered_fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let recovered_store = AdapterEffect::StoreBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let recovered_store_ownership = bound_test_effect_ownership(&recovered_fetch, tag(0), 9_026)
+        .rebind_as_inherited_adapter_effect(&recovered_store)
+        .expect("project the cold-recovered Prepare Store owner");
+    let recovered_store_pending = recovered_store_ownership
+        .exact_pending_adapter_effect_binding(&recovered_store)
+        .expect("seal the cold-recovered Store binding");
+    executor
+        .install_recovered_published_lifecycle_store_retry_marker(
+            &recovered_store,
+            &recovered_store_pending,
+            &durable,
+        )
+        .expect("restore the published Store marker before live clocks are armed");
+    assert_eq!(executor.published_lifecycle_store_retry_markers.len(), 1);
+    let installed_marker = executor.published_lifecycle_store_retry_markers[&key].clone();
+
+    let retry_tag = tag(1);
+    let ordinary_fetch = AdapterEffect::FetchBody {
+        tag: retry_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let retry_store = AdapterEffect::StoreBody {
+        tag: retry_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let retry_ownership = bound_test_effect_ownership(&ordinary_fetch, retry_tag, 9_027)
+        .rebind_as_inherited_adapter_effect(&retry_store)
+        .expect("project the fresh ordinary Store retry owner");
+    let retry_pending = retry_ownership
+        .exact_pending_adapter_effect_binding(&retry_store)
+        .expect("seal the fresh ordinary Store retry binding");
+    assert_ne!(recovered_store_ownership.owner(), retry_ownership.owner());
+    assert_eq!(
+        recovered_store_pending
+            .candidate_statement()
+            .zip(retry_pending.candidate_statement())
+            .and_then(|(recovered, retry)| recovered.body_stage_authority_relation_to(retry)),
+        Some(RuntimeFetchAuthorityRelation::Stale),
+        "the regression needs a stale retry under a foreign physical owner",
+    );
+    let terminal_identity = recovered_store_ownership
+        .candidate_semantic_identity()
+        .expect("the recovered Store has one candidate identity");
+    assert_ne!(
+        retry_ownership.candidate_semantic_identity(),
+        Some(terminal_identity),
+        "ordinary and Prepare Store carriers intentionally have distinct candidate identities",
+    );
+    assert!(
+        executor
+            .runtime
+            .terminal_body_candidate_owners
+            .insert(terminal_identity, recovered_store_ownership)
+            .is_none()
+    );
+    let queued_terminal = RuntimeCompletion::BodyStored(
+        tag(0),
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        durable,
+    );
+    executor.runtime.completions.push(queued_terminal.clone());
+    let terminal_owners_before = executor.runtime.terminal_body_candidate_owners.clone();
+    let terminal_queries_before = executor.runtime.terminal_body_candidate_queries.clone();
+    let terminal_commits_before = executor.runtime.terminal_body_candidate_commits;
+
+    executor
+        .retain_effect_batch(vec![retry_store], vec![retry_ownership])
+        .expect("the cold Store marker stutters the stale foreign-owner retry");
+
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(executor.pending_stores.is_empty());
+    assert_eq!(
+        executor.published_lifecycle_store_retry_markers[&key],
+        installed_marker,
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_owners,
+        terminal_owners_before,
+    );
+    assert_eq!(executor.runtime.completions, vec![queued_terminal]);
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_queries, terminal_queries_before,
+        "the recovered marker must stutter before runtime terminal-owner comparison",
+    );
+    assert_eq!(
+        executor.runtime.terminal_body_candidate_commits,
+        terminal_commits_before,
+    );
     assert_eq!(executor.pending_work(), 0);
     assert!(!executor.status().fail_closed);
     assert!(!executor.output_guard.restart_required());
@@ -2318,6 +4826,7 @@ fn cold_recovered_lifecycle_validate_marker_coalesces_timer_authority_upgrade() 
             &initial_validate,
             &initial_pending,
             &durable,
+            9_024,
         )
         .expect("restore the cold-opened Validate retry marker before clock activation");
 
@@ -2353,6 +4862,82 @@ fn cold_recovered_lifecycle_validate_marker_coalesces_timer_authority_upgrade() 
     assert_eq!(executor.pending_work(), 0);
     assert!(!executor.status().fail_closed);
     assert!(!executor.output_guard.restart_required());
+}
+
+#[test]
+fn unprotected_enter_view_preserves_active_published_store_marker() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        HashOf::new(&fixture.manifest),
+    );
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(key, (fixture.manifest.clone(), durable.clone()))
+            .is_none()
+    );
+    assert!(
+        executor
+            .durable_bodies
+            .insert(key, durable.clone())
+            .is_none()
+    );
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let store = AdapterEffect::StoreBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let ownership = bound_test_effect_ownership(&fetch, tag(0), 9_032)
+        .rebind_as_inherited_adapter_effect(&store)
+        .expect("project the registry-owned Store row");
+    let pending = ownership
+        .exact_pending_adapter_effect_binding(&store)
+        .expect("seal the registry-owned Store row");
+    let marker = executor
+        .prepare_published_lifecycle_store_retry_marker(&durable)
+        .expect("preflight the active published Store marker")
+        .bind_store_successor(&store, &pending)
+        .expect("bind the active published Store marker");
+    executor.commit_published_lifecycle_store_retry_marker(marker);
+    let accepted_marker = executor.published_lifecycle_store_retry_markers[&key].clone();
+
+    let next_tag = tag(1);
+    executor.runtime.round_tag = Some(next_tag);
+    executor.runtime.locked_body = None;
+    executor
+        .install_view(
+            next_tag,
+            timeout_certificate(&fixture),
+            None,
+            None,
+            &mut services,
+        )
+        .expect("executor-only EnterView preserves an active registry Store row");
+
+    assert_eq!(executor.protected_lock, None);
+    assert_eq!(
+        executor.published_lifecycle_store_retry_markers[&key], accepted_marker,
+        "an unprotected non-highest active Store marker survives view cleanup",
+    );
+    assert_eq!(executor.pending_work(), 0);
+    assert!(!executor.status().fail_closed);
+    assert!(services.closed.is_empty());
 }
 
 #[test]
@@ -2396,7 +4981,13 @@ fn unprotected_enter_view_retires_inert_validate_retry_seal_without_work_debt() 
     executor.runtime.round_tag = Some(next_tag);
     executor.runtime.locked_body = None;
     executor
-        .install_view(next_tag, timeout_certificate(&fixture), None, &mut services)
+        .install_view(
+            next_tag,
+            timeout_certificate(&fixture),
+            None,
+            None,
+            &mut services,
+        )
         .expect("unprotected EnterView retires the stale Validate tombstone");
     assert!(executor.durable_validate_retry_seals.is_empty());
     assert!(executor.durable_validate_retry_seals_are_finalization_inert());
@@ -3113,6 +5704,7 @@ fn recovered_next_vote_body_catalog_join_is_exact_and_store_bound() {
 }
 include!("v2_effects_kura_tip_replay.rs");
 include!("v2_effects_01_view_churn_and_runtime_steps.rs");
+include!("v2_effects_highest_prepare_retention.rs");
 #[test]
 fn runtime_step_reconciliation_rejects_durable_decision_loss() {
     let fixture = Fixture::new();

@@ -316,16 +316,13 @@ named_route_policy_test!(
             .collect::<Vec<_>>();
         assert_eq!(
             commands.len(),
-            41,
+            38,
             "every SoraCloud POST must be classified"
         );
         assert_route_policies(commands.iter().map(|route| **route), ACCOUNT_AUTHENTICATED);
         for route in commands {
             let expected_effect = match route.stable_route_id() {
                 "application.soracloud_ciphertext_query_post" => RouteEffect::ReadOnly,
-                "application.soracloud_model_upload_private_execute_post" => {
-                    RouteEffect::ExpensiveCompute
-                }
                 _ => RouteEffect::Mutation,
             };
             assert_eq!(
@@ -352,15 +349,14 @@ named_route_policy_test!(
             application_api::SORACLOUD_MODEL_WEIGHT_STATUS_GET,
             application_api::SORACLOUD_MODEL_ARTIFACT_STATUS_GET,
             application_api::SORACLOUD_MODEL_UPLOAD_STATUS_GET,
-            application_api::SORACLOUD_HF_STATUS_GET,
-            application_api::SORACLOUD_MODEL_HOST_STATUS_GET,
+            application_api::SORACLOUD_HF_SHARED_LEASE_STATUS_GET,
             application_api::SORACLOUD_AGENT_STATUS_GET,
             application_api::SORACLOUD_AGENT_MAILBOX_STATUS_GET,
             application_api::SORACLOUD_AGENT_AUTONOMY_STATUS_GET,
         ];
         assert_eq!(
             protected.len(),
-            15,
+            14,
             "every sensitive Soracloud GET must be classified"
         );
         assert_route_policies(
@@ -506,11 +502,17 @@ named_route_policy_test!(
                 runtime_governance::GOV_PROPOSE_SCCP,
                 runtime_governance::GOV_CAPABILITIES,
                 runtime_governance::GOV_CITIZEN_DRAFT,
+                runtime_governance::GOV_PARLIAMENT_ATTEMPT_DRAFT,
+                runtime_governance::GOV_PARLIAMENT_ATTEMPT_READ,
+                runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ,
+                runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF,
+                runtime_governance::GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ,
+                runtime_governance::GOV_PARLIAMENT_TLE_PARTIAL_RELEASE,
+                runtime_governance::GOV_PARLIAMENT_TRANSITION_DRAFT,
                 runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF,
                 runtime_governance::VALIDATION_FEE_PROPOSALS,
                 runtime_governance::VALIDATION_FEE_PROPOSAL_DETAIL,
                 runtime_governance::VALIDATION_FEE_PROPOSAL_DRAFT,
-                runtime_governance::VALIDATION_FEE_PLAIN_BALLOT_DRAFT,
                 runtime_governance::GOV_PROPOSAL_GET,
                 runtime_governance::GOV_LOCKS_GET,
                 runtime_governance::GOV_REFERENDUM_GET,
@@ -518,7 +520,6 @@ named_route_policy_test!(
                 runtime_governance::GOV_PROTECTED_GET,
                 runtime_governance::GOV_UNLOCK_STATS,
                 runtime_governance::GOV_CONTRACT_GET,
-                runtime_governance::GOV_ENACT,
                 runtime_governance::GOV_COUNCIL_CURRENT,
                 runtime_governance::GOV_CITIZENS_COUNT,
                 runtime_governance::GOV_CITIZEN_STATUS,
@@ -534,6 +535,7 @@ named_route_policy_test!(
                 runtime_governance::ZK_ROOTS,
                 runtime_governance::ZK_MERKLE_PATH,
                 runtime_governance::RUNTIME_METRICS,
+                runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF,
                 runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF,
                 runtime_governance::VALIDATION_FEE_PROPOSAL_DETAIL,
                 runtime_governance::GOV_LOCKS_GET,
@@ -545,10 +547,7 @@ named_route_policy_test!(
             },
         );
         assert_route_policies(
-            [
-                runtime_governance::RUNTIME_ABI_HASH,
-                runtime_governance::GOV_FINALIZE,
-            ],
+            [runtime_governance::RUNTIME_ABI_HASH],
             RoutePolicyExpectation {
                 effect: Some(RouteEffect::ReadOnly),
                 admission: Some(AdmissionPolicy::Public),

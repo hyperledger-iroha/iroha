@@ -1,4 +1,4 @@
-//! Deterministic governance sortition utilities for on-chain bodies.
+//! Deterministic future-beacon sortition utilities for on-chain bodies.
 use crate::governance::sortition;
 use iroha_config::parameters::actual::Governance;
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
@@ -18,6 +18,26 @@ pub struct Draw {
     /// Alternates to replace members that decline or are ineligible.
     pub alternates: Vec<AccountId>,
 }
+/// Bodies selected before a narrow Policy Jury result can trigger a fresh Confirmation Jury.
+pub const PRIMARY_PARLIAMENT_BODIES_V1: [ParliamentBody; 9] = [
+    ParliamentBody::RulesCommittee,
+    ParliamentBody::AgendaCouncil,
+    ParliamentBody::InterestPanel,
+    ParliamentBody::ReviewPanel,
+    ParliamentBody::CoordinationCouncil,
+    ParliamentBody::MpcCommittee,
+    ParliamentBody::FmaCommittee,
+    ParliamentBody::OversightCommittee,
+    ParliamentBody::PolicyJury,
+];
+/// Deterministic simultaneous body assignment and its binding concentration cap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParliamentDrawPlan {
+    /// Rosters derived from the committed candidate snapshot and future pulse.
+    pub bodies: ParliamentBodies,
+    /// Smallest feasible maximum number of primary bodies assigned to one citizen.
+    pub assignment_cap: u32,
+}
 /// Replace a missing member with the next alternate. Returns `true` if replaced.
 pub fn replace_with_alternate(
     members: &mut [AccountId],
@@ -35,8 +55,8 @@ pub fn replace_with_alternate(
 }
 /// Domain separator for citizen draws.
 pub const CITIZEN_SEED_DOMAIN: &[u8] = b"gov:citizen:seed:v1";
-/// Domain separator for citizen sortition inputs.
-pub const CITIZEN_INPUT_DOMAIN: &[u8] = b"iroha:vrf:v1:citizen|";
+/// Domain separator for citizen sortition inputs derived from a finalized beacon pulse.
+pub const CITIZEN_INPUT_DOMAIN: &[u8] = b"iroha:beacon-sortition:v1:citizen|";
 fn scored_output(seed: &[u8; 64], input_domain: &[u8], account_id: &AccountId) -> [u8; 32] {
     let input = sortition::build_input(input_domain, seed, account_id);
     let digest = Blake2b512::digest(input);
@@ -96,8 +116,9 @@ where
 }
 /// Deterministically derive parliament bodies directly from bonded citizen candidates.
 ///
-/// Each body is sampled independently with body-specific domain tags. A citizen is unique within
-/// one body's member/alternate roster, but may serve on multiple independently drawn bodies.
+/// Each body is sampled with body-specific domain tags. A citizen is unique within one body's
+/// member/alternate roster, but may serve on multiple bodies when the electorate is too small for
+/// complete separation.
 /// Bond amounts are used only for eligibility before this function is called, so every bonded
 /// citizen has one draw per body. Proposal-time JIT sortition intentionally does not consume the
 /// persisted per-epoch seat budget; that budget governs accepted, persisted service assignments.
@@ -124,46 +145,18 @@ where
                 acc
             });
     let candidate_count = u32::try_from(dedup.len()).unwrap_or(u32::MAX);
-    let candidates: Vec<(AccountId, Quantity)> = dedup.into_iter().collect();
-    let alternates_per_body = gov_cfg
-        .parliament_alternate_size
-        .unwrap_or(gov_cfg.parliament_committee_size);
-    let mut rosters = std::collections::BTreeMap::new();
-    for body in [
-        ParliamentBody::RulesCommittee,
-        ParliamentBody::AgendaCouncil,
-        ParliamentBody::InterestPanel,
-        ParliamentBody::ReviewPanel,
-        ParliamentBody::PolicyJury,
-        ParliamentBody::OversightCommittee,
-        ParliamentBody::FmaCommittee,
-    ] {
-        let committee_size = body_committee_size(gov_cfg, body);
-        let (members, alternates) = body_selection_from_bonded(
-            network_id,
-            epoch,
-            beacon,
-            &candidates,
-            committee_size,
-            alternates_per_body,
-            body,
-        );
-        rosters.insert(
-            body,
-            ParliamentRoster {
-                body,
-                epoch,
-                members,
-                alternates,
-                candidate_count,
-                derived_by,
-            },
-        );
-    }
-    ParliamentBodies {
-        selection_epoch: epoch,
-        rosters,
-    }
+    let candidates: Vec<AccountId> = dedup.into_keys().collect();
+    derive_body_plan(
+        gov_cfg,
+        network_id,
+        epoch,
+        beacon,
+        &candidates,
+        candidate_count,
+        derived_by,
+        &PRIMARY_PARLIAMENT_BODIES_V1,
+    )
+    .bodies
 }
 /// Deterministically derive parliament rosters for all bodies from the persisted council draw.
 ///
@@ -181,53 +174,254 @@ pub fn derive_parliament_bodies(
     candidates.extend(council.alternates.iter().cloned());
     let mut seen = BTreeSet::new();
     candidates.retain(|id| seen.insert(id.clone()));
+    derive_body_plan(
+        gov_cfg,
+        network_id,
+        epoch,
+        beacon,
+        &candidates,
+        council.candidate_count,
+        council.derived_by,
+        &PRIMARY_PARLIAMENT_BODIES_V1,
+    )
+    .bodies
+}
+/// Derive a fresh Confirmation Jury from a later finalized pulse.
+///
+/// Policy Jury members are excluded unconditionally. If the remaining electorate is smaller than
+/// the configured jury, the nonempty feasible roster is binding and its reduced size is visible in
+/// the returned roster.
+#[must_use]
+pub fn derive_confirmation_jury(
+    gov_cfg: &Governance,
+    network_id: &NetworkId,
+    pulse_height: u64,
+    future_beacon: &[u8; 32],
+    candidates: &[AccountId],
+    policy_jury_members: &BTreeSet<AccountId>,
+    derived_by: CouncilDerivationKind,
+) -> ParliamentDrawPlan {
+    let eligible: Vec<_> = candidates
+        .iter()
+        .filter(|candidate| !policy_jury_members.contains(*candidate))
+        .cloned()
+        .collect();
+    let candidate_count = u32::try_from(eligible.len()).unwrap_or(u32::MAX);
+    derive_body_plan(
+        gov_cfg,
+        network_id,
+        pulse_height,
+        future_beacon,
+        &eligible,
+        candidate_count,
+        derived_by,
+        &[ParliamentBody::ConfirmationJury],
+    )
+}
+
+/// Derive an attempt-local body plan from an exact precommitted candidate snapshot.
+///
+/// `pulse_height` and `future_beacon` must come from the finalized pulse named by
+/// the corresponding sortition requests. The caller is responsible for checking
+/// that `candidates` is the exact strictly ordered snapshot committed by every
+/// request in `bodies`; this function defensively deduplicates without using the
+/// caller's ordering as entropy.
+#[must_use]
+pub fn derive_attempt_body_plan_v1(
+    gov_cfg: &Governance,
+    network_id: &NetworkId,
+    pulse_height: u64,
+    future_beacon: &[u8; 32],
+    candidates: &[AccountId],
+    bodies: &[ParliamentBody],
+) -> ParliamentDrawPlan {
+    let candidates: Vec<_> = candidates
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let candidate_count = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
+    derive_body_plan(
+        gov_cfg,
+        network_id,
+        pulse_height,
+        future_beacon,
+        &candidates,
+        candidate_count,
+        CouncilDerivationKind::Sortition,
+        bodies,
+    )
+}
+
+/// Return the smallest feasible simultaneous assignment cap for `bodies`.
+#[must_use]
+pub fn smallest_feasible_assignment_cap(
+    gov_cfg: &Governance,
+    candidate_count: usize,
+    bodies: &[ParliamentBody],
+) -> u32 {
+    if candidate_count == 0 || bodies.is_empty() {
+        return 0;
+    }
+    let required_seats = bodies.iter().fold(0usize, |total, body| {
+        total.saturating_add(body_committee_size(gov_cfg, *body).min(candidate_count))
+    });
+    let cap = required_seats.div_ceil(candidate_count).min(bodies.len());
+    u32::try_from(cap).unwrap_or(u32::MAX)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_body_plan(
+    gov_cfg: &Governance,
+    network_id: &NetworkId,
+    epoch: u64,
+    beacon: &[u8; 32],
+    candidates: &[AccountId],
+    candidate_count: u32,
+    derived_by: CouncilDerivationKind,
+    bodies: &[ParliamentBody],
+) -> ParliamentDrawPlan {
     let alternates_per_body = gov_cfg
         .parliament_alternate_size
         .unwrap_or(gov_cfg.parliament_committee_size);
-    let mut rosters = std::collections::BTreeMap::new();
-    for body in [
-        ParliamentBody::RulesCommittee,
-        ParliamentBody::AgendaCouncil,
-        ParliamentBody::InterestPanel,
-        ParliamentBody::ReviewPanel,
-        ParliamentBody::PolicyJury,
-        ParliamentBody::OversightCommittee,
-        ParliamentBody::FmaCommittee,
-    ] {
-        let committee_size = body_committee_size(gov_cfg, body);
-        let (members, alternates) = body_selection(
-            network_id,
-            epoch,
-            beacon,
-            &candidates,
-            committee_size,
-            alternates_per_body,
-            body,
+    let assignment_cap = smallest_feasible_assignment_cap(gov_cfg, candidates.len(), bodies);
+    let mut rankings = BTreeMap::new();
+    for body in bodies {
+        rankings.insert(
+            *body,
+            ranked_body_candidates(network_id, epoch, beacon, candidates, *body),
         );
-        let roster = ParliamentRoster {
-            body,
-            epoch,
-            members,
-            alternates,
-            candidate_count: council.candidate_count,
-            derived_by: council.derived_by,
-        };
-        rosters.insert(body, roster);
     }
-    ParliamentBodies {
-        selection_epoch: epoch,
-        rosters,
+    let mut loads: BTreeMap<AccountId, u32> = candidates
+        .iter()
+        .cloned()
+        .map(|candidate| (candidate, 0))
+        .collect();
+    let mut selected: BTreeMap<ParliamentBody, Vec<AccountId>> = BTreeMap::new();
+    for body in bodies {
+        let target = body_committee_size(gov_cfg, *body).min(candidates.len());
+        let ranked = rankings
+            .get(body)
+            .expect("every requested body has a deterministic ranking");
+        let mut eligible: Vec<_> = ranked
+            .iter()
+            .enumerate()
+            .filter_map(|(rank, candidate)| {
+                let load = loads.get(candidate).copied().unwrap_or(0);
+                (load < assignment_cap).then_some((
+                    load,
+                    same_matter_overlap(*body, candidate, &selected),
+                    rank,
+                    candidate.clone(),
+                ))
+            })
+            .collect();
+        eligible.sort_by(|left, right| {
+            (left.0, left.1, left.2, &left.3).cmp(&(right.0, right.1, right.2, &right.3))
+        });
+        let chosen_set: BTreeSet<_> = eligible
+            .into_iter()
+            .take(target)
+            .map(|(_, _, _, candidate)| candidate)
+            .collect();
+        let members: Vec<_> = ranked
+            .iter()
+            .filter(|candidate| chosen_set.contains(*candidate))
+            .cloned()
+            .collect();
+        for member in &members {
+            let load = loads
+                .get_mut(member)
+                .expect("selected candidates originate in the frozen snapshot");
+            *load = load.saturating_add(1);
+        }
+        selected.insert(*body, members);
+    }
+
+    let mut rosters = BTreeMap::new();
+    for body in bodies {
+        let members = selected.remove(body).unwrap_or_default();
+        let member_set: BTreeSet<_> = members.iter().cloned().collect();
+        let alternates = rankings
+            .remove(body)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|candidate| !member_set.contains(candidate))
+            .filter(|candidate| loads.get(candidate).copied().unwrap_or(0) < assignment_cap)
+            .take(alternates_per_body)
+            .collect();
+        rosters.insert(
+            *body,
+            ParliamentRoster {
+                body: *body,
+                epoch,
+                members,
+                alternates,
+                candidate_count,
+                derived_by,
+            },
+        );
+    }
+    ParliamentDrawPlan {
+        bodies: ParliamentBodies {
+            selection_epoch: epoch,
+            rosters,
+        },
+        assignment_cap,
     }
 }
-fn body_committee_size(cfg: &Governance, body: ParliamentBody) -> usize {
+
+fn same_matter_overlap(
+    body: ParliamentBody,
+    candidate: &AccountId,
+    selected: &BTreeMap<ParliamentBody, Vec<AccountId>>,
+) -> u8 {
+    let related: &[ParliamentBody] = match body {
+        ParliamentBody::CoordinationCouncil => &[ParliamentBody::ReviewPanel],
+        ParliamentBody::MpcCommittee | ParliamentBody::FmaCommittee => &[
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::CoordinationCouncil,
+        ],
+        ParliamentBody::OversightCommittee => &[
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::CoordinationCouncil,
+            ParliamentBody::MpcCommittee,
+            ParliamentBody::FmaCommittee,
+        ],
+        ParliamentBody::PolicyJury => &[
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::CoordinationCouncil,
+            ParliamentBody::MpcCommittee,
+            ParliamentBody::FmaCommittee,
+            ParliamentBody::OversightCommittee,
+        ],
+        ParliamentBody::ConfirmationJury => &[ParliamentBody::PolicyJury],
+        ParliamentBody::RulesCommittee
+        | ParliamentBody::AgendaCouncil
+        | ParliamentBody::InterestPanel
+        | ParliamentBody::ReviewPanel => &[],
+    };
+    related.iter().fold(0u8, |overlap, related_body| {
+        overlap.saturating_add(u8::from(
+            selected
+                .get(related_body)
+                .is_some_and(|members| members.contains(candidate)),
+        ))
+    })
+}
+pub(crate) fn body_committee_size(cfg: &Governance, body: ParliamentBody) -> usize {
     match body {
         ParliamentBody::RulesCommittee => cfg.rules_committee_size,
         ParliamentBody::AgendaCouncil => cfg.agenda_council_size,
         ParliamentBody::InterestPanel => cfg.interest_panel_size,
         ParliamentBody::ReviewPanel => cfg.review_panel_size,
-        ParliamentBody::PolicyJury => cfg.policy_jury_size,
-        ParliamentBody::OversightCommittee => cfg.oversight_committee_size,
+        ParliamentBody::CoordinationCouncil => cfg.coordination_council_size,
+        ParliamentBody::MpcCommittee => cfg.mpc_committee_size,
         ParliamentBody::FmaCommittee => cfg.fma_committee_size,
+        ParliamentBody::OversightCommittee => cfg.oversight_committee_size,
+        ParliamentBody::PolicyJury => cfg.policy_jury_size,
+        ParliamentBody::ConfirmationJury => cfg.confirmation_jury_size,
     }
 }
 fn body_seed_domain(body: ParliamentBody) -> &'static [u8] {
@@ -236,74 +430,42 @@ fn body_seed_domain(body: ParliamentBody) -> &'static [u8] {
         ParliamentBody::AgendaCouncil => b"gov:parliament:body:agenda:v1",
         ParliamentBody::InterestPanel => b"gov:parliament:body:interest:v1",
         ParliamentBody::ReviewPanel => b"gov:parliament:body:review:v1",
-        ParliamentBody::PolicyJury => b"gov:parliament:body:policy_jury:v1",
-        ParliamentBody::OversightCommittee => b"gov:parliament:body:oversight:v1",
+        ParliamentBody::CoordinationCouncil => b"gov:parliament:body:coordination:v1",
+        ParliamentBody::MpcCommittee => b"gov:parliament:body:mpc:v1",
         ParliamentBody::FmaCommittee => b"gov:parliament:body:fma:v1",
+        ParliamentBody::OversightCommittee => b"gov:parliament:body:oversight:v1",
+        ParliamentBody::PolicyJury => b"gov:parliament:body:policy_jury:v1",
+        ParliamentBody::ConfirmationJury => b"gov:parliament:body:confirmation_jury:v1",
     }
 }
 fn body_input_domain(body: ParliamentBody) -> &'static [u8] {
     match body {
-        ParliamentBody::RulesCommittee => b"iroha:vrf:v1:parliament:rules|",
-        ParliamentBody::AgendaCouncil => b"iroha:vrf:v1:parliament:agenda|",
-        ParliamentBody::InterestPanel => b"iroha:vrf:v1:parliament:interest|",
-        ParliamentBody::ReviewPanel => b"iroha:vrf:v1:parliament:review|",
-        ParliamentBody::PolicyJury => b"iroha:vrf:v1:parliament:policy_jury|",
-        ParliamentBody::OversightCommittee => b"iroha:vrf:v1:parliament:oversight|",
-        ParliamentBody::FmaCommittee => b"iroha:vrf:v1:parliament:fma|",
+        ParliamentBody::RulesCommittee => b"iroha:beacon-sortition:v1:parliament:rules|",
+        ParliamentBody::AgendaCouncil => b"iroha:beacon-sortition:v1:parliament:agenda|",
+        ParliamentBody::InterestPanel => b"iroha:beacon-sortition:v1:parliament:interest|",
+        ParliamentBody::ReviewPanel => b"iroha:beacon-sortition:v1:parliament:review|",
+        ParliamentBody::CoordinationCouncil => {
+            b"iroha:beacon-sortition:v1:parliament:coordination|"
+        }
+        ParliamentBody::MpcCommittee => b"iroha:beacon-sortition:v1:parliament:mpc|",
+        ParliamentBody::FmaCommittee => b"iroha:beacon-sortition:v1:parliament:fma|",
+        ParliamentBody::OversightCommittee => b"iroha:beacon-sortition:v1:parliament:oversight|",
+        ParliamentBody::PolicyJury => b"iroha:beacon-sortition:v1:parliament:policy_jury|",
+        ParliamentBody::ConfirmationJury => {
+            b"iroha:beacon-sortition:v1:parliament:confirmation_jury|"
+        }
     }
 }
-fn body_selection(
+fn ranked_body_candidates(
     network_id: &NetworkId,
     epoch: u64,
     beacon: &[u8; 32],
     candidates: &[AccountId],
-    committee_size: usize,
-    alternate_size: usize,
     body: ParliamentBody,
-) -> (Vec<AccountId>, Vec<AccountId>) {
+) -> Vec<AccountId> {
     let seed = sortition::compute_seed(network_id, epoch, beacon, body_seed_domain(body));
     let mut scored: Vec<([u8; 32], AccountId)> = Vec::new();
     for account_id in candidates {
-        let input = sortition::build_input(body_input_domain(body), &seed, account_id);
-        let digest = Blake2b512::digest(input);
-        let mut output = [0u8; 32];
-        output.copy_from_slice(&digest[..32]);
-        scored.push((output, account_id.clone()));
-    }
-    scored.sort_by(|a, b| {
-        use core::cmp::Ordering;
-        match b.0.cmp(&a.0) {
-            Ordering::Equal => a.1.cmp(&b.1),
-            other => other,
-        }
-    });
-    scored.dedup_by(|a, b| a.1 == b.1);
-    let total_alternates = alternate_size.min(scored.len().saturating_sub(committee_size));
-    let mut members = Vec::with_capacity(committee_size.min(scored.len()));
-    let mut alternates = Vec::with_capacity(total_alternates);
-    for (idx, (_, account_id)) in scored.into_iter().enumerate() {
-        if idx < committee_size {
-            members.push(account_id);
-        } else if alternates.len() < total_alternates {
-            alternates.push(account_id);
-        } else {
-            break;
-        }
-    }
-    (members, alternates)
-}
-fn body_selection_from_bonded(
-    network_id: &NetworkId,
-    epoch: u64,
-    beacon: &[u8; 32],
-    candidates: &[(AccountId, Quantity)],
-    committee_size: usize,
-    alternate_size: usize,
-    body: ParliamentBody,
-) -> (Vec<AccountId>, Vec<AccountId>) {
-    let seed = sortition::compute_seed(network_id, epoch, beacon, body_seed_domain(body));
-    let mut scored: Vec<([u8; 32], AccountId)> = Vec::new();
-    for (account_id, _bond) in candidates {
         let output = scored_output(&seed, body_input_domain(body), account_id);
         scored.push((output, account_id.clone()));
     }
@@ -315,19 +477,10 @@ fn body_selection_from_bonded(
         }
     });
     scored.dedup_by(|a, b| a.1 == b.1);
-    let total_alternates = alternate_size.min(scored.len().saturating_sub(committee_size));
-    let mut members = Vec::with_capacity(committee_size.min(scored.len()));
-    let mut alternates = Vec::with_capacity(total_alternates);
-    for (idx, (_, account_id)) in scored.into_iter().enumerate() {
-        if idx < committee_size {
-            members.push(account_id);
-        } else if alternates.len() < total_alternates {
-            alternates.push(account_id);
-        } else {
-            break;
-        }
-    }
-    (members, alternates)
+    scored
+        .into_iter()
+        .map(|(_, account_id)| account_id)
+        .collect()
 }
 #[cfg(test)]
 mod tests {
@@ -487,15 +640,7 @@ mod tests {
             inflated,
             CouncilDerivationKind::Manual,
         );
-        for body in [
-            ParliamentBody::RulesCommittee,
-            ParliamentBody::AgendaCouncil,
-            ParliamentBody::InterestPanel,
-            ParliamentBody::ReviewPanel,
-            ParliamentBody::PolicyJury,
-            ParliamentBody::OversightCommittee,
-            ParliamentBody::FmaCommittee,
-        ] {
+        for body in PRIMARY_PARLIAMENT_BODIES_V1 {
             let baseline = baseline_bodies.rosters.get(&body).expect("baseline roster");
             let inflated = inflated_bodies.rosters.get(&body).expect("inflated roster");
             assert_eq!(baseline.members, inflated.members, "{body:?} members");
@@ -543,15 +688,7 @@ mod tests {
             [(&citizen, 10_000_u128)],
             CouncilDerivationKind::Sortition,
         );
-        for body in [
-            ParliamentBody::RulesCommittee,
-            ParliamentBody::AgendaCouncil,
-            ParliamentBody::InterestPanel,
-            ParliamentBody::ReviewPanel,
-            ParliamentBody::PolicyJury,
-            ParliamentBody::OversightCommittee,
-            ParliamentBody::FmaCommittee,
-        ] {
+        for body in PRIMARY_PARLIAMENT_BODIES_V1 {
             let roster = bodies.rosters.get(&body).expect("one-citizen roster");
             assert_eq!(roster.members, [citizen.clone()]);
             assert!(roster.alternates.is_empty());
@@ -601,32 +738,24 @@ mod tests {
             accounts.iter().map(|account| (account, 100u128)),
             CouncilDerivationKind::Manual,
         );
-        let distinct_member_lists: BTreeSet<_> = [
-            ParliamentBody::RulesCommittee,
-            ParliamentBody::AgendaCouncil,
-            ParliamentBody::InterestPanel,
-            ParliamentBody::ReviewPanel,
-            ParliamentBody::PolicyJury,
-            ParliamentBody::OversightCommittee,
-            ParliamentBody::FmaCommittee,
-        ]
-        .into_iter()
-        .map(|body| {
-            bodies
-                .rosters
-                .get(&body)
-                .expect("body roster")
-                .members
-                .clone()
-        })
-        .collect();
+        let distinct_member_lists: BTreeSet<_> = PRIMARY_PARLIAMENT_BODIES_V1
+            .into_iter()
+            .map(|body| {
+                bodies
+                    .rosters
+                    .get(&body)
+                    .expect("body roster")
+                    .members
+                    .clone()
+            })
+            .collect();
         assert!(
             distinct_member_lists.len() > 1,
             "body draws must not clone one shared membership list across all parliament bodies"
         );
     }
     #[test]
-    fn forty_six_citizens_fill_all_default_body_members_independently() {
+    fn forty_six_citizens_bind_each_primary_body_to_its_feasible_size() {
         let network_id = network_id(b"body-readiness-demo");
         let beacon = [0x46; 32];
         let epoch = 46u64;
@@ -641,13 +770,15 @@ mod tests {
             CouncilDerivationKind::Manual,
         );
         for (body, expected) in [
-            (ParliamentBody::RulesCommittee, 7),
-            (ParliamentBody::AgendaCouncil, 9),
-            (ParliamentBody::InterestPanel, 11),
-            (ParliamentBody::ReviewPanel, 13),
-            (ParliamentBody::PolicyJury, 25),
-            (ParliamentBody::OversightCommittee, 7),
-            (ParliamentBody::FmaCommittee, 5),
+            (ParliamentBody::RulesCommittee, 46),
+            (ParliamentBody::AgendaCouncil, 46),
+            (ParliamentBody::InterestPanel, 12),
+            (ParliamentBody::ReviewPanel, 46),
+            (ParliamentBody::CoordinationCouncil, 46),
+            (ParliamentBody::MpcCommittee, 46),
+            (ParliamentBody::FmaCommittee, 46),
+            (ParliamentBody::OversightCommittee, 46),
+            (ParliamentBody::PolicyJury, 46),
         ] {
             let roster = bodies.rosters.get(&body).expect("default body roster");
             assert_eq!(roster.members.len(), expected, "{body:?} members");
@@ -669,7 +800,7 @@ mod tests {
             .values()
             .flat_map(|roster| roster.members.iter())
             .collect();
-        assert_eq!(total_member_seats, 77);
+        assert_eq!(total_member_seats, 380);
         assert!(
             distinct_members.len() <= accounts.len(),
             "independent body draws may reuse a citizen across bodies"
@@ -776,5 +907,163 @@ mod tests {
                 "{body:?} member/alternate overlap must be deduplicated before body selection"
             );
         }
+    }
+
+    #[test]
+    fn simultaneous_primary_draw_uses_the_smallest_feasible_overlap_cap() {
+        let network_id = network_id(b"body-cap-demo");
+        let beacon = [0xD4; 32];
+        let accounts: Vec<_> = (1..=3).map(mk_account).collect();
+        let cfg = Governance {
+            rules_committee_size: 2,
+            agenda_council_size: 2,
+            interest_panel_size: 2,
+            review_panel_size: 2,
+            coordination_council_size: 2,
+            mpc_committee_size: 2,
+            fma_committee_size: 2,
+            oversight_committee_size: 2,
+            policy_jury_size: 2,
+            parliament_alternate_size: Some(0),
+            ..Governance::default()
+        };
+        let plan = derive_body_plan(
+            &cfg,
+            &network_id,
+            19,
+            &beacon,
+            &accounts,
+            3,
+            CouncilDerivationKind::Sortition,
+            &PRIMARY_PARLIAMENT_BODIES_V1,
+        );
+        assert_eq!(plan.assignment_cap, 6);
+        let mut loads: BTreeMap<AccountId, u32> = BTreeMap::new();
+        for roster in plan.bodies.rosters.values() {
+            assert_eq!(roster.members.len(), 2);
+            for member in &roster.members {
+                *loads.entry(member.clone()).or_default() += 1;
+            }
+        }
+        assert_eq!(loads.values().copied().max(), Some(plan.assignment_cap));
+        assert_eq!(loads.values().copied().min(), Some(plan.assignment_cap));
+    }
+
+    #[test]
+    fn attempt_body_plan_uses_only_snapshot_set_and_finalized_pulse() {
+        let network_id = network_id(b"attempt-body-plan-demo");
+        let accounts: Vec<_> = (1..=8).map(mk_account).collect();
+        let mut reordered_with_duplicate = accounts.iter().rev().cloned().collect::<Vec<_>>();
+        reordered_with_duplicate.push(accounts[3].clone());
+        let cfg = Governance {
+            rules_committee_size: 3,
+            agenda_council_size: 3,
+            parliament_alternate_size: Some(2),
+            ..Governance::default()
+        };
+        let bodies = [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+        ];
+        let expected =
+            derive_attempt_body_plan_v1(&cfg, &network_id, 31, &[0xA7; 32], &accounts, &bodies);
+        let reordered = derive_attempt_body_plan_v1(
+            &cfg,
+            &network_id,
+            31,
+            &[0xA7; 32],
+            &reordered_with_duplicate,
+            &bodies,
+        );
+        assert_eq!(expected, reordered);
+        assert_ne!(
+            expected,
+            derive_attempt_body_plan_v1(&cfg, &network_id, 32, &[0xA8; 32], &accounts, &bodies,)
+        );
+    }
+
+    #[test]
+    fn enough_citizens_make_all_primary_assignments_disjoint() {
+        let network_id = network_id(b"body-disjoint-demo");
+        let beacon = [0xE5; 32];
+        let accounts: Vec<_> = (1..=18).map(mk_account).collect();
+        let cfg = Governance {
+            rules_committee_size: 2,
+            agenda_council_size: 2,
+            interest_panel_size: 2,
+            review_panel_size: 2,
+            coordination_council_size: 2,
+            mpc_committee_size: 2,
+            fma_committee_size: 2,
+            oversight_committee_size: 2,
+            policy_jury_size: 2,
+            parliament_alternate_size: Some(0),
+            ..Governance::default()
+        };
+        let plan = derive_body_plan(
+            &cfg,
+            &network_id,
+            20,
+            &beacon,
+            &accounts,
+            18,
+            CouncilDerivationKind::Sortition,
+            &PRIMARY_PARLIAMENT_BODIES_V1,
+        );
+        assert_eq!(plan.assignment_cap, 1);
+        let members: Vec<_> = plan
+            .bodies
+            .rosters
+            .values()
+            .flat_map(|roster| roster.members.iter())
+            .collect();
+        let unique: BTreeSet<_> = members.iter().copied().collect();
+        assert_eq!(members.len(), unique.len());
+    }
+
+    #[test]
+    fn confirmation_jury_uses_a_fresh_pulse_and_excludes_policy_jurors() {
+        let network_id = network_id(b"confirmation-jury-demo");
+        let candidates: Vec<_> = (1..=8).map(mk_account).collect();
+        let policy_jury_members: BTreeSet<_> = candidates[..3].iter().cloned().collect();
+        let cfg = Governance {
+            confirmation_jury_size: 4,
+            parliament_alternate_size: Some(1),
+            ..Governance::default()
+        };
+        let first = derive_confirmation_jury(
+            &cfg,
+            &network_id,
+            21,
+            &[0xF1; 32],
+            &candidates,
+            &policy_jury_members,
+            CouncilDerivationKind::Sortition,
+        );
+        let second = derive_confirmation_jury(
+            &cfg,
+            &network_id,
+            22,
+            &[0xF2; 32],
+            &candidates,
+            &policy_jury_members,
+            CouncilDerivationKind::Sortition,
+        );
+        for plan in [&first, &second] {
+            assert_eq!(plan.assignment_cap, 1);
+            let roster = plan
+                .bodies
+                .rosters
+                .get(&ParliamentBody::ConfirmationJury)
+                .expect("confirmation roster");
+            assert_eq!(roster.members.len(), 4);
+            assert!(
+                roster
+                    .members
+                    .iter()
+                    .all(|member| !policy_jury_members.contains(member))
+            );
+        }
+        assert_ne!(first.bodies, second.bodies);
     }
 }

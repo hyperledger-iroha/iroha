@@ -270,6 +270,11 @@ fn validate_committed_tx_predicate(
 ) -> Result<(), CommittedTxPredicateValidationError> {
     validate_committed_tx_predicate_inner(predicate, 1, &mut PredicateValidationBudget::default())
 }
+
+/// Return whether a committed-transaction predicate satisfies all structural limits.
+pub(super) fn committed_tx_predicate_is_valid(predicate: &CommittedTxPredicate) -> bool {
+    validate_committed_tx_predicate(predicate).is_ok()
+}
 /// Validation error for the committed-transaction app-expression JSON codec.
 #[cfg(feature = "json")]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -1641,8 +1646,8 @@ pub(super) fn committed_tx_filters_from_predicate(
     Some(filters)
 }
 impl CommittedTxPredicate {
-    fn authority_of(tx: &CommittedTransaction) -> Option<crate::account::AccountId> {
-        tx.entrypoint.authority_opt().cloned()
+    fn authority_of(tx: &CommittedTransaction) -> Option<&crate::account::AccountId> {
+        tx.entrypoint.authority_opt()
     }
     fn timestamp_ms_of(tx: &CommittedTransaction) -> Option<u64> {
         tx.entrypoint.creation_time_ms()
@@ -1660,7 +1665,7 @@ impl CommittedTxPredicate {
     pub fn applies(&self, tx: &CommittedTransaction) -> bool {
         validate_committed_tx_predicate(self).is_ok() && self.applies_unchecked(tx)
     }
-    fn applies_unchecked(&self, tx: &CommittedTransaction) -> bool {
+    pub(super) fn applies_unchecked(&self, tx: &CommittedTransaction) -> bool {
         use CommittedTxPredicate as P;
         match self {
             P::Const(v) => *v,
@@ -1675,14 +1680,14 @@ impl CommittedTxPredicate {
             P::BlockExists(required) => *required,
             // Authority
             P::AuthorityExists(req) => (Self::authority_of(tx).is_some()) == *req,
-            P::AuthorityEq(a) => Self::authority_of(tx).as_ref() == Some(a),
-            P::AuthorityNe(a) => Self::authority_of(tx).as_ref() != Some(a),
-            P::AuthorityIn(list) => Self::authority_of(tx)
-                .as_ref()
-                .is_some_and(|a| list.iter().any(|x| x == a)),
-            P::AuthorityNin(list) => Self::authority_of(tx)
-                .as_ref()
-                .is_none_or(|a| !list.iter().any(|x| x == a)),
+            P::AuthorityEq(a) => Self::authority_of(tx) == Some(a),
+            P::AuthorityNe(a) => Self::authority_of(tx) != Some(a),
+            P::AuthorityIn(list) => {
+                Self::authority_of(tx).is_some_and(|a| list.iter().any(|x| x == a))
+            }
+            P::AuthorityNin(list) => {
+                Self::authority_of(tx).is_none_or(|a| !list.iter().any(|x| x == a))
+            }
             // Timestamp (None for triggers)
             P::TsEq(n) => Self::timestamp_ms_of(tx) == Some(*n),
             P::TsLt(n) => Self::timestamp_ms_of(tx).is_some_and(|m| m < *n),

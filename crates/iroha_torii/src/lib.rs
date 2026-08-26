@@ -67,6 +67,8 @@ mod ledger_state_finality;
 mod offline_commands;
 mod operator_auth;
 mod operator_signatures;
+#[cfg(feature = "app_api")]
+mod parliament_tle_release;
 pub mod privacy_issuance_api;
 #[doc(hidden)]
 pub mod profile_stats;
@@ -225,7 +227,7 @@ use iroha_core::{
         SharedSoracloudRuntime, SoracloudHostedHttpReplicaRuntimeStateV1,
         SoracloudHostedHttpRuntimeStateV1, SoracloudLocalReadRequest,
         SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
-        SoracloudRuntimeReplicaPlan,
+        SoracloudRuntimeReplicaPlan, authoritative_soracloud_sequence,
     },
     state::{
         BlockProofError, PendingQueuePlanAdmissionDisposition, QueuePlanAdmissionRegistryMatch,
@@ -335,7 +337,10 @@ use iroha_torii_shared::{
     FeeQuoteCapacity, FeeQuoteComponent, FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest,
     FeeQuoteResponse, FeeSponsorProgramByIdRequest, NORITO_V1_WEBSOCKET_SUBPROTOCOL,
     PipelineTransactionDetailsResponse, PipelineTransactionStatus,
-    PipelineTransactionStatusResponse, QueueErrorSnapshot, TriggerCompletionListResponse,
+    PipelineTransactionStatusResponse, QueueErrorSnapshot,
+    SORACLOUD_SERVED_MATERIALIZED_BUNDLE_HASH_HEADER, SORACLOUD_SERVED_PROCESS_GENERATION_HEADER,
+    SORACLOUD_SERVED_REPLICA_SLOT_HEADER, SORACLOUD_SERVED_SERVICE_NAME_HEADER,
+    SORACLOUD_SERVED_SERVICE_VERSION_HEADER, TriggerCompletionListResponse,
     TriggerCompletionRecord, TriggerCompletionSummary,
     route_catalog::{self, RouteCatalog},
     uri,
@@ -953,12 +958,13 @@ use soranet_privacy_ingress::{
 // Governance selection
 #[cfg(feature = "app_api")]
 pub use gov::{
-    AtWindowDto, EnactDto, GovernedContractResponse, LocksGetResponse, ProposalGetResponse,
-    ProtectedNamespacesDto, ReferendumGetResponse, TallyGetResponse, handle_gov_capabilities,
-    handle_gov_citizen_draft, handle_gov_citizen_status, handle_gov_contract_get,
-    handle_gov_council_current, handle_gov_enact, handle_gov_get_locks, handle_gov_get_proposal,
-    handle_gov_get_referendum, handle_gov_get_tally, handle_gov_protected_get,
-    handle_gov_protected_set, handle_gov_unlock_stats,
+    GovernedContractResponse, LocksGetResponse, ProposalGetResponse, ProtectedNamespacesDto,
+    ReferendumGetResponse, TallyGetResponse, handle_gov_capabilities, handle_gov_citizen_draft,
+    handle_gov_citizen_status, handle_gov_contract_get, handle_gov_council_current,
+    handle_gov_get_locks, handle_gov_get_proposal, handle_gov_get_referendum, handle_gov_get_tally,
+    handle_gov_parliament_attempt_draft, handle_gov_parliament_attempt_read,
+    handle_gov_parliament_tle_release_context_read, handle_gov_parliament_transition_draft,
+    handle_gov_protected_get, handle_gov_protected_set, handle_gov_unlock_stats,
 };
 // Routing helpers used by tests
 pub use routing::event::handle_events_stream;
@@ -991,7 +997,7 @@ pub use routing::{
     handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
     handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
     handle_queries_with_opts, handle_v1_events_sse, handle_v1_sumeragi_evidence_count,
-    handle_v1_sumeragi_evidence_list, handle_v1_sumeragi_vrf_penalties, signed_find_proof_by_id,
+    handle_v1_sumeragi_evidence_list, signed_find_proof_by_id,
 };
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
@@ -2313,6 +2319,8 @@ struct AppState {
     transaction_batch_max_bytes: usize,
     state: Arc<CoreState>,
     #[cfg(feature = "app_api")]
+    parliament_tle_release_coordinator: Arc<iroha_core::tle_release::TleReleaseCoordinatorV1>,
+    #[cfg(feature = "app_api")]
     musubi_search: Arc<RwLock<iroha_core::musubi_search::MusubiSearchIndexV1>>,
     bootle_lantern_issuance_runtime:
         Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
@@ -2511,7 +2519,6 @@ struct AppState {
     vpn_receipts: Arc<DashMap<AccountId, Vec<vpn::VpnReceiptRecord>>>,
     vpn_state_lock: Arc<std::sync::Mutex<vpn::VpnRuntimeState>>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
-    soracloud_hf_config: iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
     #[cfg(feature = "connect")]
     torii_proxy_pending:
         Arc<tokio::sync::Mutex<BTreeMap<(Hash, PeerId), Vec<PendingToriiProxyRequest>>>>,
@@ -5811,6 +5818,131 @@ fn early_rejection_response_format(headers: &HeaderMap) -> ResponseFormat {
         .as_ref()
         .or_else(|| headers.get(axum::http::header::ACCEPT));
     utils::negotiate_response_format(accept).unwrap_or(ResponseFormat::Json)
+}
+fn emergency_fast_route_is_available(route: &MatchedRouteMetadata) -> bool {
+    let route_id = route.stable_route_id();
+    route_id == route_catalog::core::HEALTH.stable_route_id()
+        || route_id == route_catalog::core::LIVEZ.stable_route_id()
+        || route_id == route_catalog::core::READYZ.stable_route_id()
+        || route_id == route_catalog::core::PEERS.stable_route_id()
+        || route_id == route_catalog::core::CONFIGURATION_GET.stable_route_id()
+        || route_id == "http.route_not_found"
+        || route_id == "http.method_not_allowed"
+}
+async fn enforce_emergency_fast_surface(
+    State(app): State<SharedAppState>,
+    req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<AxResponse, Infallible> {
+    if !app.kura.emergency_fast_startup_enabled()
+        || req
+            .extensions()
+            .get::<MatchedRouteMetadata>()
+            .is_some_and(emergency_fast_route_is_available)
+    {
+        return Ok(next.run(req).await);
+    }
+    let format = early_rejection_response_format(req.headers());
+    Ok(utils::respond_with_status_and_format(
+        StatusCode::SERVICE_UNAVAILABLE,
+        ErrorEnvelope::new(
+            "emergency_fast_surface_unavailable",
+            "This API needs persisted block data, derived state, or a mutable runtime that emergency Fast mode deliberately leaves offline. Use health, liveness, readiness, peer, or configuration diagnostics, or restart in Strict mode.",
+        ),
+        format,
+    ))
+}
+#[cfg(test)]
+mod emergency_fast_surface_tests {
+    use super::*;
+
+    #[test]
+    fn emergency_fast_exposes_only_bounded_operational_routes() {
+        for descriptor in [
+            route_catalog::core::HEALTH,
+            route_catalog::core::LIVEZ,
+            route_catalog::core::READYZ,
+            route_catalog::core::PEERS,
+            route_catalog::core::CONFIGURATION_GET,
+        ] {
+            assert!(emergency_fast_route_is_available(
+                &MatchedRouteMetadata::from_descriptor(descriptor)
+            ));
+        }
+        assert!(!emergency_fast_route_is_available(
+            &MatchedRouteMetadata::from_descriptor(route_catalog::core::CONFIGURATION_POST)
+        ));
+        assert!(!emergency_fast_route_is_available(
+            &MatchedRouteMetadata::from_descriptor(route_catalog::pipeline::QUERY)
+        ));
+        for descriptor in [
+            route_catalog::core::API_VERSION,
+            route_catalog::diagnostic::STATUS,
+            route_catalog::diagnostic::METRICS,
+        ] {
+            assert!(!emergency_fast_route_is_available(
+                &MatchedRouteMetadata::from_descriptor(descriptor)
+            ));
+        }
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn emergency_fast_does_not_attach_the_torii_proxy_control_subscriber() {
+        let compact_source: String = include_str!("lib.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        assert!(compact_source.contains(
+            "if!app_state.kura.emergency_fast_startup_enabled()&&letSome(network)=app_state.p2p.clone(){attach_torii_proxy_network(app_state.clone(),network);}",
+        ));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn emergency_fast_does_not_resolve_public_dataspace_upstreams_from_state() {
+        let compact_source: String = include_str!("lib.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        assert!(compact_source.contains(
+            "letpublic_dataspace_upstreams=Arc::new(ifemergency_fast{BTreeMap::new()}else{load_public_dataspace_upstreams(state.as_ref())});",
+        ));
+    }
+
+    #[test]
+    fn emergency_fast_disables_optional_torii_background_services() {
+        let compact_source: String = include_str!("lib.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        for disabled in [
+            "config.peer_telemetry_urls.clear();",
+            "config.connect.enabled=false;",
+            "config.mcp.enabled=false;",
+        ] {
+            assert!(compact_source.contains(disabled));
+        }
+        assert!(compact_source.contains(
+            "if!emergency_fast{letmutrx=self.events.subscribe();letcache=self.pipeline_status_cache.clone();",
+        ));
+        assert!(compact_source.contains(
+            "ifself.kura.emergency_fast_startup_enabled(){iroha_logger::warn!(\"emergencyFastKuramodeleavesToriidetachedfromP2Prelayservices\");returnself;}self.p2p=Some(p2p);",
+        ));
+
+        let connect_source: String = include_str!("connect.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        let from_config = connect_source
+            .split_once("pubfnfrom_config(")
+            .expect("Connect Bus configuration constructor")
+            .1
+            .split_once("fnstart_cleaner(")
+            .expect("Connect cleaner boundary")
+            .0;
+        assert!(from_config.contains("ifcfg.enabled{bus.start_cleaner();}"));
+    }
 }
 async fn coalesce_accept_headers(
     mut req: axum::http::Request<Body>,
@@ -9968,16 +10100,6 @@ async fn handler_gov_contract_get(
     crate::gov::handle_gov_contract_get(app.state.clone(), contract_address).await
 }
 #[cfg(feature = "app_api")]
-async fn handler_gov_enact(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: crate::utils::extractors::NoritoJson<crate::gov::EnactDto>,
-) -> Result<JsonBody<crate::gov::EnactResponse>, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/gov/enact").await?;
-    crate::gov::handle_gov_enact(app.state.clone(), body).await
-}
-#[cfg(feature = "app_api")]
 async fn handler_ministry_agenda_proposal_draft(
     State(app): State<SharedAppState>,
     Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
@@ -10064,6 +10186,207 @@ async fn handler_gov_citizen_draft(
     require_runtime_governance_account(&body.0.owner, &verified.account, "citizen draft")?;
     crate::gov::handle_gov_citizen_draft(app.state.clone(), body).await
 }
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_parliament_attempt_draft(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: crate::utils::extractors::NoritoJson<
+        iroha_torii_shared::parliament_api::ParliamentAttemptDraftRequestV1,
+    >,
+) -> Result<JsonBody<iroha_torii_shared::parliament_api::ParliamentAttemptDraftResponseV1>, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/gov/parliament/attempts/draft",
+    )
+    .await?;
+    crate::gov::handle_gov_parliament_attempt_draft(body).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_parliament_transition_draft(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: crate::utils::extractors::NoritoJson<
+        iroha_torii_shared::parliament_api::ParliamentTransitionDraftRequestV1,
+    >,
+) -> Result<JsonBody<iroha_torii_shared::parliament_api::ParliamentTransitionDraftResponseV1>, Error>
+{
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/gov/parliament/transitions/draft",
+    )
+    .await?;
+    crate::gov::handle_gov_parliament_transition_draft(body).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_parliament_attempt_read(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(governance_attempt_id): AxPath<String>,
+) -> Result<JsonBody<iroha_torii_shared::parliament_api::ParliamentAttemptReadResponseV1>, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/gov/parliament/attempts/{governance_attempt_id}",
+    )
+    .await?;
+    crate::gov::handle_gov_parliament_attempt_read(app.state.clone(), governance_attempt_id).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_parliament_timed_ovn_casting_context_read(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(ballot_attempt_id): AxPath<String>,
+) -> Result<
+    JsonBody<iroha_torii_shared::parliament_api::ParliamentTimedOvnCastingContextResponseV1>,
+    Error,
+> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context",
+    )
+    .await?;
+    let replay_admission = acquire_query_admission(app.as_ref(), true).await?;
+    let state = app.state.clone();
+    tokio::task::spawn_blocking(move || {
+        // Keep heavy replay capacity reserved even if cancellation detaches the
+        // blocking task from its HTTP request future.
+        let _replay_admission = replay_admission;
+        crate::gov::handle_gov_parliament_timed_ovn_casting_context_read(state, ballot_attempt_id)
+    })
+    .await
+    .map_err(|error| Error::AppServiceUnavailable {
+        code: "parliament_timed_ovn_casting_context_worker_unavailable",
+        message: error.to_string(),
+    })?
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_parliament_timed_ovn_casting_proof(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(ballot_attempt_id): AxPath<String>,
+    crate::utils::extractors::NoritoOnly(request): crate::utils::extractors::NoritoOnly<
+        iroha_torii_shared::parliament_api::ParliamentTimedOvnCastingProofRequestV1,
+    >,
+) -> Result<
+    NoritoBody<iroha_torii_shared::parliament_api::ParliamentTimedOvnCastingProofResponseV1>,
+    Error,
+> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof",
+    )
+    .await?;
+    let replay_admission = acquire_query_admission(app.as_ref(), true).await?;
+    let state = app.state.clone();
+    let kura = app.kura.clone();
+    tokio::task::spawn_blocking(move || {
+        // Keep proof construction capacity reserved after request cancellation.
+        let _replay_admission = replay_admission;
+        crate::gov::handle_gov_parliament_timed_ovn_casting_proof(
+            state,
+            kura,
+            ballot_attempt_id,
+            request,
+        )
+    })
+    .await
+    .map_err(|error| Error::AppServiceUnavailable {
+        code: "parliament_timed_ovn_casting_proof_worker_unavailable",
+        message: error.to_string(),
+    })?
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_parliament_tle_release_context_read(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(ballot_attempt_id): AxPath<String>,
+) -> Result<
+    JsonBody<iroha_torii_shared::parliament_api::ParliamentTleReleaseContextResponseV1>,
+    Error,
+> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/gov/parliament/ballots/{ballot_attempt_id}/release-context",
+    )
+    .await?;
+    let replay_admission = acquire_query_admission(app.as_ref(), true).await?;
+    let state = app.state.clone();
+    tokio::task::spawn_blocking(move || {
+        // Keep heavy replay capacity reserved even if cancellation detaches the
+        // blocking task from its HTTP request future.
+        let _replay_admission = replay_admission;
+        crate::gov::handle_gov_parliament_tle_release_context_read(state, ballot_attempt_id)
+    })
+    .await
+    .map_err(|error| Error::AppServiceUnavailable {
+        code: "parliament_tle_release_context_worker_unavailable",
+        message: error.to_string(),
+    })?
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_parliament_tle_partial_release(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(ballot_attempt_id): AxPath<String>,
+    request: axum::http::Request<Body>,
+) -> Result<JsonBody<iroha_torii_shared::parliament_api::ParliamentTlePartialReleaseShareV1>, Error>
+{
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release",
+    )
+    .await?;
+    crate::parliament_tle_release::require_empty_body_v1(request.into_body()).await?;
+    let signer_admission = acquire_query_admission(app.as_ref(), true).await?;
+    let share = crate::parliament_tle_release::request_local_partial_release_v1(
+        app.state.clone(),
+        app.parliament_tle_release_coordinator.clone(),
+        ballot_attempt_id,
+        signer_admission,
+    )
+    .await?;
+    Ok(JsonBody(
+        iroha_torii_shared::parliament_api::ParliamentTlePartialReleaseShareV1 {
+            key_session_id: share.key_session_id,
+            identity_digest: share.identity_digest,
+            participant_index: share.participant_index,
+            sigma: share.sigma,
+            proof_x: share.proof_x,
+            proof_y: share.proof_y,
+            z_s: share.z_s,
+            z_r: share.z_r,
+            z_u: share.z_u,
+        },
+    ))
+}
+
 #[cfg(feature = "app_api")]
 async fn handler_gov_citizen_status(
     State(app): State<SharedAppState>,
@@ -10118,8 +10441,13 @@ async fn handler_gov_propose_deploy(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: crate::utils::extractors::NoritoJson<crate::gov::ProposeDeployContractDto>,
-) -> Result<JsonBody<crate::gov::ProposeDeployContractResponse>, Error> {
+    body: crate::utils::extractors::NoritoJson<
+        iroha_torii_shared::governance_proposal_api::DeployContractProposalDraftRequestV1,
+    >,
+) -> Result<
+    JsonBody<iroha_torii_shared::governance_proposal_api::DeployContractProposalDraftResponseV1>,
+    Error,
+> {
     let remote_ip = remote.ip();
     check_access(
         &app,
@@ -10135,8 +10463,15 @@ async fn handler_gov_propose_sccp_route_governance(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: crate::utils::extractors::NoritoJson<crate::gov::ProposeSccpRouteGovernanceDto>,
-) -> Result<JsonBody<crate::gov::ProposeSccpRouteGovernanceResponse>, Error> {
+    body: crate::utils::extractors::NoritoJson<
+        iroha_torii_shared::governance_proposal_api::SccpRouteGovernanceProposalDraftRequestV1,
+    >,
+) -> Result<
+    JsonBody<
+        iroha_torii_shared::governance_proposal_api::SccpRouteGovernanceProposalDraftResponseV1,
+    >,
+    Error,
+> {
     let remote_ip = remote.ip();
     check_access(
         &app,
@@ -12455,7 +12790,7 @@ mod universal_offline_capability_tests {
     fn universal_capability_is_ready_and_asset_neutral() {
         let capability = universal_offline_capability_status();
         assert_eq!(capability.cash_handoff_capability, "cash_handoff_v1");
-        assert_eq!(capability.required_bridge_abi_version, 22);
+        assert_eq!(capability.required_bridge_abi_version, 23);
         assert_eq!(capability.max_hops, 8);
         assert!(capability.ready);
         let (json_content_type, json) = encode_offline_capability_representation(
@@ -14932,50 +15267,6 @@ async fn handler_gov_ballot_plain(
     )
     .await
 }
-#[cfg(feature = "app_api")]
-async fn handler_gov_parliament_ballot(
-    State(app): State<SharedAppState>,
-    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: crate::utils::extractors::NoritoJson<crate::gov::ParliamentBallotDto>,
-) -> Result<JsonBody<crate::gov::BallotSubmitResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access_enforced(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/gov/parliament/ballots",
-        true,
-    )
-    .await?;
-    crate::gov::handle_gov_parliament_ballot(
-        app.state.clone(),
-        &verified.account,
-        app.telemetry.clone(),
-        body,
-    )
-    .await
-}
-#[cfg(feature = "app_api")]
-async fn handler_gov_finalize(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: crate::utils::extractors::NoritoJson<crate::gov::FinalizeDto>,
-) -> Result<JsonBody<crate::gov::FinalizeResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access_enforced(&app, &headers, Some(remote_ip), "v1/gov/finalize", true).await?;
-    crate::gov::handle_gov_finalize(body).await
-}
-#[cfg(feature = "app_api")]
-#[allow(dead_code)]
-fn _assert_finalize_send_bounds() {
-    fn assert_send<T: Send>() {}
-    assert_send::<JsonBody<crate::gov::FinalizeResponse>>();
-    assert_send::<crate::gov::FinalizeResponse>();
-    assert_send::<crate::gov::FinalizeDto>();
-}
 #[allow(dead_code)]
 fn _assert_app_state_sync() {
     fn assert_sync<T: Sync>() {}
@@ -15230,7 +15521,14 @@ async fn handler_health(
 ///
 /// Offline wallet UI capability is universal and never participates in this
 /// probe. Future ordinary chain-readiness checks belong here.
-async fn handler_readyz(State(_app): State<SharedAppState>) -> AxResponse {
+async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
+    if app.kura.emergency_fast_startup_enabled() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Emergency Fast mode is live but intentionally not production-ready",
+        )
+            .into_response();
+    }
     (StatusCode::OK, "Ready").into_response()
 }
 /// GET `/livez` — process-only liveness; never claims protocol readiness.
@@ -17854,7 +18152,6 @@ fn soracloud_runtime_status_sections(
     let mut degraded_services = 0_u64;
     let mut unavailable_services = 0_u64;
     let mut max_load_factor_bps = 0_u16;
-    let mut reported_pending_mailbox_messages = 0_u64;
     let mut authoritative_pending_mailbox_messages = 0_u64;
     let mut bundle_cache_misses = 0_u64;
     let mut artifact_cache_misses = 0_u64;
@@ -17876,8 +18173,6 @@ fn soracloud_runtime_status_sections(
                 }
             }
             max_load_factor_bps = max_load_factor_bps.max(plan.load_factor_bps);
-            reported_pending_mailbox_messages = reported_pending_mailbox_messages
-                .saturating_add(u64::from(plan.reported_pending_mailbox_messages));
             authoritative_pending_mailbox_messages = authoritative_pending_mailbox_messages
                 .saturating_add(u64::from(plan.authoritative_pending_mailbox_messages));
             if !plan.bundle_available_locally {
@@ -17946,10 +18241,6 @@ fn soracloud_runtime_status_sections(
         json_entry("apartments", apartment_count),
         json_entry("max_load_factor_bps", max_load_factor_bps),
         json_entry(
-            "reported_pending_mailbox_messages",
-            reported_pending_mailbox_messages,
-        ),
-        json_entry(
             "authoritative_pending_mailbox_messages",
             authoritative_pending_mailbox_messages,
         ),
@@ -17964,31 +18255,57 @@ fn soracloud_runtime_status_sections(
     (service_health, runtime_pressure, runtime_manager)
 }
 fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json::Value {
-    let now_ms = std::time::SystemTime::now()
+    let view = app.state.view();
+    let latest_block_ms = view.latest_block().map_or(0, |block| {
+        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+    });
+    let wall_clock_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0);
-    let view = app.state.view();
+    let now_ms = wall_clock_ms.max(latest_block_ms);
     let world = view.world();
     let mut active_capability_adverts = 0_u64;
-    for (_validator_account_id, capability) in world.soracloud_inrou_host_capabilities().iter() {
-        if capability.is_active_at(now_ms) {
+    for (validator_account_id, capability) in world.soracloud_inrou_host_capabilities().iter() {
+        if capability.validate().is_ok()
+            && capability.validator_account_id == *validator_account_id
+            && capability.can_host_replicas_at(now_ms)
+            && iroha_core::soracloud_runtime::soracloud_validator_has_active_peer_binding(
+                world,
+                validator_account_id,
+                &capability.peer_id,
+                |lane_id| view.is_lane_active_for_authority(lane_id),
+            )
+        {
             active_capability_adverts = active_capability_adverts.saturating_add(1);
         }
     }
     let mut hosting_peers = std::collections::BTreeSet::new();
     let mut hosted_replica_count = 0_u64;
     let mut unavailable_replica_count = 0_u64;
-    for ((_service_name, _service_version), record) in
+    for ((service_name, service_version), record) in
         world.soracloud_inrou_service_placements().iter()
     {
-        for placement in &record.placements {
-            if placement.host_availability.is_available() {
-                hosted_replica_count = hosted_replica_count.saturating_add(1);
-                hosting_peers.insert(placement.peer_id.clone());
-            } else {
-                unavailable_replica_count = unavailable_replica_count.saturating_add(1);
-            }
+        let total_replicas = u64::try_from(record.placements.len()).unwrap_or(u64::MAX);
+        let Ok(placements) =
+            iroha_core::soracloud_runtime::resolve_active_inrou_replica_assignments(
+                world,
+                service_name,
+                service_version,
+                now_ms,
+                u64::try_from(view.height()).unwrap_or(u64::MAX),
+                |lane_id| view.is_lane_active_for_authority(lane_id),
+            )
+        else {
+            unavailable_replica_count = unavailable_replica_count.saturating_add(total_replicas);
+            continue;
+        };
+        unavailable_replica_count = unavailable_replica_count.saturating_add(
+            total_replicas.saturating_sub(u64::try_from(placements.len()).unwrap_or(u64::MAX)),
+        );
+        for placement in placements {
+            hosted_replica_count = hosted_replica_count.saturating_add(1);
+            hosting_peers.insert(placement.peer_id);
         }
     }
     json_object(vec![
@@ -18154,7 +18471,47 @@ fn authoritative_pending_public_mailbox_messages(
     .unwrap_or(u32::MAX)
 }
 #[cfg(feature = "app_api")]
+fn exact_local_soracloud_runtime_peer_id(
+    app: &SharedAppState,
+) -> Result<iroha_data_model::peer::PeerId, SoracloudRuntimeExecutionError> {
+    let runtime = app.soracloud_runtime.as_ref().ok_or_else(|| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "Soracloud runtime is unavailable on this Torii peer",
+        )
+    })?;
+    let runtime_peer_id = runtime.local_peer_id().ok_or_else(|| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "Soracloud runtime does not advertise a local peer id",
+        )
+    })?;
+    let runtime_peer_id: iroha_data_model::peer::PeerId =
+        runtime_peer_id.parse().map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!("invalid local Soracloud runtime peer id `{runtime_peer_id}`: {error}"),
+            )
+        })?;
+    let torii_peer_id = app.local_peer_id.as_ref().ok_or_else(|| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "Torii does not have a configured local peer identity for Soracloud runtime execution",
+        )
+    })?;
+    if torii_peer_id != &runtime_peer_id {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "local Soracloud runtime peer `{runtime_peer_id}` does not match Torii peer `{torii_peer_id}`"
+            ),
+        ));
+    }
+    Ok(runtime_peer_id)
+}
+#[cfg(feature = "app_api")]
 const SORACLOUD_LOCAL_READ_BLOCKING_MAX_IN_FLIGHT_V1: usize = 8;
+
 #[cfg(feature = "app_api")]
 const SORACLOUD_LOCAL_READ_EXECUTION_TIMEOUT_V1: Duration = Duration::from_secs(10);
 #[cfg(feature = "app_api")]
@@ -18169,6 +18526,7 @@ fn soracloud_local_read_blocking_admission_v1() -> Arc<tokio::sync::Semaphore> {
 #[cfg(feature = "app_api")]
 async fn execute_soracloud_local_read_off_reactor(
     runtime: SharedSoracloudRuntime,
+
     request: SoracloudLocalReadRequest,
 ) -> Result<iroha_core::soracloud_runtime::SoracloudLocalReadResponse, SoracloudRuntimeExecutionError>
 {
@@ -28570,7 +28928,18 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                                     )
                                     .await
                                     {
-                                        Ok(response) => response,
+                                        Ok(mut response) => {
+                                            if let Err(error) =
+                                                overwrite_soracloud_served_revision_headers(
+                                                    &mut response,
+                                                    &target,
+                                                )
+                                            {
+                                                soracloud_local_read_error_response(error)
+                                            } else {
+                                                response
+                                            }
+                                        }
                                         Err(error) => soracloud_local_read_error_response(error),
                                     }
                                 }
@@ -29138,6 +29507,7 @@ fn soracloud_local_read_error_response(
 ) -> Response {
     let status = match error.kind {
         SoracloudRuntimeExecutionErrorKind::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        SoracloudRuntimeExecutionErrorKind::Conflict => StatusCode::CONFLICT,
         SoracloudRuntimeExecutionErrorKind::InvalidRequest => StatusCode::BAD_REQUEST,
         SoracloudRuntimeExecutionErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     };
@@ -29151,6 +29521,17 @@ fn soracloud_local_read_error_response(
             );
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         })
+}
+#[cfg(all(test, feature = "app_api"))]
+#[test]
+fn soracloud_local_read_conflict_maps_to_http_conflict() {
+    let response = soracloud_local_read_error_response(
+        iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Conflict,
+            "terminal Soracloud local-read fixture",
+        ),
+    );
+    assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 #[cfg(feature = "app_api")]
 fn soracloud_public_runtime_unavailable(message: impl Into<String>) -> Response {
@@ -29181,6 +29562,48 @@ fn hosted_http_request_hash(
     *blake3_hash(&payload).as_bytes()
 }
 #[cfg(feature = "app_api")]
+fn hosted_http_rollout_bucket(
+    service_name: &str,
+    remote_ip: Option<IpAddr>,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+) -> u8 {
+    let digest = hosted_http_request_hash(
+        "soracloud:hosted-http-rollout:v1",
+        service_name,
+        None,
+        remote_ip,
+        method,
+        uri,
+    );
+    (u16::from_le_bytes([digest[0], digest[1]]) % 100) as u8
+}
+#[cfg(all(test, feature = "app_api"))]
+#[test]
+fn hosted_http_rollout_bucket_uses_the_domain_separated_request_hash() {
+    let method = axum::http::Method::GET;
+    let uri = "/app/v1/health?probe=ready"
+        .parse::<axum::http::Uri>()
+        .expect("valid hosted HTTP test URI");
+    let remote_ip = Some(IpAddr::from([203, 0, 113, 7]));
+    let digest = hosted_http_request_hash(
+        "soracloud:hosted-http-rollout:v1",
+        "web_portal",
+        None,
+        remote_ip,
+        &method,
+        &uri,
+    );
+
+    let bucket = hosted_http_rollout_bucket("web_portal", remote_ip, &method, &uri);
+
+    assert_eq!(
+        bucket,
+        (u16::from_le_bytes([digest[0], digest[1]]) % 100) as u8
+    );
+    assert!(bucket < 100);
+}
+#[cfg(feature = "app_api")]
 fn hosted_http_placement_has_active_peer_binding(
     world: &impl WorldReadOnly,
     placement: &iroha_data_model::soracloud::SoraInrouReplicaPlacementV1,
@@ -29197,10 +29620,28 @@ fn hosted_http_placement_has_active_peer_binding(
         })
 }
 #[cfg(feature = "app_api")]
-fn select_authoritative_hosted_http_replica(
-    world: &impl WorldReadOnly,
+fn hosted_http_runtime_state_matches_placement(
+    runtime_state: &iroha_data_model::soracloud::SoraInrouReplicaRuntimeStateV1,
     service_name: &str,
     service_version: &str,
+    placement: &iroha_data_model::soracloud::SoraInrouReplicaPlacementV1,
+    admitted_bundle_hash: &iroha_crypto::Hash,
+) -> bool {
+    runtime_state.service_name.as_ref() == service_name
+        && runtime_state.service_version == service_version
+        && runtime_state.replica_slot == placement.replica_slot
+        && runtime_state.placement_incarnation == placement.placement_incarnation
+        && runtime_state.validator_account_id == placement.validator_account_id
+        && runtime_state.peer_id == placement.peer_id
+        && runtime_state.selected_guest_isa == placement.selected_guest_isa
+        && runtime_state.materialized_bundle_hash == *admitted_bundle_hash
+}
+#[cfg(feature = "app_api")]
+fn select_authoritative_hosted_http_replica(
+    state_view: &iroha_core::state::StateView<'_>,
+    service_name: &str,
+    service_version: &str,
+    admitted_bundle_hash: &iroha_crypto::Hash,
     placements: &[iroha_data_model::soracloud::SoraInrouReplicaPlacementV1],
     remote_ip: Option<IpAddr>,
     method: &axum::http::Method,
@@ -29209,12 +29650,14 @@ fn select_authoritative_hosted_http_replica(
     iroha_data_model::soracloud::SoraInrouReplicaPlacementV1,
     iroha_data_model::soracloud::SoraInrouReplicaRuntimeStateV1,
 )> {
+    let world = state_view.world();
     let service_name_id = Name::from_str(service_name).ok()?;
     let lease_started_height = world
         .soracloud_service_deployments()
         .get(&service_name_id)
         .and_then(|deployment| deployment.service_lease.as_ref())?
         .lease_started_height;
+
     let healthy_replicas = placements
         .iter()
         .filter_map(|placement| {
@@ -29226,10 +29669,13 @@ fn select_authoritative_hosted_http_replica(
             (placement.host_availability.is_available()
                 && placement.lease_started_height == lease_started_height
                 && hosted_http_placement_has_active_peer_binding(world, placement)
-                && runtime_state.placement_incarnation == placement.placement_incarnation
-                && runtime_state.validator_account_id == placement.validator_account_id
-                && runtime_state.peer_id == placement.peer_id
-                && runtime_state.selected_guest_isa == placement.selected_guest_isa
+                && hosted_http_runtime_state_matches_placement(
+                    runtime_state,
+                    service_name,
+                    service_version,
+                    placement,
+                    admitted_bundle_hash,
+                )
                 && runtime_state.health_status
                     == iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy)
                 .then(|| (placement.clone(), runtime_state.clone()))
@@ -29253,10 +29699,11 @@ fn select_authoritative_hosted_http_replica(
     healthy_replicas.into_iter().nth(index)
 }
 #[cfg(feature = "app_api")]
-fn authoritative_hosted_http_version(
-    app: &SharedAppState,
+fn authoritative_weighted_hosted_http_versions(
+    world: &impl WorldReadOnly,
+    current_height: u64,
     service_name: &str,
-) -> Result<String, SoracloudRuntimeExecutionError> {
+) -> Result<(Vec<(String, u8)>, u64), SoracloudRuntimeExecutionError> {
     let deployment_name: Name = service_name.parse().map_err(|error| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
@@ -29265,20 +29712,21 @@ fn authoritative_hosted_http_version(
             ),
         )
     })?;
-    let state_view = app.state.view();
-    let current_height = u64::try_from(state_view.height()).map_err(|error| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Internal,
-            format!("canonical block height does not fit the hosted-service lease clock: {error}"),
-        )
-    })?;
-    let world = state_view.world();
+
     let Some(deployment) = world.soracloud_service_deployments().get(&deployment_name) else {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!("hosted Soracloud deployment for service `{service_name}` is unavailable"),
         ));
     };
+    deployment.validate().map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "hosted Soracloud deployment for service `{service_name}` is malformed: {error}"
+            ),
+        )
+    })?;
     let lease_status = deployment
         .hosted_service_lease_status_at(current_height)
         .map_err(|error| {
@@ -29303,15 +29751,75 @@ fn authoritative_hosted_http_version(
             ),
         ));
     }
-    if deployment.active_rollout.is_some() {
+    if deployment.process_generation == 0 {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
-                "hosted Soracloud service `{service_name}` has an unsupported active canary; first-release Inrou routing requires one active revision"
+                "hosted Soracloud deployment for service `{service_name}` has no positive process generation"
             ),
         ));
     }
-    Ok(deployment.current_service_version.clone())
+    let Some(rollout) = deployment.active_rollout.as_ref() else {
+        return Ok((
+            vec![(deployment.current_service_version.clone(), 100)],
+            deployment.process_generation,
+        ));
+    };
+    let invalid_rollout = |reason: String| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "invalid authoritative hosted Soracloud rollout for service `{service_name}`: {reason}"
+            ),
+        )
+    };
+    if rollout.stage != iroha_data_model::soracloud::SoraRolloutStageV1::Canary {
+        return Err(invalid_rollout(format!(
+            "active rollout stage must be Canary, got {:?}",
+            rollout.stage
+        )));
+    }
+    if rollout.candidate_version != deployment.current_service_version {
+        return Err(invalid_rollout(format!(
+            "candidate revision `{}` must equal current revision `{}`",
+            rollout.candidate_version, deployment.current_service_version
+        )));
+    }
+    let candidate_weight = rollout.traffic_percent;
+    if !(1..=99).contains(&candidate_weight) {
+        return Err(invalid_rollout(format!(
+            "candidate traffic percent must be within 1..=99, got {candidate_weight}"
+        )));
+    }
+    let baseline_version = rollout.baseline_version.trim();
+    if baseline_version.is_empty() {
+        return Err(invalid_rollout(
+            "baseline revision must be present and nonempty".to_owned(),
+        ));
+    }
+    if baseline_version == rollout.candidate_version {
+        return Err(invalid_rollout(
+            "baseline and candidate revisions must be distinct".to_owned(),
+        ));
+    }
+    rollout
+        .validate()
+        .map_err(|error| invalid_rollout(error.to_string()))?;
+    let baseline_weight = 100 - candidate_weight;
+    let versions = vec![
+        (rollout.candidate_version.clone(), candidate_weight),
+        (baseline_version.to_owned(), baseline_weight),
+    ];
+    let total_weight = versions
+        .iter()
+        .map(|(_, weight)| u16::from(*weight))
+        .sum::<u16>();
+    if total_weight != 100 {
+        return Err(invalid_rollout(format!(
+            "configured revision weights must total 100, got {total_weight}"
+        )));
+    }
+    Ok((versions, deployment.process_generation))
 }
 #[cfg(feature = "app_api")]
 #[derive(Clone, Debug)]
@@ -29320,24 +29828,62 @@ struct ResolvedHostedHttpTarget {
     replica_slot: u16,
     assigned_peer_id: PeerId,
     local_listen_base_url: Option<String>,
+    materialized_bundle_hash: String,
+    process_generation: u64,
 }
 #[cfg(feature = "app_api")]
+#[derive(Clone, Debug)]
+struct LocalHostedHttpReplicaRuntime {
+    listen_base_url: String,
+    materialized_bundle_hash: String,
+    process_generation: u64,
+}
+#[cfg(feature = "app_api")]
+fn ensure_matching_hosted_http_materialized_bundle_hash(
+    service_name: &str,
+    service_version: &str,
+    replica_slot: u16,
+    admitted_bundle_hash: &str,
+    local_bundle_hash: &str,
+    authoritative_process_generation: u64,
+    local_process_generation: u64,
+) -> Result<(), SoracloudRuntimeExecutionError> {
+    if admitted_bundle_hash != local_bundle_hash {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "hosted Soracloud service `{service_name}` revision `{service_version}` replica {replica_slot} local bundle hash does not match the admitted service revision"
+            ),
+        ));
+    }
+    if authoritative_process_generation != local_process_generation {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "hosted Soracloud service `{service_name}` revision `{service_version}` replica {replica_slot} local process generation {local_process_generation} does not match authoritative generation {authoritative_process_generation}"
+            ),
+        ));
+    }
+    Ok(())
+}
+#[cfg(feature = "app_api")]
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn ensure_local_hosted_http_snapshot_origin(
     app: &AppState,
     snapshot: &iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
 ) -> Result<(), SoracloudRuntimeExecutionError> {
-    let Some(snapshot_peer_id) = snapshot.local_peer_id.as_deref() else {
-        return Err(SoracloudRuntimeExecutionError::new(
+    let snapshot_peer_id = snapshot.local_peer_id.as_deref().ok_or_else(|| {
+        SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
-            "hosted Soracloud runtime snapshot does not declare its peer identity",
-        ));
-    };
-    let Some(local_peer_id) = app.local_peer_id.as_ref() else {
-        return Err(SoracloudRuntimeExecutionError::new(
+            "hosted Soracloud runtime snapshot has no exact local peer identity",
+        )
+    })?;
+    let local_peer_id = app.local_peer_id.as_ref().ok_or_else(|| {
+        SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
-            "local ingress peer identity is unavailable for hosted Soracloud snapshot validation",
-        ));
-    };
+            "local ingress peer identity is unavailable for hosted Soracloud runtime binding",
+        )
+    })?;
     if snapshot_peer_id == local_peer_id.to_string() {
         return Ok(());
     }
@@ -29349,12 +29895,23 @@ fn ensure_local_hosted_http_snapshot_origin(
     ))
 }
 #[cfg(feature = "app_api")]
-fn resolve_local_hosted_http_replica_listener(
+#[cfg(not(any(feature = "p2p_ws", feature = "connect")))]
+fn ensure_local_hosted_http_snapshot_origin(
+    _app: &AppState,
+    _snapshot: &iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
+) -> Result<(), SoracloudRuntimeExecutionError> {
+    Err(SoracloudRuntimeExecutionError::new(
+        SoracloudRuntimeExecutionErrorKind::Unavailable,
+        "hosted Soracloud runtime snapshot identity requires peer connectivity",
+    ))
+}
+#[cfg(feature = "app_api")]
+fn resolve_local_hosted_http_replica_runtime(
     app: &SharedAppState,
     service_name: &str,
     service_version: &str,
     placement: &iroha_data_model::soracloud::SoraInrouReplicaPlacementV1,
-) -> Result<Option<String>, SoracloudRuntimeExecutionError> {
+) -> Result<Option<LocalHostedHttpReplicaRuntime>, SoracloudRuntimeExecutionError> {
     let Some(runtime) = app.soracloud_runtime.as_ref() else {
         return Ok(None);
     };
@@ -29365,6 +29922,13 @@ fn resolve_local_hosted_http_replica_listener(
         .get(service_name)
         .and_then(|versions| versions.get(service_version))
         .and_then(|plan| {
+            if plan.service_name != service_name
+                || plan.service_version != service_version
+                || plan.health_status
+                    != iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy
+            {
+                return None;
+            }
             plan.local_replicas
                 .iter()
                 .find(|replica| {
@@ -29378,7 +29942,16 @@ fn resolve_local_hosted_http_replica_listener(
                         && replica.health_status
                             == iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy
                 })
-                .and_then(|replica| replica.listen_base_url.clone())
+                .and_then(|replica| {
+                    let process_generation = plan.process_generation.filter(|value| *value > 0)?;
+                    replica.listen_base_url.as_ref().map(|listen_base_url| {
+                        LocalHostedHttpReplicaRuntime {
+                            listen_base_url: listen_base_url.clone(),
+                            materialized_bundle_hash: plan.bundle_hash.clone(),
+                            process_generation,
+                        }
+                    })
+                })
         }))
 }
 #[cfg(feature = "app_api")]
@@ -29389,75 +29962,174 @@ fn resolve_hosted_http_runtime_target(
     method: &axum::http::Method,
     uri: &axum::http::Uri,
 ) -> Result<ResolvedHostedHttpTarget, SoracloudRuntimeExecutionError> {
+    struct HealthyTarget {
+        route_match: soracloud::HostedHttpRouteMatch,
+        replica_slot: u16,
+        peer_id: String,
+        local_listen_base_url: Option<String>,
+        materialized_bundle_hash: String,
+        process_generation: u64,
+    }
     let service_name = route_match.service_name.clone();
-    let selected_version = authoritative_hosted_http_version(app, &service_name)?;
+    let now_ms = current_public_ingress_ledger_time_ms(app);
     let state_view = app.state.view();
     let world = state_view.world();
-    let placement_record = world
-        .soracloud_inrou_service_placements()
-        .get(&(service_name.clone(), selected_version.clone()))
+    let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
+    let (weighted_versions, process_generation) =
+        authoritative_weighted_hosted_http_versions(world, current_height, &service_name)?;
+    let mut healthy_targets = Vec::with_capacity(weighted_versions.len());
+    for (service_version, weight) in &weighted_versions {
+        if *weight == 0 {
+            continue;
+        }
+        let admitted_bundle_hash = world
+            .soracloud_service_revisions()
+            .get(&(service_name.clone(), service_version.clone()))
+            .map(|bundle| bundle.container.bundle_hash)
+            .ok_or_else(|| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Internal,
+                    format!(
+                        "active hosted Soracloud service `{service_name}` revision `{service_version}` has no admitted deployment bundle"
+                    ),
+                )
+            })?;
+        let placements = iroha_core::soracloud_runtime::resolve_active_inrou_replica_assignments(
+            world,
+            &service_name,
+            service_version,
+            now_ms,
+            current_height,
+            |lane_id| state_view.is_lane_active_for_authority(lane_id),
+        )
+        .map_err(|message| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                message,
+            )
+        })?;
+        let Some((placement, runtime_state)) = select_authoritative_hosted_http_replica(
+            &state_view,
+            &service_name,
+            service_version,
+            &admitted_bundle_hash,
+            &placements,
+            remote_ip,
+            method,
+            uri,
+        ) else {
+            continue;
+        };
+        let placement_is_local = app
+            .local_peer_id
+            .as_ref()
+            .is_some_and(|local_peer_id| local_peer_id.to_string() == placement.peer_id);
+        let local_runtime = placement_is_local
+            .then(|| {
+                resolve_local_hosted_http_replica_runtime(
+                    app,
+                    &service_name,
+                    service_version,
+                    &placement,
+                )
+            })
+            .transpose()?
+            .flatten();
+        if placement_is_local && local_runtime.is_none() {
+            continue;
+        }
+        debug_assert_eq!(runtime_state.materialized_bundle_hash, admitted_bundle_hash);
+        let materialized_bundle_hash = admitted_bundle_hash.to_string();
+        if let Some(local_runtime) = local_runtime.as_ref() {
+            ensure_matching_hosted_http_materialized_bundle_hash(
+                &service_name,
+                service_version,
+                placement.replica_slot,
+                &materialized_bundle_hash,
+                &local_runtime.materialized_bundle_hash,
+                process_generation,
+                local_runtime.process_generation,
+            )?;
+        }
+        healthy_targets.push(HealthyTarget {
+            route_match: soracloud::HostedHttpRouteMatch {
+                service_name: service_name.clone(),
+                service_version: service_version.clone(),
+                request_path: route_match.request_path.clone(),
+            },
+            replica_slot: placement.replica_slot,
+            peer_id: placement.peer_id,
+            local_listen_base_url: local_runtime.map(|runtime| runtime.listen_base_url),
+            materialized_bundle_hash,
+            process_generation,
+        });
+    }
+    drop(state_view);
+    if healthy_targets.is_empty() {
+        let requested_versions = weighted_versions
+            .into_iter()
+            .map(|(version, weight)| format!("{version} ({weight}%)"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "no healthy authoritative hosted Soracloud revision is available for service `{service_name}` across [{requested_versions}]"
+            ),
+        ));
+    }
+    // Select the authoritative rollout bucket before considering health. Moving a request to a
+    // different revision would silently alter the configured rollout percentage.
+    let bucket = hosted_http_rollout_bucket(&service_name, remote_ip, method, uri);
+    let mut cumulative = 0u8;
+    let intended_version_index = weighted_versions
+        .iter()
+        .position(|(_, weight)| {
+            cumulative = cumulative.saturating_add(*weight);
+            bucket < cumulative
+        })
+        .ok_or_else(|| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                format!(
+                    "authoritative hosted Soracloud traffic weights for service `{service_name}` do not cover rollout bucket {bucket}"
+                ),
+            )
+        })?;
+    let intended_version = &weighted_versions[intended_version_index].0;
+    let selected_index = healthy_targets
+        .iter()
+        .position(|target| target.route_match.service_version == *intended_version)
+
         .ok_or_else(|| {
             SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Unavailable,
                 format!(
-                    "selected hosted Soracloud revision `{selected_version}` for service `{service_name}` has no authoritative placement"
+                    "authoritative hosted Soracloud revision `{intended_version}` selected for service `{service_name}` has no healthy replica"
                 ),
             )
         })?;
-    let (placement, _runtime_state) = select_authoritative_hosted_http_replica(
-        world,
-        &service_name,
-        &selected_version,
-        &placement_record.placements,
-        remote_ip,
-        method,
-        uri,
-    )
-    .ok_or_else(|| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "selected hosted Soracloud revision `{selected_version}` for service `{service_name}` has no healthy authoritative replica"
-            ),
-        )
-    })?;
-    let selected_route = soracloud::HostedHttpRouteMatch {
-        service_name: service_name.clone(),
-        service_version: selected_version,
-        request_path: route_match.request_path.clone(),
-    };
-    let assigned_peer_id = placement.peer_id.parse::<PeerId>().map_err(|error| {
+    let selected = healthy_targets.remove(selected_index);
+    let assigned_peer_id = selected.peer_id.parse::<PeerId>().map_err(|error| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
             format!(
                 "authoritative hosted Soracloud peer id `{}` for service `{}` revision `{}` replica {} is invalid: {error}",
-                placement.peer_id,
-                selected_route.service_name,
-                selected_route.service_version,
-                placement.replica_slot
+                selected.peer_id,
+                selected.route_match.service_name,
+                selected.route_match.service_version,
+                selected.replica_slot
             ),
         )
     })?;
-    drop(state_view);
-    let local_listen_base_url = app
-        .local_peer_id
-        .as_ref()
-        .filter(|local_peer_id| local_peer_id.to_string() == placement.peer_id)
-        .map(|_| {
-            resolve_local_hosted_http_replica_listener(
-                app,
-                &selected_route.service_name,
-                &selected_route.service_version,
-                &placement,
-            )
-        })
-        .transpose()?
-        .flatten();
+
     Ok(ResolvedHostedHttpTarget {
-        route_match: selected_route,
-        replica_slot: placement.replica_slot,
+        route_match: selected.route_match,
+        replica_slot: selected.replica_slot,
         assigned_peer_id,
-        local_listen_base_url,
+        local_listen_base_url: selected.local_listen_base_url,
+        materialized_bundle_hash: selected.materialized_bundle_hash,
+        process_generation: selected.process_generation,
     })
 }
 #[cfg(feature = "app_api")]
@@ -29467,8 +30139,22 @@ fn resolve_exact_hosted_http_runtime_target(
     service_version: &str,
     replica_slot: u16,
 ) -> Result<ResolvedHostedHttpTarget, SoracloudRuntimeExecutionError> {
-    let active_version = authoritative_hosted_http_version(app, service_name)?;
-    if active_version != service_version {
+    let local_peer_id = app.local_peer_id.clone().ok_or_else(|| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "local peer identity is unavailable for hosted Soracloud proxy execution",
+        )
+    })?;
+    let now_ms = current_public_ingress_ledger_time_ms(app);
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
+    let (active_versions, process_generation) =
+        authoritative_weighted_hosted_http_versions(world, current_height, service_name)?;
+    if !active_versions
+        .iter()
+        .any(|(version, weight)| *weight > 0 && version == service_version)
+    {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
@@ -29476,36 +30162,35 @@ fn resolve_exact_hosted_http_runtime_target(
             ),
         ));
     }
-    let Some(local_peer_id) = app.local_peer_id.as_ref() else {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            "local peer identity is unavailable for hosted Soracloud proxy execution",
-        ));
-    };
-    let state_view = app.state.view();
-    let world = state_view.world();
-    let Some(placement_record) = world
-        .soracloud_inrou_service_placements()
+    let admitted_bundle_hash = world
+        .soracloud_service_revisions()
         .get(&(service_name.to_owned(), service_version.to_owned()))
+        .map(|bundle| bundle.container.bundle_hash)
+        .ok_or_else(|| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                format!(
+                    "active hosted Soracloud service `{service_name}` revision `{service_version}` has no admitted deployment bundle"
+                ),
+            )
+        })?;
+    let Some(placement) = iroha_core::soracloud_runtime::resolve_active_inrou_replica_assignment(
+        world,
+        service_name,
+        service_version,
+        replica_slot,
+        now_ms,
+        current_height,
+        |lane_id| state_view.is_lane_active_for_authority(lane_id),
+    )
+    .map_err(|message| {
+        SoracloudRuntimeExecutionError::new(SoracloudRuntimeExecutionErrorKind::Internal, message)
+    })?
     else {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
-                "authoritative hosted Soracloud placement for service `{service_name}` revision `{service_version}` is unavailable"
-            ),
-        ));
-    };
-    let Some(placement) = placement_record
-        .placements
-        .iter()
-        .find(|placement| placement.replica_slot == replica_slot)
-        .cloned()
-    else {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "authoritative hosted Soracloud replica {} is unavailable for service `{service_name}` revision `{service_version}`",
-                replica_slot
+                "authoritative hosted Soracloud replica {replica_slot} for service `{service_name}` revision `{service_version}` has no active matching authoritative host capability or placement"
             ),
         ));
     };
@@ -29548,30 +30233,74 @@ fn resolve_exact_hosted_http_runtime_target(
             ),
         ));
     }
-    let runtime_state = world.soracloud_inrou_replica_runtime().get(&(
-        service_name.to_owned(),
-        service_version.to_owned(),
-        replica_slot.to_string(),
-    ));
-    if !runtime_state.is_some_and(|runtime_state| {
-        runtime_state.placement_incarnation == placement.placement_incarnation
-            && runtime_state.validator_account_id == placement.validator_account_id
-            && runtime_state.peer_id == placement.peer_id
-            && runtime_state.selected_guest_isa == placement.selected_guest_isa
-            && runtime_state.health_status
+    let authoritative_runtime_state = world
+        .soracloud_inrou_replica_runtime()
+        .get(&(
+            service_name.to_owned(),
+            service_version.to_owned(),
+            replica_slot.to_string(),
+        ))
+        .filter(|runtime_state| {
+            hosted_http_runtime_state_matches_placement(
+                runtime_state,
+                service_name,
+                service_version,
+                &placement,
+                &admitted_bundle_hash,
+            )
+        })
+        .filter(|runtime_state| {
+            runtime_state.health_status
+
                 == iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy
-    }) {
+        })
+        .ok_or_else(|| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!(
+                    "hosted Soracloud replica {replica_slot} for service `{service_name}` revision `{service_version}` has no matching healthy authoritative runtime state"
+                ),
+            )
+        })?;
+    debug_assert_eq!(
+        authoritative_runtime_state.materialized_bundle_hash,
+        admitted_bundle_hash
+    );
+    let materialized_bundle_hash = admitted_bundle_hash.to_string();
+    drop(state_view);
+    let local_runtime = resolve_local_hosted_http_replica_runtime(
+        app,
+        service_name,
+        service_version,
+        &placement,
+    )?
+    .ok_or_else(|| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "hosted Soracloud replica {replica_slot} for service `{service_name}` revision `{service_version}` has no matching healthy local runtime"
+            ),
+        )
+    })?;
+    ensure_matching_hosted_http_materialized_bundle_hash(
+        service_name,
+        service_version,
+        replica_slot,
+        &materialized_bundle_hash,
+        &local_runtime.materialized_bundle_hash,
+        process_generation,
+        local_runtime.process_generation,
+    )?;
+    let listen_base_url = local_runtime.listen_base_url;
+    if listen_base_url.is_empty() {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
-                "hosted Soracloud replica {} for service `{service_name}` revision `{service_version}` is not healthy in authoritative state",
-                replica_slot
+                "hosted Soracloud replica {replica_slot} for service `{service_name}` revision `{service_version}` has an empty local listener"
             ),
         ));
     }
-    drop(state_view);
-    let local_listen_base_url =
-        resolve_local_hosted_http_replica_listener(app, service_name, service_version, &placement)?;
+
     Ok(ResolvedHostedHttpTarget {
         route_match: soracloud::HostedHttpRouteMatch {
             service_name: service_name.to_owned(),
@@ -29579,9 +30308,114 @@ fn resolve_exact_hosted_http_runtime_target(
             request_path: String::new(),
         },
         replica_slot,
-        assigned_peer_id: local_peer_id.clone(),
-        local_listen_base_url,
+        assigned_peer_id: local_peer_id,
+        local_listen_base_url: Some(listen_base_url),
+        materialized_bundle_hash,
+        process_generation,
     })
+}
+#[cfg(feature = "app_api")]
+fn overwrite_soracloud_served_revision_headers(
+    response: &mut Response,
+    target: &ResolvedHostedHttpTarget,
+) -> Result<(), SoracloudRuntimeExecutionError> {
+    let invalid_value = |field: &str, error: axum::http::header::InvalidHeaderValue| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "hosted Soracloud served-revision {field} is not a valid response header: {error}"
+            ),
+        )
+    };
+    let service_name = HeaderValue::from_str(&target.route_match.service_name)
+        .map_err(|error| invalid_value("service name", error))?;
+    let service_version = HeaderValue::from_str(&target.route_match.service_version)
+        .map_err(|error| invalid_value("service version", error))?;
+    let replica_slot = HeaderValue::from_str(&target.replica_slot.to_string())
+        .map_err(|error| invalid_value("replica slot", error))?;
+    let process_generation = HeaderValue::from_str(&target.process_generation.to_string())
+        .map_err(|error| invalid_value("process generation", error))?;
+    let materialized_bundle_hash = HeaderValue::from_str(&target.materialized_bundle_hash)
+        .map_err(|error| invalid_value("materialized bundle hash", error))?;
+    let headers = response.headers_mut();
+    headers.insert(SORACLOUD_SERVED_SERVICE_NAME_HEADER, service_name);
+    headers.insert(SORACLOUD_SERVED_SERVICE_VERSION_HEADER, service_version);
+    headers.insert(SORACLOUD_SERVED_REPLICA_SLOT_HEADER, replica_slot);
+    headers.insert(
+        SORACLOUD_SERVED_PROCESS_GENERATION_HEADER,
+        process_generation,
+    );
+    headers.insert(
+        SORACLOUD_SERVED_MATERIALIZED_BUNDLE_HASH_HEADER,
+        materialized_bundle_hash,
+    );
+    Ok(())
+}
+#[cfg(feature = "app_api")]
+fn exact_soracloud_served_revision_header<'a>(
+    headers: &'a HeaderMap,
+    name: &str,
+) -> Result<&'a str, SoracloudRuntimeExecutionError> {
+    let mut values = headers.get_all(name).iter();
+    let value = values.next().ok_or_else(|| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!("hosting peer response is missing Torii-owned `{name}`"),
+        )
+    })?;
+    if values.next().is_some() {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!("hosting peer response contains duplicate Torii-owned `{name}`"),
+        ));
+    }
+    value.to_str().map_err(|_| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!("hosting peer response contains non-text Torii-owned `{name}`"),
+        )
+    })
+}
+#[cfg(feature = "app_api")]
+fn validate_soracloud_served_revision_headers(
+    response: &Response,
+    target: &ResolvedHostedHttpTarget,
+) -> Result<(), SoracloudRuntimeExecutionError> {
+    let expected_replica_slot = target.replica_slot.to_string();
+    let expected_process_generation = target.process_generation.to_string();
+    for (name, expected) in [
+        (
+            SORACLOUD_SERVED_SERVICE_NAME_HEADER,
+            target.route_match.service_name.as_str(),
+        ),
+        (
+            SORACLOUD_SERVED_SERVICE_VERSION_HEADER,
+            target.route_match.service_version.as_str(),
+        ),
+        (
+            SORACLOUD_SERVED_REPLICA_SLOT_HEADER,
+            expected_replica_slot.as_str(),
+        ),
+        (
+            SORACLOUD_SERVED_PROCESS_GENERATION_HEADER,
+            expected_process_generation.as_str(),
+        ),
+        (
+            SORACLOUD_SERVED_MATERIALIZED_BUNDLE_HASH_HEADER,
+            target.materialized_bundle_hash.as_str(),
+        ),
+    ] {
+        let actual = exact_soracloud_served_revision_header(response.headers(), name)?;
+        if actual != expected {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!(
+                    "hosting peer response `{name}` does not match the selected runtime target"
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 #[cfg(feature = "app_api")]
 async fn proxy_soracloud_public_hosted_http_locally(
@@ -29743,16 +30577,16 @@ async fn execute_hosted_http_proxy_request_with_fallback(
     headers: &HeaderMap,
     body: Bytes,
     remote_ip: Option<IpAddr>,
-) -> Option<Response> {
+) -> Result<Option<Response>, Response> {
     let Some(local_peer_id) = app.local_peer_id.as_ref() else {
-        return None;
+        return Ok(None);
     };
     let Some(_network) = app.p2p.as_ref() else {
-        return None;
+        return Ok(None);
     };
     let proxy_memory = match acquire_torii_proxy_memory(app) {
         Ok(reservation) => reservation,
-        Err(response) => return Some(response),
+        Err(response) => return Err(response),
     };
     let request_kind = ToriiProxyRequestKindV1::HostedHttp(ToriiHostedHttpProxyRequestV1 {
         service_name: target.route_match.service_name.clone(),
@@ -29767,7 +30601,7 @@ async fn execute_hosted_http_proxy_request_with_fallback(
     });
     let request = match new_torii_proxy_request(app.as_ref(), request_kind) {
         Ok(request) => request,
-        Err(response) => return Some(response),
+        Err(response) => return Err(response),
     };
     let candidates = hosted_http_proxy_candidate_peer_ids(
         app.as_ref(),
@@ -29785,7 +30619,7 @@ async fn execute_hosted_http_proxy_request_with_fallback(
         "Soracloud hosted-HTTP proxy prepared peer candidates"
     );
     if candidates.peers.is_empty() {
-        return Some(torii_proxy_error_response(
+        return Err(torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "route_unavailable",
             format!(
@@ -29804,7 +30638,7 @@ async fn execute_hosted_http_proxy_request_with_fallback(
     ) {
         Ok(request) => request,
         Err(error) => {
-            return Some(torii_proxy_error_response(
+            return Err(torii_proxy_error_response(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "proxy_capacity_exceeded",
                 error,
@@ -29841,10 +30675,10 @@ async fn execute_hosted_http_proxy_request_with_fallback(
                     continue;
                 }
                 mark_torii_proxy_request_completed(app, request_id.clone()).await;
-                return Some(hold_torii_proxy_memory_in_response_body(
+                return Ok(Some(hold_torii_proxy_memory_in_response_body(
                     response,
                     proxy_memory,
-                ));
+                )));
             }
             Err(error) => {
                 iroha_logger::warn!(
@@ -29859,22 +30693,25 @@ async fn execute_hosted_http_proxy_request_with_fallback(
         }
     }
     mark_torii_proxy_request_completed(app, request_id).await;
-    let response = last_retryable.unwrap_or_else(|| {
-        torii_proxy_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "route_unavailable",
-            format!(
-                "the authoritative hosting peer did not respond for hosted Soracloud service `{}` revision `{}` replica {}",
-                target.route_match.service_name,
-                target.route_match.service_version,
-                target.replica_slot
+    let Some(response) = last_retryable else {
+        return Err(hold_torii_proxy_memory_in_response_body(
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                format!(
+                    "the authoritative hosting peer did not respond for hosted Soracloud service `{}` revision `{}` replica {}",
+                    target.route_match.service_name,
+                    target.route_match.service_version,
+                    target.replica_slot
+                ),
             ),
-        )
-    });
-    Some(hold_torii_proxy_memory_in_response_body(
+            proxy_memory,
+        ));
+    };
+    Ok(Some(hold_torii_proxy_memory_in_response_body(
         response,
         proxy_memory,
-    ))
+    )))
 }
 #[cfg(not(feature = "connect"))]
 async fn execute_hosted_http_proxy_request_with_fallback(
@@ -29885,8 +30722,8 @@ async fn execute_hosted_http_proxy_request_with_fallback(
     _headers: &HeaderMap,
     _body: Bytes,
     _remote_ip: Option<IpAddr>,
-) -> Option<Response> {
-    None
+) -> Result<Option<Response>, Response> {
+    Ok(None)
 }
 #[cfg(feature = "app_api")]
 async fn proxy_soracloud_public_hosted_http(
@@ -29914,7 +30751,15 @@ async fn proxy_soracloud_public_hosted_http(
         )
         .await
         {
-            Ok(response) => response,
+            Ok(mut response) => {
+                if let Err(error) =
+                    overwrite_soracloud_served_revision_headers(&mut response, &target)
+                {
+                    soracloud_local_read_error_response(error)
+                } else {
+                    response
+                }
+            }
             Err(error) => soracloud_local_read_error_response(error),
         };
     }
@@ -29936,8 +30781,16 @@ async fn proxy_soracloud_public_hosted_http(
     )
     .await
     {
-        Some(response) => response,
-        None => soracloud_local_read_error_response(SoracloudRuntimeExecutionError::new(
+        Ok(Some(mut response)) => {
+            if let Err(error) = validate_soracloud_served_revision_headers(&response, &target)
+                .and_then(|()| overwrite_soracloud_served_revision_headers(&mut response, &target))
+            {
+                soracloud_local_read_error_response(error)
+            } else {
+                response
+            }
+        }
+        Ok(None) => soracloud_local_read_error_response(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
                 "authoritative hosting peer `{}` for hosted Soracloud service `{}` revision `{}` replica {} is unreachable from this ingress node",
@@ -29947,10 +30800,11 @@ async fn proxy_soracloud_public_hosted_http(
                 target.replica_slot
             ),
         )),
+        Err(response) => response,
     }
 }
 #[cfg(feature = "app_api")]
-fn current_public_soradns_ledger_time_ms(app: &SharedAppState) -> u64 {
+fn current_public_ingress_ledger_time_ms(app: &SharedAppState) -> u64 {
     let latest_block_ms = app.state.view().latest_block().map_or(0, |block| {
         u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
     });
@@ -29970,7 +30824,7 @@ fn resolve_active_soradns_gateway_host(
     app: &SharedAppState,
     fqdn: &str,
 ) -> Result<String, Response> {
-    let now_ms = current_public_soradns_ledger_time_ms(app);
+    let now_ms = current_public_ingress_ledger_time_ms(app);
     let state_view = app.state.view();
     let record = iroha_core::sns::get_name_record(
         state_view.world(),
@@ -30113,7 +30967,13 @@ async fn execute_soracloud_public_runtime_request(
         }
         soracloud::PublicRouteMatch::LocalRead(route_match) => route_match,
         soracloud::PublicRouteMatch::OrderedMailbox(route_match) => {
-            let (observed_height, observed_block_hash, runtime_state, authoritative_pending) = {
+            let (
+                observed_height,
+                observed_block_hash,
+                observed_sequence,
+                runtime_state,
+                authoritative_pending,
+            ) = {
                 let state_view = app.state.view();
                 let pending = authoritative_pending_public_mailbox_messages(
                     state_view.world(),
@@ -30122,6 +30982,7 @@ async fn execute_soracloud_public_runtime_request(
                 (
                     u64::try_from(state_view.height()).unwrap_or(u64::MAX),
                     state_view.latest_block_hash().map(Hash::from),
+                    authoritative_soracloud_sequence(state_view.world()),
                     state_view
                         .world()
                         .soracloud_service_runtime()
@@ -30132,7 +30993,6 @@ async fn execute_soracloud_public_runtime_request(
             };
             let request_headers = canonicalize_soracloud_local_read_headers(&headers);
             let request_body = body.to_vec();
-            let execution_sequence = observed_height.max(1);
             let request_commitment = soracloud_public_ordered_mailbox_request_commitment(
                 observed_height,
                 observed_block_hash,
@@ -30153,10 +31013,17 @@ async fn execute_soracloud_public_runtime_request(
                 ))
                 .expect("public mailbox message id encoding should be infallible"),
             );
+            let enqueue_height = observed_height.max(1);
+            let retention_blocks = route_match
+                .handler
+                .mailbox
+                .as_ref()
+                .map(|mailbox| u64::from(mailbox.retention_blocks.get()))
+                .unwrap_or(1);
             let request = iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionRequest {
                 observed_height,
                 observed_block_hash,
-                execution_sequence,
+                observed_sequence,
                 deployment: route_match.deployment.clone(),
                 bundle: route_match.bundle.clone(),
                 handler: Some(route_match.handler.clone()),
@@ -30165,14 +31032,18 @@ async fn execute_soracloud_public_runtime_request(
                         iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
                     message_id,
                     from_service: route_match.bundle.service.service_name.clone(),
+                    from_service_version: route_match.service_version.clone(),
                     from_handler: route_match.handler.handler_name.clone(),
                     to_service: route_match.bundle.service.service_name.clone(),
+                    to_service_version: route_match.service_version.clone(),
                     to_handler: route_match.handler.handler_name.clone(),
                     payload_bytes: request_body,
                     payload_commitment: request_commitment,
-                    enqueue_sequence: execution_sequence,
-                    available_after_sequence: execution_sequence,
-                    expires_at_sequence: None,
+                    delivery_delay_blocks: 0,
+                    enqueue_sequence: observed_sequence,
+                    enqueue_height,
+                    available_after_height: enqueue_height,
+                    expires_at_height: enqueue_height.saturating_add(retention_blocks),
                 },
                 runtime_state,
                 authoritative_pending_mailbox_messages: authoritative_pending,
@@ -32479,81 +33350,7 @@ async fn handler_sumeragi_status_sse(
             .into_response(),
     )
 }
-async fn handler_sumeragi_vrf_penalties(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxPath(epoch): AxPath<String>,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/vrf/penalties",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/vrf/penalties",
-            &app.telemetry,
-        ));
-    }
-    routing::handle_v1_sumeragi_vrf_penalties(State(app.state.clone()), AxPath(epoch))
-        .await
-        .map(axum::response::IntoResponse::into_response)
-}
-async fn handler_sumeragi_vrf_epoch(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxPath(epoch): AxPath<String>,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/vrf/epoch",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/vrf/epoch",
-            &app.telemetry,
-        ));
-    }
-    let epoch = if let Some(rest) = epoch.strip_prefix("0x") {
-        u64::from_str_radix(rest, 16).map_err(|_| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid epoch".into(),
-                ),
-            ))
-        })?
-    } else {
-        epoch.parse::<u64>().map_err(|_| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid epoch".into(),
-                ),
-            ))
-        })?
-    };
-    routing::handle_v1_sumeragi_vrf_epoch(app.state.clone(), epoch)
-        .await
-        .map(axum::response::IntoResponse::into_response)
-}
+
 #[cfg(feature = "telemetry")]
 async fn handler_pacemaker_status(
     State(app): State<SharedAppState>,
@@ -43168,6 +43965,9 @@ pub struct Torii {
     address: WithOrigin<SocketAddr>,
     state: Arc<CoreState>,
     #[cfg(feature = "app_api")]
+    parliament_tle_release_coordinator:
+        Arc<iroha_core::tle_release::TleReleaseCoordinatorV1>,
+    #[cfg(feature = "app_api")]
     musubi_search: Arc<RwLock<iroha_core::musubi_search::MusubiSearchIndexV1>>,
     bootle_lantern_issuance_runtime:
         Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
@@ -43183,11 +43983,7 @@ pub struct Torii {
     p2p: Option<iroha_core::IrohaNetwork>,
     #[cfg(any(feature = "app_api", feature = "connect"))]
     local_peer_id: Option<PeerId>,
-    // Query and transaction rate limits (operator-local)
-    #[allow(dead_code)]
-    query_rate_per_authority_per_sec: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    query_burst_per_authority: Option<std::num::NonZeroU32>,
+    // Query and transaction admission (operator-local)
     query_max_inflight: usize,
     query_heavy_max_inflight: usize,
     query_fanout_max_retained_bytes: usize,
@@ -43195,24 +43991,8 @@ pub struct Torii {
     app_api_routed_read_body_read_timeout: Duration,
     app_query_limits: routing::AppQueryLimits,
     query_queue_timeout: Duration,
-    #[allow(dead_code)]
-    tx_rate_per_authority_per_sec: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    tx_burst_per_authority: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    deploy_rate_per_origin_per_sec: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    deploy_burst_per_origin: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    soracloud_public_rate_per_ip_per_sec: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    soracloud_public_burst_per_ip: Option<std::num::NonZeroU32>,
     soracloud_public_max_inflight: usize,
     soracloud_public_max_response_bytes: usize,
-    #[allow(dead_code)]
-    soracloud_mutation_rate_per_account_origin_per_sec: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    soracloud_mutation_burst_per_account_origin: Option<std::num::NonZeroU32>,
     soracloud_mutation_max_inflight: usize,
     soracloud_mutation_max_body_bytes: usize,
     rate_limiter: limits::RateLimiter,
@@ -43366,7 +44146,6 @@ pub struct Torii {
     account_onboarding: Option<AccountOnboardingSigner>,
     vpn_relay_trust: Option<Arc<VpnRelayTrust>>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
-    soracloud_hf_config: iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
 }
 /// Optional runtime-owned Torii dependencies that are not present in all embeddings.
 ///
@@ -43380,11 +44159,13 @@ pub struct Torii {
 #[derive(Clone)]
 pub struct ToriiRuntimeDeps {
     telemetry: routing::MaybeTelemetry,
+    #[cfg(feature = "app_api")]
+    parliament_tle_release_coordinator:
+        Arc<iroha_core::tle_release::TleReleaseCoordinatorV1>,
     bootle_lantern_issuance_provider_registry: Option<
         Arc<dyn privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryV1>,
     >,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
-    soracloud_hf_config: Option<iroha_config::parameters::actual::SoracloudRuntimeHuggingFace>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
     #[cfg(feature = "app_api")]
     sorafs_stream_token_signer: Option<Arc<dyn sorafs::StreamTokenRuntimeSigner>>,
@@ -43498,9 +44279,12 @@ impl ToriiRuntimeDeps {
     pub fn new(telemetry: routing::MaybeTelemetry) -> Self {
         Self {
             telemetry,
+            #[cfg(feature = "app_api")]
+            parliament_tle_release_coordinator: Arc::new(
+                iroha_core::tle_release::TleReleaseCoordinatorV1::without_signer(),
+            ),
             bootle_lantern_issuance_provider_registry: None,
             soracloud_runtime: None,
-            soracloud_hf_config: None,
             sorafs_node: None,
             #[cfg(feature = "app_api")]
             sorafs_stream_token_signer: None,
@@ -43578,6 +44362,30 @@ impl ToriiRuntimeDeps {
             vpn_operator_signer: None,
         }
     }
+
+    /// Retain only bounded, in-memory dependencies for an emergency Fast boot.
+    ///
+    /// Fast mode is an explicitly degraded recovery posture. Deployment-owned
+    /// services can open durable journals, reconcile remote state, or start
+    /// signers while Torii is being constructed, so none of them may cross this
+    /// boundary. The normal Strict restart reconstructs and validates them.
+    fn into_emergency_fast(self) -> Self {
+        Self::new(self.telemetry)
+    }
+    /// Attach the deployment-owned Parliament TLE partial-release coordinator.
+    ///
+    /// The coordinator retains the runtime signer behind its opaque Core
+    /// boundary. Torii accepts only ballot identifiers and never receives a
+    /// caller-selected release identity, transcript, participant seat, or key.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_parliament_tle_release_coordinator(
+        mut self,
+        coordinator: Arc<iroha_core::tle_release::TleReleaseCoordinatorV1>,
+    ) -> Self {
+        self.parliament_tle_release_coordinator = coordinator;
+        self
+    }
     /// Attach the deployment-owned Bootle/Lantern issuance provider registry.
     ///
     /// The registry owns all issuer and authentication secrets. Torii accepts
@@ -43595,15 +44403,6 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_soracloud_runtime(mut self, runtime: SharedSoracloudRuntime) -> Self {
         self.soracloud_runtime = Some(runtime);
-        self
-    }
-    /// Attach the resolved Soracloud Hugging Face runtime config.
-    #[must_use]
-    pub fn with_soracloud_hf_config(
-        mut self,
-        config: iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
-    ) -> Self {
-        self.soracloud_hf_config = Some(config);
         self
     }
     /// Attach a prebuilt embedded SoraFS node handle.
@@ -44070,6 +44869,73 @@ fn torii_runtime_deps_keep_vpn_and_proxy_signers_separate() {
     );
     assert_ne!(proxy_signer.public_key(), vpn_signer.public_key());
 }
+
+#[cfg(test)]
+#[test]
+fn emergency_fast_runtime_deps_drop_external_services_and_signers() {
+    let proxy_signer = KeyPair::try_from_seed(vec![0x93; 32], iroha_crypto::Algorithm::Ed25519)
+        .expect("proxy signer fixture");
+    let vpn_signer = KeyPair::try_from_seed(vec![0x94; 32], iroha_crypto::Algorithm::Ed25519)
+        .expect("VPN signer fixture");
+    let deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
+        .with_torii_proxy_bridge_signer(proxy_signer)
+        .with_vpn_operator_signer(vpn_signer)
+        .into_emergency_fast();
+
+    assert!(deps.torii_proxy_bridge_signer.is_none());
+    assert!(deps.vpn_operator_signer.is_none());
+    assert!(deps.soracloud_runtime.is_none());
+    assert!(deps.sorafs_node.is_none());
+}
+
+#[cfg(test)]
+#[test]
+fn emergency_fast_uses_only_the_process_local_sorafs_facade() {
+    let compact_source: String = include_str!("lib.rs")
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    let fast_facade = compact_source
+        .find(
+            "letsorafs_node=ifemergency_fast{sorafs_node::NodeHandle::try_new_emergency_disabled(",
+        )
+        .expect("emergency-disabled SoraFS facade");
+    let durable_constructor = compact_source[fast_facade..]
+        .find("sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(")
+        .map(|offset| fast_facade + offset)
+        .expect("Strict SoraFS constructor");
+    let process_local_por = compact_source[fast_facade..]
+        .find("ifemergency_fast{(Arc::new(sorafs::PorCoordinator::with_record_limit(1)),None,)")
+        .map(|offset| fast_facade + offset)
+        .expect("process-local emergency PoR coordinator");
+
+    assert!(fast_facade < durable_constructor && durable_constructor < process_local_por);
+}
+
+#[cfg(test)]
+#[test]
+fn emergency_fast_does_not_configure_or_start_the_background_zk_prover() {
+    let source = include_str!("lib.rs");
+    let app_services = source
+        .rsplit_once("// Configure app API subsystems (attachments) from Torii config")
+        .expect("app-service startup section")
+        .1
+        .split_once("let query_rate = config")
+        .expect("end of app-service startup section")
+        .0;
+    let fast_guard = app_services
+        .find("if !emergency_fast")
+        .expect("emergency Fast ZK-prover guard");
+    let configure = app_services
+        .find("crate::zk_prover::configure(")
+        .expect("ZK-prover configuration");
+    let start = app_services
+        .find("crate::zk_prover::start_worker()")
+        .expect("ZK-prover worker start");
+
+    assert!(fast_guard < configure && configure < start);
+}
+
 impl From<routing::MaybeTelemetry> for ToriiRuntimeDeps {
     fn from(telemetry: routing::MaybeTelemetry) -> Self {
         Self::new(telemetry)
@@ -44859,14 +45725,6 @@ macro_rules! catalog_route_policy {
     (canonical_account_get($handler:path, $state:ident, $auth_limit:expr)) => {
         catalog_get($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
-    (contract_account_get($handler:path, $state:ident, $auth_limit:expr)) => {
-        catalog_get($handler).authenticated_canonical_account_body_with_missing_auth(
-            $state.clone(),
-            $auth_limit,
-            "contract_code_auth_required",
-            "signed account headers are required to read governed contract metadata",
-        )
-    };
     (canonical_account_post($handler:path, $state:ident, $auth_limit:expr)) => {
         catalog_post($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
@@ -45438,8 +46296,6 @@ impl Torii {
             SCCP_CAPABILITIES => public_get(handler_sccp_capabilities);
             SCCP_REGISTRY => public_get(handler_sccp_registry);
             SCCP_SORA_OUTBOUND_MATERIAL => public_get(handler_sccp_sora_outbound_material);
-            VRF_PENALTIES => operator_get(handler_sumeragi_vrf_penalties, app_state);
-            VRF_EPOCH => operator_get(handler_sumeragi_vrf_epoch, app_state);
             BRIDGE_FINALITY => public_get(handler_bridge_finality_proof);
             BRIDGE_FINALITY_ATTESTATION => public_get(handler_bridge_finality_attestation);
             BRIDGE_FINALITY_BUNDLE => public_get(handler_bridge_finality_bundle);
@@ -46333,26 +47189,16 @@ impl Torii {
             SORACLOUD_MODEL_UPLOAD_STATUS_GET,
             soracloud::handle_uploaded_model_status
         );
-        mount_soracloud_command!(SORACLOUD_HF_DEPLOY_POST, handle_hf_deploy);
-        mount_soracloud_read!(SORACLOUD_HF_STATUS_GET, soracloud::handle_hf_status);
-        mount_soracloud_command!(SORACLOUD_HF_LEASE_LEAVE_POST, handle_hf_lease_leave);
-        mount_soracloud_command!(SORACLOUD_HF_LEASE_RENEW_POST, handle_hf_lease_renew);
         mount_soracloud_command!(
-            SORACLOUD_MODEL_HOST_ADVERTISE_POST,
-            handle_model_host_advertise
-        );
-        mount_soracloud_command!(
-            SORACLOUD_MODEL_HOST_HEARTBEAT_POST,
-            handle_model_host_heartbeat
-        );
-        mount_soracloud_command!(
-            SORACLOUD_MODEL_HOST_WITHDRAW_POST,
-            handle_model_host_withdraw
+            SORACLOUD_HF_SHARED_LEASE_JOIN_POST,
+            handle_hf_shared_lease_join
         );
         mount_soracloud_read!(
-            SORACLOUD_MODEL_HOST_STATUS_GET,
-            soracloud::handle_model_host_status
+            SORACLOUD_HF_SHARED_LEASE_STATUS_GET,
+            soracloud::handle_hf_shared_lease_status
         );
+        mount_soracloud_command!(SORACLOUD_HF_LEASE_LEAVE_POST, handle_hf_lease_leave);
+        mount_soracloud_command!(SORACLOUD_HF_LEASE_RENEW_POST, handle_hf_lease_renew);
         mount_soracloud_command!(SORACLOUD_AGENT_DEPLOY_POST, handle_agent_deploy);
         mount_soracloud_command!(SORACLOUD_AGENT_LEASE_RENEW_POST, handle_agent_lease_renew);
         mount_soracloud_command!(SORACLOUD_AGENT_RESTART_POST, handle_agent_restart);
@@ -46795,11 +47641,17 @@ impl Torii {
                 GOV_PROPOSE_SCCP => canonical_account_post(handler_gov_propose_sccp_route_governance, app_state, runtime_governance_body_limit);
                 GOV_CAPABILITIES => canonical_account_get(handler_gov_capabilities, app_state, 0);
                 GOV_CITIZEN_DRAFT => canonical_account_post(handler_gov_citizen_draft, app_state, runtime_governance_body_limit);
+                GOV_PARLIAMENT_ATTEMPT_DRAFT => canonical_account_post(handler_gov_parliament_attempt_draft, app_state, runtime_governance_body_limit);
+                GOV_PARLIAMENT_ATTEMPT_READ => canonical_account_get(handler_gov_parliament_attempt_read, app_state, 0);
+                GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ => canonical_account_get(handler_gov_parliament_timed_ovn_casting_context_read, app_state, 0);
+                GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF => canonical_account_post(handler_gov_parliament_timed_ovn_casting_proof, app_state, runtime_governance_body_limit);
+                GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ => canonical_account_get(handler_gov_parliament_tle_release_context_read, app_state, 0);
+                GOV_PARLIAMENT_TLE_PARTIAL_RELEASE => canonical_account_post(handler_gov_parliament_tle_partial_release, app_state, 0);
+                GOV_PARLIAMENT_TRANSITION_DRAFT => canonical_account_post(handler_gov_parliament_transition_draft, app_state, runtime_governance_body_limit);
                 VALIDATION_FEE_CURRENT_POLICY_PROOF => canonical_account_post(validation_fee_api::handler_current_policy_proof, app_state, runtime_governance_body_limit);
                 VALIDATION_FEE_PROPOSALS => canonical_account_get(validation_fee_api::handler_proposals, app_state, 0);
                 VALIDATION_FEE_PROPOSAL_DETAIL => canonical_account_get(validation_fee_api::handler_proposal_detail, app_state, 0);
                 VALIDATION_FEE_PROPOSAL_DRAFT => canonical_account_post(validation_fee_api::handler_proposal_draft, app_state, runtime_governance_body_limit);
-                VALIDATION_FEE_PLAIN_BALLOT_DRAFT => canonical_account_post(validation_fee_api::handler_plain_ballot_draft, app_state, runtime_governance_body_limit);
                 GOV_PROPOSAL_GET => canonical_account_get(handler_gov_proposal_get, app_state, 0);
                 GOV_LOCKS_GET => canonical_account_get(handler_gov_locks_get, app_state, 0);
                 GOV_REFERENDUM_GET => canonical_account_get(handler_gov_referendum_get, app_state, 0);
@@ -46807,14 +47659,12 @@ impl Torii {
                 GOV_BALLOT_ZK_V1 => limited_canonical_account_post(handler_gov_ballot_zk_v1, app_state, proof_body_limit, proof_body_limit);
                 GOV_BALLOT_ZK_V1_PROOF => limited_canonical_account_post(handler_gov_ballot_zk_v1_ballot_proof, app_state, proof_body_limit, proof_body_limit);
                 GOV_BALLOT_PLAIN => limited_canonical_account_post(handler_gov_ballot_plain, app_state, proof_body_limit, proof_body_limit);
-                GOV_PARLIAMENT_BALLOT => limited_canonical_account_post(handler_gov_parliament_ballot, app_state, proof_body_limit, proof_body_limit);
-                GOV_FINALIZE => public_post(handler_gov_finalize);
                 GOV_PROTECTED_POST => operator_post(handler_gov_protected_set, app_state);
                 GOV_PROTECTED_GET => canonical_account_get(handler_gov_protected_get, app_state, 0);
                 GOV_STREAM => protocol_handshake_get(handler_gov_stream);
                 GOV_UNLOCK_STATS => canonical_account_get(handler_gov_unlock_stats, app_state, 0);
-                GOV_CONTRACT_GET => contract_account_get(handler_gov_contract_get, app_state, 0);
-                GOV_ENACT => canonical_account_post(handler_gov_enact, app_state, runtime_governance_body_limit);
+                GOV_CONTRACT_GET => canonical_account_get(handler_gov_contract_get, app_state, 0);
+
                 GOV_COUNCIL_CURRENT => canonical_account_get(handler_gov_council_current, app_state, 0);
                 GOV_CITIZENS_COUNT => canonical_account_get(handler_gov_citizen_count, app_state, 0);
                 GOV_CITIZEN_STATUS => canonical_account_get(handler_gov_citizen_status, app_state, 0);
@@ -46915,7 +47765,7 @@ impl Torii {
         chain_id: ChainId,
         network_id: NetworkId,
         kiso: KisoHandle,
-        config: Config,
+        mut config: Config,
         queue: Arc<Queue>,
         events: EventsSender,
         query_service: LiveQueryStoreHandle,
@@ -46930,7 +47780,52 @@ impl Torii {
             state.network_id, network_id,
             "Torii network id must match the genesis-derived Core state identity"
         );
+        let emergency_fast = kura.emergency_fast_startup_enabled();
+        if emergency_fast {
+            // Keep emergency startup independent of every optional durable
+            // Torii subsystem. These services are reconstructed and audited on
+            // the next Strict restart; Fast never opens their journals or
+            // starts their mutation workers.
+            config.privacy_bootle_lantern_issuer = None;
+            config.webhooks_enabled = false;
+            config.zk_attachments_enabled = false;
+            config.zk_prover_enabled = false;
+            config.push.enabled = false;
+            config.iso_bridge.enabled = false;
+            config.iso_bridge.store_dir = None;
+            config.iso_bridge.audit_export_dir = None;
+            config.operator_auth = iroha_config::parameters::actual::ToriiOperatorAuth::default();
+            config.da_ingest.taikai_anchor = None;
+            config.sorafs_discovery = iroha_config::parameters::actual::SorafsDiscovery::default();
+            config.sorafs_discovery.discovery_enabled = false;
+            config.sorafs_storage = iroha_config::parameters::actual::SorafsStorage::default();
+            config.sorafs_storage.enabled = false;
+            config.sorafs_repair = iroha_config::parameters::actual::SorafsRepair::default();
+            config.sorafs_repair.enabled = false;
+            config.sorafs_gc = iroha_config::parameters::actual::SorafsGc::default();
+            config.sorafs_gc.enabled = false;
+            config.sorafs_por = iroha_config::parameters::actual::SorafsPor::default();
+            config.sorafs_por.enabled = false;
+            config.sorafs_gateway = iroha_config::parameters::actual::SorafsGateway::default();
+            config.sorafs_gateway.acme.enabled = false;
+            config.sorafs_gateway.compliance = None;
+            config.sorafs_appeal_finance_settlement =
+                iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
+            config.account_onboarding = None;
+            config.faucet = None;
+            config.kagemusha_commands = None;
+            config.ram_lfe = None;
+            config.tx_history = None;
+            config.peer_telemetry_urls.clear();
+            config.connect.enabled = false;
+            config.mcp.enabled = false;
+        }
         let runtime_deps = runtime_deps.into();
+        let runtime_deps = if emergency_fast {
+            runtime_deps.into_emergency_fast()
+        } else {
+            runtime_deps
+        };
         #[cfg(feature = "app_api")]
         let mut runtime_deps = runtime_deps;
         #[cfg(feature = "app_api")]
@@ -46973,12 +47868,14 @@ impl Torii {
             }
         };
         let telemetry = runtime_deps.telemetry.clone();
+        #[cfg(feature = "app_api")]
+        let parliament_tle_release_coordinator =
+            runtime_deps.parliament_tle_release_coordinator.clone();
         let pipeline_status_cache = Arc::new(PipelineStatusCache::with_limits(
             queue.current_backpressure().capacity().get(),
             PIPELINE_STATUS_CACHE_TTL,
         ));
         let soracloud_runtime = runtime_deps.soracloud_runtime.clone();
-        let soracloud_hf_config = runtime_deps.soracloud_hf_config.clone().unwrap_or_default();
         #[cfg(feature = "app_api")]
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
         #[cfg(feature = "app_api")]
@@ -47176,23 +48073,25 @@ impl Torii {
                     telemetry.clone(),
                 );
             }
-            // Non-consensus background prover hook (disabled by default)
-            crate::zk_prover::configure(
-                config.zk_prover_enabled,
-                config.zk_prover_scan_period_secs,
-                config.zk_prover_reports_ttl_secs,
-                config.zk_prover_reports_max_count,
-                config.zk_prover_reports_max_bytes,
-                config.zk_prover_max_inflight,
-                config.zk_prover_max_scan_bytes,
-                config.zk_prover_max_scan_millis,
-                config.zk_prover_keys_dir.clone(),
-                config.zk_prover_allowed_backends.clone(),
-                config.zk_prover_allowed_circuits.clone(),
-                Some(state.clone()),
-                telemetry.clone(),
-            );
-            crate::zk_prover::start_worker();
+            if !emergency_fast {
+                // Non-consensus background prover hook (disabled by default)
+                crate::zk_prover::configure(
+                    config.zk_prover_enabled,
+                    config.zk_prover_scan_period_secs,
+                    config.zk_prover_reports_ttl_secs,
+                    config.zk_prover_reports_max_count,
+                    config.zk_prover_reports_max_bytes,
+                    config.zk_prover_max_inflight,
+                    config.zk_prover_max_scan_bytes,
+                    config.zk_prover_max_scan_millis,
+                    config.zk_prover_keys_dir.clone(),
+                    config.zk_prover_allowed_backends.clone(),
+                    config.zk_prover_allowed_circuits.clone(),
+                    Some(state.clone()),
+                    telemetry.clone(),
+                );
+                crate::zk_prover::start_worker();
+            }
         }
         let query_rate = config
             .query_rate_per_authority_per_sec
@@ -47482,10 +48381,20 @@ impl Torii {
             )
         });
         #[cfg(feature = "app_api")]
-        let sorafs_cache =
-            shared_sorafs_cache.or_else(|| build_sorafs_cache(&config, sorafs_admission.clone()));
+        let sorafs_cache = if emergency_fast {
+            None
+        } else {
+            shared_sorafs_cache.or_else(|| build_sorafs_cache(&config, sorafs_admission.clone()))
+        };
         #[cfg(feature = "app_api")]
-        let sorafs_node = {
+        let sorafs_node = if emergency_fast {
+            let data_dir = sorafs_node::config::StorageConfig::from(&config.sorafs_storage)
+                .data_dir()
+                .clone();
+            sorafs_node::NodeHandle::try_new_emergency_disabled(data_dir).unwrap_or_else(|err| {
+                panic!("failed to initialise emergency-disabled SoraFS facade: {err}")
+            })
+        } else {
             let storage_config = sorafs_node::config::StorageConfig::from(&config.sorafs_storage);
             let repair_config = sorafs_node::config::RepairConfig::from(&config.sorafs_repair);
             let gc_config = sorafs_node::config::GcConfig::from(&config.sorafs_gc);
@@ -48059,10 +48968,17 @@ impl Torii {
             shared_sorafs_stream_token_signer,
         );
         #[cfg(feature = "app_api")]
-        let (por_coordinator, por_runtime) =
-            build_por_components(&config, &network_id, &sorafs_node, sorafs_admission.clone());
+        let (por_coordinator, por_runtime) = if emergency_fast {
+            (Arc::new(sorafs::PorCoordinator::with_record_limit(1)), None)
+        } else {
+            build_por_components(&config, &network_id, &sorafs_node, sorafs_admission.clone())
+        };
         #[cfg(feature = "app_api")]
-        let gc_runtime = build_gc_runtime(&sorafs_node, state.clone());
+        let gc_runtime = if emergency_fast {
+            None
+        } else {
+            build_gc_runtime(&sorafs_node, state.clone())
+        };
         #[cfg(feature = "app_api")]
         let account_onboarding = config.account_onboarding.as_ref().map(|cfg| {
             let mut api_token_hashes_by_domain = BTreeMap::new();
@@ -48186,12 +49102,19 @@ impl Torii {
             Some(service)
         });
         #[cfg(feature = "app_api")]
-        let tx_history_access_policy = Arc::new(load_tx_history_access_policy(
-            config.tx_history.as_ref(),
-            &state.nexus_snapshot().dataspace_catalog,
-        ));
+        let tx_history_access_policy =
+            Arc::new(if let Some(tx_history) = config.tx_history.as_ref() {
+                let nexus = state.nexus_snapshot();
+                load_tx_history_access_policy(Some(tx_history), &nexus.dataspace_catalog)
+            } else {
+                TxHistoryAccessPolicy::default()
+            });
         #[cfg(feature = "app_api")]
-        let public_dataspace_upstreams = Arc::new(load_public_dataspace_upstreams(state.as_ref()));
+        let public_dataspace_upstreams = Arc::new(if emergency_fast {
+            BTreeMap::new()
+        } else {
+            load_public_dataspace_upstreams(state.as_ref())
+        });
         #[cfg(feature = "app_api")]
         let recipient_lookup = Arc::new(config.recipient_lookup.clone());
         #[cfg(feature = "app_api")]
@@ -48200,9 +49123,11 @@ impl Torii {
             Some(config.recipient_lookup.requests_per_minute),
         );
         #[cfg(feature = "app_api")]
-        let musubi_search = Arc::new(RwLock::new(select_initial_musubi_search_index(
-            rebuild_musubi_search_index(state.as_ref(), None),
-        )));
+        let musubi_search = Arc::new(RwLock::new(if emergency_fast {
+            iroha_core::musubi_search::MusubiSearchIndexV1::default()
+        } else {
+            select_initial_musubi_search_index(rebuild_musubi_search_index(state.as_ref(), None))
+        }));
         Self {
             chain_id: Arc::new(chain_id),
             signed_query_admission,
@@ -48213,6 +49138,8 @@ impl Torii {
             query_service,
             kura,
             state,
+            #[cfg(feature = "app_api")]
+            parliament_tle_release_coordinator,
             #[cfg(feature = "app_api")]
             musubi_search,
             bootle_lantern_issuance_runtime,
@@ -48250,8 +49177,6 @@ impl Torii {
             p2p: None,
             #[cfg(any(feature = "app_api", feature = "connect"))]
             local_peer_id: None,
-            query_rate_per_authority_per_sec: config.query_rate_per_authority_per_sec,
-            query_burst_per_authority: config.query_burst_per_authority,
             query_max_inflight: config.query_max_inflight.get(),
             query_heavy_max_inflight: config.query_heavy_max_inflight.get(),
             query_fanout_max_retained_bytes: usize::try_from(
@@ -48262,21 +49187,11 @@ impl Torii {
             app_api_routed_read_body_read_timeout: config.app_api_routed_read_body_read_timeout,
             app_query_limits,
             query_queue_timeout: config.query_queue_timeout,
-            tx_rate_per_authority_per_sec: config.tx_rate_per_authority_per_sec,
-            tx_burst_per_authority: config.tx_burst_per_authority,
-            deploy_rate_per_origin_per_sec: config.deploy_rate_per_origin_per_sec,
-            deploy_burst_per_origin: config.deploy_burst_per_origin,
-            soracloud_public_rate_per_ip_per_sec: config.soracloud_public_rate_per_ip_per_sec,
-            soracloud_public_burst_per_ip: config.soracloud_public_burst_per_ip,
             soracloud_public_max_inflight: config.soracloud_public_max_inflight.get(),
             soracloud_public_max_response_bytes: usize::try_from(
                 config.soracloud_public_max_response_bytes.get(),
             )
             .unwrap_or(usize::MAX),
-            soracloud_mutation_rate_per_account_origin_per_sec: config
-                .soracloud_mutation_rate_per_account_origin_per_sec,
-            soracloud_mutation_burst_per_account_origin: config
-                .soracloud_mutation_burst_per_account_origin,
             soracloud_mutation_max_inflight: config.soracloud_mutation_max_inflight.get(),
             soracloud_mutation_max_body_bytes: usize::try_from(
                 config.soracloud_mutation_max_body_bytes.get(),
@@ -48437,12 +49352,17 @@ impl Torii {
             account_onboarding,
             vpn_relay_trust,
             soracloud_runtime,
-            soracloud_hf_config,
         }
     }
     /// Wire a P2P handle for authenticated network services.
     #[cfg(any(feature = "app_api", feature = "connect"))]
     pub fn with_p2p(mut self, p2p: iroha_core::IrohaNetwork) -> Self {
+        if self.kura.emergency_fast_startup_enabled() {
+            iroha_logger::warn!(
+                "emergency Fast Kura mode leaves Torii detached from P2P relay services"
+            );
+            return self;
+        }
         self.p2p = Some(p2p);
         #[cfg(feature = "connect")]
         {
@@ -48552,6 +49472,30 @@ impl Torii {
         Some(layer)
     }
     fn prepare_da_runtime_services(&self) -> DaRuntimeServices {
+        let replay_cache_config = iroha_core::da::ReplayCacheConfig::new()
+            .with_max_entries_per_lane(self.da_ingest.replay_cache_capacity)
+            .with_max_lane_epochs(self.da_ingest.replay_cache_max_lane_epochs)
+            .with_ttl(self.da_ingest.replay_cache_ttl)
+            .with_max_sequence_lag(self.da_ingest.replay_cache_max_sequence_lag);
+        if self.kura.emergency_fast_startup_enabled() {
+            // Handlers fail closed in Fast mode. Keep only bounded placeholders
+            // so router construction never opens, scans, verifies, or repairs
+            // the durable receipt/cursor trees.
+            let replay_cache = Arc::new(iroha_core::da::ReplayCache::new(replay_cache_config));
+            let replay_store = Arc::new(da::ReplayCursorStore::in_memory_with_max_lane_epochs(
+                self.da_ingest.replay_cache_max_lane_epochs,
+            ));
+            let receipt_log = Arc::new(da::DaReceiptLog::in_memory(
+                Arc::clone(&replay_store),
+                self.da_receipt_signer.public_key().clone(),
+            ));
+            return DaRuntimeServices {
+                replay_cache,
+                replay_store,
+                receipt_log,
+                spooler: None,
+            };
+        }
         let replay_store_dir = self.da_ingest.replay_cache_store_dir.clone();
         let replay_cursor_store = da::ReplayCursorStore::open_with_max_lane_epochs(
             replay_store_dir.clone(),
@@ -48563,11 +49507,6 @@ impl Torii {
                 replay_store_dir.display()
             )
         });
-        let replay_cache_config = iroha_core::da::ReplayCacheConfig::new()
-            .with_max_entries_per_lane(self.da_ingest.replay_cache_capacity)
-            .with_max_lane_epochs(self.da_ingest.replay_cache_max_lane_epochs)
-            .with_ttl(self.da_ingest.replay_cache_ttl)
-            .with_max_sequence_lag(self.da_ingest.replay_cache_max_sequence_lag);
         let replay_cache = Arc::new(iroha_core::da::ReplayCache::new(replay_cache_config));
         for (lane_epoch, highest) in replay_cursor_store.highest_sequences() {
             replay_cache
@@ -48756,6 +49695,8 @@ impl Torii {
                 .try_into()
                 .unwrap_or(usize::MAX),
             state: self.state.clone(),
+            #[cfg(feature = "app_api")]
+            parliament_tle_release_coordinator: self.parliament_tle_release_coordinator.clone(),
             #[cfg(feature = "app_api")]
             musubi_search: self.musubi_search.clone(),
             bootle_lantern_issuance_runtime: self.bootle_lantern_issuance_runtime.clone(),
@@ -48966,7 +49907,6 @@ impl Torii {
             vpn_receipts: Arc::new(DashMap::new()),
             vpn_state_lock: Arc::new(std::sync::Mutex::new(vpn::VpnRuntimeState::default())),
             soracloud_runtime: self.soracloud_runtime.clone(),
-            soracloud_hf_config: self.soracloud_hf_config.clone(),
             #[cfg(feature = "connect")]
             torii_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             #[cfg(feature = "connect")]
@@ -49036,8 +49976,10 @@ impl Torii {
                 )
             });
         }
-        #[cfg(feature = "connect")]
-        if let Some(network) = app_state.p2p.clone() {
+        #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+        if !app_state.kura.emergency_fast_startup_enabled()
+            && let Some(network) = app_state.p2p.clone()
+        {
             attach_torii_proxy_network(app_state.clone(), network);
         }
         let router = self.compose_api_router(app_state.clone());
@@ -49210,6 +50152,13 @@ impl Torii {
                 )
             },
         ));
+        // Fast restores no derived World indexes and has no mutable runtime.
+        // Keep its HTTP surface diagnostic-only before authentication, body
+        // extraction, query execution, or optional service code can run.
+        let router = router.layer(axum::middleware::from_fn_with_state(
+            app_state.clone(),
+            enforce_emergency_fast_surface,
+        ));
         // Matched-route metadata must wrap metrics and tracing so neither ever
         // needs to use a raw URL as a fallback label.
         let router = router.layer(axum::middleware::from_fn_with_state(
@@ -49254,6 +50203,7 @@ impl Torii {
         self,
         shutdown_signal: ShutdownSignal,
     ) -> core::result::Result<(), Report<Error>> {
+        let emergency_fast = self.kura.emergency_fast_startup_enabled();
         #[cfg(feature = "app_api")]
         if let Some(code) = self.sorafs_moderation_startup_error {
             return Err(Report::new(Error::SorafsModerationStartup { code }));
@@ -49301,7 +50251,9 @@ impl Torii {
             }
         }
         #[cfg(feature = "app_api")]
-        self.spawn_musubi_search_projection_worker(shutdown_signal.clone());
+        if !emergency_fast {
+            self.spawn_musubi_search_projection_worker(shutdown_signal.clone());
+        }
         if let Some(runtime) = self.iso_bridge.clone() {
             let mut rx = self.events.subscribe();
             tokio::spawn(async move {
@@ -49354,7 +50306,7 @@ impl Torii {
                 }
             });
         }
-        {
+        if !emergency_fast {
             let mut rx = self.events.subscribe();
             let cache = self.pipeline_status_cache.clone();
             let kura = self.kura.clone();
@@ -49391,7 +50343,7 @@ impl Torii {
         }
         #[cfg(feature = "app_api")]
         {
-            if let Some(anchor_cfg) = self.da_ingest.taikai_anchor.clone() {
+            if !emergency_fast && let Some(anchor_cfg) = self.da_ingest.taikai_anchor.clone() {
                 crate::da::spawn_anchor_worker(
                     self.da_ingest.manifest_store_dir.clone(),
                     anchor_cfg,
@@ -49400,26 +50352,33 @@ impl Torii {
             }
         }
         #[cfg(feature = "app_api")]
-        self.spawn_pin_registry_metrics_worker(shutdown_signal.clone());
+        if !emergency_fast {
+            self.spawn_pin_registry_metrics_worker(shutdown_signal.clone());
+        }
         #[cfg(feature = "app_api")]
-        self.spawn_por_ingestion_metrics_worker(shutdown_signal.clone());
+        if !emergency_fast {
+            self.spawn_por_ingestion_metrics_worker(shutdown_signal.clone());
+        }
         #[cfg(feature = "app_api")]
-        let evidence_viewer_compaction_worker =
-            self.spawn_evidence_viewer_compaction_worker(shutdown_signal.clone());
+        let evidence_viewer_compaction_worker = if emergency_fast {
+            None
+        } else {
+            self.spawn_evidence_viewer_compaction_worker(shutdown_signal.clone())
+        };
         #[cfg(feature = "app_api")]
-        if let Some(runtime) = &self.por_runtime {
+        if !emergency_fast && let Some(runtime) = &self.por_runtime {
             runtime.clone().spawn(shutdown_signal.clone());
         }
         #[cfg(feature = "app_api")]
-        if let Some(runtime) = &self.sorafs_pop_credentials {
+        if !emergency_fast && let Some(runtime) = &self.sorafs_pop_credentials {
             runtime.clone().spawn(shutdown_signal.clone());
         }
         #[cfg(feature = "app_api")]
-        if let Some(runtime) = &self.gc_runtime {
+        if !emergency_fast && let Some(runtime) = &self.gc_runtime {
             runtime.clone().spawn(shutdown_signal.clone());
         }
         #[cfg(feature = "app_api")]
-        if let Some(components) = &self.sorafs_gateway_security {
+        if !emergency_fast && let Some(components) = &self.sorafs_gateway_security {
             if let Some(automation) = &components.tls_automation {
                 automation.spawn(self.telemetry.clone(), shutdown_signal.clone());
             }
@@ -49431,7 +50390,7 @@ impl Torii {
             .attach_with(|| self.address.clone().into_attachment())?;
         let (api_router, app_state) = self.create_api_router_with_state();
         #[cfg(feature = "app_api")]
-        {
+        if !emergency_fast {
             sorafs::api::spawn_sorafs_capacity_reconciler_worker(
                 app_state.clone(),
                 shutdown_signal.clone(),

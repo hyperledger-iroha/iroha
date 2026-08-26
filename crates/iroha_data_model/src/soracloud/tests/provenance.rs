@@ -172,7 +172,7 @@ fn model_weight_rollback_provenance_payload_encodes_canonical_tuple() {
 fn uploaded_model_bundle_register_provenance_payload_encodes_bundle_value() {
     let bundle = SoraUploadedModelBundleV1 {
         schema_version: SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
-        service_name: sample_name("private_model_host"),
+        service_name: sample_name("uploaded_model_registry"),
         model_id: "bundle-1".to_string(),
         weight_version: "v1".to_string(),
         family: "demo-family".to_string(),
@@ -185,12 +185,9 @@ fn uploaded_model_bundle_register_provenance_payload_encodes_bundle_value() {
         plaintext_bytes: 2_048,
         ciphertext_bytes: 1_024,
         chunk_manifest_root: sample_hash(33),
-        upload_recipient: sample_uploaded_model_encryption_recipient(),
-        wrapped_bundle_key: sample_uploaded_model_wrapped_key(),
         pricing_policy: SoraUploadedModelPricingPolicyV1 {
             storage_price: xor_quantity_from_nanos(10),
         },
-        decryption_policy_ref: "policy/v1".to_string(),
     };
     let encoded = encode_uploaded_model_bundle_register_provenance_payload(bundle.clone())
         .expect("encode payload");
@@ -204,7 +201,6 @@ fn hf_shared_lease_join_provenance_payload_encodes_canonical_tuple() {
     let encoded = encode_hf_shared_lease_join_provenance_payload(
         "openai/demo-model",
         "4f9d72c",
-        "demo_model",
         "demo_service",
         Some("demo_apartment"),
         StorageClass::Warm,
@@ -216,7 +212,6 @@ fn hf_shared_lease_join_provenance_payload_encodes_canonical_tuple() {
     let expected = norito::to_bytes(&(
         "openai/demo-model",
         "4f9d72c",
-        "demo_model",
         "demo_service",
         Some("demo_apartment"),
         StorageClass::Warm,
@@ -256,7 +251,6 @@ fn hf_shared_lease_renew_provenance_payload_encodes_canonical_tuple() {
     let encoded = encode_hf_shared_lease_renew_provenance_payload(
         "openai/demo-model",
         "4f9d72c",
-        "demo_model",
         "demo_service",
         Some("demo_apartment"),
         StorageClass::Warm,
@@ -268,7 +262,6 @@ fn hf_shared_lease_renew_provenance_payload_encodes_canonical_tuple() {
     let expected = norito::to_bytes(&(
         "openai/demo-model",
         "4f9d72c",
-        "demo_model",
         "demo_service",
         Some("demo_apartment"),
         StorageClass::Warm,
@@ -277,103 +270,6 @@ fn hf_shared_lease_renew_provenance_payload_encodes_canonical_tuple() {
         base_fee,
     ))
     .expect("encode tuple");
-    assert_eq!(encoded, expected);
-}
-#[test]
-fn hf_resource_profile_reports_expected_size_bucket() {
-    assert_eq!(
-        sample_hf_resource_profile().size_bucket(),
-        SoraHfModelSizeBucketV1::Medium
-    );
-}
-#[test]
-fn hf_source_record_validates_resource_profile() {
-    sample_hf_source_record()
-        .validate()
-        .expect("valid source record");
-}
-#[test]
-fn model_host_capability_record_validates() {
-    sample_model_host_capability_record()
-        .validate()
-        .expect("valid host capability record");
-}
-#[test]
-fn hf_placement_record_validates_and_counts_warm_hosts() {
-    let placement = sample_hf_placement_record();
-    placement.validate().expect("valid placement record");
-    assert_eq!(placement.warm_host_count(), 1);
-}
-#[test]
-fn hf_placement_record_validate_rejects_zero_prehash_digest_sentinels() {
-    let zero_digest = zero_prehash_statement_hash();
-    macro_rules! assert_placement_digest_rejects {
-        ($field:literal, $assign:expr) => {{
-            let mut placement = sample_hf_placement_record();
-            $assign(&mut placement, zero_digest);
-            let error = placement
-                .validate()
-                .expect_err("placement placeholder digest must fail admission");
-            assert_zero_prehash_digest_error(&error, $field);
-        }};
-    }
-    assert_placement_digest_rejects!(
-        "placement_id",
-        |record: &mut SoraHfPlacementRecordV1, value| {
-            record.placement_id = value;
-        }
-    );
-    assert_placement_digest_rejects!(
-        "source_id",
-        |record: &mut SoraHfPlacementRecordV1, value| {
-            record.source_id = value;
-        }
-    );
-    assert_placement_digest_rejects!("pool_id", |record: &mut SoraHfPlacementRecordV1, value| {
-        record.pool_id = value;
-    });
-    assert_placement_digest_rejects!(
-        "selection_seed_hash",
-        |record: &mut SoraHfPlacementRecordV1, value| {
-            record.selection_seed_hash = value;
-        }
-    );
-}
-#[test]
-fn model_host_advertise_provenance_payload_encodes_canonical_layout() {
-    let capability = sample_model_host_capability_record();
-    let encoded =
-        encode_model_host_advertise_provenance_payload(&capability).expect("encode payload");
-    let expected = norito::to_bytes(&capability).expect("encode capability");
-    assert_eq!(encoded, expected);
-}
-#[test]
-fn model_host_heartbeat_provenance_payload_encodes_purpose_bound_preimage() {
-    let validator_account_id = sample_account_id(0xC3);
-    let encoded = encode_model_host_heartbeat_provenance_payload(&validator_account_id, 160_000)
-        .expect("encode payload");
-    let semantic_payload =
-        norito::encode_canonical(&(validator_account_id, 160_000u64)).expect("encode tuple");
-    let expected = norito::encode_canonical(&(
-        SORACLOUD_RUNTIME_PROVENANCE_DOMAIN_V1.to_vec(),
-        SORACLOUD_RUNTIME_PROVENANCE_PREIMAGE_VERSION_V1,
-        SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat.wire_id(),
-        semantic_payload,
-    ))
-    .expect("encode expected provenance preimage");
-    assert_eq!(encoded, expected);
-    validate_soracloud_runtime_provenance_preimage_v1(
-        SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat,
-        &encoded,
-    )
-    .expect("heartbeat purpose must validate");
-}
-#[test]
-fn model_host_withdraw_provenance_payload_encodes_account_id() {
-    let validator_account_id = sample_account_id(0xC3);
-    let encoded = encode_model_host_withdraw_provenance_payload(&validator_account_id)
-        .expect("encode payload");
-    let expected = norito::to_bytes(&validator_account_id).expect("encode account id");
     assert_eq!(encoded, expected);
 }
 #[test]
@@ -401,8 +297,8 @@ fn inrou_host_advertise_provenance_payload_encodes_purpose_bound_preimage() {
 fn runtime_provenance_signature_cannot_replay_across_purposes() {
     let canonical_payload =
         norito::encode_canonical(&("same-payload", 7u64)).expect("encode shared semantic payload");
-    let heartbeat_preimage = encode_soracloud_runtime_provenance_preimage_v1(
-        SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat,
+    let withdraw_preimage = encode_soracloud_runtime_provenance_preimage_v1(
+        SoracloudRuntimeProvenancePurposeV1::InrouHostWithdraw,
         &canonical_payload,
     )
     .expect("encode heartbeat preimage");
@@ -411,30 +307,30 @@ fn runtime_provenance_signature_cannot_replay_across_purposes() {
         &canonical_payload,
     )
     .expect("encode Inrou preimage");
-    assert_ne!(heartbeat_preimage, inrou_preimage);
+    assert_ne!(withdraw_preimage, inrou_preimage);
     assert_eq!(
         validate_soracloud_runtime_provenance_preimage_v1(
             SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert,
-            &heartbeat_preimage,
+            &withdraw_preimage,
         ),
         Err(SoracloudRuntimeProvenancePreimageErrorV1::PurposeMismatch)
     );
     let signer = sample_ed25519_keypair(0x9A);
-    let signature = Signature::try_new(signer.private_key(), &heartbeat_preimage)
-        .expect("sign heartbeat preimage");
+    let signature = Signature::try_new(signer.private_key(), &withdraw_preimage)
+        .expect("sign withdrawal preimage");
     signature
-        .verify(signer.public_key(), &heartbeat_preimage)
+        .verify(signer.public_key(), &withdraw_preimage)
         .expect("same-purpose signature must verify");
     assert!(
         signature
             .verify(signer.public_key(), &inrou_preimage)
             .is_err(),
-        "a heartbeat signature must not verify as an Inrou advert"
+        "an Inrou withdrawal signature must not verify as an Inrou advert"
     );
 }
 #[test]
 fn runtime_provenance_preimage_validator_rejects_non_v1_framing() {
-    let expected_purpose = SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat;
+    let expected_purpose = SoracloudRuntimeProvenancePurposeV1::InrouHostWithdraw;
     assert_eq!(
         validate_soracloud_runtime_provenance_preimage_v1(
             expected_purpose,
@@ -476,10 +372,10 @@ fn runtime_provenance_preimage_validator_rejects_non_v1_framing() {
 #[test]
 fn runtime_provenance_purpose_rejects_unknown_wire_ids() {
     assert_eq!(
-        SoracloudRuntimeProvenancePurposeV1::try_from_wire_id(3),
+        SoracloudRuntimeProvenancePurposeV1::try_from_wire_id(2),
         Ok(SoracloudRuntimeProvenancePurposeV1::InrouHostWithdraw)
     );
-    for unknown in [0, 4, u8::MAX] {
+    for unknown in [0, 3, u8::MAX] {
         assert_eq!(
             SoracloudRuntimeProvenancePurposeV1::try_from_wire_id(unknown),
             Err(SoracloudRuntimeProvenancePurposeErrorV1)
@@ -935,11 +831,10 @@ fn sample_agent_apartment_record() -> SoraAgentApartmentRecordV1 {
         schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
         manifest_hash: manifest.manifest_hash(),
         manifest,
-        status: SoraAgentRuntimeStatusV1::Running,
         deployed_sequence: 10,
-        lease_started_sequence: 10,
-        lease_expires_sequence: 110,
-        last_renewed_sequence: 10,
+        lease_started_height: 10,
+        lease_expires_height: 110,
+        last_renewed_height: 10,
         restart_count: 1,
         last_restart_sequence: Some(30),
         last_restart_reason: Some("policy refresh".to_string()),
@@ -1005,10 +900,12 @@ fn sample_agent_apartment_audit_event() -> SoraAgentApartmentAuditEventV1 {
     SoraAgentApartmentAuditEventV1 {
         schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
         sequence: 40,
+        block_height: 40,
+        block_timestamp_ms: 86_400_000,
         action: SoraAgentApartmentActionV1::Restart,
         apartment_name: sample_name("ops_agent"),
         status: SoraAgentRuntimeStatusV1::Running,
-        lease_expires_sequence: 140,
+        lease_expires_height: 140,
         manifest_hash: sample_hash(44),
         restart_count: 2,
         signer: sample_signer(),
@@ -1684,33 +1581,39 @@ fn sample_service_runtime_state() -> SoraServiceRuntimeStateV1 {
         health_status: SoraServiceHealthStatusV1::Healthy,
         load_factor_bps: 750,
         materialized_bundle_hash: sample_hash(160),
-        rollout_handle: Some("rollout-1".to_string()),
-        pending_mailbox_message_count: 2,
-        last_receipt_id: Some(sample_hash(161)),
     }
 }
 fn sample_service_audit_event() -> SoraServiceAuditEventV1 {
     SoraServiceAuditEventV1 {
         schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
         sequence: 1,
+        block_height: 1,
+        block_timestamp_ms: 1,
         action: SoraServiceLifecycleActionV1::DecryptionRequest,
         service_name: "portal".parse().expect("valid name"),
         from_version: None,
         to_version: "1.0.0".to_string(),
         service_manifest_hash: sample_hash(172),
         container_manifest_hash: sample_hash(173),
+        process_generation: 1,
+        config_generation: 0,
+        secret_generation: 0,
+        config_snapshot_hash: derive_soracloud_service_config_snapshot_hash_v1(&BTreeMap::new()),
+        secret_snapshot_hash: derive_soracloud_service_secret_snapshot_hash_v1(&BTreeMap::new()),
         governance_tx_hash: Some(sample_hash(176)),
         binding_name: Some("private_state".parse().expect("valid name")),
         state_key: Some("/state/private/patient-1".to_string()),
-        config_name: None,
-        secret_name: None,
-        rollout_handle: None,
+        config_mutations: Vec::new(),
+        secret_mutations: Vec::new(),
+        rollout_state: None,
         policy_name: Some("phi_threshold_policy".parse().expect("valid name")),
         policy_snapshot_hash: Some(sample_hash(177)),
         jurisdiction_tag: Some("us_hipaa".to_string()),
         consent_evidence_hash: Some(sample_hash(178)),
         break_glass: Some(true),
         break_glass_reason: Some("emergency review".to_string()),
+        lease_usage: None,
+        service_lease_commitment: None,
         lease_reporting_epoch_rollover: None,
         signer: sample_signer(),
     }
@@ -1725,12 +1628,6 @@ fn persisted_service_runtime_identifiers_and_state_paths_are_exact() {
     padded_version
         .validate()
         .expect_err("audit version aliases must fail closed");
-
-    let mut padded_rollout = audit.clone();
-    padded_rollout.rollout_handle = Some("rollout-1 ".to_owned());
-    padded_rollout
-        .validate()
-        .expect_err("rollout-handle aliases must fail closed");
 
     let mut noncanonical_state_path = audit.clone();
     noncanonical_state_path.state_key = Some("/state//patient-1".to_owned());
@@ -1751,12 +1648,6 @@ fn persisted_service_runtime_identifiers_and_state_paths_are_exact() {
     padded_active_version
         .validate()
         .expect_err("active service-version aliases must fail closed");
-    let mut padded_runtime_rollout = runtime;
-    padded_runtime_rollout.rollout_handle = Some(" rollout-1".to_owned());
-    padded_runtime_rollout
-        .validate()
-        .expect_err("runtime rollout-handle aliases must fail closed");
-
     let mut inrou_runtime = sample_inrou_replica_runtime_state();
     inrou_runtime.service_version = "2026.4 ".to_owned();
     inrou_runtime
@@ -1764,19 +1655,25 @@ fn persisted_service_runtime_identifiers_and_state_paths_are_exact() {
         .expect_err("Inrou runtime service-version aliases must fail closed");
 }
 fn sample_service_mailbox_message() -> SoraServiceMailboxMessageV1 {
-    SoraServiceMailboxMessageV1 {
+    let mut message = SoraServiceMailboxMessageV1 {
         schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
-        message_id: sample_hash(162),
+        message_id: Hash::prehashed([0; Hash::LENGTH]),
         from_service: "portal".parse().expect("valid name"),
+        from_service_version: "2026.1".to_string(),
         from_handler: "update".parse().expect("valid name"),
         to_service: "audit".parse().expect("valid name"),
+        to_service_version: "2026.1".to_string(),
         to_handler: "ciphertext_update".parse().expect("valid name"),
         payload_bytes: b"ciphertext".to_vec(),
         payload_commitment: Hash::new(b"ciphertext"),
+        delivery_delay_blocks: 0,
         enqueue_sequence: 10,
-        available_after_sequence: 10,
-        expires_at_sequence: Some(12),
-    }
+        enqueue_height: 10,
+        available_after_height: 10,
+        expires_at_height: 12,
+    };
+    message.message_id = derive_soracloud_mailbox_message_id_v1(&message);
+    message
 }
 fn sample_runtime_receipt() -> SoraRuntimeReceiptV1 {
     SoraRuntimeReceiptV1 {
@@ -1790,30 +1687,31 @@ fn sample_runtime_receipt() -> SoraRuntimeReceiptV1 {
         result_commitment: sample_hash(166),
         certified_by: SoraCertifiedResponsePolicyV1::None,
         emitted_sequence: 44,
-        placement_id: Some(sample_hash(170)),
-        selected_validator_account_id: Some(sample_account_id(171)),
-        selected_peer_id: Some(sample_peer_id(171)),
+        execution_host: Some(SoraRuntimeDeterministicValidatorHostV1 {
+            lane_id: crate::nexus::LaneId::SINGLE,
+            validator_account_id: sample_account_id(171),
+            peer_id: sample_peer_id(171),
+        }),
         mailbox_message_id: Some(sample_hash(163)),
         journal_artifact_hash: Some(sample_hash(168)),
         checkpoint_artifact_hash: Some(sample_hash(169)),
     }
 }
 #[test]
-fn runtime_receipt_requires_an_exact_selected_hf_peer_id() {
+fn runtime_receipt_requires_an_exact_selected_validator_peer_id() {
     let mut receipt = sample_runtime_receipt();
     receipt
         .validate()
         .expect("canonical runtime receipt host attribution");
-    receipt.selected_peer_id = Some(format!(
-        "{} ",
-        receipt
-            .selected_peer_id
-            .as_deref()
-            .expect("selected peer fixture")
-    ));
+    receipt
+        .execution_host
+        .as_mut()
+        .expect("selected validator fixture")
+        .peer_id
+        .push(' ');
     receipt
         .validate()
-        .expect_err("selected HF peer aliases must fail closed");
+        .expect_err("selected validator peer aliases must fail closed");
 
     let mut padded_service_version = sample_runtime_receipt();
     padded_service_version.service_version.push(' ');
@@ -1880,37 +1778,39 @@ fn service_world_records_are_closed_and_require_explicit_nullable_keys() {
             "governance_tx_hash",
             "binding_name",
             "state_key",
-            "config_name",
-            "secret_name",
-            "rollout_handle",
+            "rollout_state",
             "policy_name",
             "policy_snapshot_hash",
             "jurisdiction_tag",
             "consent_evidence_hash",
             "break_glass",
             "break_glass_reason",
+            "lease_usage",
+            "service_lease_commitment",
+            "lease_reporting_epoch_rollover",
         ],
         "service audit event"
     );
-    assert_closed_and_required_nullable!(
-        sample_service_runtime_state(),
-        SoraServiceRuntimeStateV1,
-        ["rollout_handle", "last_receipt_id"],
-        "service runtime state"
-    );
-    assert_closed_and_required_nullable!(
-        sample_service_mailbox_message(),
-        SoraServiceMailboxMessageV1,
-        ["expires_at_sequence"],
-        "service mailbox message"
+    let mut service_runtime_unknown =
+        norito::json::to_value(&sample_service_runtime_state()).expect("serialize runtime state");
+    service_runtime_unknown
+        .as_object_mut()
+        .expect("service runtime state JSON object")
+        .insert("retired_v0".to_owned(), norito::json::Value::from(true));
+    let error = norito::json::from_value::<SoraServiceRuntimeStateV1>(service_runtime_unknown)
+        .expect_err("service runtime state must reject unknown fields");
+    assert!(
+        matches!(
+            error,
+            norito::json::Error::UnknownField { ref field } if field == "retired_v0"
+        ),
+        "service runtime state reported the wrong unknown-field error: {error}"
     );
     assert_closed_and_required_nullable!(
         sample_runtime_receipt(),
         SoraRuntimeReceiptV1,
         [
-            "placement_id",
-            "selected_validator_account_id",
-            "selected_peer_id",
+            "execution_host",
             "mailbox_message_id",
             "journal_artifact_hash",
             "checkpoint_artifact_hash",
@@ -1991,8 +1891,7 @@ fn host_protocol_v1_json_rejects_unknown_fields_across_the_direct_graph() {
         to_service: "audit".parse().expect("valid name"),
         to_handler: "update".parse().expect("valid name"),
         payload_bytes: Vec::new(),
-        available_after_sequence: 1,
-        expires_at_sequence: None,
+        delivery_delay_blocks: 1,
     };
     assert_unknown_rejected!(
         SoracloudHostOperationV1::ReadConfig,
@@ -2202,23 +2101,10 @@ fn host_protocol_v1_json_requires_explicit_null_and_empty_keys() {
             to_service: "audit".parse().expect("valid name"),
             to_handler: "update".parse().expect("valid name"),
             payload_bytes: Vec::new(),
-            available_after_sequence: 1,
-            expires_at_sequence: None,
+            delivery_delay_blocks: 1,
         },
         SoracloudEmitMailboxMessageRequestV1,
-        ["payload_bytes"],
-        "emit mailbox message request"
-    );
-    assert_required_nulls!(
-        SoracloudEmitMailboxMessageRequestV1 {
-            to_service: "audit".parse().expect("valid name"),
-            to_handler: "update".parse().expect("valid name"),
-            payload_bytes: Vec::new(),
-            available_after_sequence: 1,
-            expires_at_sequence: None,
-        },
-        SoracloudEmitMailboxMessageRequestV1,
-        ["expires_at_sequence"],
+        ["payload_bytes", "delivery_delay_blocks"],
         "emit mailbox message request"
     );
     assert_required_fields!(

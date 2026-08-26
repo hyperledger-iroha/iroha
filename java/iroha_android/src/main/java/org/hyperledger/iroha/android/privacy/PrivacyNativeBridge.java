@@ -14,7 +14,7 @@ import org.hyperledger.iroha.android.model.NetworkId;
  * fixture bundle. The local catalog never establishes network activation or readiness.
  */
 public final class PrivacyNativeBridge {
-  public static final int REQUIRED_BRIDGE_ABI_VERSION = 22;
+  public static final int REQUIRED_BRIDGE_ABI_VERSION = 23;
   public static final int CONFIDENTIAL_DERIVATION_CONTRACT_REVISION_V3 = 1;
   public static final int EXACT12_CAPABILITY_MANIFEST_MAX_BYTES = 256 * 1024;
   public static final int COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES = 256 * 1024;
@@ -25,7 +25,7 @@ public final class PrivacyNativeBridge {
       32 + CONFIDENTIAL_TREE_DEPTH * 32 + CONFIDENTIAL_TREE_DEPTH;
   private static final String LIBRARY_NAME = "connect_norito_bridge";
 
-  /** Stable ABI-22 result of validating one typed local compiled-profile catalog. */
+  /** Stable ABI-23 result of validating one typed local compiled-profile catalog. */
   public enum CompiledProfileCatalogValidationStatusV1 {
     VALID(0),
     NULL_POINTER(1),
@@ -48,7 +48,7 @@ public final class PrivacyNativeBridge {
     }
   }
 
-  /** Stable ABI-22 result of validating the Rust-derived exact-12 fixture bundle. */
+  /** Stable ABI-23 result of validating the Rust-derived exact-12 fixture bundle. */
   public enum Exact12FixtureValidationStatusV1 {
     VALID(0),
     NULL_POINTER(1),

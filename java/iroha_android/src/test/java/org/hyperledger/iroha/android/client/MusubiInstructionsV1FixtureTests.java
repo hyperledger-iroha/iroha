@@ -13,6 +13,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import org.hyperledger.iroha.android.address.AccountAddress;
@@ -482,8 +483,15 @@ public final class MusubiInstructionsV1FixtureTests {
     readField(transactionDecoder, "authority");
     readField(transactionDecoder, "creation_time_ms");
     final byte[] executablePayload = readField(transactionDecoder, "executable");
-    for (int index = 0; index < 5; index++) {
-      readField(transactionDecoder, "tail[" + index + "]");
+    for (final String field :
+        Arrays.asList(
+            "time_to_live_ms",
+            "nonce",
+            "fee_payment",
+            "admission_intent",
+            "metadata",
+            "attachments")) {
+      readField(transactionDecoder, field);
     }
     assertEquals(0, transactionDecoder.remaining());
 
@@ -1005,7 +1013,7 @@ public final class MusubiInstructionsV1FixtureTests {
 
   private static void assertSemanticKeys(
       final Map<String, Object> semantic, final String... expectedKeys) {
-    assertEquals(Arrays.asList(expectedKeys), new ArrayList<>(semantic.keySet()));
+    assertEquals(new HashSet<>(Arrays.asList(expectedKeys)), semantic.keySet());
   }
 
   private static GovernanceDecision governanceDecision(final Object value) {
@@ -1601,7 +1609,7 @@ public final class MusubiInstructionsV1FixtureTests {
 
   private static NoritoDecoder canonicalDecoder(final byte[] payload) {
     return new NoritoDecoder(
-        payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+        payload, NoritoCodec.DEFAULT_FLAGS);
   }
 
   private static byte[] readField(final NoritoDecoder decoder, final String field) {

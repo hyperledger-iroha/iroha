@@ -169,6 +169,8 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       NoritoAdapters.option(PROOF_ATTACHMENT_LIST_ADAPTER);
   private static final String INSTRUCTION_BOX_SCHEMA =
       "(alloc::string::String, alloc::vec::Vec<u8>)";
+  private static final String CUSTOM_INSTRUCTION_SCHEMA =
+      "iroha_data_model::isi::transparent::CustomInstruction";
   private static final String MULTISIG_PROPOSE_DTO_SCHEMA =
       "iroha_torii::routing::MultisigProposeDto";
   private final int chainDiscriminant;
@@ -409,7 +411,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     private static byte[] decodeSibling(
         final byte[] payload, final NoritoDecoder parent, final int index) {
       final NoritoDecoder child =
-          new NoritoDecoder(payload, parent.flags(), parent.flagsHint());
+          new NoritoDecoder(payload, parent.flags());
       final Optional<byte[]> sibling = OPTIONAL_LANE_PRIVACY_HASH_ADAPTER.decode(child);
       if (child.remaining() != 0) {
         throw new IllegalArgumentException(
@@ -638,6 +640,85 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     return NoritoCodec.encode(instruction, INSTRUCTION_BOX_SCHEMA, new InstructionAdapter());
   }
 
+  /** Encodes the bare Norito vector preimage hashed by Rust's HashOf<Vec<InstructionBox>>. */
+  static byte[] encodeCanonicalInstructionBoxes(final List<byte[]> encodedInstructions) {
+    if (encodedInstructions == null) {
+      throw new IllegalArgumentException("encodedInstructions must not be null");
+    }
+    if (encodedInstructions.isEmpty()) {
+      throw new IllegalArgumentException("encodedInstructions must not be empty");
+    }
+    for (int index = 0; index < encodedInstructions.size(); index++) {
+      final byte[] encoded = encodedInstructions.get(index);
+      if (encoded == null || encoded.length == 0) {
+        throw new IllegalArgumentException(
+            "encodedInstructions[" + index + "] must not be empty");
+      }
+      final InstructionBox decoded = decodeInstructionBox(encoded);
+      final byte[] canonical = encodeInstructionBox(decoded);
+      try {
+        if (!Arrays.equals(encoded, canonical)) {
+          throw new IllegalArgumentException(
+              "encodedInstructions[" + index + "] is not canonical");
+        }
+      } finally {
+        Arrays.fill(canonical, (byte) 0);
+      }
+    }
+    final NoritoEncoder encoder = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
+    ENCODED_INSTRUCTION_LIST_ADAPTER.encode(encoder, encodedInstructions);
+    return encoder.toByteArray();
+  }
+
+  /** Decodes one exact canonical {@code iroha.custom} instruction JSON payload. */
+  static String decodeCanonicalCustomInstructionJson(final InstructionBox instruction) {
+    if (instruction == null || !(instruction.payload() instanceof InstructionBox.WirePayload)) {
+      throw new IllegalArgumentException("instruction must contain a wire payload");
+    }
+    final InstructionBox.WirePayload wire = (InstructionBox.WirePayload) instruction.payload();
+    if (!"iroha.custom".equals(wire.wireName())) {
+      throw new IllegalArgumentException("instruction wire name must be iroha.custom");
+    }
+    final byte[] framed = wire.payloadBytes();
+    byte[] canonical = null;
+    try {
+      final String json =
+          NoritoCodec.decode(framed, CustomInstructionAdapter.INSTANCE, CUSTOM_INSTRUCTION_SCHEMA);
+      canonical =
+          NoritoCodec.encode(json, CUSTOM_INSTRUCTION_SCHEMA, CustomInstructionAdapter.INSTANCE);
+      if (!Arrays.equals(framed, canonical)) {
+        int mismatch = 0;
+        final int sharedLength = Math.min(framed.length, canonical.length);
+        while (mismatch < sharedLength && framed[mismatch] == canonical[mismatch]) {
+          mismatch++;
+        }
+        throw new IllegalArgumentException(
+            "custom instruction payload is not the exact canonical encoding"
+                + " (first mismatch at byte "
+                + mismatch
+                + ", received length "
+                + framed.length
+                + ", canonical length "
+                + canonical.length
+                + ")");
+      }
+      JsonValue.fromCanonicalWire(json);
+      return json;
+    } finally {
+      Arrays.fill(framed, (byte) 0);
+      if (canonical != null) {
+        Arrays.fill(canonical, (byte) 0);
+      }
+    }
+  }
+
+  /** Test and fixture support for the canonical custom-instruction envelope. */
+  static byte[] encodeCanonicalCustomInstructionJson(final String json) {
+    final String canonical = JsonValue.fromCanonicalWire(json).canonicalJson();
+    return NoritoCodec.encode(
+        canonical, CUSTOM_INSTRUCTION_SCHEMA, CustomInstructionAdapter.INSTANCE);
+  }
+
   static byte[] encodeProofAttachmentPayload(final ProofAttachment value) {
     return encodeProofAttachmentPayload(value, 0);
   }
@@ -654,7 +735,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
   static ProofAttachment decodeProofAttachmentPayload(final byte[] encoded, final int flags) {
     final NoritoDecoder decoder =
-        new NoritoDecoder(encoded, flags, NoritoHeader.MINOR_VERSION);
+        new NoritoDecoder(encoded, flags);
     final ProofAttachment value = PROOF_ATTACHMENT_ADAPTER.decode(decoder);
     if (decoder.remaining() != 0) {
       throw new IllegalArgumentException("trailing ProofAttachment payload bytes");
@@ -979,7 +1060,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       if (payload.length == 0) {
         throw new IllegalArgumentException("Instruction payload must not be empty");
       }
-      final InstructionBox wire = tryDecodeWireInstruction(payload, decoder.flags(), decoder.flagsHint());
+      final InstructionBox wire = tryDecodeWireInstruction(payload, decoder.flags());
       if (wire != null) {
         return wire;
       }
@@ -1086,12 +1167,12 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     @Override
     public String decode(final NoritoDecoder decoder) {
       final byte[] payload = decoder.readBytes(decoder.remaining());
-      return decodePayload(payload, decoder.flags(), decoder.flagsHint());
+      return decodePayload(payload, decoder.flags());
     }
 
     private static String decodePayload(
-        final byte[] payload, final int flags, final int flagsHint) {
-      final NoritoDecoder controllerDecoder = new NoritoDecoder(payload, flags, flagsHint);
+        final byte[] payload, final int flags) {
+      final NoritoDecoder controllerDecoder = new NoritoDecoder(payload, flags);
       final ControllerPayload controller = decodeControllerPayload(controllerDecoder);
       if (controllerDecoder.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after authority payload");
@@ -1352,7 +1433,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       throw new IllegalArgumentException("Field payload too large");
     }
     final byte[] payload = decoder.readBytes((int) length);
-    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
     final T value = adapter.decode(child);
     if (child.remaining() != 0) {
       throw new IllegalArgumentException("Trailing bytes after field payload");
@@ -1370,7 +1451,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       throw new IllegalArgumentException(fieldName + " payload too large");
     }
     final byte[] payload = decoder.readBytes((int) length);
-    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
     final T value = adapter.decode(child);
     if (child.remaining() != 0) {
       throw new IllegalArgumentException("Trailing bytes after " + fieldName + " payload");
@@ -1418,7 +1499,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       throw new IllegalArgumentException("numeric mantissa payload too large");
     }
     final NoritoDecoder child =
-        new NoritoDecoder(decoder.readBytes((int) length), decoder.flags(), decoder.flagsHint());
+        new NoritoDecoder(decoder.readBytes((int) length), decoder.flags());
     final long byteLength = child.readUInt(32);
     if (byteLength > 64L) {
       throw new IllegalArgumentException("numeric mantissa exceeds 512 bits");
@@ -1473,7 +1554,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       throw new IllegalArgumentException("Field payload too large");
     }
     final byte[] payload = decoder.readBytes((int) length);
-    return AccountIdAdapter.decodePayload(payload, decoder.flags(), decoder.flagsHint());
+    return AccountIdAdapter.decodePayload(payload, decoder.flags());
   }
 
   private static Optional<String> optionalString(final String value) {
@@ -1597,9 +1678,9 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   }
 
   private static InstructionBox tryDecodeWireInstruction(
-      final byte[] payload, final int flags, final int flagsHint) {
+      final byte[] payload, final int flags) {
     try {
-      final NoritoDecoder wireDecoder = new NoritoDecoder(payload, flags, flagsHint);
+      final NoritoDecoder wireDecoder = new NoritoDecoder(payload, flags);
       final String wireName = decodeSizedField(wireDecoder, STRING_ADAPTER);
       final byte[] wirePayload = decodeSizedField(wireDecoder, RAW_BYTE_VEC_ADAPTER);
       if (wireDecoder.remaining() != 0) {
@@ -1694,12 +1775,12 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     @Override
     public byte[] decode(final NoritoDecoder decoder) {
       final byte[] payload = decoder.readBytes(decoder.remaining());
-      return decodePayload(payload, decoder.flags(), decoder.flagsHint());
+      return decodePayload(payload, decoder.flags());
     }
 
     private static byte[] decodePayload(
-        final byte[] payload, final int flags, final int flagsHint) {
-      final NoritoDecoder sized = new NoritoDecoder(payload, flags, flagsHint);
+        final byte[] payload, final int flags) {
+      final NoritoDecoder sized = new NoritoDecoder(payload, flags);
       final byte[] value = decodeSizedField(sized, RAW_BYTE_VEC_ADAPTER);
       if (sized.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after IVM payload");
@@ -1725,6 +1806,37 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     @Override
     public boolean isSelfDelimiting() {
       return true;
+    }
+  }
+
+  private static final class CustomInstructionAdapter implements TypeAdapter<String> {
+    private static final CustomInstructionAdapter INSTANCE = new CustomInstructionAdapter();
+
+    private static final TypeAdapter<String> PAYLOAD_FIELD_ADAPTER =
+        new TypeAdapter<>() {
+          @Override
+          public void encode(final NoritoEncoder encoder, final String value) {
+            encodeSizedField(encoder, JSON_VALUE_ADAPTER, value);
+          }
+
+          @Override
+          public String decode(final NoritoDecoder decoder) {
+            return decodeSizedField(decoder, JSON_VALUE_ADAPTER);
+          }
+        };
+
+    @Override
+    public void encode(final NoritoEncoder encoder, final String value) {
+      // CustomInstruction's derived struct field and Json's wire field are independently
+      // self-delimiting. Keep both envelopes: Rust and iroha-js therefore emit four compact
+      // lengths before the canonical UTF-8 document (Custom struct, Json field, String field,
+      // and String bytes).
+      encodeSizedField(encoder, PAYLOAD_FIELD_ADAPTER, value);
+    }
+
+    @Override
+    public String decode(final NoritoDecoder decoder) {
+      return decodeSizedField(decoder, PAYLOAD_FIELD_ADAPTER);
     }
   }
 

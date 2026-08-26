@@ -7,6 +7,7 @@ import java.util.concurrent.CompletionException;
 import java.util.function.Supplier;
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.IrohaClient;
 import org.hyperledger.iroha.android.client.TransactionFinality;
@@ -74,34 +75,64 @@ public final class NexusAppClient {
           "Connect transport is required to await wallet approval");
     }
     final NexusApprovedAccount approved = connectTransport.awaitApproval(session, config);
+    if (approved.session() != null) {
+      throw new NexusAppError(
+          "approval_session_mismatch",
+          "wallet approval must not replace the caller's Connect session");
+    }
     if (approved.accountId().isBlank()) {
       throw new NexusAppError("approval_missing_account", "wallet approval did not include an account");
     }
-    final byte[] publicKey = firstKey(
-        approved.signingPublicKey(), session.signingPublicKey(), config.signingPublicKey());
-    if (publicKey == null || publicKey.length == 0) {
-      throw new NexusAppError(
-          "missing_signing_public_key", "wallet approval did not include a signing public key");
+    final String accountId =
+        requireCanonicalAccountId(approved.accountId(), "wallet approval account");
+    final String[] assertedAccounts = {
+      config.authority(),
+      session.approvedAccount(),
+    };
+    final String[] assertedContexts = {
+      "configured authority", "Connect session approved account"
+    };
+    for (int i = 0; i < assertedAccounts.length; i++) {
+      final String assertedAccount = assertedAccounts[i];
+      if (assertedAccount != null) {
+        requireCanonicalAccountId(assertedAccount, assertedContexts[i]);
+      }
+      if (assertedAccount != null && !assertedAccount.equals(accountId)) {
+        throw new NexusAppError(
+            "approval_account_mismatch",
+            assertedContexts[i] + " does not match the wallet approval account");
+      }
     }
-    validateEd25519PublicKey(publicKey);
-    final NexusConnectSession approvedSession = approved.session() == null
-        ? session.withApproval(approved.accountId(), publicKey)
-        : approved.session();
+    final byte[] publicKey =
+        requireAccountSigningKey(
+            accountId,
+            "wallet approval account",
+            approved.signingPublicKey(),
+            session.signingPublicKey(),
+            config.signingPublicKey());
+    final NexusConnectSession approvedSession = session.withApproval(accountId, publicKey);
     return approved.withSessionAndKey(approvedSession, publicKey);
   }
 
   public NexusTransferDraft buildTransferDraft(final NexusTransferInput input) {
+    if (config.authority() != null) {
+      requireCanonicalAccountId(config.authority(), "configured authority");
+    }
     final String authority = input.authority() != null ? input.authority() : config.authority();
     if (authority == null || authority.isBlank()) {
       throw new NexusAppError("missing_authority", "transfer authority is required");
     }
-    final byte[] signingPublicKey = firstKey(input.signingPublicKey(), config.signingPublicKey());
-    if (signingPublicKey == null) {
-      throw new NexusAppError(
-          "missing_signing_public_key",
-          "signing public key is required for an externally signed transfer");
-    }
-    validateEd25519PublicKey(signingPublicKey);
+    requireCanonicalAccountId(authority, "transfer authority");
+    requireCanonicalAccountId(
+        input.destinationAccountId(), "transfer destination account");
+    requireCanonicalAccountId(
+        sourceAssetOwner(input.sourceAssetId()), "transfer source asset owner");
+    final byte[] signingPublicKey =
+        requireAccountSigningKey(
+            authority,
+            "transfer authority",
+            input.signingPublicKey(),
+            config.signingPublicKey());
     final NexusTransferInput normalized = input.toBuilder()
         .authority(authority)
         .signingPublicKey(signingPublicKey)
@@ -148,6 +179,31 @@ public final class NexusAppClient {
           "connect_transport_unavailable",
           "Connect transport is required to request a wallet signature");
     }
+    requireCanonicalAccountId(signable.authority(), "signable authority");
+    if (config.authority() != null) {
+      requireCanonicalAccountId(config.authority(), "configured authority");
+    }
+    if (session.approvedAccount() != null) {
+      requireCanonicalAccountId(
+          session.approvedAccount(), "Connect session approved account");
+    }
+    final String[] assertedAccounts = {config.authority(), session.approvedAccount()};
+    final String[] assertedContexts = {
+      "configured authority", "Connect session approved account"
+    };
+    for (int i = 0; i < assertedAccounts.length; i++) {
+      if (assertedAccounts[i] != null && !assertedAccounts[i].equals(signable.authority())) {
+        throw new NexusAppError(
+            "approval_account_mismatch",
+            assertedContexts[i] + " does not match the signable authority");
+      }
+    }
+    requireAccountSigningKey(
+        signable.authority(),
+        "signable authority",
+        signable.signingPublicKey(),
+        session.signingPublicKey(),
+        config.signingPublicKey());
     ensureEd25519(signable.signatureAlgorithm());
     final NexusWalletSignature signature =
         connectTransport.requestSignature(session, signable, config);
@@ -165,6 +221,11 @@ public final class NexusAppClient {
       final NexusSignableTransaction signable,
       final NexusWalletSignature signature,
       final NexusFinalizeOptions options) {
+    requireAccountSigningKey(
+        signable.authority(),
+        "signable authority",
+        signable.signingPublicKey(),
+        config.signingPublicKey());
     ensureEd25519(signable.signatureAlgorithm());
     ensureEd25519(signature.algorithm());
     validateEd25519PublicKey(signable.signingPublicKey());
@@ -231,6 +292,17 @@ public final class NexusAppClient {
       final NexusConnectSession session,
       final NexusTransferInput input,
       final NexusFinalizeOptions options) {
+    final String[] accountInputs = {
+      session.approvedAccount(), input.authority(), config.authority()
+    };
+    final String[] accountContexts = {
+      "Connect session approved account", "transfer authority", "configured authority"
+    };
+    for (int i = 0; i < accountInputs.length; i++) {
+      if (accountInputs[i] != null) {
+        requireCanonicalAccountId(accountInputs[i], accountContexts[i]);
+      }
+    }
     final String authority = input.authority() != null
         ? input.authority()
         : session.approvedAccount() != null ? session.approvedAccount() : config.authority();
@@ -245,16 +317,137 @@ public final class NexusAppClient {
           "transfer authority does not match the approved wallet account");
     }
     final byte[] signingPublicKey =
-        firstKey(input.signingPublicKey(), session.signingPublicKey(), config.signingPublicKey());
-    if (signingPublicKey == null) {
-      throw new NexusAppError(
-          "missing_signing_public_key",
-          "approved account did not provide a signing public key");
-    }
+        requireAccountSigningKey(
+            authority,
+            "transfer authority",
+            input.signingPublicKey(),
+            session.signingPublicKey(),
+            config.signingPublicKey());
     final NexusTransferDraft draft =
         buildTransferDraft(input.toBuilder().authority(authority).signingPublicKey(signingPublicKey).build());
     final NexusWalletSignature walletSignature = requestSignature(session, draft.signable());
     return finalizeAndSubmit(draft.signable(), walletSignature, options);
+  }
+
+  private String requireCanonicalAccountId(final String value, final String context) {
+    if (!value.equals(value.trim())) {
+      throw new NexusAppError(
+          "invalid_account_id",
+          context
+              + " must be an exact canonical I105 account for chain discriminant "
+              + config.chainDiscriminant());
+    }
+    final AccountAddress address;
+    try {
+      address =
+          AccountAddress.parseEncodedIgnoringCurveSupport(
+                  value, config.chainDiscriminant())
+              .address;
+    } catch (final AccountAddress.AccountAddressException error) {
+      throw new NexusAppError(
+          "invalid_account_id",
+          context
+              + " must be an exact canonical I105 account for chain discriminant "
+              + config.chainDiscriminant(),
+          error);
+    }
+    final String canonical;
+    try {
+      canonical = address.toI105(config.chainDiscriminant());
+    } catch (final AccountAddress.AccountAddressException error) {
+      throw new NexusAppError(
+          "invalid_account_id",
+          context
+              + " could not be rendered for chain discriminant "
+              + config.chainDiscriminant(),
+          error);
+    }
+    if (!canonical.equals(value)) {
+      throw new NexusAppError(
+          "invalid_account_id", context + " must use its exact canonical I105 representation");
+    }
+    return value;
+  }
+
+  private byte[] requireAccountSigningKey(
+      final String accountId, final String context, final byte[]... sources) {
+    final AccountAddress address;
+    try {
+      address =
+          AccountAddress.parseEncodedIgnoringCurveSupport(
+                  requireCanonicalAccountId(accountId, context), config.chainDiscriminant())
+              .address;
+    } catch (final NexusAppError error) {
+      throw error;
+    } catch (final AccountAddress.AccountAddressException error) {
+      throw new NexusAppError(
+          "missing_signing_public_key", context + " must encode one Ed25519 controller", error);
+    }
+    final AccountAddress.SingleKeyPayload controller;
+    try {
+      controller = address.singleKeyPayloadIgnoringCurveSupport().orElse(null);
+    } catch (final AccountAddress.AccountAddressException error) {
+      throw new NexusAppError(
+          "missing_signing_public_key", context + " must encode one Ed25519 controller", error);
+    }
+    if (controller == null || controller.curveId() != 0x01) {
+      throw new NexusAppError(
+          "missing_signing_public_key", context + " must encode one Ed25519 controller");
+    }
+    final byte[] controllerKey = controller.publicKey();
+    validateEd25519PublicKey(controllerKey);
+    boolean supplied = false;
+    for (final byte[] source : sources) {
+      if (source == null) {
+        continue;
+      }
+      supplied = true;
+      validateEd25519PublicKey(source);
+      if (!Arrays.equals(source, controllerKey)) {
+        throw new NexusAppError(
+            "approval_account_mismatch", "signing public key does not control " + context);
+      }
+    }
+    if (!supplied) {
+      throw new NexusAppError(
+          "missing_signing_public_key", context + " did not provide a signing public key");
+    }
+    return Arrays.copyOf(controllerKey, controllerKey.length);
+  }
+
+  private static String sourceAssetOwner(final String sourceAssetId) {
+    final String[] parts = sourceAssetId.split("#", -1);
+    if (parts.length < 2 || parts.length > 3 || parts[1].isEmpty()) {
+      throw new NexusAppError(
+          "invalid_account_id",
+          "transfer source asset must contain one canonical owner account");
+    }
+    if (parts.length == 3 && !isCanonicalDataspaceScope(parts[2])) {
+      throw new NexusAppError(
+          "invalid_account_id",
+          "transfer source asset scope must be a canonical dataspace:<u64> suffix");
+    }
+    return parts[1];
+  }
+
+  private static boolean isCanonicalDataspaceScope(final String scope) {
+    final String prefix = "dataspace:";
+    if (!scope.startsWith(prefix)) {
+      return false;
+    }
+    final String value = scope.substring(prefix.length());
+    if (value.isEmpty() || (value.length() > 1 && value.charAt(0) == '0')) {
+      return false;
+    }
+    for (int i = 0; i < value.length(); i++) {
+      final char ch = value.charAt(i);
+      if (ch < '0' || ch > '9') {
+        return false;
+      }
+    }
+    final String maxU64 = "18446744073709551615";
+    return value.length() < maxU64.length()
+        || (value.length() == maxU64.length() && value.compareTo(maxU64) <= 0);
   }
 
   private static void ensureEd25519(final String algorithm) {
@@ -312,15 +505,6 @@ public final class NexusAppClient {
       throw new NexusAppError(
           "invalid_signature", "Ed25519 signature does not verify for the signable payload");
     }
-  }
-
-  private static byte[] firstKey(final byte[]... keys) {
-    for (final byte[] key : keys) {
-      if (key != null && key.length > 0) {
-        return Arrays.copyOf(key, key.length);
-      }
-    }
-    return null;
   }
 
   private static <T> T joinClientFuture(

@@ -219,9 +219,7 @@ fn wait_for_total_usage_scan_pause(kura: &Kura) {
     }
 }
 fn kura_config(root: &Path) -> KuraConfig {
-    KuraConfig {
-        init_mode: InitMode::Strict,
-        store_dir: WithOrigin::inline(root.to_path_buf()),
+    KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(root.to_path_buf()),
         max_disk_usage_bytes: MAX_DISK_USAGE_BYTES,
         blocks_in_memory: BLOCKS_IN_MEMORY,
         debug_output_new_blocks: false,

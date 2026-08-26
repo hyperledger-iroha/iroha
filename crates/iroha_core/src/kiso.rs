@@ -1216,9 +1216,7 @@ mod tests {
                 },
             },
             soracloud_runtime: iroha_config::parameters::actual::SoracloudRuntime::default(),
-            kura: Kura {
-                init_mode: iroha_config::kura::InitMode::Strict,
-                store_dir: WithOrigin::inline(std::env::temp_dir()),
+            kura: Kura { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(std::env::temp_dir()),
                 max_disk_usage_bytes:
                     iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: NonZeroUsize::new(10).unwrap(),
@@ -1689,6 +1687,15 @@ mod tests {
                     iroha_config::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
                 parliament_quorum_bps:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS,
+                parliament_invitation_phase_blocks:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
+                parliament_public_finding_phase_blocks:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
+                parliament_timed_ovn:
+                    iroha_config::parameters::actual::ParliamentTimedOvn::default(),
+                parliament_tle_partial_release_signer_provider_handle: None,
+                parliament_tle_partial_release_signer_provider_revision: None,
+                parliament_tle_partial_release_signer_provider_policy_digest: None,
                 rules_committee_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_RULES_COMMITTEE_SIZE,
                 agenda_council_size:
@@ -1697,24 +1704,18 @@ mod tests {
                     iroha_config::parameters::defaults::governance::PARLIAMENT_INTEREST_PANEL_SIZE,
                 review_panel_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_REVIEW_PANEL_SIZE,
+                coordination_council_size:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE,
                 policy_jury_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_POLICY_JURY_SIZE,
+                confirmation_jury_size:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE,
                 oversight_committee_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE,
+                mpc_committee_size:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_MPC_COMMITTEE_SIZE,
                 fma_committee_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_FMA_COMMITTEE_SIZE,
-                pipeline_study_sla_blocks:
-                    iroha_config::parameters::defaults::governance::PIPELINE_STUDY_SLA_BLOCKS,
-                pipeline_review_sla_blocks:
-                    iroha_config::parameters::defaults::governance::PIPELINE_REVIEW_SLA_BLOCKS,
-                pipeline_decision_sla_blocks:
-                    iroha_config::parameters::defaults::governance::PIPELINE_DECISION_SLA_BLOCKS,
-                pipeline_enactment_sla_blocks:
-                    iroha_config::parameters::defaults::governance::PIPELINE_ENACTMENT_SLA_BLOCKS,
-                pipeline_rules_sla_blocks:
-                    iroha_config::parameters::defaults::governance::PIPELINE_RULES_SLA_BLOCKS,
-                pipeline_agenda_sla_blocks:
-                    iroha_config::parameters::defaults::governance::PIPELINE_AGENDA_SLA_BLOCKS,
             },
             nts: iroha_config::parameters::actual::Nts {
                 sample_interval: iroha_config::parameters::defaults::time::NTS_SAMPLE_INTERVAL,

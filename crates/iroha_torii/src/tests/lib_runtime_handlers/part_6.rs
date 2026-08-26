@@ -1263,7 +1263,6 @@ fn sample_soracloud_runtime_snapshot(
                 local_replicas: Vec::new(),
                 health_status,
                 load_factor_bps: 2_500,
-                reported_pending_mailbox_messages: 2,
                 authoritative_pending_mailbox_messages: 3,
                 rollout_handle: None,
                 config_generation: 0,
@@ -1310,7 +1309,7 @@ fn sample_soracloud_runtime_snapshot(
             manifest_hash: "hash:manifest".to_string(),
             status: iroha_data_model::soracloud::SoraAgentRuntimeStatusV1::Running,
             process_generation: 3,
-            lease_expires_sequence: 90,
+            lease_expires_height: 90,
             last_active_sequence: 88,
             materialization_dir: "/tmp/soracloud/runtime/apartments/ops_agent".to_string(),
             pending_wallet_request_count: 1,
@@ -1328,7 +1327,6 @@ fn sample_soracloud_runtime_snapshot(
         local_peer_id: None,
         services,
         apartments,
-        hf_sources: std::collections::BTreeMap::new(),
     }
 }
 fn seed_public_soracloud_world() -> World {
@@ -1485,10 +1483,12 @@ fn seed_public_soracloud_world() -> World {
         );
     world
 }
+
 fn hosted_http_runtime_plan(
     materialization_dir: &Path,
     service_name: &str,
     service_version: &str,
+    materialized_bundle_hash: String,
     role: iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole,
     traffic_percent: u8,
     health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
@@ -1501,7 +1501,7 @@ fn hosted_http_runtime_plan(
         traffic_percent,
         runtime: iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou,
         execution_plane: iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService,
-        bundle_hash: Hash::new(service_version.as_bytes()).to_string(),
+        bundle_hash: materialized_bundle_hash,
         bundle_path: format!("/bundles/{service_version}.to"),
         entrypoint: "/runtime/bin/launch.sh".to_owned(),
         inrou: None,
@@ -1519,7 +1519,6 @@ fn hosted_http_runtime_plan(
         local_replicas,
         health_status,
         load_factor_bps: 0,
-        reported_pending_mailbox_messages: 0,
         authoritative_pending_mailbox_messages: 0,
         rollout_handle: Some("rollout-2026-03".to_owned()),
         config_generation: 0,
@@ -1627,6 +1626,60 @@ fn seed_authoritative_hosted_http_revision(
         iroha_data_model::soracloud::SoraServiceHealthStatusV1,
     )],
 ) {
+    for (_, validator_account_id, peer_id, _) in assignments {
+        let canonical_peer_id =
+            PeerId::from(validator_account_id.expect_single_signatory().clone()).to_string();
+        assert_eq!(
+            peer_id, &canonical_peer_id,
+            "positive hosted HTTP fixtures must bind each validator account to its canonical peer"
+        );
+        let validator_peer_id = peer_id
+            .parse::<PeerId>()
+            .expect("hosted HTTP assignment peer id must be valid");
+        world.public_lane_validators_mut_for_testing().insert(
+            (
+                iroha_data_model::nexus::LaneId::SINGLE,
+                validator_account_id.clone(),
+            ),
+            iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
+                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                validator: validator_account_id.clone(),
+                peer_id: validator_peer_id,
+                stake_account: validator_account_id.clone(),
+                total_stake: iroha_primitives::numeric::Quantity::from(1_u64),
+                self_stake: iroha_primitives::numeric::Quantity::from(1_u64),
+                metadata: iroha_data_model::metadata::Metadata::default(),
+                status: iroha_data_model::nexus::staking::PublicLaneValidatorStatus::Active,
+                activation_epoch: Some(0),
+                activation_height: Some(0),
+                last_reward_epoch: None,
+            },
+        );
+        let capability = iroha_data_model::soracloud::SoraInrouHostCapabilityRecordV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+            validator_account_id: validator_account_id.clone(),
+            peer_id: peer_id.clone(),
+            supported_guest_isas: std::collections::BTreeSet::from([
+                iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
+            ]),
+            max_hosted_replica_capacity:
+                iroha_data_model::soracloud::SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
+            max_cpu_millis: u32::MAX,
+            max_memory_bytes: u64::MAX,
+            max_storage_bytes: u64::MAX,
+            geography_tags: Default::default(),
+            observed_latency_ms: None,
+            advertised_at_ms: 1,
+            heartbeat_expires_at_ms: u64::MAX,
+        };
+        capability
+            .validate()
+            .expect("positive hosted HTTP host capability must be production-valid");
+        world
+            .soracloud_inrou_host_capabilities_mut_for_testing()
+            .insert(validator_account_id.clone(), capability);
+    }
     let placements = assignments
         .iter()
         .map(
@@ -1649,6 +1702,25 @@ fn seed_authoritative_hosted_http_revision(
             },
         )
         .collect::<Vec<_>>();
+    let placement_record = iroha_data_model::soracloud::SoraInrouServicePlacementRecordV1 {
+        schema_version: iroha_data_model::soracloud::SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
+        service_name: bundle.service.service_name.clone(),
+        service_version: bundle.service.service_version.clone(),
+        desired_replica_count,
+        eligible_validator_count: u32::try_from(assignments.len()).unwrap_or(u32::MAX),
+        placements: placements.clone(),
+        reconciled_at_ms: 1,
+        last_error: (placements.len() < usize::from(desired_replica_count)).then(|| {
+            format!(
+                "placed {} of {desired_replica_count} replicas using {} eligible validators",
+                placements.len(),
+                assignments.len()
+            )
+        }),
+    };
+    placement_record
+        .validate()
+        .expect("positive hosted HTTP placement must be production-valid");
     world
         .soracloud_inrou_service_placements_mut_for_testing()
         .insert(
@@ -1656,21 +1728,32 @@ fn seed_authoritative_hosted_http_revision(
                 bundle.service.service_name.to_string(),
                 bundle.service.service_version.clone(),
             ),
-            iroha_data_model::soracloud::SoraInrouServicePlacementRecordV1 {
-                schema_version:
-                    iroha_data_model::soracloud::SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
-                service_name: bundle.service.service_name.clone(),
-                service_version: bundle.service.service_version.clone(),
-                desired_replica_count,
-                eligible_validator_count: u32::try_from(assignments.len()).unwrap_or(u32::MAX),
-                placements: placements.clone(),
-                reconciled_at_ms: 1,
-                last_error: None,
-            },
+            placement_record,
         );
     for ((replica_slot, validator_account_id, peer_id, health_status), placement) in
         assignments.iter().zip(placements.iter())
     {
+        let runtime_state = iroha_data_model::soracloud::SoraInrouReplicaRuntimeStateV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
+            service_name: bundle.service.service_name.clone(),
+            service_version: bundle.service.service_version.clone(),
+            replica_slot: *replica_slot,
+            placement_incarnation: placement.placement_incarnation,
+            validator_account_id: validator_account_id.clone(),
+            peer_id: peer_id.clone(),
+            selected_guest_isa: placement.selected_guest_isa,
+            health_status: *health_status,
+            load_factor_bps: 0,
+            materialized_bundle_hash: bundle.container.bundle_hash,
+            reporting_epoch: 1,
+            accounted_egress_bytes: 0,
+            updated_at_ms: 1,
+            last_error: None,
+        };
+        runtime_state
+            .validate()
+            .expect("positive hosted HTTP runtime state must be production-valid");
         world
             .soracloud_inrou_replica_runtime_mut_for_testing()
             .insert(
@@ -1679,26 +1762,7 @@ fn seed_authoritative_hosted_http_revision(
                     bundle.service.service_version.clone(),
                     replica_slot.to_string(),
                 ),
-                iroha_data_model::soracloud::SoraInrouReplicaRuntimeStateV1 {
-                    schema_version:
-                        iroha_data_model::soracloud::SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
-                    service_name: bundle.service.service_name.clone(),
-                    service_version: bundle.service.service_version.clone(),
-                    replica_slot: *replica_slot,
-                    placement_incarnation: placement.placement_incarnation,
-                    validator_account_id: validator_account_id.clone(),
-                    peer_id: peer_id.clone(),
-                    selected_guest_isa: placement.selected_guest_isa,
-                    health_status: *health_status,
-                    load_factor_bps: 0,
-                    materialized_bundle_hash: bundle.container.bundle_hash,
-                    reporting_epoch: 1,
-                    accounted_egress_bytes: 0,
-                    pending_mailbox_message_count: 0,
-                    last_receipt_id: None,
-                    updated_at_ms: 1,
-                    last_error: None,
-                },
+                runtime_state,
             );
     }
 }
@@ -1724,7 +1788,7 @@ fn seed_public_hosted_http_rollout_app_with_service_lease(
     candidate_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
     service_lease: Option<iroha_data_model::soracloud::SoraServiceLeaseStateV1>,
 ) -> SharedAppState {
-    seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
+    seed_public_hosted_http_rollout_app_with_replica_plans_and_snapshot_peer_id(
         temp,
         baseline_health,
         candidate_health,
@@ -1739,26 +1803,26 @@ fn seed_public_hosted_http_rollout_app_with_service_lease(
             &temp.path().join("service-canary"),
             1,
             candidate_health,
-            Some("http://127.0.0.1:18081"),
-            Some(201),
+            None,
+            None,
         )],
         Some(hosted_http_rollout_local_peer_id().to_string()),
         service_lease,
     )
 }
-fn seed_public_hosted_http_rollout_app_with_local_replicas(
+fn seed_public_hosted_http_rollout_app_with_replica_plans(
     temp: &tempfile::TempDir,
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
     candidate_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
-    baseline_local_replicas: Vec<SoracloudRuntimeReplicaPlan>,
-    candidate_local_replicas: Vec<SoracloudRuntimeReplicaPlan>,
+    baseline_replica_plans: Vec<SoracloudRuntimeReplicaPlan>,
+    candidate_replica_plans: Vec<SoracloudRuntimeReplicaPlan>,
 ) -> SharedAppState {
-    seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
+    seed_public_hosted_http_rollout_app_with_replica_plans_and_snapshot_peer_id(
         temp,
         baseline_health,
         candidate_health,
-        baseline_local_replicas,
-        candidate_local_replicas,
+        baseline_replica_plans,
+        candidate_replica_plans,
         Some(hosted_http_rollout_local_peer_id().to_string()),
         Some(hosted_http_service_lease_state(
             iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
@@ -1792,8 +1856,10 @@ fn hosted_http_service_lease_state(
         last_status_reason: None,
     }
 }
-fn hosted_http_rollout_local_peer_id() -> PeerId {
-    checked_torii_test_peer_id(0x3e, "derive hosted-http rollout peer fixture key")
+fn checked_torii_test_inrou_host_identity(seed: u8, context: &'static str) -> (AccountId, PeerId) {
+    let key_pair = checked_torii_test_ed25519_keypair(seed, context);
+    let public_key = key_pair.public_key().clone();
+    (AccountId::new(public_key.clone()), PeerId::from(public_key))
 }
 fn seed_hosted_http_rollout_public_lane_validator(
     app: &SharedAppState,
@@ -1837,12 +1903,49 @@ fn seed_hosted_http_rollout_public_lane_validator(
         .commit()
         .expect("commit hosted-http public-lane validator fixture");
 }
-fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
+fn hosted_http_lease_volume_states(
+    bundle: &iroha_data_model::soracloud::SoraDeploymentBundleV1,
+    service_lease: Option<&iroha_data_model::soracloud::SoraServiceLeaseStateV1>,
+) -> Vec<iroha_data_model::soracloud::SoraServiceLeaseVolumeStateV1> {
+    let Some(service_lease) = service_lease else {
+        return Vec::new();
+    };
+    bundle
+        .service
+        .lease_volumes
+        .iter()
+        .map(
+            |volume| iroha_data_model::soracloud::SoraServiceLeaseVolumeStateV1 {
+                schema_version:
+                    iroha_data_model::soracloud::SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1,
+                volume_name: volume.volume_name.clone(),
+                kind: volume.kind,
+                storage_class: volume.storage_class,
+                mount_path: volume.mount_path.clone(),
+                max_total_bytes: volume.max_total_bytes.get(),
+                lease_started_height: service_lease.lease_started_height,
+                lease_expires_height: service_lease.lease_expires_height,
+                authoritative_generation: 1,
+            },
+        )
+        .collect()
+}
+fn hosted_http_rollout_local_identity() -> (AccountId, PeerId) {
+    checked_torii_test_inrou_host_identity(
+        0x3d,
+        "derive canonical hosted-http rollout local host fixture key",
+    )
+}
+fn hosted_http_rollout_local_peer_id() -> PeerId {
+    hosted_http_rollout_local_identity().1
+}
+fn seed_public_hosted_http_rollout_app_with_replica_plans_and_snapshot_peer_id(
     temp: &tempfile::TempDir,
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
-    _candidate_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
-    baseline_local_replicas: Vec<SoracloudRuntimeReplicaPlan>,
-    candidate_local_replicas: Vec<SoracloudRuntimeReplicaPlan>,
+    candidate_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
+    baseline_replica_plans: Vec<SoracloudRuntimeReplicaPlan>,
+    candidate_replica_plans: Vec<SoracloudRuntimeReplicaPlan>,
+
     snapshot_local_peer_id: Option<String>,
     service_lease: Option<iroha_data_model::soracloud::SoraServiceLeaseStateV1>,
 ) -> SharedAppState {
@@ -1858,11 +1961,13 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
         .expect("public service bundle");
     baseline_bundle.container.runtime = iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou;
     baseline_bundle.container.inrou = Some(test_inrou_manifest());
+    baseline_bundle.container.entrypoint = "/app/main".to_owned();
     baseline_bundle.service.execution_plane =
         iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
     baseline_bundle.service.replicas = std::num::NonZeroU16::new(2).expect("replicas");
     baseline_bundle.service.state_bindings.clear();
     baseline_bundle.service.handlers.clear();
+    baseline_bundle.service.artifacts.clear();
     baseline_bundle.service.lease_volumes = vec![
         iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
             volume_name: "root_disk".parse().expect("volume"),
@@ -1880,6 +1985,9 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
         },
     ];
     baseline_bundle.service.container.manifest_hash = baseline_bundle.container_manifest_hash();
+    baseline_bundle
+        .validate_for_admission()
+        .expect("baseline hosted HTTP Inrou fixture must pass production validation");
     world.soracloud_service_revisions_mut_for_testing().insert(
         (service_name.to_owned(), baseline_version.to_owned()),
         baseline_bundle.clone(),
@@ -1889,66 +1997,165 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
     candidate_bundle.container.bundle_hash = Hash::new(b"hosted-http-canary-bundle");
     candidate_bundle.container.bundle_path = "/bundles/public-canary.to".to_owned();
     candidate_bundle.service.container.manifest_hash = candidate_bundle.container_manifest_hash();
+    candidate_bundle
+        .validate_for_admission()
+        .expect("candidate hosted HTTP Inrou fixture must pass production validation");
     world.soracloud_service_revisions_mut_for_testing().insert(
         (service_name.to_owned(), candidate_version.to_owned()),
         candidate_bundle.clone(),
     );
+    let lease_volume_states =
+        hosted_http_lease_volume_states(&candidate_bundle, service_lease.as_ref());
+    let rollout = iroha_data_model::soracloud::SoraServiceRolloutStateV1 {
+        schema_version: iroha_data_model::soracloud::SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+        rollout_handle: "rollout-2026-03".to_owned(),
+        baseline_version: baseline_version.to_owned(),
+        candidate_version: candidate_version.to_owned(),
+        canary_percent: 20,
+        traffic_percent: 20,
+        stage: iroha_data_model::soracloud::SoraRolloutStageV1::Canary,
+        health_failures: 0,
+        max_health_failures: 3,
+        health_window_secs: 60,
+        created_sequence: 1,
+        updated_sequence: 1,
+    };
+    let deployment = iroha_data_model::soracloud::SoraServiceDeploymentStateV1 {
+        schema_version: iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+        service_name: service_name.parse().expect("service"),
+        current_service_version: candidate_version.to_owned(),
+        current_service_manifest_hash: candidate_bundle.service_manifest_hash(),
+        current_container_manifest_hash: candidate_bundle.container_manifest_hash(),
+        revision_count: 2,
+        process_generation: 1,
+        process_started_sequence: 1,
+        active_rollout: Some(rollout.clone()),
+        last_rollout: Some(rollout),
+        config_generation: 0,
+        secret_generation: 0,
+        service_configs: BTreeMap::new(),
+        service_secrets: BTreeMap::new(),
+        fhe_policy_records: BTreeMap::new(),
+        service_lease,
+        lease_volume_states,
+    };
+    deployment
+        .validate()
+        .expect("hosted HTTP rollout deployment must be production-valid");
+    iroha_core::soracloud_runtime::validate_soracloud_deployment_lease_volume_bindings(
+        &deployment,
+        &candidate_bundle,
+    )
+    .expect("hosted HTTP rollout deployment must exactly match admitted lease-volume economics");
     world
         .soracloud_service_deployments_mut_for_testing()
-        .insert(
-            service_name.parse().expect("service"),
-            iroha_data_model::soracloud::SoraServiceDeploymentStateV1 {
-                schema_version:
-                    iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                service_name: service_name.parse().expect("service"),
-                current_service_version: baseline_version.to_owned(),
-                current_service_manifest_hash: baseline_bundle.service_manifest_hash(),
-                current_container_manifest_hash: baseline_bundle.container_manifest_hash(),
-                revision_count: 2,
-                process_generation: 1,
-                process_started_sequence: 1,
-                active_rollout: None,
-                last_rollout: None,
-                config_generation: 0,
-                secret_generation: 0,
-                service_configs: BTreeMap::new(),
-                service_secrets: BTreeMap::new(),
-                fhe_policy_records: BTreeMap::new(),
-                service_lease,
-                lease_volume_states: Vec::new(),
-            },
-        );
-    let local_validator_account_id =
-        checked_torii_test_account_id(0x3d, "derive hosted-http rollout validator fixture key");
-    let local_peer_id = hosted_http_rollout_local_peer_id();
-    let baseline_assignments = baseline_local_replicas
+        .insert(service_name.parse().expect("service"), deployment);
+
+    let (local_validator_account_id, local_peer_id) = hosted_http_rollout_local_identity();
+    let local_peer_id_string = local_peer_id.to_string();
+    let mut local_host_available = true;
+    let mut assignments_for = |replicas: &[SoracloudRuntimeReplicaPlan],
+                               remote_seed_base: u8,
+                               remote_context: &'static str| {
+        replicas
+            .iter()
+            .enumerate()
+            .map(|(index, replica)| {
+                let (validator_account_id, peer_id) = if local_host_available {
+                    local_host_available = false;
+                    (local_validator_account_id.clone(), local_peer_id.clone())
+                } else {
+                    let seed_offset =
+                        u8::try_from(index).expect("hosted HTTP fixture replica index must fit u8");
+                    let seed = remote_seed_base
+                        .checked_add(seed_offset)
+                        .expect("hosted HTTP fixture identity seed must not overflow");
+                    checked_torii_test_inrou_host_identity(seed, remote_context)
+                };
+                (
+                    replica.replica_slot,
+                    validator_account_id,
+                    peer_id.to_string(),
+                    replica.health_status,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let baseline_assignments = assignments_for(
+        &baseline_replica_plans,
+        0x40,
+        "derive canonical hosted-http rollout baseline remote host fixture key",
+    );
+    let candidate_assignments = assignments_for(
+        &candidate_replica_plans,
+        0x60,
+        "derive canonical hosted-http rollout candidate remote host fixture key",
+    );
+    let assignment_count = baseline_assignments.len() + candidate_assignments.len();
+    let distinct_validator_count = baseline_assignments
         .iter()
-        .map(|replica| {
-            (
-                replica.replica_slot,
-                local_validator_account_id.clone(),
-                local_peer_id.to_string(),
-                replica.health_status,
-            )
+        .chain(candidate_assignments.iter())
+        .map(|assignment| assignment.1.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let distinct_peer_count = baseline_assignments
+        .iter()
+        .chain(candidate_assignments.iter())
+        .map(|assignment| assignment.2.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    assert_eq!(
+        (distinct_validator_count, distinct_peer_count),
+        (assignment_count, assignment_count),
+        "first-release rollout fixtures must use one distinct canonical host per active assignment"
+    );
+    for (assignments, replica_plans) in [
+        (
+            baseline_assignments.as_slice(),
+            baseline_replica_plans.as_slice(),
+        ),
+        (
+            candidate_assignments.as_slice(),
+            candidate_replica_plans.as_slice(),
+        ),
+    ] {
+        for (assignment, replica_plan) in assignments.iter().zip(replica_plans) {
+            if assignment.2.as_str() != local_peer_id_string.as_str() {
+                assert!(
+                    replica_plan.listen_base_url.is_none() && replica_plan.pid.is_none(),
+                    "remote hosted HTTP assignments must not expose a local listener or process"
+                );
+            }
+        }
+    }
+    let baseline_local_replicas = baseline_replica_plans
+        .into_iter()
+        .filter(|replica| {
+            baseline_assignments.iter().any(|assignment| {
+                assignment.0 == replica.replica_slot
+                    && assignment.2.as_str() == local_peer_id_string.as_str()
+            })
         })
         .collect::<Vec<_>>();
+    let candidate_local_replicas = candidate_replica_plans
+        .into_iter()
+        .filter(|replica| {
+            candidate_assignments.iter().any(|assignment| {
+                assignment.0 == replica.replica_slot
+                    && assignment.2.as_str() == local_peer_id_string.as_str()
+            })
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        baseline_local_replicas.len() + candidate_local_replicas.len() <= 1,
+        "only the assignment owned by the local peer may expose local runtime state"
+    );
     seed_authoritative_hosted_http_revision(
         &mut world,
         &baseline_bundle,
         baseline_bundle.service.replicas.get(),
         &baseline_assignments,
     );
-    let candidate_assignments = candidate_local_replicas
-        .iter()
-        .map(|replica| {
-            (
-                replica.replica_slot,
-                local_validator_account_id.clone(),
-                local_peer_id.to_string(),
-                replica.health_status,
-            )
-        })
-        .collect::<Vec<_>>();
     seed_authoritative_hosted_http_revision(
         &mut world,
         &candidate_bundle,
@@ -1960,18 +2167,34 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
     snapshot.local_peer_id = snapshot_local_peer_id;
     snapshot.services.insert(
         service_name.to_owned(),
-        BTreeMap::from([(
-            baseline_version.to_owned(),
-            hosted_http_runtime_plan(
-                &baseline_dir,
-                service_name,
-                baseline_version,
-                iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active,
-                100,
-                baseline_health,
-                baseline_local_replicas,
+        BTreeMap::from([
+            (
+                baseline_version.to_owned(),
+                hosted_http_runtime_plan(
+                    &baseline_dir,
+                    service_name,
+                    baseline_version,
+                    baseline_bundle.container.bundle_hash.to_string(),
+                    iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active,
+                    80,
+                    baseline_health,
+                    baseline_local_replicas,
+                ),
             ),
-        )]),
+            (
+                candidate_version.to_owned(),
+                hosted_http_runtime_plan(
+                    &candidate_dir,
+                    service_name,
+                    candidate_version,
+                    candidate_bundle.container.bundle_hash.to_string(),
+                    iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::CanaryCandidate,
+                    20,
+                    candidate_health,
+                    candidate_local_replicas,
+                ),
+            ),
+        ]),
     );
     let runtime = TestLocalReadRuntime {
         snapshot,
@@ -2260,7 +2483,27 @@ async fn travel_split_topology_fixture(mode: TravelSplitVaultMode) -> TravelSpli
     });
     live_bundle.service.handlers.clear();
     live_bundle.service.state_bindings.clear();
+    live_bundle.service.artifacts.clear();
+    live_bundle.service.lease_volumes = vec![
+        iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
+            volume_name: "root_disk".parse().expect("volume"),
+            kind: iroha_data_model::soracloud::SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+            mount_path: "/".to_owned(),
+            max_total_bytes: std::num::NonZeroU64::new(8 * 1024 * 1024 * 1024).expect("bytes"),
+        },
+        iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
+            volume_name: "service_state".parse().expect("volume"),
+            kind: iroha_data_model::soracloud::SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+            mount_path: "/var/lib/soracloud/service".to_owned(),
+            max_total_bytes: std::num::NonZeroU64::new(1024 * 1024).expect("bytes"),
+        },
+    ];
     live_bundle.service.container.manifest_hash = live_bundle.container_manifest_hash();
+    live_bundle
+        .validate_for_admission()
+        .expect("hosted live Inrou fixture must pass production validation");
 
     let mut vault_bundle = seed_bundle;
     vault_bundle.service.service_name = "travel_ops_vault".parse().expect("service");
@@ -2298,7 +2541,11 @@ async fn travel_split_topology_fixture(mode: TravelSplitVaultMode) -> TravelSpli
             }),
         },
     }];
+    vault_bundle.service.artifacts.clear();
     vault_bundle.service.container.manifest_hash = vault_bundle.container_manifest_hash();
+    vault_bundle
+        .validate_for_admission()
+        .expect("deterministic vault fixture must pass production validation");
 
     for bundle in [live_bundle.clone(), vault_bundle] {
         let service_name = bundle.service.service_name.clone();
@@ -2309,63 +2556,67 @@ async fn travel_split_topology_fixture(mode: TravelSplitVaultMode) -> TravelSpli
             ),
             bundle.clone(),
         );
+        let service_lease = (bundle.service.execution_plane
+            == iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService)
+            .then(|| {
+                hosted_http_service_lease_state(
+                    iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
+                    "50".parse().expect("runtime balance"),
+                    100,
+                )
+            });
+        let lease_volume_states = hosted_http_lease_volume_states(&bundle, service_lease.as_ref());
+        let deployment = iroha_data_model::soracloud::SoraServiceDeploymentStateV1 {
+            schema_version: iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+            service_name: bundle.service.service_name.clone(),
+            current_service_version: bundle.service.service_version.clone(),
+            current_service_manifest_hash: bundle.service_manifest_hash(),
+            current_container_manifest_hash: bundle.container_manifest_hash(),
+            revision_count: 1,
+            process_generation: 1,
+            process_started_sequence: 1,
+            active_rollout: None,
+            last_rollout: None,
+            config_generation: 0,
+            secret_generation: 0,
+            service_configs: BTreeMap::new(),
+            service_secrets: BTreeMap::new(),
+            fhe_policy_records: BTreeMap::new(),
+            service_lease,
+            lease_volume_states,
+        };
+        deployment
+            .validate()
+            .expect("travel split deployment must be production-valid");
+        iroha_core::soracloud_runtime::validate_soracloud_deployment_lease_volume_bindings(
+            &deployment,
+            &bundle,
+        )
+        .expect("travel split deployment must exactly match admitted lease-volume economics");
         world
             .soracloud_service_deployments_mut_for_testing()
-            .insert(
-                service_name,
-                iroha_data_model::soracloud::SoraServiceDeploymentStateV1 {
-                    schema_version:
-                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                    service_name: bundle.service.service_name.clone(),
-                    current_service_version: bundle.service.service_version.clone(),
-                    current_service_manifest_hash: bundle.service_manifest_hash(),
-                    current_container_manifest_hash: bundle.container_manifest_hash(),
-                    revision_count: 1,
-                    process_generation: 1,
-                    process_started_sequence: 1,
-                    active_rollout: None,
-                    last_rollout: None,
-                    config_generation: 0,
-                    secret_generation: 0,
-                    service_configs: BTreeMap::new(),
-                    service_secrets: BTreeMap::new(),
-                    fhe_policy_records: BTreeMap::new(),
-                    service_lease: (bundle.service.execution_plane
-                        == iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService)
-                        .then(|| {
-                            hosted_http_service_lease_state(
-                                iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
-                                "50".parse().expect("runtime balance"),
-                                100,
-                            )
-                        }),
-                    lease_volume_states: Vec::new(),
-                },
-            );
+            .insert(service_name, deployment);
     }
 
-    let (validator_seed, validator_context, peer_seed, peer_context) = match mode {
+    let (host_seed, host_context) = match mode {
         TravelSplitVaultMode::LocalRead => (
             0x45,
-            "derive hosted live/local split validator fixture key",
-            0x46,
-            "derive hosted live/local split peer fixture key",
+            "derive canonical hosted live/local split host fixture key",
         ),
         TravelSplitVaultMode::OrderedMailbox => (
             0x47,
-            "derive hosted live/mailbox split validator fixture key",
-            0x48,
-            "derive hosted live/mailbox split peer fixture key",
+            "derive canonical hosted live/mailbox split host fixture key",
         ),
     };
-    let live_peer_id = checked_torii_test_peer_id(peer_seed, peer_context);
+    let (live_validator_account_id, live_peer_id) =
+        checked_torii_test_inrou_host_identity(host_seed, host_context);
     seed_authoritative_hosted_http_revision(
         &mut world,
         &live_bundle,
         live_bundle.service.replicas.get(),
         &[(
             1,
-            checked_torii_test_account_id(validator_seed, validator_context),
+            live_validator_account_id,
             live_peer_id.to_string(),
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         )],
@@ -2380,6 +2631,7 @@ async fn travel_split_topology_fixture(mode: TravelSplitVaultMode) -> TravelSpli
                 &live_materialization_dir,
                 "travel_ops_live",
                 "2026.04.0",
+                live_bundle.container.bundle_hash.to_string(),
                 iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active,
                 100,
                 iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,

@@ -1,8 +1,8 @@
 /// User-level configuration container for `Kura`.
 #[derive(Debug, ReadConfig)]
 pub struct Kura {
-    /// Initialisation mode controlling whether to reuse or reset existing storage.
-    #[config(env = "KURA_INIT_MODE", default)]
+    /// Startup validation policy for the canonical block journal.
+    #[config(default)]
     pub init_mode: KuraInitMode,
     /// Directory where Kura stores blocks and auxiliary indices.
     #[config(

@@ -302,8 +302,8 @@ fn tool_registry_skips_ws_and_sse_routes() {
             .iter()
             .any(|tool| tool.name == "iroha.gov.council.replace")
     );
-    assert!(tools.iter().any(|tool| tool.name == "iroha.gov.enact"));
-    assert!(tools.iter().any(|tool| tool.name == "iroha.gov.finalize"));
+    assert!(!tools.iter().any(|tool| tool.name == "iroha.gov.enact"));
+    assert!(!tools.iter().any(|tool| tool.name == "iroha.gov.finalize"));
     assert!(
         tools
             .iter()
@@ -790,38 +790,6 @@ async fn governance_mcp_rejects_noncanonical_ids_before_inner_dispatch() {
     )
     .await
     .expect_err("invalid plain selector must fail before routing");
-    let enact = norito::json!({ "body": { "proposal_id": ("AA".repeat(32)) } });
-    dispatch_iroha_gov_enact(&app, &headers, enact.as_object().expect("enact arguments"))
-        .await
-        .expect_err("invalid enact proposal id must fail before routing");
-    let finalize = norito::json!({
-        "body": {
-            "referendum_id": ("11".repeat(32)),
-            "proposal_id": ("22".repeat(32))
-        }
-    });
-    dispatch_iroha_gov_finalize(
-        &app,
-        &headers,
-        finalize.as_object().expect("finalize arguments"),
-    )
-    .await
-    .expect_err("mismatched finalization ids must fail before routing");
-    let non_digest_finalize = norito::json!({
-        "body": {
-            "referendum_id": "referendum-1",
-            "proposal_id": ("11".repeat(32))
-        }
-    });
-    dispatch_iroha_gov_finalize(
-        &app,
-        &headers,
-        non_digest_finalize
-            .as_object()
-            .expect("non-digest finalize arguments"),
-    )
-    .await
-    .expect_err("non-digest finalization referendum id must fail before routing");
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
         0,
@@ -879,28 +847,6 @@ async fn openapi_governance_mcp_rejects_noncanonical_ids_before_inner_dispatch()
             "/v1/gov/ballots/plain",
             norito::json!({ "body": { "referendum_id": ".hidden" } }),
         ),
-        (
-            "/v1/gov/enact",
-            norito::json!({ "body": { "proposal_id": ("AA".repeat(32)) } }),
-        ),
-        (
-            "/v1/gov/finalize",
-            norito::json!({
-                "body": {
-                    "referendum_id": ("11".repeat(32)),
-                    "proposal_id": ("22".repeat(32))
-                }
-            }),
-        ),
-        (
-            "/v1/gov/finalize",
-            norito::json!({
-                "body": {
-                    "referendum_id": "referendum-1",
-                    "proposal_id": ("11".repeat(32))
-                }
-            }),
-        ),
     ] {
         let tool = sample_tool_at("torii.test", Method::POST, path, ToolEffect::Write);
         dispatch_openapi_tool(
@@ -944,6 +890,8 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
     let headers = HeaderMap::new();
     let proposal_id = "ab".repeat(32);
     let maximum_selector = "a".repeat(128);
+    let network_id = format!("hash:{}#0000", "A".repeat(64));
+    let authority = "sorau-test-authority";
     let target_headers = norito::json!({
         "X-Iroha-Witness": (canonical_test_witness_header())
     });
@@ -985,13 +933,25 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
         .await
         .expect("canonical tally selector dispatches");
     let zk = with_target_headers(norito::json!({
-        "body": { "election_id": "election-1" }
+        "body": {
+            "network_id": (network_id.clone()),
+            "authority": authority,
+            "election_id": "election-1",
+            "backend": "halo2/ipa",
+            "envelope_b64": "AQ=="
+        }
     }));
     dispatch_iroha_gov_ballots_zk_v1(&app, &headers, zk.as_object().expect("ZK ballot arguments"))
         .await
         .expect("canonical ZK selector dispatches");
     let zk_proof = with_target_headers(norito::json!({
-        "election_id": (maximum_selector.clone())
+        "network_id": (network_id.clone()),
+        "authority": authority,
+        "election_id": (maximum_selector.clone()),
+        "ballot": {
+            "backend": "halo2/ipa",
+            "envelope_bytes": "AQ=="
+        }
     }));
     dispatch_iroha_gov_ballots_zk_v1_ballot_proof(
         &app,
@@ -1001,7 +961,13 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
     .await
     .expect("canonical flat ZK proof selector dispatches");
     let plain = with_target_headers(norito::json!({
-        "referendum_id": "referendum-1"
+        "network_id": network_id,
+        "authority": authority,
+        "referendum_id": "referendum-1",
+        "owner": authority,
+        "amount": "100",
+        "duration_blocks": "600",
+        "direction": "Aye"
     }));
     dispatch_iroha_gov_ballots_plain(
         &app,
@@ -1010,26 +976,9 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
     )
     .await
     .expect("canonical flat plain selector dispatches");
-    let enact = with_target_headers(norito::json!({
-        "proposal_id": (proposal_id.clone())
-    }));
-    dispatch_iroha_gov_enact(&app, &headers, enact.as_object().expect("enact arguments"))
-        .await
-        .expect("canonical flat enactment proposal dispatches");
-    let finalize = with_target_headers(norito::json!({
-        "referendum_id": (proposal_id.clone()),
-        "proposal_id": (proposal_id.clone())
-    }));
-    dispatch_iroha_gov_finalize(
-        &app,
-        &headers,
-        finalize.as_object().expect("finalize arguments"),
-    )
-    .await
-    .expect("canonical flat finalization ids dispatch");
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
-        9,
+        7,
         "each canonical purpose-built governance call must dispatch exactly once"
     );
     calls.store(0, std::sync::atomic::Ordering::SeqCst);
@@ -1090,12 +1039,6 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
                 "body": { "referendum_id": "referendum-1" }
             })),
         ),
-        (
-            "/v1/gov/enact",
-            with_target_headers(norito::json!({
-                "body": { "proposal_id": (proposal_id.clone()) }
-            })),
-        ),
     ] {
         let tool = sample_tool_at("torii.test", Method::POST, path, ToolEffect::Write);
         dispatch_openapi_tool(
@@ -1107,31 +1050,9 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
         .await
         .expect("canonical OpenAPI-derived POST dispatches");
     }
-    let finalize_arguments = with_target_headers(norito::json!({
-        "body": {
-            "referendum_id": (proposal_id.clone()),
-            "proposal_id": proposal_id
-        }
-    }));
-    let finalize_tool = sample_tool_at(
-        "torii.test",
-        Method::POST,
-        "/v1/gov/finalize",
-        ToolEffect::Write,
-    );
-    dispatch_openapi_tool(
-        &app,
-        &headers,
-        &finalize_tool,
-        finalize_arguments
-            .as_object()
-            .expect("OpenAPI finalize arguments"),
-    )
-    .await
-    .expect("canonical OpenAPI-derived finalization dispatches");
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
-        10,
+        8,
         "each canonical OpenAPI-derived governance call must dispatch exactly once"
     );
 }
@@ -2133,24 +2054,6 @@ fn governance_mcp_catalog_publishes_exact_id_grammars() {
             iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN,
             iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES as u64,
         ),
-        (
-            "iroha.gov.enact",
-            "proposal_id",
-            GOVERNANCE_PROPOSAL_ID_V1_PATTERN,
-            64,
-        ),
-        (
-            "iroha.gov.finalize",
-            "referendum_id",
-            GOVERNANCE_PROPOSAL_ID_V1_PATTERN,
-            64,
-        ),
-        (
-            "iroha.gov.finalize",
-            "proposal_id",
-            GOVERNANCE_PROPOSAL_ID_V1_PATTERN,
-            64,
-        ),
     ] {
         let schema = tool_schema(tool);
         assert_grammar(&schema, &["properties", field], pattern, max_length);
@@ -2159,6 +2062,204 @@ fn governance_mcp_catalog_publishes_exact_id_grammars() {
             &["properties", "body", "properties", field],
             pattern,
             max_length,
+        );
+    }
+}
+#[test]
+fn parliament_mcp_catalog_exposes_authenticated_draft_and_read_tools() {
+    let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    let tools = build_tool_specs(&cfg);
+    for (name, method, path, effect) in [
+        (
+            "iroha.gov.parliament.attempts.draft",
+            Method::POST,
+            "/v1/gov/parliament/attempts/draft",
+            ToolEffect::BuildInstruction,
+        ),
+        (
+            "iroha.gov.parliament.attempts.get",
+            Method::GET,
+            "/v1/gov/parliament/attempts/{governance_attempt_id}",
+            ToolEffect::Read,
+        ),
+        (
+            "iroha.gov.parliament.ballots.timed_ovn_casting_context.get",
+            Method::GET,
+            "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context",
+            ToolEffect::Read,
+        ),
+        (
+            "iroha.gov.parliament.ballots.tle_release_context.get",
+            Method::GET,
+            "/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context",
+            ToolEffect::Read,
+        ),
+        (
+            "iroha.gov.parliament.ballots.tle_partial_release.create",
+            Method::POST,
+            "/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release",
+            ToolEffect::Write,
+        ),
+        (
+            "iroha.gov.parliament.transitions.draft",
+            Method::POST,
+            "/v1/gov/parliament/transitions/draft",
+            ToolEffect::BuildInstruction,
+        ),
+    ] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("missing Parliament MCP tool `{name}`"));
+        assert_eq!(tool.method, method);
+        assert_eq!(tool.path_template, path);
+        assert_eq!(tool.effect, effect);
+        let schema = sanitize_tool_input_schema(&tool.input_schema);
+        assert_eq!(
+            schema.get("additionalProperties").and_then(Value::as_bool),
+            Some(false)
+        );
+        let required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("authenticated Parliament tool required fields");
+        assert!(
+            required
+                .iter()
+                .any(|field| field.as_str() == Some("headers"))
+        );
+    }
+}
+#[test]
+fn parliament_mcp_dispatch_requires_exact_nonzero_attempt_id() {
+    let expected = format!("01{}", "ab".repeat(31));
+    let arguments = norito::json!({
+        "path": { "governance_attempt_id": (expected.clone()) }
+    });
+    assert_eq!(
+        extract_parliament_attempt_id_argument(arguments.as_object().expect("arguments object"))
+            .expect("canonical Parliament attempt id"),
+        expected
+    );
+
+    for rejected in [
+        norito::json!({ "governance_attempt_id": ("ab".repeat(32)) }),
+        norito::json!({ "path": { "id": ("ab".repeat(32)) } }),
+        norito::json!({ "path": { "governance_attempt_id": ("AB".repeat(32)) } }),
+        norito::json!({ "path": { "governance_attempt_id": ("00".repeat(32)) } }),
+        norito::json!({
+            "path": {
+                "governance_attempt_id": ("ab".repeat(32)),
+                "unexpected": true
+            }
+        }),
+    ] {
+        assert!(
+            extract_parliament_attempt_id_argument(rejected.as_object().expect("arguments object"))
+                .is_err()
+        );
+    }
+}
+#[test]
+fn parliament_tle_release_context_mcp_requires_exact_nonzero_ballot_id() {
+    let expected = format!("01{}", "cd".repeat(31));
+    let arguments = norito::json!({
+        "path": { "ballot_attempt_id": (expected.clone()) }
+    });
+    assert_eq!(
+        extract_parliament_ballot_attempt_id_argument(
+            arguments.as_object().expect("arguments object"),
+            "Parliament TLE release-context read",
+        )
+        .expect("canonical Parliament ballot attempt id"),
+        expected
+    );
+
+    for rejected in [
+        norito::json!({ "ballot_attempt_id": ("ab".repeat(32)) }),
+        norito::json!({ "path": { "id": ("ab".repeat(32)) } }),
+        norito::json!({ "path": { "ballot_attempt_id": ("AB".repeat(32)) } }),
+        norito::json!({ "path": { "ballot_attempt_id": ("00".repeat(32)) } }),
+        norito::json!({
+            "path": {
+                "ballot_attempt_id": ("ab".repeat(32)),
+                "unexpected": true
+            }
+        }),
+    ] {
+        assert!(
+            extract_parliament_ballot_attempt_id_argument(
+                rejected.as_object().expect("arguments object"),
+                "Parliament TLE release-context read",
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn parliament_tle_partial_release_mcp_is_strict_zero_body_write() {
+    let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    let tools = build_tool_specs(&cfg);
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name == "iroha.gov.parliament.ballots.tle_partial_release.create")
+        .expect("partial-release MCP tool");
+    assert_eq!(tool.effect, ToolEffect::Write);
+    assert_eq!(tool.method, Method::POST);
+    let properties = tool
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("partial-release input properties");
+    assert!(!properties.contains_key("body"));
+
+    for rejected in [
+        norito::json!({
+            "path": { "ballot_attempt_id": ("ab".repeat(32)) },
+            "body": {}
+        }),
+        norito::json!({
+            "path": { "ballot_attempt_id": ("ab".repeat(32)) },
+            "unexpected": true
+        }),
+    ] {
+        assert!(
+            extract_parliament_ballot_attempt_id_argument(
+                rejected.as_object().expect("arguments object"),
+                "Parliament TLE partial-release request",
+            )
+            .is_err()
+        );
+    }
+}
+#[test]
+fn parliament_mcp_dispatch_requires_explicit_json_body() {
+    let expected_body = norito::json!({
+        "version": 1,
+        "governance_attempt_id": ("ab".repeat(32)),
+        "transition": { "BeginCitizenSnapshot": { "snapshot_height": 7 } }
+    });
+    let arguments = norito::json!({ "body": (expected_body.clone()) });
+    let encoded = parliament_json_body(
+        arguments.as_object().expect("arguments object"),
+        "Parliament transition draft",
+    )
+    .expect("explicit Parliament JSON body");
+    let decoded: Value = norito::json::from_slice(&encoded).expect("decode Parliament JSON body");
+    assert_eq!(decoded, expected_body);
+
+    for rejected in [
+        norito::json!({ "version": 1 }),
+        norito::json!({ "body": "not-an-object" }),
+        norito::json!({ "body": {}, "query": {} }),
+    ] {
+        assert!(
+            parliament_json_body(
+                rejected.as_object().expect("arguments object"),
+                "Parliament transition draft",
+            )
+            .is_err()
         );
     }
 }
@@ -2212,18 +2313,30 @@ fn governance_mcp_catalog_preserves_required_body_or_flat_forms() {
     for (name, fields) in [
         (
             "iroha.gov.ballots.zk_v1",
-            &["network_id", "authority", "election_id"][..],
+            &[
+                "network_id",
+                "authority",
+                "election_id",
+                "backend",
+                "envelope_b64",
+            ][..],
         ),
         (
             "iroha.gov.ballots.zk_v1.ballot_proof",
-            &["network_id", "authority", "election_id"][..],
+            &["network_id", "authority", "election_id", "ballot"][..],
         ),
         (
             "iroha.gov.ballots.plain",
-            &["network_id", "authority", "referendum_id"][..],
+            &[
+                "network_id",
+                "authority",
+                "referendum_id",
+                "owner",
+                "amount",
+                "duration_blocks",
+                "direction",
+            ][..],
         ),
-        ("iroha.gov.enact", &["proposal_id"][..]),
-        ("iroha.gov.finalize", &["referendum_id", "proposal_id"][..]),
     ] {
         let schema = tool_schema(name);
         assert_required(&schema, &["if", "required"], &["body"]);
@@ -2272,6 +2385,17 @@ fn governance_mcp_catalog_preserves_required_body_or_flat_forms() {
             assert!(!description.contains("equal to X-Iroha-Account"));
         }
     }
+    let proof = tool_schema("iroha.gov.ballots.zk_v1.ballot_proof");
+    assert_required(
+        &proof,
+        &["properties", "ballot", "required"],
+        &["backend", "envelope_bytes"],
+    );
+    assert_required(
+        &proof,
+        &["properties", "body", "properties", "ballot", "required"],
+        &["backend", "envelope_bytes"],
+    );
 }
 #[test]
 fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {
@@ -2282,8 +2406,6 @@ fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {
         "/v1/gov/ballots/zk-v1",
         "/v1/gov/ballots/zk-v1/ballot-proof",
         "/v1/gov/ballots/plain",
-        "/v1/gov/enact",
-        "/v1/gov/finalize",
     ] {
         let tool = tools
             .iter()
@@ -2335,6 +2457,22 @@ fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {
         assert!(
             body_is_closed,
             "{path} must preserve its closed typed body schema"
+        );
+    }
+    for retired_path in [
+        "/v1/gov/parliament/ballots",
+        "/v1/gov/finalize",
+        "/v1/gov/enact",
+    ] {
+        assert!(
+            tools.iter().all(|tool| tool.path_template != retired_path),
+            "retired proposal-backed governance route remains exposed through MCP: {retired_path}"
+        );
+    }
+    for retired_tool in ["iroha.gov.finalize", "iroha.gov.enact"] {
+        assert!(
+            tools.iter().all(|tool| tool.name != retired_tool),
+            "retired proposal-backed governance MCP tool remains registered: {retired_tool}"
         );
     }
 }

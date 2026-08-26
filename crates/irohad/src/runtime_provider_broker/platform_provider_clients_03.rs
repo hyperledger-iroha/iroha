@@ -2667,6 +2667,109 @@ ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1{
         | BrokerError::Conflict => Error::Rejected,
     }
 }
+#[derive(Clone)]
+struct GlobalBeaconBrokerPartialSigner {
+    session: Arc<BrokerSession>,
+    binding: ProviderBindingWireV1,
+    metadata_digest: [u8; 32],
+}
+
+impl iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1 for GlobalBeaconBrokerPartialSigner {
+    fn sign_partial(
+        &self,
+        session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+        payload: &[u8],
+    ) -> Result<iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1, String> {
+        let slot =
+            iroha_core::beacon::global_threshold_beacon_pulse_signing_slot_v1(session, payload)
+                .map_err(|_| ERROR_REJECTED.to_owned())?;
+        live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)
+            .map_err(redacted_provider_error)?;
+        let request = GlobalBeaconPartialSignRequestWireV1 {
+            session: session.record().clone(),
+            height: slot.height,
+            finalized_chain_anchor: slot.finalized_chain_anchor,
+        };
+        let request_payload = encode_canonical(&request, MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1)
+            .map_err(redacted_provider_error)?;
+        let result = provider_call!(
+            self,
+            call,
+            OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1,
+            request_payload,
+            false,
+        )
+        .map_err(redacted_provider_error)?;
+        let signed = self
+            .session
+            .decode_result::<GlobalBeaconPartialSignResultWireV1>(&result)
+            .map_err(redacted_provider_error)?;
+        let mut verifier =
+            global_beacon_aggregator_from_sign_request(&request, &session.record().network_id)
+                .map_err(redacted_provider_error)?;
+        verifier.accept_partial(signed.partial).map_err(|_| {
+            self.session.poison();
+            ERROR_REJECTED.to_owned()
+        })?;
+        live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)
+            .map_err(redacted_provider_error)?;
+        Ok(signed.partial)
+    }
+}
+
+#[derive(Clone)]
+struct ParliamentTleBrokerPartialReleaseSigner {
+    session: Arc<BrokerSession>,
+    binding: ProviderBindingWireV1,
+    metadata_digest: [u8; 32],
+}
+
+impl iroha_core::tle_release::TlePartialReleaseSignerV1
+    for ParliamentTleBrokerPartialReleaseSigner
+{
+    fn sign_partial_release(
+        &self,
+        context: &iroha_core::tle_release::AuthorizedTleReleaseContextV1,
+    ) -> Result<iroha_core::tle_release::TlePartialReleaseShareV1, String> {
+        let projection = context
+            .broker_projection_v1()
+            .map_err(|_| ERROR_REJECTED.to_owned())?;
+        live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)
+            .map_err(redacted_provider_error)?;
+        let request_payload = encode_canonical(
+            &ParliamentTlePartialReleaseSignRequestWireV1 { projection },
+            MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        )
+        .map_err(redacted_provider_error)?;
+        let result = provider_call!(
+            self,
+            call,
+            OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1,
+            request_payload,
+            false,
+        )
+        .map_err(redacted_provider_error)?;
+        let signed = self
+            .session
+            .decode_result::<ParliamentTlePartialReleaseSignResultWireV1>(&result)
+            .map_err(redacted_provider_error)?;
+        context
+            .session()
+            .verify_partial_release(
+                context.identity(),
+                context.finalized_height(),
+                &signed.partial,
+            )
+            .map_err(|_| {
+                self.session.poison();
+                ERROR_REJECTED.to_owned()
+            })?;
+        live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)
+            .map_err(redacted_provider_error)?;
+        Ok(signed.partial)
+    }
+}
+
 fn redacted_provider_error(error: BrokerError) -> String {
     match error {
         BrokerError::StaleOrRevoked => ERROR_STALE_OR_REVOKED.to_owned(),
@@ -2734,6 +2837,56 @@ pub(super) fn resolve(
     let mut potr_runtime_binding: Option<PotrRuntimeBindingWireV1> = None;
     for (binding, observation) in requested_catalog.iter().zip(&observations) {
         match binding.runtime_slot().map_err(registry_error)?.wire_id() {
+            slot if slot == IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id() => {
+                let signer = Arc::new(GlobalBeaconBrokerPartialSigner {
+                    session: Arc::clone(&session),
+                    binding: binding.clone(),
+                    metadata_digest: observation.metadata_digest,
+                });
+                let first = live_exact_qualification(
+                    signer.session.as_ref(),
+                    &signer.binding,
+                    signer.metadata_digest,
+                )
+                .map_err(registry_error)?;
+                let second = live_exact_qualification(
+                    signer.session.as_ref(),
+                    &signer.binding,
+                    signer.metadata_digest,
+                )
+                .map_err(registry_error)?;
+                if first != second {
+                    signer.session.poison();
+                    return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+                }
+                dependencies = dependencies.with_sumeragi_global_beacon_partial_signer(signer);
+            }
+            slot if slot
+                == IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id() =>
+            {
+                let signer = Arc::new(ParliamentTleBrokerPartialReleaseSigner {
+                    session: Arc::clone(&session),
+                    binding: binding.clone(),
+                    metadata_digest: observation.metadata_digest,
+                });
+                let first = live_exact_qualification(
+                    signer.session.as_ref(),
+                    &signer.binding,
+                    signer.metadata_digest,
+                )
+                .map_err(registry_error)?;
+                let second = live_exact_qualification(
+                    signer.session.as_ref(),
+                    &signer.binding,
+                    signer.metadata_digest,
+                )
+                .map_err(registry_error)?;
+                if first != second {
+                    signer.session.poison();
+                    return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+                }
+                dependencies = dependencies.with_parliament_tle_partial_release_signer(signer);
+            }
             slot if slot
                 == IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id() =>
             {

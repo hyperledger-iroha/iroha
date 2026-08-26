@@ -171,7 +171,7 @@ private val WALLET_SIGNATURE_ADAPTER: TypeAdapter<WalletSignature> =
 
             val algorithmLength = decoder.readLength(compactLen)
             val algorithmBytes = decoder.readBytes(algorithmLength.toInt())
-            val algorithmDecoder = NoritoDecoder(algorithmBytes, decoder.flags, decoder.flagsHint)
+            val algorithmDecoder = NoritoDecoder(algorithmBytes, decoder.flags)
             val algorithm = UINT32.decode(algorithmDecoder).toInt()
             if (algorithmDecoder.remaining() != 0) {
                 throw IllegalArgumentException(
@@ -181,7 +181,7 @@ private val WALLET_SIGNATURE_ADAPTER: TypeAdapter<WalletSignature> =
 
             val signatureLength = decoder.readLength(compactLen)
             val signatureBytes = decoder.readBytes(signatureLength.toInt())
-            val signatureDecoder = NoritoDecoder(signatureBytes, decoder.flags, decoder.flagsHint)
+            val signatureDecoder = NoritoDecoder(signatureBytes, decoder.flags)
             val signature = BYTE_VECTOR.decode(signatureDecoder)
             if (signatureDecoder.remaining() != 0) {
                 throw IllegalArgumentException(
@@ -219,7 +219,7 @@ private val CIPHERTEXT_ADAPTER: TypeAdapter<ConnectCiphertext> =
 
             val directionLength = decoder.readLength(compactLen)
             val directionBytes = decoder.readBytes(directionLength.toInt())
-            val directionDecoder = NoritoDecoder(directionBytes, decoder.flags, decoder.flagsHint)
+            val directionDecoder = NoritoDecoder(directionBytes, decoder.flags)
             val direction = DIRECTION_ADAPTER.decode(directionDecoder)
             if (directionDecoder.remaining() != 0) {
                 throw IllegalArgumentException(
@@ -229,7 +229,7 @@ private val CIPHERTEXT_ADAPTER: TypeAdapter<ConnectCiphertext> =
 
             val aeadLength = decoder.readLength(compactLen)
             val aeadBytes = decoder.readBytes(aeadLength.toInt())
-            val aeadDecoder = NoritoDecoder(aeadBytes, decoder.flags, decoder.flagsHint)
+            val aeadDecoder = NoritoDecoder(aeadBytes, decoder.flags)
             val aead = RAW_BYTES.decode(aeadDecoder)
             if (aeadDecoder.remaining() != 0) {
                 throw IllegalArgumentException(
@@ -482,9 +482,9 @@ object ConnectFrameCodec {
         adapter: TypeAdapter<T>,
         label: String,
     ): T {
-        NoritoCodec.DecodeFlagsGuard.enterWithHint(CONNECT_LAYOUT_FLAGS, CONNECT_LAYOUT_FLAGS).use {
+        NoritoCodec.DecodeFlagsGuard.enter(CONNECT_LAYOUT_FLAGS).use {
             try {
-                val decoder = NoritoDecoder(fieldBytes, CONNECT_LAYOUT_FLAGS, CONNECT_LAYOUT_FLAGS)
+                val decoder = NoritoDecoder(fieldBytes, CONNECT_LAYOUT_FLAGS)
                 val value = adapter.decode(decoder)
                 if (decoder.remaining() != 0) {
                     throw ConnectProtocolException(

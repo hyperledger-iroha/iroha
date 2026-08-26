@@ -378,15 +378,6 @@ fn require_borrowed_governance_selector_body<'a>(
     Ok(value)
 }
 
-fn require_borrowed_governance_proposal_id_body<'a>(
-    body: &BorrowedMcpJson<'a>,
-    field: &str,
-) -> Result<&'a str, String> {
-    let value = require_borrowed_governance_body_string(body, field)?;
-    require_governance_proposal_id_v1(field, value)?;
-    Ok(value)
-}
-
 fn try_begin_form_query(path: &mut String) -> Result<usize, String> {
     let query_start = path
         .len()

@@ -645,8 +645,8 @@ pub struct MergeExecutionBatch {
     pub batch_hash: Hash,
 }
 /// Ordered log entry produced by the merge ledger.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize))]
 #[norito(deny_unknown_fields)]
 pub struct MergeLedgerEntry {
     /// Exact first-release entry layout. Only version two is supported.
@@ -678,6 +678,87 @@ pub struct MergeLedgerEntry {
     /// an entry to the single highest autoscale retirement candidate.
     pub lane_drain_certificates: Vec<LaneDrainCertificateV1>,
 }
+
+#[derive(Decode)]
+#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+struct MergeLedgerEntryWire {
+    version: u8,
+    epoch_id: u64,
+    lane_catalog_hash: Hash,
+    active_lanes: Vec<MergeLaneBinding>,
+    incarnation_root: Hash,
+    activation_root: Hash,
+    lane_snapshots: Vec<MergeLaneSnapshot>,
+    global_state_root: Hash,
+    merge_qc: MergeQuorumCertificate,
+    execution_batch: Option<MergeExecutionBatch>,
+    lane_drain_certificates: Vec<LaneDrainCertificateV1>,
+}
+
+impl TryFrom<MergeLedgerEntryWire> for MergeLedgerEntry {
+    type Error = u8;
+
+    fn try_from(wire: MergeLedgerEntryWire) -> Result<Self, Self::Error> {
+        if wire.version != Self::VERSION {
+            return Err(wire.version);
+        }
+        Ok(Self {
+            version: wire.version,
+            epoch_id: wire.epoch_id,
+            lane_catalog_hash: wire.lane_catalog_hash,
+            active_lanes: wire.active_lanes,
+            incarnation_root: wire.incarnation_root,
+            activation_root: wire.activation_root,
+            lane_snapshots: wire.lane_snapshots,
+            global_state_root: wire.global_state_root,
+            merge_qc: wire.merge_qc,
+            execution_batch: wire.execution_batch,
+            lane_drain_certificates: wire.lane_drain_certificates,
+        })
+    }
+}
+
+impl<'de> norito::core::NoritoDeserialize<'de> for MergeLedgerEntry {
+    fn schema_hash() -> [u8; 16] {
+        <Self as norito::core::NoritoSerialize>::schema_hash()
+    }
+
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("merge-ledger entry wire version must be current")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let wire = <MergeLedgerEntryWire as norito::core::NoritoDeserialize>::try_deserialize(
+            archived.cast(),
+        )?;
+        Self::try_from(wire).map_err(|actual| {
+            norito::core::Error::Message(format!(
+                "unsupported merge-ledger entry version {actual}; expected {}",
+                Self::VERSION
+            ))
+        })
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for MergeLedgerEntry {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let wire =
+            <MergeLedgerEntryWire as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        Self::try_from(wire).map_err(|actual| {
+            norito::json::Error::Message(format!(
+                "unsupported merge-ledger entry version {actual}; expected {}",
+                Self::VERSION
+            ))
+        })
+    }
+}
+
 impl MergeLedgerEntry {
     /// Current supported entry layout.
     pub const VERSION: u8 = MERGE_LEDGER_ENTRY_VERSION_V2;
@@ -935,6 +1016,7 @@ mod tests {
     }
     fn assert_canonical_decoder_rejects_invalid_wire<T>(encoded: &[u8], fixture: &str)
     where
+        T: norito::NoritoSerialize,
         for<'de> T: norito::NoritoDeserialize<'de>,
     {
         for prefix_len in 0..encoded.len() {
@@ -1224,6 +1306,26 @@ mod tests {
         let decoded = MergeLedgerEntry::decode(&mut &encoded[..])
             .expect("merge entry rounds trips through Norito");
         assert_eq!(decoded, entry);
+        #[cfg(feature = "json")]
+        {
+            let json = norito::json::to_json(&entry).expect("merge entry encodes as JSON");
+            let decoded_json: MergeLedgerEntry =
+                norito::json::from_json(&json).expect("current merge entry JSON decodes");
+            assert_eq!(decoded_json, entry);
+
+            let current_version = format!("\"version\":{}", MergeLedgerEntry::VERSION);
+            let previous_version = format!("\"version\":{}", MergeLedgerEntry::VERSION - 1);
+            let previous_json = json.replacen(&current_version, &previous_version, 1);
+            assert_ne!(previous_json, json, "root version field must be present");
+            let error = norito::json::from_json::<MergeLedgerEntry>(&previous_json)
+                .expect_err("previous merge entry JSON version must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported merge-ledger entry version"),
+                "unexpected wrong-version JSON error: {error}"
+            );
+        }
         let unversioned = UnversionedMergeLedgerEntry {
             epoch_id: entry.epoch_id,
             lane_catalog_hash: entry.lane_catalog_hash,

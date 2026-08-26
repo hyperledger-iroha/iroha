@@ -5,6 +5,7 @@ use crate::{
     validate_batch_semantics,
 };
 use iroha_crypto::Hash;
+pub use iroha_data_model::nexus::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES;
 use iroha_data_model::{
     DataSpaceId,
     account::AccountId,
@@ -280,7 +281,7 @@ pub fn embedded_axt_binding(batch: &TransitionBatch) -> Result<AxtFastpqBinding>
 /// Returns an error when the embedded binding or proof metadata is
 /// missing/malformed, the supplied manifest or DA commitment differs from the
 /// proof-bound value, the binding does not match the batch, or the proof payload
-/// cannot be encoded.
+/// cannot be encoded within the verifier's inner payload limit.
 pub fn axt_proof_envelope_from_bound_batch(
     batch: &TransitionBatch,
     proof: Proof,
@@ -304,11 +305,13 @@ pub fn axt_proof_envelope_from_bound_batch(
         });
     }
     verify_axt_bound_batch(batch, &proof, &binding)?;
+    let encoded_proof = encode_axt_fastpq_payload(batch, proof)?;
+    enforce_axt_fastpq_payload_limit(&encoded_proof)?;
     Ok(AxtProofEnvelope {
         dsid: DataSpaceId::new(binding.source_dsid),
         manifest_root,
         da_commitment,
-        proof: encode_axt_fastpq_payload(batch, proof)?,
+        proof: encoded_proof,
         fastpq_binding: Some(binding),
         committed_amount,
         amount_commitment: None,
@@ -333,8 +336,10 @@ pub fn axt_proof_blob_from_bound_batch(
         });
     }
     let envelope = axt_proof_envelope_from_bound_batch(batch, proof, manifest_root, da_commitment)?;
+    let payload = encode_canonical_norito(&envelope)?;
+    enforce_axt_proof_blob_payload_limit(&payload)?;
     Ok(ProofBlob {
-        payload: encode_canonical_norito(&envelope)?,
+        payload,
         expiry_slot,
     })
 }
@@ -502,13 +507,7 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
             details: "AXT proof envelope source_dsid does not match dsid".into(),
         });
     }
-    if envelope.proof.len() > DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES {
-        return Err(Error::VerifierLimitExceeded {
-            limit: "max_axt_fastpq_payload_bytes",
-            actual: envelope.proof.len(),
-            max: DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES,
-        });
-    }
+    enforce_axt_fastpq_payload_limit(&envelope.proof)?;
     let payload = decode_canonical_axt_fastpq_payload(&envelope.proof)?;
     let batch = transition_batch_from_model(&payload.batch);
     verify_batch_matches_binding(&batch, binding)?;
@@ -543,19 +542,30 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
         expiry_slot: proof_bound_expiry,
     })
 }
+fn enforce_axt_fastpq_payload_limit(payload: &[u8]) -> Result<()> {
+    if payload.len() > DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_axt_fastpq_payload_bytes",
+            actual: payload.len(),
+            max: DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES,
+        });
+    }
+    Ok(())
+}
 /// Verify an AXT proof blob and require its advertised expiry to match the proof trace.
 ///
 /// # Errors
-/// Returns an error when the blob is empty, carries the forbidden explicit
-/// zero expiry, is not a canonical [`AxtProofEnvelope`], fails `FastPQ`
-/// verification, or advertises an expiry different from the proof-bound batch
-/// metadata.
+/// Returns an error when the blob is empty or oversized, carries the forbidden
+/// explicit zero expiry, is not a canonical [`AxtProofEnvelope`], fails
+/// `FastPQ` verification, or advertises an expiry different from the
+/// proof-bound batch metadata.
 pub fn verify_axt_proof_blob(proof: &ProofBlob) -> Result<AxtVerifiedProof> {
     if proof.payload.is_empty() {
         return Err(Error::InvalidAxtBinding {
             details: "AXT proof blob payload must not be empty".into(),
         });
     }
+    enforce_axt_proof_blob_payload_limit(&proof.payload)?;
     if proof.expiry_slot == Some(0) {
         return Err(Error::InvalidAxtBinding {
             details: "AXT proof blob expiry_slot must be non-zero when present".into(),
@@ -569,6 +579,16 @@ pub fn verify_axt_proof_blob(proof: &ProofBlob) -> Result<AxtVerifiedProof> {
         });
     }
     verify_axt_proof_envelope_with_outer_metadata(&envelope, proof.expiry_slot)
+}
+fn enforce_axt_proof_blob_payload_limit(payload: &[u8]) -> Result<()> {
+    if payload.len() > MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_axt_proof_blob_payload_bytes",
+            actual: payload.len(),
+            max: MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+        });
+    }
+    Ok(())
 }
 /// Verify an already-decoded AXT proof envelope and its outer expiry mirror.
 ///
@@ -2828,6 +2848,23 @@ mod tests {
                 max,
             } if actual == DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES + 1
                 && max == DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES
+        ));
+    }
+    #[test]
+    fn verify_axt_proof_blob_rejects_oversized_payload_before_decode() {
+        let blob = ProofBlob {
+            payload: vec![0xA5; MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1],
+            expiry_slot: None,
+        };
+        let err = verify_axt_proof_blob(&blob).expect_err("oversized blob must fail before decode");
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_axt_proof_blob_payload_bytes",
+                actual,
+                max,
+            } if actual == MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1
+                && max == MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES
         ));
     }
     #[test]

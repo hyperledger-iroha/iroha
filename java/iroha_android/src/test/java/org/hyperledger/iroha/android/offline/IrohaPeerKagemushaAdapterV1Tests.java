@@ -14,12 +14,12 @@ import org.junit.Test;
 
 public final class IrohaPeerKagemushaAdapterV1Tests {
   @Test
-  public void requiresAbi22AndPreservesExactBytesThroughNative() {
+  public void requiresAbi23AndPreservesExactBytesThroughNative() {
     final byte[] archive = portableOfferFixture();
     final boolean nativeAvailable =
         KagemushaRecursiveSpendProver.isArtifactStreamingAvailable();
     assertTrue(
-        "A freshly built connect_norito_bridge ABI 22 artifact-streaming library is required",
+        "A freshly built connect_norito_bridge ABI 23 artifact-streaming library is required",
         nativeAvailable);
 
     final KagemushaPeerTransport.Payload typed =

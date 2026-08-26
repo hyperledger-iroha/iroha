@@ -71,7 +71,7 @@ impl norito::json::JsonDeserialize for Permission {
                         ))
                     })?);
                 }
-                _ => visitor.skip_value()?,
+                other => return Err(norito::json::Error::unknown_field(other.to_owned())),
             }
         }
         visitor.finish()?;
@@ -147,6 +147,17 @@ mod tests {
                 .to_string()
                 .contains("duplicate field `payload`")
         );
+    }
+    #[test]
+    fn permission_deserialization_rejects_unknown_top_level_fields() {
+        let error = deserialize_permission_with_parser(
+            r#"{"name":"CanDoThing","payload":null,"legacy_payload":{}}"#,
+        )
+        .expect_err("unknown permission fields must fail closed");
+        assert!(matches!(
+            error,
+            norito::json::Error::UnknownField { field } if field == "legacy_payload"
+        ));
     }
     #[test]
     fn permission_deserialization_rejects_oversized_payload_without_panicking() {

@@ -40,7 +40,8 @@ interface IrohaClient {
      *
      * The signed bytes are dispatched at most once. A transport or ambiguous HTTP failure completes
      * the future with [AmbiguousTransactionSubmissionException]; reconcile its transaction hash
-     * before constructing and signing any replacement.
+     * before constructing and signing any replacement. A non-canonical admission response completes
+     * the future with [TransactionSubmissionHttpException]; HTTP 202 is the sole success status.
      */
     fun submitTransaction(transaction: SignedTransaction): CompletableFuture<ClientResponse>
 

@@ -153,10 +153,7 @@ impl norito::json::JsonDeserialize for NewRole {
                     }
                     grant_to = Some(visitor.parse_value::<AccountId>()?);
                 }
-                _other => {
-                    visitor.skip_value()?;
-                    // Unknown fields are ignored for forward compatibility.
-                }
+                other => return Err(norito::json::Error::unknown_field(other.to_owned())),
             }
         }
         visitor.finish()?;
@@ -224,10 +221,7 @@ impl norito::json::JsonDeserialize for Role {
                     }
                     permissions = Some(visitor.parse_value::<Permissions>()?);
                 }
-                _other => {
-                    visitor.skip_value()?;
-                    // Ignore unknown fields for forward compatibility.
-                }
+                other => return Err(norito::json::Error::unknown_field(other.to_owned())),
             }
         }
         visitor.finish()?;
@@ -352,6 +346,47 @@ mod tests {
         );
     }
     #[test]
+    fn role_json_rejects_unknown_fields() {
+        let role = Role {
+            id: RoleId::new("auditor".parse().expect("role name")),
+            permissions: Permissions::new(),
+            permission_epochs: BTreeMap::new(),
+        };
+        let mut value = norito::json::to_value(&role).expect("serialize role");
+        let norito::json::Value::Object(fields) = &mut value else {
+            panic!("role must serialize as an object");
+        };
+        fields.insert("retired_alias".to_owned(), norito::json::Value::Bool(true));
+        let error = norito::json::from_value::<Role>(value)
+            .expect_err("unknown role fields must fail closed");
+        assert!(matches!(
+            error,
+            norito::json::Error::UnknownField { field } if field == "retired_alias"
+        ));
+    }
+    #[test]
+    fn new_role_json_rejects_unknown_fields() {
+        use iroha_crypto::{Algorithm, KeyPair};
+
+        let keypair = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("derive checked role fixture keypair");
+        let new_role = Role::new(
+            RoleId::new("auditor".parse().expect("role name")),
+            AccountId::new(keypair.public_key().clone()),
+        );
+        let mut value = norito::json::to_value(&new_role).expect("serialize new role");
+        let norito::json::Value::Object(fields) = &mut value else {
+            panic!("new role must serialize as an object");
+        };
+        fields.insert("legacy_owner".to_owned(), norito::json::Value::Bool(true));
+        let error = norito::json::from_value::<NewRole>(value)
+            .expect_err("unknown new-role fields must fail closed");
+        assert!(matches!(
+            error,
+            norito::json::Error::UnknownField { field } if field == "legacy_owner"
+        ));
+    }
+    #[test]
     fn role_permission_epochs_capture_epoch() {
         use iroha_crypto::{Algorithm, KeyPair};
         let name: Name = "auditor".parse().expect("role name");
@@ -390,8 +425,8 @@ mod tests {
 pub mod prelude {
     pub use super::{NewRole, Role, RoleId};
 }
-// Provide a slice-based decoder for Role to satisfy event enum derives
-// that require `DecodeFromSlice` under strict-safe builds.
+// Provide a slice-based decoder for Role to satisfy event enum derives that
+// require `DecodeFromSlice` at the always-bounded decode boundary.
 impl<'a> norito::core::DecodeFromSlice<'a> for Role {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         // Use the adaptive bare decoder; it consumes the full slice.

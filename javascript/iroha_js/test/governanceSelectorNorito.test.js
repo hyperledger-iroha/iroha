@@ -58,15 +58,6 @@ const SELECTOR_INSTRUCTIONS = [
     }),
   ],
   [
-    "FinalizeReferendum",
-    (selector) => ({
-      FinalizeReferendum: {
-        referendum_id: selector,
-        proposal_id: new Array(32).fill(0x33),
-      },
-    }),
-  ],
-  [
     "CreateElection",
     (selector) => ({
       zk: {

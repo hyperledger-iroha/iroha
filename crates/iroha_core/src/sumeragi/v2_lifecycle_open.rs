@@ -35,6 +35,7 @@ use super::{
     wal_recovery::{
         AuthenticatedRecoveredWalControlProjection,
         AuthenticatedRecoveredWalDecisionFetchProjection, RecoveredDecisionFetchStoreProjectionV1,
+        RecoveredDecisionValidateInstalledSealV1, RecoveredDecisionValidateProjectionV1,
         RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
     },
     work_registry::{
@@ -71,6 +72,11 @@ enum RecoveredWalStartupProjectionV1<'authority> {
     DecisionStore(
         &'authority AuthenticatedRecoveredWalDecisionFetchProjection,
         &'authority RecoveredDecisionFetchStoreProjectionV1,
+    ),
+    DecisionValidate(
+        &'authority AuthenticatedRecoveredWalDecisionFetchProjection,
+        &'authority RecoveredDecisionFetchStoreProjectionV1,
+        &'authority RecoveredDecisionValidateProjectionV1,
     ),
     DecisionApply(&'authority crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1),
 }
@@ -458,6 +464,27 @@ impl AuthenticatedLifecycleRecoveryCut {
         )?;
         Ok((recovery, body_pipeline))
     }
+    /// Assemble an advanced recovered Decision Store with its sole live Validate child.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn assemble_storage_only_with_recovered_decision_validate_and_body_pipeline_startup(
+        ledger: LifecycleLedgerV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        body_store: &mut V2BodyStore,
+        fetch: &AuthenticatedRecoveredWalDecisionFetchProjection,
+        store: &RecoveredDecisionFetchStoreProjectionV1,
+        validate: &RecoveredDecisionValidateProjectionV1,
+        mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
+    ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
+    {
+        let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
+            ledger,
+            serve_payloads,
+            body_store,
+            RecoveredWalStartupProjectionV1::DecisionValidate(fetch, store, validate),
+            Some(&mut body_pipeline),
+        )?;
+        Ok((recovery, body_pipeline))
+    }
     /// Assemble one exact recovered Decision body chain with every unrelated
     /// ordinary durable body-pipeline row.
     ///
@@ -725,6 +752,17 @@ impl AuthenticatedLifecycleRecoveryCut {
         fetch.belongs_to_context(self.context)
             && store.context() == self.context
             && store.owns_spliced_candidate(&self.candidates)
+    }
+    /// Revalidate the exact recovered Validate child retained by cold recovery.
+    pub(super) fn owns_recovered_decision_validate(
+        &self,
+        seal: &RecoveredDecisionValidateInstalledSealV1,
+    ) -> bool {
+        seal.context() == self.context
+            && seal
+                .live_validate_record(&self.authenticated_ledger)
+                .is_some()
+            && seal.owns_spliced_candidate(&self.candidates)
     }
     /// Seed the opaque installed projection's exact Validate parent.
     #[cfg(test)]
@@ -3088,6 +3126,7 @@ fn recovered_wal_exactly_owns_signed_broadcast(
         | RecoveredWalStartupProjectionV1::ControlSign(_)
         | RecoveredWalStartupProjectionV1::DecisionFetch(_)
         | RecoveredWalStartupProjectionV1::DecisionStore(_, _)
+        | RecoveredWalStartupProjectionV1::DecisionValidate(_, _, _)
         | RecoveredWalStartupProjectionV1::DecisionApply(_) => false,
     }
 }
@@ -3143,6 +3182,9 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
             projection.belongs_to_context(ledger.context())
         }
         RecoveredWalStartupProjectionV1::DecisionStore(fetch, store) => {
+            fetch.belongs_to_context(ledger.context()) && store.context() == ledger.context()
+        }
+        RecoveredWalStartupProjectionV1::DecisionValidate(fetch, store, _validate) => {
             fetch.belongs_to_context(ledger.context()) && store.context() == ledger.context()
         }
         RecoveredWalStartupProjectionV1::DecisionApply(projection) => {
@@ -3326,6 +3368,20 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
                             },
                         )
                     }
+                    RecoveredWalStartupProjectionV1::DecisionValidate(fetch, store, validate)
+                        if work_class == LifecycleWorkClass::Validate =>
+                    {
+                        recovered_decision_validate_chain_records(ledger, fetch, store, validate)
+                            .is_some_and(|[_fetch, store_record, validate_record]| {
+                                validate_record.ordinal() == record.ordinal()
+                                    && validate.splice_candidate_from_records(
+                                        store_record.owner(),
+                                        store_record,
+                                        validate_record,
+                                        &mut candidates,
+                                    )
+                            })
+                    }
                     RecoveredWalStartupProjectionV1::DecisionApply(projection)
                         if work_class == LifecycleWorkClass::Apply =>
                     {
@@ -3344,6 +3400,7 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
                     | RecoveredWalStartupProjectionV1::ControlBroadcastAndSign(_, _, _)
                     | RecoveredWalStartupProjectionV1::DecisionFetch(_)
                     | RecoveredWalStartupProjectionV1::DecisionStore(_, _)
+                    | RecoveredWalStartupProjectionV1::DecisionValidate(_, _, _)
                     | RecoveredWalStartupProjectionV1::DecisionApply(_) => false,
                 };
                 if admitted_recovered_wal {
@@ -3492,6 +3549,16 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
                 ));
             }
         }
+        RecoveredWalStartupProjectionV1::DecisionValidate(fetch, store, validate) => {
+            if !validate.owns_spliced_candidate(&candidates)
+                || recovered_decision_validate_chain_records(ledger, fetch, store, validate)
+                    .is_none()
+            {
+                return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+                    "repaired frame has no exact live recovered Decision Validate",
+                ));
+            }
+        }
         RecoveredWalStartupProjectionV1::DecisionApply(projection) => {
             if !projection
                 .lineage()
@@ -3543,6 +3610,28 @@ fn recovered_decision_store_chain_records<'ledger>(
             .and_then(|index| ledger.records().get(index))
     };
     Some([record_at(fetch_ordinal)?, record_at(store_ordinal)?])
+}
+fn recovered_decision_validate_chain_records<'ledger>(
+    ledger: &'ledger LifecycleLedgerV1,
+    fetch: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    store: &RecoveredDecisionFetchStoreProjectionV1,
+    validate: &RecoveredDecisionValidateProjectionV1,
+) -> Option<[&'ledger LifecycleLedgerRecordV1; 3]> {
+    let (fetch_ordinal, store_ordinal, validate_ordinal) = ledger
+        .authenticate_recovered_decision_store_validate(fetch, store, validate)
+        .ok()?;
+    let record_at = |ordinal| {
+        ledger
+            .records()
+            .binary_search_by_key(&ordinal, LifecycleLedgerRecordV1::ordinal)
+            .ok()
+            .and_then(|index| ledger.records().get(index))
+    };
+    Some([
+        record_at(fetch_ordinal)?,
+        record_at(store_ordinal)?,
+        record_at(validate_ordinal)?,
+    ])
 }
 fn recovered_decision_apply_chain_records<'ledger>(
     ledger: &'ledger LifecycleLedgerV1,

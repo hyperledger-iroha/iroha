@@ -18,7 +18,7 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     events::data::{DataEvent, musubi::prelude::*},
-    governance::types::ProposalKind,
+    governance::types::{GovernanceAttemptStatusV1, ProposalContentId, ProposalKind},
     isi::{
         error::{InstructionExecutionError as Error, InvalidParameterError},
         musubi::*,
@@ -4232,13 +4232,34 @@ fn verify_parliament_decision(
             ),
         );
     }
-    if proposal.status != GovernanceProposalStatus::Enacted
-        || proposal.enacted_at_height != Some(decision.enacted_at_height)
-    {
+    if proposal.status != GovernanceProposalStatus::Enacted {
         return reject_governance_mutation(
             rejection_reason,
             MusubiGovernanceRejectionReasonV1::InvalidDecision,
             invariant("Musubi Parliament proposal is not enacted at the claimed height"),
+        );
+    }
+    let proposal_content_id = ProposalContentId::new(decision.decision_id);
+    let mut enacted_attempts = state_transaction
+        .world
+        .parliament_attempts
+        .iter()
+        .filter(|(_, attempt)| attempt.proposal_content_id() == proposal_content_id)
+        .filter(|(_, attempt)| {
+            attempt.attempt().status == GovernanceAttemptStatusV1::Enacted
+                && attempt.terminal_height() == Some(decision.enacted_at_height)
+                && attempt.certificate().is_some_and(|certificate| {
+                    certificate.proposal_content_id == proposal_content_id
+                        && certificate.enact_at_height == decision.enacted_at_height
+                })
+        });
+    if enacted_attempts.next().is_none() || enacted_attempts.next().is_some() {
+        return reject_governance_mutation(
+            rejection_reason,
+            MusubiGovernanceRejectionReasonV1::InvalidDecision,
+            invariant(
+                "Musubi Parliament decision has no unique enacted attempt at the claimed height",
+            ),
         );
     }
     match &proposal.kind {

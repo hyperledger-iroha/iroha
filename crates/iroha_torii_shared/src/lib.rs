@@ -10,8 +10,12 @@ use iroha_data_model::{
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 /// Shared data-availability helpers (sampling, assignment).
 pub mod da;
+/// Public Torii DTOs for certificate-only governance proposal drafts.
+pub mod governance_proposal_api;
 /// Public Torii DTOs for the offline cash lifecycle.
 pub mod offline_api;
+/// Public Torii DTOs for authenticated SORA Parliament draft and read routes.
+pub mod parliament_api;
 /// Stable cross-SDK signing transcript for exact prepared transactions.
 pub mod prepared_transaction;
 /// Shared QR Code encoder used by Torii and CLI offline flows.
@@ -24,6 +28,19 @@ pub mod sorafs_hedging_billing_api;
 pub mod sorafs_moderation_api;
 /// Public Torii DTOs for Parliament-governed validation-fee policy state.
 pub mod validation_fee_api;
+/// Response header binding a hosted Soracloud response to the served service name.
+pub const SORACLOUD_SERVED_SERVICE_NAME_HEADER: &str = "x-iroha-soracloud-served-service-name";
+/// Response header binding a hosted Soracloud response to the served service version.
+pub const SORACLOUD_SERVED_SERVICE_VERSION_HEADER: &str =
+    "x-iroha-soracloud-served-service-version";
+/// Response header binding a hosted Soracloud response to the served replica slot.
+pub const SORACLOUD_SERVED_REPLICA_SLOT_HEADER: &str = "x-iroha-soracloud-served-replica-slot";
+/// Response header binding a hosted Soracloud response to the authoritative process generation.
+pub const SORACLOUD_SERVED_PROCESS_GENERATION_HEADER: &str =
+    "x-iroha-soracloud-served-process-generation";
+/// Response header binding a hosted Soracloud response to the materialized bundle hash.
+pub const SORACLOUD_SERVED_MATERIALIZED_BUNDLE_HASH_HEADER: &str =
+    "x-iroha-soracloud-served-materialized-bundle-hash";
 /// Required WebSocket subprotocol for canonical Norito event and block streams.
 pub const NORITO_V1_WEBSOCKET_SUBPROTOCOL: &str = "iroha-norito-v1";
 /// Canonical request body for account-signed `POST /v1/fees/quote`.
@@ -165,6 +182,28 @@ pub mod uri {
     /// URI used to draft the exact configured citizenship registration instruction.
     pub const GOV_CITIZEN_DRAFT: &str =
         crate::route_catalog::runtime_governance::GOV_CITIZEN_DRAFT.path();
+    /// URI used to draft one canonical Parliament attempt creation.
+    pub const GOV_PARLIAMENT_ATTEMPT_DRAFT: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_ATTEMPT_DRAFT.path();
+    /// URI template used to read one exact Parliament attempt.
+    pub const GOV_PARLIAMENT_ATTEMPT_READ: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_ATTEMPT_READ.path();
+    /// URI template used to inspect one node-local timed-OVN casting context.
+    pub const GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ
+            .path();
+    /// URI template used to fetch one consensus-authenticated casting-proof page.
+    pub const GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF.path();
+    /// URI template used to read one authorized public Parliament TLE release context.
+    pub const GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ.path();
+    /// Request one locally produced, independently verified TLE partial release.
+    pub const GOV_PARLIAMENT_TLE_PARTIAL_RELEASE: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_TLE_PARTIAL_RELEASE.path();
+    /// URI used to draft one closed Parliament lifecycle transition.
+    pub const GOV_PARLIAMENT_TRANSITION_DRAFT: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_TRANSITION_DRAFT.path();
     /// URI used to list typed validation-fee Parliament proposals.
     pub const VALIDATION_FEE_PROPOSALS: &str =
         crate::route_catalog::runtime_governance::VALIDATION_FEE_PROPOSALS_PATH;
@@ -174,9 +213,6 @@ pub mod uri {
     /// URI used to draft one strict native validation-fee Parliament proposal.
     pub const VALIDATION_FEE_PROPOSAL_DRAFT: &str =
         crate::route_catalog::runtime_governance::VALIDATION_FEE_PROPOSAL_DRAFT_PATH;
-    /// URI used to draft one exact proposal-bound validation-fee PLAIN ballot.
-    pub const VALIDATION_FEE_PLAIN_BALLOT_DRAFT: &str =
-        crate::route_catalog::runtime_governance::VALIDATION_FEE_PLAIN_BALLOT_DRAFT_PATH;
     /// URI used to fetch an offline operation by ID.
     pub const OFFLINE_OPERATION: &str = crate::route_catalog::offline::OPERATION_PATH;
     /// Transaction URI is used to handle incoming signed transaction requests.
@@ -255,14 +291,8 @@ pub mod uri {
     pub const GOV_PROPOSE_DEPLOY: &str = "/v1/gov/proposals/deploy-contract";
     /// Draft one closed SCCP route-governance proposal.
     pub const GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE: &str = "/v1/gov/proposals/sccp-route-governance";
-    /// Governance: submit a non-ZK quadratic ballot (optional mode)
+    /// Standalone referendum ballot route; never a Parliament body ballot.
     pub const GOV_BALLOT_PLAIN: &str = "/v1/gov/ballots/plain";
-    /// Governance: draft an equal signed Parliament stage ballot
-    pub const GOV_PARLIAMENT_BALLOT: &str = "/v1/gov/parliament/ballots";
-    /// Governance: finalize a referendum (compute tally and emit Approved/Rejected)
-    pub const GOV_FINALIZE: &str = "/v1/gov/finalize";
-    /// Governance: enact an approved referendum (build `EnactReferendum` instruction)
-    pub const GOV_ENACT: &str = "/v1/gov/enact";
     /// Governance: query the current sortition council
     pub const GOV_COUNCIL_CURRENT: &str = "/v1/gov/council/current";
     /// Governance: query exact citizenship registry count

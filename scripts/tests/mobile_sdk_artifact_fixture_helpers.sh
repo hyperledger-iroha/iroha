@@ -94,7 +94,7 @@ for abi in abis:
 
 manifest = {
     "schema": "iroha.android-native-build-provenance.v1",
-    "native_bridge_abi_version": 22,
+    "native_bridge_abi_version": 23,
     "build_profile": "release",
     "cargo_locked": True,
     "privacy_production_enabled": production,
@@ -308,7 +308,7 @@ bridge_dir = root / "crates/connect_norito_bridge"
 (bridge_dir / "src").mkdir(parents=True, exist_ok=True)
 (bridge_dir / "include").mkdir(parents=True, exist_ok=True)
 (bridge_dir / "include/connect_norito_bridge.h").write_text(
-    "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 22\n"
+    "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 23\n"
     + "\n".join(f"int {symbol}(void);" for symbol in c_symbols)
     + "\n",
     encoding="utf-8",
@@ -370,7 +370,7 @@ for namespace in (
 protocol = root / "crates/iroha_data_model/src/privacy/protocol.rs"
 protocol.parent.mkdir(parents=True, exist_ok=True)
 protocol.write_text(
-    "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 22;\n",
+    "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 23;\n",
     encoding="utf-8",
 )
 
@@ -525,7 +525,7 @@ SWIFT
   cat >"$root/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json" <<JSON
 {
   "version": "1.0.0",
-  "native_bridge_abi_version": 22,
+  "native_bridge_abi_version": 23,
   "privacy_production_enabled": false,
   "cargo_features": [],
   "build_environment": {
@@ -597,6 +597,9 @@ SWIFT
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
+    "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
+    "connect_norito_parliament_timed_ovn_ballot_from_proof_v1",
     "iroha_privacy_compiled_profile_catalog_v1",
     "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",

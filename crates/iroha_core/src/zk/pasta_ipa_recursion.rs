@@ -31,11 +31,8 @@ pub(crate) enum PastaIpaInstanceQueryV1 {
 /// Exact configured proof shape before any key generation or proving work.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PastaIpaProofShapeV1 {
-    k: u32,
-    instance_query: PastaIpaInstanceQueryV1,
     degree: usize,
     advice_columns: usize,
-    instance_columns: usize,
     advice_queries: usize,
     instance_queries: usize,
     fixed_queries: usize,
@@ -51,16 +48,6 @@ pub(crate) struct PastaIpaProofShapeV1 {
 }
 
 impl PastaIpaProofShapeV1 {
-    /// Configured IPA round count.
-    pub(crate) const fn k(&self) -> u32 {
-        self.k
-    }
-
-    /// Public-instance opening policy included in this accounting.
-    pub(crate) const fn instance_query(&self) -> PastaIpaInstanceQueryV1 {
-        self.instance_query
-    }
-
     /// Maximum constraint degree.
     #[cfg(test)]
     pub(crate) const fn degree(&self) -> usize {
@@ -71,11 +58,6 @@ impl PastaIpaProofShapeV1 {
     #[cfg(test)]
     pub(crate) const fn advice_columns(&self) -> usize {
         self.advice_columns
-    }
-
-    /// Number of public-instance columns.
-    pub(crate) const fn instance_columns(&self) -> usize {
-        self.instance_columns
     }
 
     /// Number of distinct advice query pairs.
@@ -298,11 +280,8 @@ where
         .map_err(|_| "augmented proof byte length does not fit u32".to_owned())?;
 
     Ok(PastaIpaProofShapeV1 {
-        k,
-        instance_query,
         degree,
         advice_columns: cs.num_advice_columns(),
-        instance_columns: cs.num_instance_columns(),
         advice_queries: cs.advice_queries().len(),
         instance_queries: cs.instance_queries().len(),
         fixed_queries,

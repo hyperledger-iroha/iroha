@@ -501,23 +501,19 @@ public struct KagemushaTopUpAnchor: Equatable, Sendable {
     }
 }
 
-/// Opaque typed consensus proof returned by the canonical Torii top-up
-/// operation status resource.
-public typealias KagemushaTopUpFinalityProof = KagemushaTopUpFinalityProofArchive
-
 public struct KagemushaTopUpResult: Equatable, Sendable {
     public let transactionHash: String
     public let finalizedBlockHeight: UInt64
     public let serverTimeMs: UInt64
     public let anchor: KagemushaTopUpAnchor
-    public let finalityProof: KagemushaTopUpFinalityProof
+    public let finalityProof: KagemushaTopUpFinalityProofArchive
 
     public init(
         transactionHash: String,
         finalizedBlockHeight: UInt64,
         serverTimeMs: UInt64,
         anchor: KagemushaTopUpAnchor,
-        finalityProof: KagemushaTopUpFinalityProof
+        finalityProof: KagemushaTopUpFinalityProofArchive
     ) throws {
         self.transactionHash = try KagemushaOperationValidation.transactionHash(
             transactionHash,
@@ -990,7 +986,7 @@ public enum KagemushaOperationCodec {
         let finalityProofPayload = try readField(&reader, compact: compact) {
             try $0.readBytes($0.remaining())
         }
-        let finalityProof = try KagemushaTopUpFinalityProof(
+        let finalityProof = try KagemushaTopUpFinalityProofArchive(
             noritoArchive: KagemushaRecursiveSpend.frameArchive(
                 schema: KagemushaRecursiveSpend.topUpFinalityProofWireName,
                 payload: finalityProofPayload

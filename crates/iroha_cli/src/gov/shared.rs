@@ -1,12 +1,8 @@
 //! Internal helpers shared across governance CLI submodules.
 use crate::{CliOutputFormat, RunContext};
-use core::mem;
 use eyre::{Result, eyre};
 use iroha::client::Client;
-use iroha_crypto::{
-    Hash,
-    blake2::{Blake2b512, digest::Digest},
-};
+use iroha_crypto::Hash;
 use norito::json::Value;
 /// Parse one canonical governance selector V1 for Clap.
 pub(crate) fn parse_governance_selector_v1(input: &str) -> Result<String, String> {
@@ -91,31 +87,24 @@ pub(super) fn decode_hex32(hex_str: &str) -> Result<[u8; 32]> {
     hex::decode_to_slice(&canonical, &mut out)?;
     Ok(out)
 }
-/// Compute the governance proposal id using the stable hash recipe.
+/// Compute the exact deploy-contract `ProposalKind` fingerprint stored by Core.
 pub(super) fn compute_proposal_id(
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
     code_hash: &[u8; 32],
     abi_hash: &[u8; 32],
+    manifest_provenance: Option<iroha::data_model::smart_contract::manifest::ManifestProvenance>,
 ) -> [u8; 32] {
-    let contract_address_literal = contract_address.as_ref();
-    let contract_address_len = u32::try_from(contract_address_literal.len())
-        .expect("contract address length must fit in u32 for hashing");
-    let mut input = Vec::with_capacity(
-        b"iroha:gov:proposal:v1|".len()
-            + mem::size_of::<u32>()
-            + contract_address_literal.len()
-            + code_hash.len()
-            + abi_hash.len(),
-    );
-    input.extend_from_slice(b"iroha:gov:proposal:v1|");
-    input.extend_from_slice(&contract_address_len.to_le_bytes());
-    input.extend_from_slice(contract_address_literal.as_bytes());
-    input.extend_from_slice(code_hash);
-    input.extend_from_slice(abi_hash);
-    let digest = Blake2b512::digest(&input);
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&digest[..32]);
-    out
+    use iroha::data_model::governance::types::{
+        AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
+    };
+    ProposalKind::DeployContract(DeployContractProposal {
+        contract_address: contract_address.clone(),
+        code_hash: ContractCodeHash::new(*code_hash),
+        abi_hash: ContractAbiHash::new(*abi_hash),
+        abi_version: AbiVersion::new(1),
+        manifest_provenance,
+    })
+    .fingerprint()
 }
 pub(super) fn resolve_contract_address_target(
     client: &Client,
@@ -242,26 +231,25 @@ mod tests {
         }
     }
     #[test]
-    fn compute_proposal_id_matches_reference_logic() {
-        use iroha_crypto::blake2::{Blake2b512, digest::Digest as _};
+    fn compute_proposal_id_matches_proposal_kind_fingerprint() {
+        use iroha::data_model::governance::types::{
+            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
+        };
         let contract_address: iroha::data_model::smart_contract::ContractAddress =
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         let code = [0x11u8; 32];
         let abi = [0x22u8; 32];
-        let mut input = Vec::new();
-        input.extend_from_slice(b"iroha:gov:proposal:v1|");
-        let contract_address_len = u32::try_from(contract_address.as_ref().len())
-            .expect("contract address length must fit in u32 for hashing");
-        input.extend_from_slice(&contract_address_len.to_le_bytes());
-        input.extend_from_slice(contract_address.as_ref().as_bytes());
-        input.extend_from_slice(&code);
-        input.extend_from_slice(&abi);
-        let digest = Blake2b512::digest(&input);
-        let mut expected = [0u8; 32];
-        expected.copy_from_slice(&digest[..32]);
-        let candidate = compute_proposal_id(&contract_address, &code, &abi);
+        let expected = ProposalKind::DeployContract(DeployContractProposal {
+            contract_address: contract_address.clone(),
+            code_hash: ContractCodeHash::new(code),
+            abi_hash: ContractAbiHash::new(abi),
+            abi_version: AbiVersion::new(1),
+            manifest_provenance: None,
+        })
+        .fingerprint();
+        let candidate = compute_proposal_id(&contract_address, &code, &abi, None);
         assert_eq!(candidate, expected);
     }
 }

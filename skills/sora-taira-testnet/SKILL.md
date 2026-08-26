@@ -104,6 +104,10 @@ Add `--full-doctor` to the mandatory `up --inrou-canary-dir ...` command only
 when the broad public-product route surface is part of the test. The doctor is
 additive and never replaces guest workload qualification.
 
+This optional local diagnostic does not qualify a public ingress. Run the
+same-revision `iroha taira doctor` directly against the public ingress under
+test for that purpose.
+
 The generated bundle contains private keys and tokens. Do not print, move,
 archive, or commit it. On failure the command attempts bounded teardown and
 leaves bounded peer logs for diagnosis; if ownership or termination cannot be
@@ -204,6 +208,13 @@ form. Keep the populated
 `configs/soranexus/taira/taira-canary-client.example.toml` copy and onboarding
 token in the owner-only runtime workspace. Do not replace the compiled protocol
 with a parallel Python implementation.
+
+Deployment proof always runs a fresh same-revision read-only Inrou check;
+retained receipts are audit evidence and never substitute for current
+liveness. Host cleanup persists one request-bound plan before mutation, then
+removes only marker-admitted upload/release roots through crash-resumable
+tombstones within the signed reclaim-byte cap. It does not scan or prune live
+state, secrets, the selected release, or rollback state.
 
 Before other live writes, verify the account exists, holds a positive fee
 asset balance, and has the exact required permission. After any reset, treat

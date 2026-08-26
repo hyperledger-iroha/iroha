@@ -6,11 +6,7 @@ import java.util.Map;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.instructions.CastPlainBallotInstruction;
 import org.hyperledger.iroha.android.model.instructions.CastZkBallotInstruction;
-import org.hyperledger.iroha.android.model.instructions.EnactReferendumInstruction;
-import org.hyperledger.iroha.android.model.instructions.FinalizeReferendumInstruction;
-import org.hyperledger.iroha.android.model.instructions.GovernanceInstructionUtils;
 import org.hyperledger.iroha.android.model.instructions.PersistCouncilForEpochInstruction;
-import org.hyperledger.iroha.android.model.instructions.ProposeDeployContractInstruction;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 
 /** Regression tests covering the governance instruction builders. */
@@ -19,10 +15,6 @@ public final class GovernanceInstructionBuilderTests {
   private GovernanceInstructionBuilderTests() {}
 
   public static void main(final String[] args) {
-    proposeDeployContractRoundTrip();
-    proposeDeployContractFromArgumentsRoundTrip();
-    proposeDeployContractRejectsAmbiguousTarget();
-    votingModeParserRejectsNoncanonicalAliases();
     castZkBallotRoundTrip();
     castZkBallotRejectsUnsupportedPublicInputs();
     castZkBallotNormalizesPublicInputs();
@@ -32,84 +24,8 @@ public final class GovernanceInstructionBuilderTests {
     castZkBallotRejectsInvalidHexHints();
     castPlainBallotRoundTrip();
     castPlainBallotRejectsNoncanonicalQuantities();
-    enactReferendumRoundTrip();
-    finalizeReferendumRoundTrip();
     persistCouncilRoundTrip();
     System.out.println("[IrohaAndroid] GovernanceInstructionBuilderTests passed.");
-  }
-
-  private static void proposeDeployContractRoundTrip() {
-    final ProposeDeployContractInstruction instruction =
-        ProposeDeployContractInstruction.builder()
-            .setContractAlias("router::universal")
-            .setCodeHashHex("a0".repeat(32))
-            .setAbiHashHex("b1".repeat(32))
-            .setAbiVersion("1")
-            .setWindow(new GovernanceInstructionUtils.AtWindow(10, 20))
-            .setVotingMode(GovernanceInstructionUtils.VotingMode.PLAIN)
-            .build();
-    final Map<String, String> args = instruction.toArguments();
-    assert "router::universal".equals(args.get("contract_alias")) : "contract_alias mismatch";
-    assert "Plain".equals(args.get("mode")) : "mode mismatch";
-    assert "router::universal".equals(instruction.contractAlias()) : "contract alias mismatch";
-    assert instruction.contractAddress() == null : "contract address should be absent";
-    assert instruction.window() != null : "window missing";
-    assert instruction.window().lower() == 10 : "window lower mismatch";
-    assert instruction.votingMode() == GovernanceInstructionUtils.VotingMode.PLAIN : "mode mismatch";
-  }
-
-  private static void proposeDeployContractFromArgumentsRoundTrip() {
-    final Map<String, String> args = new java.util.LinkedHashMap<>();
-    args.put("action", "ProposeDeployContract");
-    args.put(
-        "contract_address",
-        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw");
-    args.put("code_hash_hex", "a2".repeat(32));
-    args.put("abi_hash_hex", "b3".repeat(32));
-    args.put("abi_version", "1");
-
-    final ProposeDeployContractInstruction instruction =
-        ProposeDeployContractInstruction.fromArguments(args);
-
-    assert instruction.contractAlias() == null : "contract alias should be absent";
-    assert "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
-        .equals(instruction.contractAddress()) : "contract address mismatch";
-    assert instruction.toArguments().equals(args) : "arguments should round-trip";
-  }
-
-  private static void proposeDeployContractRejectsAmbiguousTarget() {
-    boolean failed = false;
-    try {
-      ProposeDeployContractInstruction.builder()
-          .setContractAlias("router::universal")
-          .setContractAddress(
-              "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw")
-          .setCodeHashHex("a4".repeat(32))
-          .setAbiHashHex("b5".repeat(32))
-          .setAbiVersion("1")
-          .build();
-    } catch (final IllegalStateException ex) {
-      failed = ex.getMessage().contains("Exactly one");
-    }
-    assert failed : "expected ambiguous selector rejection";
-  }
-
-  private static void votingModeParserRejectsNoncanonicalAliases() {
-    assert GovernanceInstructionUtils.VotingMode.parse("Zk")
-        == GovernanceInstructionUtils.VotingMode.ZK : "canonical Zk mode mismatch";
-    assert GovernanceInstructionUtils.VotingMode.parse("Plain")
-        == GovernanceInstructionUtils.VotingMode.PLAIN : "canonical Plain mode mismatch";
-
-    for (final String alias :
-        List.of("zk", "plain", "ZK", "PLAIN", " Zk", "Plain ", "quadratic")) {
-      boolean failed = false;
-      try {
-        GovernanceInstructionUtils.VotingMode.parse(alias);
-      } catch (final IllegalArgumentException ex) {
-        failed = true;
-      }
-      assert failed : "expected noncanonical voting mode rejection: " + alias;
-    }
   }
 
   private static void castZkBallotRoundTrip() {
@@ -301,28 +217,6 @@ public final class GovernanceInstructionBuilderTests {
       }
       assert readbackFailed : "readback accepted noncanonical Quantity `" + amount + "`";
     }
-  }
-
-  private static void enactReferendumRoundTrip() {
-    final EnactReferendumInstruction instruction =
-        EnactReferendumInstruction.builder()
-            .setReferendumIdHex("c0".repeat(32))
-            .setPreimageHashHex("d1".repeat(32))
-            .setWindow(new GovernanceInstructionUtils.AtWindow(5, 15))
-            .build();
-    assert "c0".repeat(32).equals(instruction.referendumIdHex()) : "referendum id hex mismatch";
-    assert instruction.window().upper() == 15 : "enact window mismatch";
-  }
-
-  private static void finalizeReferendumRoundTrip() {
-    final String proposalId = "e1".repeat(32);
-    final FinalizeReferendumInstruction instruction =
-        FinalizeReferendumInstruction.builder()
-            .setReferendumId(proposalId)
-            .setProposalIdHex(proposalId)
-            .build();
-    assert proposalId.equals(instruction.referendumId()) : "referendum id mismatch";
-    assert proposalId.equals(instruction.proposalIdHex()) : "proposal id mismatch";
   }
 
   private static void persistCouncilRoundTrip() {

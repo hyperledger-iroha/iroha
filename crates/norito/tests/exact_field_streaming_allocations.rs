@@ -113,7 +113,7 @@ enum UnknownEnum {
     Payload(UnknownBlob),
 }
 fn bare_bytes(value: &dyn NoritoSerialize, flags: u8) -> Vec<u8> {
-    let _guard = DecodeFlagsGuard::enter_with_hint(flags, flags);
+    let _guard = DecodeFlagsGuard::enter(flags);
     let mut bytes = Vec::new();
     serialize_to_buffer(value, &mut bytes).expect("serialize test value");
     bytes
@@ -165,7 +165,7 @@ fn large_exact_nested_box_streams_without_temporary_allocation() {
             payload: ExactBlob(vec![0xC3; 1024 * 1024]),
         },
     });
-    let _guard = DecodeFlagsGuard::enter_with_hint(flags, flags);
+    let _guard = DecodeFlagsGuard::enter(flags);
     let exact_len = NoritoSerialize::encoded_len_exact(&value).expect("exact boxed length");
     let mut output = Vec::with_capacity(exact_len);
     // Initialize thread-local state and the serializer before measuring.

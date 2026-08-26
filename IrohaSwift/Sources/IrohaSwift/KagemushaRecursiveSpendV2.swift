@@ -25,7 +25,7 @@ public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
         case let .invalidArchive(field):
             return "Invalid Kagemusha recursive spend Norito archive: \(field)."
         case .nativeBridgeUnavailable:
-            return "The ABI-22 Kagemusha recursive spend bridge is unavailable."
+            return "The ABI-23 Kagemusha recursive spend bridge is unavailable."
         case .proofBackendUnavailable:
             return "Kagemusha recursive spend V4 is unavailable until the ABI-21 proof backend is promoted."
         case .proofWorkerBusy:
@@ -171,7 +171,7 @@ public enum KagemushaRecursiveSpend {
         }
     }
 
-    public static let requiredNativeBridgeAbiVersion: UInt32 = 22
+    public static let requiredNativeBridgeAbiVersion: UInt32 = 23
     /// Sender-final peer-cash contract advertised by universal capability discovery.
     public static let cashHandoffCapabilityV1 = "cash_handoff_v1"
     public static let authorizationPreparationVersionV2: UInt16 = 2
@@ -450,6 +450,10 @@ public enum KagemushaRecursiveSpend {
     public static let maximumPeerArchiveBytes = maximumPeerArchiveBytesV4
     /// Maximum canonical ABI-21 promoted-release marker accepted by native install.
     public static let maximumPromotionRecordBytesV4 = 1_024 * 1_024
+    /// Maximum canonical runner-signed internal-validation receipt accepted by native install.
+    public static let maximumInternalValidationReceiptBytesV4 = 1_024 * 1_024
+    /// Maximum canonical signed cryptographic-review envelope accepted by native install.
+    public static let maximumCryptographicReviewBytesV4 = 1_024 * 1_024
     /// Exact Rust `KAGEMUSHA_RECURSIVE_SPEND_TOPUP_PROVENANCE_MAX_BYTES_V4`.
     public static let maximumTopUpProvenanceArchiveBytesV4 =
         topUpFinalityRosterMaximumArchiveBytes
@@ -554,7 +558,7 @@ public enum KagemushaRecursiveSpend {
         )
     }
 
-    /// True when the ABI-22 bridge was compiled with the audited production
+    /// True when the ABI-23 bridge was compiled with the audited production
     /// promotion feature, even if its authenticated artifact set has not been
     /// installed yet. Setup UI uses this non-cached probe to avoid an artifact
     /// bootstrap cycle; value-moving operations still require
@@ -2265,9 +2269,12 @@ public final class KagemushaRecursiveSpendArtifactIngest: @unchecked Sendable {
 ///
 /// The policy must be provisioned from the application/deployment trust root;
 /// it must never be accepted from the same downloaded bundle as the manifest.
+/// Native also authenticates the runner-signed internal-validation receipt before
+/// it consumes any finalized artifact handle.
 public struct KagemushaRecursiveSpendReleaseAuthenticationV4: Sendable {
     public let trustedPolicyNorito: Data
     public let releaseAttestationNorito: Data
+    public let internalValidationReceiptNorito: Data
     public let benchmarkEvidence: Data
     public let cryptographicReview: Data
     public let promotionRecordNorito: Data
@@ -2275,6 +2282,7 @@ public struct KagemushaRecursiveSpendReleaseAuthenticationV4: Sendable {
     public init(
         trustedPolicyNorito: Data,
         releaseAttestationNorito: Data,
+        internalValidationReceiptNorito: Data,
         benchmarkEvidence: Data,
         cryptographicReview: Data,
         promotionRecordNorito: Data
@@ -2286,13 +2294,20 @@ public struct KagemushaRecursiveSpendReleaseAuthenticationV4: Sendable {
               releaseAttestationNorito.count <= 1_024 * 1_024 else {
             throw KagemushaRecursiveSpendError.invalidField("release.attestation")
         }
-        for (field, evidence) in [
-            ("release.benchmarkEvidence", benchmarkEvidence),
-            ("release.cryptographicReview", cryptographicReview),
-        ] {
-            guard !evidence.isEmpty, evidence.count <= 16 * 1_024 * 1_024 else {
-                throw KagemushaRecursiveSpendError.invalidField(field)
-            }
+        guard !internalValidationReceiptNorito.isEmpty,
+              internalValidationReceiptNorito.count
+                <= KagemushaRecursiveSpend.maximumInternalValidationReceiptBytesV4 else {
+            throw KagemushaRecursiveSpendError.invalidField(
+                "release.internalValidationReceipt"
+            )
+        }
+        guard !benchmarkEvidence.isEmpty, benchmarkEvidence.count <= 16 * 1_024 * 1_024 else {
+            throw KagemushaRecursiveSpendError.invalidField("release.benchmarkEvidence")
+        }
+        guard !cryptographicReview.isEmpty,
+              cryptographicReview.count
+                <= KagemushaRecursiveSpend.maximumCryptographicReviewBytesV4 else {
+            throw KagemushaRecursiveSpendError.invalidField("release.cryptographicReview")
         }
         guard !promotionRecordNorito.isEmpty,
               promotionRecordNorito.count
@@ -2301,6 +2316,7 @@ public struct KagemushaRecursiveSpendReleaseAuthenticationV4: Sendable {
         }
         self.trustedPolicyNorito = Data(trustedPolicyNorito)
         self.releaseAttestationNorito = Data(releaseAttestationNorito)
+        self.internalValidationReceiptNorito = Data(internalValidationReceiptNorito)
         self.benchmarkEvidence = Data(benchmarkEvidence)
         self.cryptographicReview = Data(cryptographicReview)
         self.promotionRecordNorito = Data(promotionRecordNorito)
@@ -2416,6 +2432,8 @@ public final class KagemushaRecursiveSpendArtifactInstallSessionV4: @unchecked S
                     expectedManifestSHA256: manifest.sha256,
                     trustedPolicyArchive: authentication.trustedPolicyNorito,
                     releaseAttestationArchive: authentication.releaseAttestationNorito,
+                    internalValidationReceiptArchive:
+                        authentication.internalValidationReceiptNorito,
                     benchmarkEvidence: authentication.benchmarkEvidence,
                     cryptographicReview: authentication.cryptographicReview,
                     promotionRecordArchive: authentication.promotionRecordNorito,

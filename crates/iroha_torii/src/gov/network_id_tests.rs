@@ -35,21 +35,6 @@ async fn governance_ballots_require_exact_network_before_semantic_validation() {
     .await
     .expect_err("foreign PLAIN ballot must fail before selector validation");
     assert!(format!("{error:?}").contains("different network"));
-    let error = handle_gov_parliament_ballot(
-        state.clone(),
-        &authenticated,
-        MaybeTelemetry::disabled(),
-        NoritoJson(ParliamentBallotDto {
-            authority: canonical_authority.clone(),
-            network_id: foreign_network,
-            proposal_id: "not canonical hex".to_owned(),
-            body: ParliamentBody::PolicyJury,
-            decision: ParliamentDecision::Approve,
-        }),
-    )
-    .await
-    .expect_err("foreign Parliament ballot must fail before proposal validation");
-    assert!(format!("{error:?}").contains("different network"));
     let dto = ZkBallotV1Dto {
         authority: canonical_authority.clone(),
         network_id: foreign_network,
@@ -150,22 +135,6 @@ async fn governance_ballot_dtos_reject_retired_identity_keys() {
             .expect("PLAIN ballot object")
             .insert(retired.into(), norito::json::Value::from("retired"));
         assert!(norito::json::from_value::<PlainBallotDto>(with_retired).is_err());
-    }
-    let parliament = norito::json::to_value(&ParliamentBallotDto {
-        authority: authority.clone(),
-        network_id,
-        proposal_id: "11".repeat(32),
-        body: ParliamentBody::PolicyJury,
-        decision: ParliamentDecision::Approve,
-    })
-    .expect("serialize exact Parliament ballot");
-    for retired in ["chain_id", "genesis_hash"] {
-        let mut with_retired = parliament.clone();
-        with_retired
-            .as_object_mut()
-            .expect("Parliament ballot object")
-            .insert(retired.into(), norito::json::Value::from("retired"));
-        assert!(norito::json::from_value::<ParliamentBallotDto>(with_retired).is_err());
     }
     let envelope = norito::json::to_value(&ZkBallotV1Dto {
         authority: authority.clone(),

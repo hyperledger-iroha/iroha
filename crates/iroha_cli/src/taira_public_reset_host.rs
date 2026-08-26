@@ -13,7 +13,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Context as _, Result, eyre};
 use iroha::{
     client::{
-        AccountOnboardingPlanReceiptV1, AccountOnboardingProofRequiredPrepareResponseV1,
+        AccountFaucetPreparedTransactionV1, AccountOnboardingPlanReceiptV1,
+        AccountOnboardingPreparedTransactionV1, AccountOnboardingProofRequiredPrepareResponseV1,
         TairaPublicResetMutationBindingV1, verify_account_onboarding_proof_required_result_v1,
     },
     config::{Config as ClientConfig, LoadPath},
@@ -28,6 +29,7 @@ use iroha::{
 use iroha_crypto::{Hash, HashOf};
 use iroha_torii_shared::{
     AccountOnboardingCurrentStateRequestV1, AccountOnboardingCurrentStateResponseV1,
+    FeeQuoteResponse,
 };
 use iroha_version::codec::DecodeVersioned as _;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
@@ -64,6 +66,8 @@ const HOST_RECEIPT_SCHEMA_V1: &str = "iroha.taira.public-reset.host-receipt.v1";
 const HOST_GUARD_SCHEMA_V1: &str = "iroha.taira.public-reset.host-guard.v1";
 const LOCAL_RECEIPT_SCHEMA_V1: &str = "iroha.taira.public-reset.local-receipt.v1";
 const GENERATED_MARKER_SCHEMA_V1: &str = "iroha.taira.public-reset.generated-path.v1";
+#[cfg(any(target_os = "linux", test))]
+const CLEANUP_PLAN_SCHEMA_V1: &str = "iroha.taira.public-reset.cleanup-plan.v1";
 const LEASE_SCHEMA_V1: &str = "iroha.taira.public-reset.host-lease.v1";
 const HOST_INTENT_SCHEMA_V1: &str = "iroha.taira.public-reset.host-intent.v1";
 const MANAGER_INTENT_SCHEMA_V1: &str = "iroha.taira.public-reset.manager-intent.v1";
@@ -80,7 +84,9 @@ const FIXED_DISPATCHER: &str = "/usr/local/libexec/iroha-taira-public-reset-v1";
 const HOST_DISPATCH_SUFFIX: &str = "taira public-reset host-dispatch --protocol v1";
 const MAX_PROCESS_OUTPUT: usize = 4 * 1024 * 1024;
 const MAX_HOST_REQUEST_BYTES: usize = 32 * 1024 * 1024;
-const MAX_PREPARED_ENVELOPE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_PREPARED_ENVELOPE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_PREPARED_TRANSACTION_BYTES: usize = 1024 * 1024;
+const MAX_REPORT_EVIDENCE_TOKEN_BYTES: usize = 32;
 const MAX_PROOF_READ_RESPONSE_BYTES: usize =
     iroha_torii_shared::ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES;
 const FRAME_LENGTH_BYTES: usize = 8;
@@ -88,6 +94,12 @@ const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const HOST_ACTION_IN_PROGRESS_MARKER: &str = "iroha.taira.public-reset.host-action-in-progress.v1";
 #[cfg(target_os = "linux")]
 const MAX_CLEANUP_ENTRIES: usize = 65_536;
+#[cfg(any(target_os = "linux", test))]
+const MAX_CLEANUP_NAMESPACE_ENTRIES: usize = 4_096;
+#[cfg(any(target_os = "linux", test))]
+const CLEANUP_TOMBSTONE_PREFIX: &str = ".public-reset-cleanup-v1-";
+#[cfg(any(target_os = "linux", test))]
+const CLEANUP_TOMBSTONE_SUFFIX: &str = ".tombstone";
 const RESET_GENERATED_ENTRIES: [&str; 6] = [
     "storage",
     "snapshots",
@@ -124,7 +136,7 @@ pub(super) fn is_local_mutation_recovery_pending(error: &eyre::Report) -> bool {
 #[derive(clap::Args, Debug)]
 pub(super) struct PublicResetHost {
     /// Internal protocol marker; no request field is accepted through argv.
-    #[arg(long, hide = true, default_value = "v1")]
+    #[arg(long, hide = true, value_parser = ["v1"])]
     protocol: String,
 }
 
@@ -348,6 +360,36 @@ struct GeneratedMarkerV1 {
     created_at_unix_ms: u64,
 }
 
+#[cfg(any(target_os = "linux", test))]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct CleanupPlanEntryV1 {
+    kind: String,
+    original_name: String,
+    original_path: String,
+    marker: GeneratedMarkerV1,
+    marker_sha256: String,
+    directory_device: u64,
+    directory_inode: u64,
+    initial_bytes: u64,
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct CleanupPlanV1 {
+    schema: String,
+    action: String,
+    host_slug: String,
+    request_sha256: String,
+    inventory_sha256: String,
+    authorization_sha256: String,
+    authorization_nonce: String,
+    max_reclaim_bytes: u64,
+    bytes_before: u64,
+    entries: Vec<CleanupPlanEntryV1>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HostAction {
     Preflight,
@@ -565,17 +607,21 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
         if action == HostAction::Upload {
             verify_upload_body(&admitted, body, None)?;
         }
+        if action == HostAction::Cleanup {
+            verify_completed_cleanup_plan(&admitted, Some(&receipt))?;
+        }
         match progress_decision {
-            HostProgressDecision::Advance => {
+            HostProgressDecision::Advance if action != HostAction::Cleanup => {
                 revalidate_cached_action_postcondition(&admitted, action)?;
             }
-            HostProgressDecision::Replay => {
+            HostProgressDecision::Replay if action != HostAction::Cleanup => {
                 if action == HostAction::Rollback {
                     revalidate_cached_action_postcondition(&admitted, HostAction::Rollback)?;
                 } else {
                     revalidate_current_target_postcondition(&admitted, &progress)?;
                 }
             }
+            HostProgressDecision::Advance | HostProgressDecision::Replay => {}
             HostProgressDecision::AbsentNoOp => unreachable!("handled before receipt replay"),
         }
         if progress_decision == HostProgressDecision::Advance {
@@ -1035,6 +1081,69 @@ fn validate_prepared_mutation_envelope(
             "prepared mutation envelope binding differs from the signed authorization"
         ));
     }
+    let is_inrou = matches!(
+        admitted.request.mutation_kind.as_str(),
+        "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_canary"
+    );
+    if !is_inrou
+        && !matches!(
+            admitted.request.mutation_kind.as_str(),
+            "onboarding" | "faucet" | "write_canary"
+        )
+    {
+        return Err(eyre!("prepared mutation child kind is outside exact V1"));
+    }
+    require_exact_json_fields(
+        root,
+        if is_inrou {
+            &[
+                "schema",
+                "binding",
+                "public_root",
+                "chain_id",
+                "network_id",
+                "authority",
+                "stage",
+                "operation",
+            ]
+        } else {
+            &[
+                "schema",
+                "binding",
+                "public_root",
+                "chain_id",
+                "network_id",
+                "authority",
+                "operation",
+            ]
+        },
+        "prepared mutation envelope",
+    )?;
+    let binding_value = root
+        .get("binding")
+        .expect("binding object was validated immediately above");
+    let exact_write_binding = if is_inrou {
+        let exact: crate::soracloud::TairaMutationBindingV1 =
+            json::from_value(binding_value.clone())
+                .wrap_err("prepared Inrou binding is not exact typed V1 JSON")?;
+        if json::to_value(&exact)? != *binding_value {
+            return Err(eyre!(
+                "prepared Inrou binding is outside its exact typed V1 closure"
+            ));
+        }
+        None
+    } else {
+        let exact: TairaPublicResetMutationBindingV1 = json::from_value(binding_value.clone())
+            .wrap_err("prepared write binding is not exact typed V1 JSON")?;
+        if exact.schema != TairaPublicResetMutationBindingV1::SCHEMA
+            || json::to_value(&exact)? != *binding_value
+        {
+            return Err(eyre!(
+                "prepared write binding is outside its exact typed V1 closure"
+            ));
+        }
+        Some(exact)
+    };
     let network_id_value = root
         .get("network_id")
         .ok_or_else(|| eyre!("prepared mutation envelope omits its network identity"))?;
@@ -1074,6 +1183,11 @@ fn validate_prepared_mutation_envelope(
         .get("operation")
         .and_then(norito::json::Value::as_object)
         .ok_or_else(|| eyre!("prepared mutation envelope omits its operation"))?;
+    require_exact_json_fields(
+        operation,
+        &["kind", "envelope"],
+        "prepared mutation tagged operation",
+    )?;
     let operation_kind = operation
         .get("kind")
         .and_then(norito::json::Value::as_str)
@@ -1102,21 +1216,16 @@ fn validate_prepared_mutation_envelope(
         let result: AccountOnboardingProofRequiredPrepareResponseV1 =
             json::from_value(result_value.clone())
                 .wrap_err("proof-required onboarding result is not exact typed V1 JSON")?;
-        let exact_binding: TairaPublicResetMutationBindingV1 = json::from_value(
-            root.get("binding")
-                .expect("binding was validated immediately above")
-                .clone(),
-        )
-        .wrap_err("proof-required onboarding binding is not exact typed V1 JSON")?;
+        let exact_binding = exact_write_binding
+            .as_ref()
+            .expect("proof-required onboarding uses a write binding");
         if admitted.request.mutation_kind != "onboarding"
-            || root.len() != 7
-            || operation.len() != 2
             || proof_required.len() != 3
             || proof_required
                 .get("schema")
                 .and_then(norito::json::Value::as_str)
                 != Some("iroha.taira.prepared-onboarding-proof-required.v1")
-            || &exact_binding != &result.binding
+            || exact_binding != &result.binding
             || receipt.body.request != admitted.inventory.canary_onboarding_request
         {
             return Err(eyre!(
@@ -1128,7 +1237,7 @@ fn validate_prepared_mutation_envelope(
             &admitted.inventory.canary_onboarding_request,
             &result,
             &receipt,
-            &exact_binding,
+            exact_binding,
         )
         .wrap_err("proof-required onboarding receipt or result authentication failed")?;
         return Ok((
@@ -1153,12 +1262,167 @@ fn validate_prepared_mutation_envelope(
             "prepared mutation operation tag or label does not match its child kind"
         ));
     }
+    if is_inrou {
+        let stage = root
+            .get("stage")
+            .and_then(norito::json::Value::as_object)
+            .ok_or_else(|| eyre!("prepared Inrou envelope omits its retained stage identity"))?;
+        require_exact_json_fields(
+            stage,
+            &[
+                "service_name",
+                "service_version",
+                "route_host",
+                "route_path_prefix",
+                "healthcheck_path",
+                "stage_mode",
+                "bundle_hash",
+                "bundle_content_cid",
+                "bundle_manifest_digest_hex",
+                "guest_content_cid",
+                "guest_manifest_digest_hex",
+                "container_manifest_hash",
+                "service_manifest_hash",
+            ],
+            "prepared Inrou stage identity",
+        )?;
+        let canary = &admitted.inventory.inrou_canary;
+        for (field, expected) in [
+            ("service_name", canary.service_name.as_str()),
+            ("service_version", canary.service_version.as_str()),
+            ("route_host", canary.route_host.as_str()),
+            ("route_path_prefix", canary.route_path_prefix.as_str()),
+            ("healthcheck_path", canary.healthcheck_path.as_str()),
+            ("stage_mode", "deploy"),
+            ("bundle_hash", canary.bundle_hash.as_str()),
+            ("bundle_content_cid", canary.bundle_content_cid.as_str()),
+            (
+                "bundle_manifest_digest_hex",
+                canary.bundle_manifest_digest_hex.as_str(),
+            ),
+            ("guest_content_cid", canary.guest_content_cid.as_str()),
+            (
+                "guest_manifest_digest_hex",
+                canary.guest_manifest_digest_hex.as_str(),
+            ),
+            (
+                "container_manifest_hash",
+                canary.container_manifest_hash.as_str(),
+            ),
+            (
+                "service_manifest_hash",
+                canary.service_manifest_hash.as_str(),
+            ),
+        ] {
+            if stage.get(field).and_then(norito::json::Value::as_str) != Some(expected) {
+                return Err(eyre!(
+                    "prepared Inrou stage identity differs from inventory field `{field}`"
+                ));
+            }
+        }
+    }
+    match admitted.request.mutation_kind.as_str() {
+        "onboarding" => {
+            let prepared: AccountOnboardingPreparedTransactionV1 =
+                json::from_value(norito::json::Value::Object(operation_envelope.clone()))
+                    .wrap_err("prepared onboarding operation is not exact typed V1 JSON")?;
+            if json::to_value(&prepared)? != norito::json::Value::Object(operation_envelope.clone())
+                || prepared.schema != AccountOnboardingPreparedTransactionV1::SCHEMA
+                || prepared.operation != AccountOnboardingPreparedTransactionV1::OPERATION
+                || Some(&prepared.binding) != exact_write_binding.as_ref()
+                || prepared.receipt.body.request != admitted.inventory.canary_onboarding_request
+            {
+                return Err(eyre!(
+                    "prepared onboarding operation is outside its exact typed V1 closure"
+                ));
+            }
+            require_lower_sha256(
+                &prepared.semantic_hash_hex,
+                "prepared onboarding semantic hash",
+            )?;
+        }
+        "faucet" => {
+            let prepared: AccountFaucetPreparedTransactionV1 =
+                json::from_value(norito::json::Value::Object(operation_envelope.clone()))
+                    .wrap_err("prepared faucet operation is not exact typed V1 JSON")?;
+            if json::to_value(&prepared)? != norito::json::Value::Object(operation_envelope.clone())
+                || prepared.schema != AccountFaucetPreparedTransactionV1::SCHEMA
+                || prepared.operation != AccountFaucetPreparedTransactionV1::OPERATION
+                || Some(&prepared.binding) != exact_write_binding.as_ref()
+                || prepared.account_id != admitted.inventory.canary_onboarding_request.account_id
+            {
+                return Err(eyre!(
+                    "prepared faucet operation is outside its exact typed V1 closure"
+                ));
+            }
+            require_lower_sha256(&prepared.semantic_hash_hex, "prepared faucet semantic hash")?;
+        }
+        "write_canary" => {
+            require_exact_json_fields(
+                operation_envelope,
+                &[
+                    "schema",
+                    "binding",
+                    "operation",
+                    "transaction_hash_hex",
+                    "signed_transaction_wire_hex",
+                    "signed_transaction_wire_sha256",
+                    "semantic_hash_hex",
+                    "fee_payment",
+                    "fee_quote",
+                ],
+                "prepared final-canary operation",
+            )?;
+            if operation_envelope
+                .get("schema")
+                .and_then(norito::json::Value::as_str)
+                != Some("iroha.taira.prepared-transaction.v1")
+            {
+                return Err(eyre!(
+                    "prepared final-canary operation has an invalid V1 schema"
+                ));
+            }
+            require_lower_sha256(
+                operation_envelope
+                    .get("semantic_hash_hex")
+                    .and_then(norito::json::Value::as_str)
+                    .ok_or_else(|| eyre!("prepared final-canary omits its semantic hash"))?,
+                "prepared final-canary semantic hash",
+            )?;
+        }
+        "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_canary" => {
+            require_exact_json_fields(
+                operation_envelope,
+                &[
+                    "schema",
+                    "binding",
+                    "operation",
+                    "transaction_hash_hex",
+                    "signed_transaction_wire_hex",
+                    "signed_transaction_wire_sha256",
+                    "fee_payment",
+                    "fee_quote",
+                ],
+                "prepared Inrou transaction",
+            )?;
+            if operation_envelope
+                .get("schema")
+                .and_then(norito::json::Value::as_str)
+                != Some("iroha.taira.prepared-soracloud-transaction.v1")
+            {
+                return Err(eyre!("prepared Inrou transaction has an invalid V1 schema"));
+            }
+        }
+        _ => unreachable!("prepared child kind was closed above"),
+    }
     let wire_hex = operation_envelope
         .get("signed_transaction_wire_hex")
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("prepared mutation operation omits exact transaction wire"))?;
     let wire = hex::decode(wire_hex).wrap_err("prepared transaction wire is not lowercase hex")?;
-    if hex::encode(&wire) != wire_hex || wire.is_empty() || wire.len() > MAX_PREPARED_ENVELOPE_BYTES
+    if hex::encode(&wire) != wire_hex
+        || wire.is_empty()
+        || wire.len() > MAX_PREPARED_TRANSACTION_BYTES
     {
         return Err(eyre!(
             "prepared transaction wire is not canonical or bounded"
@@ -1204,6 +1468,98 @@ fn validate_prepared_mutation_envelope(
         return Err(eyre!(
             "prepared transaction metadata does not bind its exact reset authorization"
         ));
+    }
+    let fee_payment = operation_envelope
+        .get("fee_payment")
+        .ok_or_else(|| eyre!("prepared transaction omits its fee payment"))?;
+    let fee_quote_value = operation_envelope
+        .get("fee_quote")
+        .and_then(norito::json::Value::as_object)
+        .ok_or_else(|| eyre!("prepared transaction omits its fee quote"))?;
+    let fee_quote: FeeQuoteResponse =
+        json::from_value(norito::json::Value::Object(fee_quote_value.clone()))
+            .wrap_err("prepared transaction fee quote is not exact typed V1 JSON")?;
+    if json::to_value(transaction.fee_payment_intent())? != *fee_payment
+        || json::to_value(&fee_quote)? != norito::json::Value::Object(fee_quote_value.clone())
+        || json::to_value(&fee_quote.intent)? != *fee_payment
+    {
+        return Err(eyre!(
+            "prepared transaction fee payment and quote differ from its signed wire"
+        ));
+    }
+    if is_inrou {
+        if transaction.metadata().len() != 7
+            || transaction
+                .metadata()
+                .get(&Name::from_str("taira_public_reset_authorization_sha256")?)
+                .and_then(|value| value.try_into_any_norito::<String>().ok())
+                .as_deref()
+                != Some(admitted.authorization_sha256.as_str())
+            || transaction
+                .metadata()
+                .get(&Name::from_str("taira_public_reset_authorization_nonce")?)
+                .and_then(|value| value.try_into_any_norito::<String>().ok())
+                .as_deref()
+                != Some(admitted.inventory.authorization_nonce.as_str())
+            || transaction
+                .metadata()
+                .get(&Name::from_str("taira_public_reset_mutation_kind")?)
+                .and_then(|value| value.try_into_any_norito::<String>().ok())
+                .as_deref()
+                != Some(admitted.request.mutation_kind.as_str())
+            || transaction
+                .metadata()
+                .get(&Name::from_str("taira_public_reset_mutation_phase")?)
+                .and_then(|value| value.try_into_any_norito::<String>().ok())
+                .as_deref()
+                != Some(admitted.request.mutation_phase.as_str())
+            || transaction
+                .metadata()
+                .get(&Name::from_str("taira_public_reset_idempotency_key")?)
+                .and_then(|value| value.try_into_any_norito::<String>().ok())
+                .as_deref()
+                != Some(admitted.request.mutation_idempotency_key.as_str())
+            || transaction
+                .metadata()
+                .get(&Name::from_str(
+                    "taira_public_reset_execution_expires_at_unix_ms",
+                )?)
+                .and_then(|value| value.try_into_any_norito::<u64>().ok())
+                != Some(admitted.authorization.claims.execution_expires_at_unix_ms)
+            || transaction
+                .metadata()
+                .get(&Name::from_str("taira_public_reset_mutation_operation")?)
+                .and_then(|value| value.try_into_any_norito::<String>().ok())
+                .as_deref()
+                != Some(operation_label)
+        {
+            return Err(eyre!(
+                "prepared Inrou transaction metadata is outside its exact V1 closure"
+            ));
+        }
+    } else {
+        let semantic = operation_envelope
+            .get("semantic_hash_hex")
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| eyre!("prepared write transaction omits its semantic hash"))?;
+        if transaction.metadata().len() != 3
+            || transaction
+                .metadata()
+                .get(&Name::from_str("taira_prepared_operation")?)
+                .and_then(|value| value.try_into_any_norito::<String>().ok())
+                .as_deref()
+                != Some(operation_label)
+            || transaction
+                .metadata()
+                .get(&Name::from_str("taira_prepared_semantic_hash")?)
+                .and_then(|value| value.try_into_any_norito::<String>().ok())
+                .as_deref()
+                != Some(semantic)
+        {
+            return Err(eyre!(
+                "prepared write transaction metadata is outside its exact V1 closure"
+            ));
+        }
     }
     Ok((
         sha256_hex(bytes),
@@ -1305,20 +1661,44 @@ fn validate_prepared_mutation_applied_evidence(
     let object = value
         .as_object()
         .ok_or_else(|| eyre!("prepared mutation Applied evidence is not an object"))?;
+    let is_inrou = matches!(
+        prepared.kind.as_str(),
+        "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_canary"
+    );
+    let service_applied = prepared.kind == "inrou_canary";
+    require_exact_json_fields(
+        object,
+        if service_applied {
+            PREPARED_INROU_SERVICE_APPLIED_REPORT_FIELDS
+        } else if is_inrou {
+            PREPARED_INROU_REPORT_FIELDS
+        } else if prepared.kind == "write_canary" {
+            PREPARED_FINAL_CANARY_REPORT_FIELDS
+        } else {
+            PREPARED_WRITE_REPORT_FIELDS
+        },
+        "prepared mutation Applied evidence",
+    )?;
+    validate_prepared_report_common_arrays(
+        object,
+        service_applied,
+        "prepared mutation Applied evidence",
+    )?;
     let string = |name: &str| {
         object
             .get(name)
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("prepared mutation Applied evidence omits `{name}`"))
     };
-    let failures_empty = object
-        .get("failures")
-        .and_then(norito::json::Value::as_array)
-        .is_some_and(Vec::is_empty);
     let command = string("command")?;
-    if !matches!(command, "taira_write_canary" | "taira_inrou_canary")
+    if command
+        != if is_inrou {
+            "taira_inrou_canary"
+        } else {
+            "taira_write_canary"
+        }
         || string("status")? != "ok"
-        || !failures_empty
+        || string("public_root")? != admitted.inventory.inrou_canary.public_root
         || string("authorization_sha256")? != admitted.authorization_sha256
         || string("authorization_nonce")? != admitted.inventory.authorization_nonce
         || string("mutation_kind")? != prepared.kind
@@ -1329,6 +1709,10 @@ fn validate_prepared_mutation_applied_evidence(
         || string("prepared_envelope_sha256")? != prepared.prepared_sha256
         || string("recovery_outcome")? != "Applied"
         || object
+            .get("execution_expires_at_unix_ms")
+            .and_then(norito::json::Value::as_u64)
+            != Some(admitted.authorization.claims.execution_expires_at_unix_ms)
+        || object
             .get("applied_block_height")
             .and_then(norito::json::Value::as_u64)
             .is_none_or(|height| height == 0)
@@ -1337,6 +1721,34 @@ fn validate_prepared_mutation_applied_evidence(
             "prepared mutation Applied evidence does not bind its exact transaction and authorization"
         ));
     }
+    require_lower_sha256(
+        string("evidence")?,
+        "prepared mutation Applied committed evidence",
+    )?;
+    if is_inrou {
+        if string("evidence")? != prepared.transaction_hash || string("mutation_mode")? != "deploy"
+        {
+            return Err(eyre!(
+                "prepared Inrou Applied evidence differs from its exact transaction"
+            ));
+        }
+        if service_applied {
+            validate_applied_inrou_service_identity(object, &admitted.inventory)?;
+            if !object
+                .get("observed_at_unix_ms")
+                .and_then(norito::json::Value::as_u64)
+                .is_some_and(|timestamp| timestamp > 0)
+            {
+                return Err(eyre!(
+                    "prepared Inrou Applied evidence omits its observation timestamp"
+                ));
+            }
+        }
+    }
+    let envelope = BASE64
+        .decode(&prepared.prepared_base64)
+        .wrap_err("prepared mutation Applied envelope is not base64")?;
+    validate_prepared_report_envelope_bytes(&value, &envelope)?;
     Ok(sha256_hex(bytes))
 }
 
@@ -1362,16 +1774,18 @@ fn validate_prepared_mutation_proof_required_evidence(
     let object = value
         .as_object()
         .ok_or_else(|| eyre!("proof-required onboarding evidence is not an object"))?;
+    require_exact_json_fields(
+        object,
+        PREPARED_WRITE_REPORT_FIELDS,
+        "proof-required onboarding evidence",
+    )?;
+    validate_prepared_report_common_arrays(object, false, "proof-required onboarding evidence")?;
     let string = |name: &str| {
         object
             .get(name)
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("proof-required onboarding evidence omits `{name}`"))
     };
-    let failures_empty = object
-        .get("failures")
-        .and_then(norito::json::Value::as_array)
-        .is_some_and(Vec::is_empty);
     let envelope = BASE64
         .decode(&prepared.prepared_base64)
         .wrap_err("proof-required onboarding prepared envelope is not base64")?;
@@ -1381,7 +1795,6 @@ fn validate_prepared_mutation_proof_required_evidence(
         || string("command")? != "taira_write_canary"
         || string("status")? != "ok"
         || string("public_root")? != admitted.inventory.inrou_canary.public_root
-        || !failures_empty
         || string("authorization_sha256")? != admitted.authorization_sha256
         || string("authorization_nonce")? != admitted.inventory.authorization_nonce
         || string("mutation_kind")? != "onboarding"
@@ -1390,6 +1803,10 @@ fn validate_prepared_mutation_proof_required_evidence(
         || string("operation")? != "onboarding"
         || string("recovery_outcome")? != "Applied"
         || string("prepared_envelope_sha256")? != prepared.prepared_sha256
+        || object
+            .get("execution_expires_at_unix_ms")
+            .and_then(norito::json::Value::as_u64)
+            != Some(admitted.authorization.claims.execution_expires_at_unix_ms)
         || object.get("transaction_hash_hex") != Some(&norito::json::Value::Null)
         || object.get("applied_block_height") != Some(&norito::json::Value::Null)
         || require_lower_sha256(
@@ -1403,6 +1820,7 @@ fn validate_prepared_mutation_proof_required_evidence(
             "proof-required onboarding evidence does not bind the fresh atomic account-and-alias proof"
         ));
     }
+    validate_prepared_report_envelope_bytes(&value, &envelope)?;
     prove_fresh_onboarding_current_state(
         admitted,
         &proof_required.account_id,
@@ -3598,10 +4016,9 @@ fn revalidate_cached_action_postcondition(
             Ok(())
         }
         HostAction::Seal => verify_success_seal_postcondition(admitted),
-        // Cleanup is a bounded historical observation/mutation. A later aged
-        // candidate is not part of the already-published receipt and must not
-        // be deleted by an idempotent receipt replay.
-        HostAction::Cleanup => Ok(()),
+        // Cleanup replay proves only the immutable plan absent. A later aged
+        // candidate is outside the already-published receipt and is untouched.
+        HostAction::Cleanup => verify_completed_cleanup_plan(admitted, None),
         HostAction::Rollback => verify_rollback_postcondition(admitted),
     }
 }
@@ -5403,25 +5820,166 @@ struct CleanupCandidate {
 }
 
 #[cfg(target_os = "linux")]
+struct CleanupTombstone {
+    path: PathBuf,
+    kind: &'static str,
+    parent: File,
+    directory: File,
+    name: OsString,
+    original_name: OsString,
+    marker: Option<GeneratedMarkerV1>,
+}
+
+#[cfg(target_os = "linux")]
+enum CleanupPlanEntryState {
+    Complete,
+    Candidate(CleanupCandidate),
+    Tombstone(CleanupTombstone),
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn validate_cleanup_original_name(name: &str, kind: &str) -> Result<()> {
+    match kind {
+        "upload" => super::validate_nonce(name),
+        "release"
+            if name.len() == 40
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) =>
+        {
+            Ok(())
+        }
+        "release" => Err(eyre!("cleanup release name is not a canonical commit")),
+        _ => Err(eyre!("generated cleanup kind is not exact V1")),
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn cleanup_tombstone_name(original_name: &OsStr, kind: &str) -> Result<OsString> {
+    let original_name = original_name
+        .to_str()
+        .ok_or_else(|| eyre!("generated cleanup root name is not UTF-8"))?;
+    validate_cleanup_original_name(original_name, kind)?;
+    Ok(OsString::from(format!(
+        "{CLEANUP_TOMBSTONE_PREFIX}{original_name}{CLEANUP_TOMBSTONE_SUFFIX}"
+    )))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn cleanup_original_name_from_tombstone(name: &OsStr, kind: &str) -> Result<Option<OsString>> {
+    if !name
+        .as_encoded_bytes()
+        .starts_with(CLEANUP_TOMBSTONE_PREFIX.as_bytes())
+    {
+        return Ok(None);
+    }
+    let name = name
+        .to_str()
+        .ok_or_else(|| eyre!("cleanup tombstone name is not exact UTF-8 V1"))?;
+    let original_name = name
+        .strip_prefix(CLEANUP_TOMBSTONE_PREFIX)
+        .and_then(|name| name.strip_suffix(CLEANUP_TOMBSTONE_SUFFIX))
+        .ok_or_else(|| eyre!("cleanup tombstone name is not exact V1"))?;
+    validate_cleanup_original_name(original_name, kind)?;
+    Ok(Some(OsString::from(original_name)))
+}
+
+#[cfg(target_os = "linux")]
 fn cleanup_generated_waste(admitted: &HostAdmission) -> Result<(u64, u64, Vec<String>)> {
+    let plan = load_or_create_cleanup_plan(admitted)?;
+    execute_cleanup_plan(admitted, &plan)
+}
+
+#[cfg(target_os = "linux")]
+fn load_or_create_cleanup_plan(admitted: &HostAdmission) -> Result<CleanupPlanV1> {
+    let directory = ensure_host_receipt_dir(admitted)?;
+    let path = directory.join("cleanup.plan.json");
+    if path.exists() {
+        return read_durable_cleanup_plan(admitted);
+    }
+    let plan = build_cleanup_plan(admitted)?;
+    validate_cleanup_plan(admitted, &plan)?;
+    ensure_action_deadline(admitted)?;
+    publish_root_private_noreplace(
+        &directory,
+        "cleanup.plan.json",
+        json::to_json(&plan)?.as_bytes(),
+    )?;
+    read_durable_cleanup_plan(admitted)
+}
+
+#[cfg(target_os = "linux")]
+fn read_durable_cleanup_plan(admitted: &HostAdmission) -> Result<CleanupPlanV1> {
+    let directory = ensure_host_receipt_dir(admitted)?;
+    let path = directory.join("cleanup.plan.json");
+    if !path.exists() {
+        return Err(eyre!("cleanup receipt has no durable cleanup plan"));
+    }
+    sync_private_regular(&path, "cleanup plan")?;
+    sync_directory(&directory)?;
+    let (plan, bytes) = read_private_json::<CleanupPlanV1>(&path, "cleanup plan")?;
+    if json::to_json(&plan)?.as_bytes() != bytes {
+        return Err(eyre!("cleanup plan JSON is not canonical"));
+    }
+    validate_cleanup_plan(admitted, &plan)?;
+    Ok(plan)
+}
+
+#[cfg(target_os = "linux")]
+fn build_cleanup_plan(admitted: &HostAdmission) -> Result<CleanupPlanV1> {
     let policy = &admitted.inventory.cleanup;
-    let mut candidates = Vec::new();
+    if !scan_cleanup_tombstone_entries(admitted, "upload", policy)?.is_empty() {
+        return Err(eyre!(
+            "cleanup tombstone exists without this request's durable plan"
+        ));
+    }
+    let mut entries = Vec::new();
+    let mut namespace_entries = 0_usize;
     let upload_parent = Path::new(&admitted.guard.upload_parent);
     for entry in fs::read_dir(upload_parent)? {
         ensure_action_deadline(admitted)?;
-        let path = entry?.path();
-        if let Ok(Some(candidate)) = admit_cleanup_candidate(&path, admitted, "upload", policy) {
-            candidates.push(candidate);
+        let entry = entry?;
+        namespace_entries = namespace_entries
+            .checked_add(1)
+            .ok_or_else(|| eyre!("cleanup namespace entry count overflow"))?;
+        if namespace_entries > MAX_CLEANUP_NAMESPACE_ENTRIES {
+            return Err(eyre!("cleanup namespace exceeds its entry bound"));
+        }
+        let name = entry.file_name();
+        if cleanup_original_name_from_tombstone(&name, "upload")?.is_some() {
+            continue;
+        }
+        let Some(name) = name.to_str() else { continue };
+        if validate_cleanup_original_name(name, "upload").is_err() {
+            continue;
+        }
+        let path = entry.path();
+        if let Some(candidate) = admit_cleanup_candidate(&path, admitted, "upload", policy)? {
+            entries.push(cleanup_plan_entry_from_candidate(&candidate, admitted)?);
         }
     }
     let releases = Path::new(admitted.target.service_root()).join("releases");
     if releases.exists() {
+        if !scan_cleanup_tombstone_entries(admitted, "release", policy)?.is_empty() {
+            return Err(eyre!(
+                "cleanup tombstone exists without this request's durable plan"
+            ));
+        }
         let current_release = validated_current_release_target(admitted)?;
         let mut generated = Vec::new();
         for entry in fs::read_dir(&releases)? {
             ensure_action_deadline(admitted)?;
             let entry = entry?;
+            namespace_entries = namespace_entries
+                .checked_add(1)
+                .ok_or_else(|| eyre!("cleanup namespace entry count overflow"))?;
+            if namespace_entries > MAX_CLEANUP_NAMESPACE_ENTRIES {
+                return Err(eyre!("cleanup namespace exceeds its entry bound"));
+            }
             let name = entry.file_name();
+            if cleanup_original_name_from_tombstone(&name, "release")?.is_some() {
+                continue;
+            }
             let Some(name) = name.to_str() else { continue };
             if name == admitted.inventory.revision.commit
                 || name.len() != 40
@@ -5435,41 +5993,420 @@ fn cleanup_generated_waste(admitted: &HostAdmission) -> Result<(u64, u64, Vec<St
             if path == current_release {
                 continue;
             }
-            if let Ok(Some(candidate)) = admit_cleanup_candidate(&path, admitted, "release", policy)
-            {
-                generated.push(candidate);
+            if let Some(candidate) = admit_cleanup_candidate(&path, admitted, "release", policy)? {
+                let entry = cleanup_plan_entry_from_candidate(&candidate, admitted)?;
+                generated.push((
+                    candidate.marker.created_at_unix_ms,
+                    entry.original_name.clone(),
+                    entry,
+                ));
             }
         }
-        generated.sort_by_key(|candidate| candidate.marker.created_at_unix_ms);
+        generated.sort_by(|left, right| (left.0, &left.1).cmp(&(right.0, &right.1)));
         let retain = usize::from(policy.retain_successful_releases);
         let delete_count = generated.len().saturating_sub(retain);
-        candidates.extend(generated.into_iter().take(delete_count));
+        entries.extend(
+            generated
+                .into_iter()
+                .take(delete_count)
+                .map(|(_, _, entry)| entry),
+        );
     }
-    let mut before = 0_u64;
-    for candidate in &candidates {
+    entries.sort_by(|left, right| {
+        (&left.kind, &left.original_name).cmp(&(&right.kind, &right.original_name))
+    });
+    let bytes_before = entries.iter().try_fold(0_u64, |total, entry| {
+        total
+            .checked_add(entry.initial_bytes)
+            .ok_or_else(|| eyre!("cleanup byte count overflow"))
+    })?;
+    Ok(CleanupPlanV1 {
+        schema: CLEANUP_PLAN_SCHEMA_V1.to_owned(),
+        action: HostAction::Cleanup.label().to_owned(),
+        host_slug: admitted.target.slug().to_owned(),
+        request_sha256: admitted.request_sha256.clone(),
+        inventory_sha256: admitted.inventory_sha256.clone(),
+        authorization_sha256: admitted.authorization_sha256.clone(),
+        authorization_nonce: admitted.inventory.authorization_nonce.clone(),
+        max_reclaim_bytes: policy.max_reclaim_bytes_per_host,
+        bytes_before,
+        entries,
+    })
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn validate_cleanup_plan(admitted: &HostAdmission, plan: &CleanupPlanV1) -> Result<()> {
+    if plan.schema != CLEANUP_PLAN_SCHEMA_V1
+        || plan.action != HostAction::Cleanup.label()
+        || plan.host_slug != admitted.target.slug()
+        || plan.request_sha256 != admitted.request_sha256
+        || plan.inventory_sha256 != admitted.inventory_sha256
+        || plan.authorization_sha256 != admitted.authorization_sha256
+        || plan.authorization_nonce != admitted.inventory.authorization_nonce
+        || plan.max_reclaim_bytes != admitted.inventory.cleanup.max_reclaim_bytes_per_host
+        || plan.entries.len() > MAX_CLEANUP_NAMESPACE_ENTRIES
+    {
+        return Err(eyre!("cleanup plan is not bound to this exact request"));
+    }
+    let mut previous: Option<(&str, &str)> = None;
+    let mut total = 0_u64;
+    for entry in &plan.entries {
+        validate_cleanup_original_name(&entry.original_name, &entry.kind)?;
+        let expected_path = cleanup_original_path(admitted, &entry.kind, &entry.original_name)?;
+        if entry.original_path != expected_path.to_string_lossy().as_ref()
+            || entry.directory_inode == 0
+            || entry.initial_bytes == 0
+        {
+            return Err(eyre!("cleanup plan entry identity is not exact"));
+        }
+        let marker = validate_generic_marker_fields(
+            entry.marker.clone(),
+            admitted.target.slug(),
+            &entry.kind,
+        )?;
+        validate_cleanup_marker_name(&marker, OsStr::new(&entry.original_name), &entry.kind)?;
+        let marker_bytes = json::to_json(&marker)?.into_bytes();
+        if entry.marker_sha256 != sha256_hex(&marker_bytes) {
+            return Err(eyre!("cleanup plan marker digest is not exact"));
+        }
+        let key = (entry.kind.as_str(), entry.original_name.as_str());
+        if previous.is_some_and(|previous| previous >= key) {
+            return Err(eyre!("cleanup plan entries are not unique canonical order"));
+        }
+        previous = Some(key);
+        total = total
+            .checked_add(entry.initial_bytes)
+            .ok_or_else(|| eyre!("cleanup plan byte count overflow"))?;
+    }
+    if total != plan.bytes_before || total > plan.max_reclaim_bytes {
+        return Err(eyre!(
+            "cleanup plan exceeds its exact signed reclaim-byte closure"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn cleanup_original_path(admitted: &HostAdmission, kind: &str, name: &str) -> Result<PathBuf> {
+    validate_cleanup_original_name(name, kind)?;
+    match kind {
+        "upload" => Ok(Path::new(&admitted.guard.upload_parent).join(name)),
+        "release" => Ok(Path::new(admitted.target.service_root())
+            .join("releases")
+            .join(name)),
+        _ => Err(eyre!("generated cleanup kind is not exact V1")),
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn ensure_cleanup_plan_entry_not_selected(
+    kind: &str,
+    original: &Path,
+    selected_release: &Path,
+) -> Result<()> {
+    match kind {
+        "upload" => Ok(()),
+        "release" if original != selected_release => Ok(()),
+        "release" => Err(eyre!(
+            "cleanup plan release became the selected live release"
+        )),
+        _ => Err(eyre!("generated cleanup kind is not exact V1")),
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn cleanup_plan_deleted_prefix(
+    initial_bytes: u64,
+    current_bytes: u64,
+    allow_partial: bool,
+) -> Result<u64> {
+    if !allow_partial && current_bytes != initial_bytes {
+        return Err(eyre!(
+            "cleanup candidate changed before its first tombstone rename"
+        ));
+    }
+    initial_bytes
+        .checked_sub(current_bytes)
+        .ok_or_else(|| eyre!("cleanup plan root grew after durable admission"))
+}
+
+#[cfg(target_os = "linux")]
+fn execute_cleanup_plan(
+    admitted: &HostAdmission,
+    plan: &CleanupPlanV1,
+) -> Result<(u64, u64, Vec<String>)> {
+    validate_cleanup_plan(admitted, plan)?;
+    for entry in &plan.entries {
         ensure_action_deadline(admitted)?;
-        before = before
-            .checked_add(secure_generated_tree_bytes(candidate, admitted)?)
-            .ok_or_else(|| eyre!("cleanup byte count overflow"))?;
+        let state = open_cleanup_plan_entry(admitted, entry)?;
+        let current_bytes = match &state {
+            CleanupPlanEntryState::Complete => 0,
+            CleanupPlanEntryState::Candidate(candidate) => {
+                secure_generated_tree_bytes(candidate, admitted)?
+            }
+            CleanupPlanEntryState::Tombstone(tombstone) => {
+                secure_cleanup_tombstone_bytes(tombstone, admitted)?
+            }
+        };
+        let mut deleted_bytes = cleanup_plan_deleted_prefix(
+            entry.initial_bytes,
+            current_bytes,
+            !matches!(&state, CleanupPlanEntryState::Candidate(_)),
+        )?;
+        match state {
+            CleanupPlanEntryState::Complete => {}
+            CleanupPlanEntryState::Candidate(candidate) => remove_generated_tree_beneath(
+                &candidate,
+                admitted,
+                &mut deleted_bytes,
+                entry.initial_bytes,
+            )?,
+            CleanupPlanEntryState::Tombstone(tombstone) => remove_cleanup_tombstone(
+                &tombstone,
+                admitted,
+                &mut deleted_bytes,
+                entry.initial_bytes,
+            )?,
+        }
+        if deleted_bytes != entry.initial_bytes {
+            return Err(eyre!(
+                "cleanup plan entry did not consume its exact admitted byte closure"
+            ));
+        }
+        let original = Path::new(&entry.original_path);
+        let tombstone = original.with_file_name(cleanup_tombstone_name(
+            OsStr::new(&entry.original_name),
+            &entry.kind,
+        )?);
+        if path_exists_no_follow(original)? || path_exists_no_follow(&tombstone)? {
+            return Err(eyre!(
+                "cleanup plan entry remains after its completed deletion"
+            ));
+        }
     }
-    if before > policy.max_reclaim_bytes_per_host {
-        return Err(eyre!("marker-bound cleanup exceeds the signed reclaim cap"));
-    }
-    let paths = candidates
-        .iter()
-        .map(|candidate| candidate.path.display().to_string())
-        .collect::<Vec<_>>();
-    let mut deleted_bytes = 0_u64;
-    for candidate in candidates {
+    Ok((
+        plan.bytes_before,
+        0,
+        plan.entries
+            .iter()
+            .map(|entry| entry.original_path.clone())
+            .collect(),
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn verify_completed_cleanup_plan(
+    admitted: &HostAdmission,
+    receipt: Option<&HostReceiptV1>,
+) -> Result<()> {
+    let plan = read_durable_cleanup_plan(admitted)?;
+    for entry in &plan.entries {
         ensure_action_deadline(admitted)?;
-        remove_generated_tree_beneath(
-            &candidate,
-            admitted,
-            &mut deleted_bytes,
-            policy.max_reclaim_bytes_per_host,
+        let kind = cleanup_kind(&entry.kind)?;
+        let original = cleanup_original_path(admitted, kind, &entry.original_name)?;
+        let tombstone = original.with_file_name(cleanup_tombstone_name(
+            OsStr::new(&entry.original_name),
+            kind,
+        )?);
+        let (_, parent) = open_cleanup_parent(admitted, kind)?;
+        parent.sync_all()?;
+        if path_exists_no_follow(&original)? || path_exists_no_follow(&tombstone)? {
+            return Err(eyre!(
+                "cached cleanup receipt has an incomplete planned root"
+            ));
+        }
+        parent.sync_all()?;
+        if path_exists_no_follow(&original)? || path_exists_no_follow(&tombstone)? {
+            return Err(eyre!(
+                "cached cleanup root reappeared during durable replay proof"
+            ));
+        }
+    }
+    if let Some(receipt) = receipt {
+        let detail = cleanup_plan_detail(&plan);
+        if receipt.bytes_before != plan.bytes_before
+            || receipt.bytes_after != 0
+            || receipt.reclaimed_bytes != plan.bytes_before
+            || receipt.detail != detail
+        {
+            return Err(eyre!(
+                "cached cleanup receipt differs from its immutable cleanup plan"
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn verify_completed_cleanup_plan(
+    _admitted: &HostAdmission,
+    _receipt: Option<&HostReceiptV1>,
+) -> Result<()> {
+    Err(eyre!(
+        "cleanup receipt replay requires Linux openat2 NO_XDEV custody"
+    ))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn cleanup_plan_detail(plan: &CleanupPlanV1) -> String {
+    format!(
+        "removed marker-authorized paths: {}",
+        plan.entries
+            .iter()
+            .map(|entry| entry.original_path.as_str())
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn open_cleanup_plan_entry(
+    admitted: &HostAdmission,
+    entry: &CleanupPlanEntryV1,
+) -> Result<CleanupPlanEntryState> {
+    let kind = cleanup_kind(&entry.kind)?;
+    let original_path = cleanup_original_path(admitted, kind, &entry.original_name)?;
+    if kind == "release" {
+        ensure_cleanup_plan_entry_not_selected(
+            kind,
+            &original_path,
+            &validated_current_release_target(admitted)?,
         )?;
     }
-    Ok((before, 0, paths))
+    let tombstone_name = cleanup_tombstone_name(OsStr::new(&entry.original_name), kind)?;
+    let tombstone_path = original_path.with_file_name(&tombstone_name);
+    let original_exists = path_exists_no_follow(&original_path)?;
+    let tombstone_exists = path_exists_no_follow(&tombstone_path)?;
+    match (original_exists, tombstone_exists) {
+        (false, false) => {
+            let (_, parent) = open_cleanup_parent(admitted, kind)?;
+            parent.sync_all()?;
+            if path_exists_no_follow(&original_path)? || path_exists_no_follow(&tombstone_path)? {
+                return Err(eyre!(
+                    "cleanup plan root reappeared while confirming durable completion"
+                ));
+            }
+            Ok(CleanupPlanEntryState::Complete)
+        }
+        (true, true) => Err(eyre!("cleanup plan root and its tombstone both exist")),
+        (true, false) => {
+            let (parent, directory, name) =
+                open_generated_cleanup_root(&original_path, admitted, kind)?;
+            validate_cleanup_plan_directory(entry, &directory)?;
+            let marker = validate_generic_marker_fields(
+                read_generated_marker_at(&directory)?,
+                admitted.target.slug(),
+                kind,
+            )?;
+            validate_cleanup_marker_name(&marker, &name, kind)?;
+            if marker != entry.marker
+                || entry.marker_sha256 != sha256_hex(json::to_json(&marker)?.as_bytes())
+            {
+                return Err(eyre!("cleanup plan root marker drifted"));
+            }
+            Ok(CleanupPlanEntryState::Candidate(CleanupCandidate {
+                path: original_path,
+                kind,
+                parent,
+                directory,
+                name,
+                marker,
+            }))
+        }
+        (false, true) => {
+            let (_, parent) = open_cleanup_parent(admitted, kind)?;
+            let before = rustix::fs::statat(
+                &parent,
+                &tombstone_name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )?;
+            if rustix::fs::FileType::from_raw_mode(before.st_mode)
+                != rustix::fs::FileType::Directory
+            {
+                return Err(eyre!("cleanup plan tombstone is not a directory"));
+            }
+            let directory = File::from(rustix::fs::openat2(
+                &parent,
+                &tombstone_name,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+                cleanup_resolve_flags(),
+            )?);
+            require_opened_entry_identity(&before, &directory)?;
+            verify_named_root_directory(&parent, &tombstone_name, &directory)?;
+            validate_cleanup_plan_directory(entry, &directory)?;
+            let marker = read_regular_at(
+                &directory,
+                ".public-reset-generated-v1.json",
+                MAX_HOST_REQUEST_BYTES,
+            )?
+            .map(|bytes| decode_generated_marker(&bytes))
+            .transpose()?;
+            if let Some(marker) = marker.as_ref() {
+                let marker =
+                    validate_generic_marker_fields(marker.clone(), admitted.target.slug(), kind)?;
+                validate_cleanup_marker_name(&marker, OsStr::new(&entry.original_name), kind)?;
+                if marker != entry.marker
+                    || entry.marker_sha256 != sha256_hex(json::to_json(&marker)?.as_bytes())
+                {
+                    return Err(eyre!("cleanup plan tombstone marker drifted"));
+                }
+            } else {
+                require_empty_cleanup_directory(&directory)?;
+            }
+            parent.sync_all()?;
+            verify_named_root_directory(&parent, &tombstone_name, &directory)?;
+            if path_exists_no_follow(&original_path)? {
+                return Err(eyre!(
+                    "cleanup original reappeared while admitting its tombstone"
+                ));
+            }
+            Ok(CleanupPlanEntryState::Tombstone(CleanupTombstone {
+                path: original_path,
+                kind,
+                parent,
+                directory,
+                name: tombstone_name,
+                original_name: OsString::from(entry.original_name.as_str()),
+                marker,
+            }))
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn validate_cleanup_plan_directory(entry: &CleanupPlanEntryV1, directory: &File) -> Result<()> {
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir()
+        || metadata.uid() != 0
+        || metadata.mode() & 0o7777 != 0o700
+        || metadata.nlink() < 2
+        || metadata.dev() != entry.directory_device
+        || metadata.ino() != entry.directory_inode
+    {
+        return Err(eyre!("cleanup plan directory identity drifted"));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn cleanup_kind(kind: &str) -> Result<&'static str> {
+    match kind {
+        "upload" => Ok("upload"),
+        "release" => Ok("release"),
+        _ => Err(eyre!("generated cleanup kind is not exact V1")),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn path_exists_no_follow(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -5479,7 +6416,7 @@ fn cleanup_generated_waste(_admitted: &HostAdmission) -> Result<(u64, u64, Vec<S
     ))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 fn validate_generic_marker_fields(
     marker: GeneratedMarkerV1,
     host_slug: &str,
@@ -5520,13 +6457,7 @@ fn admit_cleanup_candidate(
         admitted.target.slug(),
         kind,
     )?;
-    if (kind == "upload" && name != OsStr::new(&marker.authorization_nonce))
-        || (kind == "release" && name != OsStr::new(&marker.revision))
-    {
-        return Err(eyre!(
-            "generated cleanup marker does not bind its directory name"
-        ));
-    }
+    validate_cleanup_marker_name(&marker, &name, kind)?;
     let minimum_ms = policy.minimum_age_secs.saturating_mul(1_000);
     if now_unix_ms()?.saturating_sub(marker.created_at_unix_ms) < minimum_ms {
         return Ok(None);
@@ -5541,6 +6472,22 @@ fn admit_cleanup_candidate(
     }))
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn validate_cleanup_marker_name(
+    marker: &GeneratedMarkerV1,
+    original_name: &OsStr,
+    kind: &str,
+) -> Result<()> {
+    if (kind == "upload" && original_name != OsStr::new(&marker.authorization_nonce))
+        || (kind == "release" && original_name != OsStr::new(&marker.revision))
+    {
+        return Err(eyre!(
+            "generated cleanup marker does not bind its directory name"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 fn read_generated_marker_at(directory: &File) -> Result<GeneratedMarkerV1> {
     let bytes = read_regular_at(
@@ -5549,12 +6496,91 @@ fn read_generated_marker_at(directory: &File) -> Result<GeneratedMarkerV1> {
         MAX_HOST_REQUEST_BYTES,
     )?
     .ok_or_else(|| eyre!("generated cleanup marker is missing"))?;
+    decode_generated_marker(&bytes)
+}
+
+#[cfg(target_os = "linux")]
+fn decode_generated_marker(bytes: &[u8]) -> Result<GeneratedMarkerV1> {
     let marker: GeneratedMarkerV1 =
-        json::from_slice(&bytes).wrap_err("generated cleanup marker is invalid")?;
+        json::from_slice(bytes).wrap_err("generated cleanup marker is invalid")?;
     if json::to_json(&marker)?.as_bytes() != bytes {
         return Err(eyre!("generated cleanup marker JSON is not canonical"));
     }
     Ok(marker)
+}
+
+#[cfg(target_os = "linux")]
+fn scan_cleanup_tombstone_entries(
+    admitted: &HostAdmission,
+    kind: &'static str,
+    policy: &super::CleanupV1,
+) -> Result<Vec<CleanupPlanEntryV1>> {
+    let (parent_path, parent) = open_cleanup_parent(admitted, kind)?;
+    let mut names = Vec::new();
+    for entry in rustix::fs::Dir::read_from(&parent)? {
+        let entry = entry?;
+        if matches!(entry.file_name().to_bytes(), b"." | b"..") {
+            continue;
+        }
+        if names.len() >= MAX_CLEANUP_NAMESPACE_ENTRIES {
+            return Err(eyre!("cleanup namespace exceeds its entry bound"));
+        }
+        names.push(OsStr::from_bytes(entry.file_name().to_bytes()).to_os_string());
+    }
+    names.sort();
+    let mut entries = Vec::new();
+    for name in names {
+        let Some(original_name) = cleanup_original_name_from_tombstone(&name, kind)? else {
+            continue;
+        };
+        ensure_action_deadline(admitted)?;
+        let before = rustix::fs::statat(&parent, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
+        if rustix::fs::FileType::from_raw_mode(before.st_mode) != rustix::fs::FileType::Directory {
+            return Err(eyre!("cleanup tombstone is not a directory"));
+        }
+        let directory = File::from(rustix::fs::openat2(
+            &parent,
+            &name,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+            cleanup_resolve_flags(),
+        )?);
+        require_opened_entry_identity(&before, &directory)?;
+        verify_named_root_directory(&parent, &name, &directory)?;
+        let marker = read_regular_at(
+            &directory,
+            ".public-reset-generated-v1.json",
+            MAX_HOST_REQUEST_BYTES,
+        )?
+        .map(|bytes| decode_generated_marker(&bytes))
+        .transpose()?
+        .map(|marker| validate_generic_marker_fields(marker, admitted.target.slug(), kind))
+        .transpose()?;
+        if let Some(marker) = marker.as_ref() {
+            validate_cleanup_marker_name(marker, &original_name, kind)?;
+            let minimum_ms = policy.minimum_age_secs.saturating_mul(1_000);
+            if now_unix_ms()?.saturating_sub(marker.created_at_unix_ms) < minimum_ms {
+                return Err(eyre!(
+                    "in-progress cleanup tombstone predates the signed minimum age"
+                ));
+            }
+        } else {
+            require_empty_cleanup_directory(&directory)?;
+        }
+        let tombstone = CleanupTombstone {
+            path: parent_path.join(&original_name),
+            kind,
+            parent: parent.try_clone()?,
+            directory,
+            name,
+            original_name,
+            marker,
+        };
+        entries.push(cleanup_plan_entry_from_tombstone(&tombstone, admitted)?);
+    }
+    Ok(entries)
 }
 
 #[cfg(target_os = "linux")]
@@ -5567,13 +6593,94 @@ fn secure_generated_tree_bytes(
 }
 
 #[cfg(target_os = "linux")]
+fn secure_cleanup_tombstone_bytes(
+    tombstone: &CleanupTombstone,
+    admitted: &HostAdmission,
+) -> Result<u64> {
+    if tombstone.marker.is_none() {
+        require_empty_cleanup_directory(&tombstone.directory)?;
+        return Ok(0);
+    }
+    let mut entries = 0_usize;
+    inspect_generated_directory(&tombstone.directory, admitted, 0, &mut entries)
+}
+
+#[cfg(target_os = "linux")]
+fn cleanup_plan_entry_from_candidate(
+    candidate: &CleanupCandidate,
+    admitted: &HostAdmission,
+) -> Result<CleanupPlanEntryV1> {
+    cleanup_plan_entry(
+        candidate.kind,
+        &candidate.name,
+        &candidate.path,
+        &candidate.marker,
+        &candidate.directory,
+        secure_generated_tree_bytes(candidate, admitted)?,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn cleanup_plan_entry_from_tombstone(
+    tombstone: &CleanupTombstone,
+    admitted: &HostAdmission,
+) -> Result<CleanupPlanEntryV1> {
+    let marker = tombstone
+        .marker
+        .as_ref()
+        .ok_or_else(|| eyre!("markerless cleanup tombstone has no durable cleanup plan"))?;
+    cleanup_plan_entry(
+        tombstone.kind,
+        &tombstone.original_name,
+        &tombstone.path,
+        marker,
+        &tombstone.directory,
+        secure_cleanup_tombstone_bytes(tombstone, admitted)?,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn cleanup_plan_entry(
+    kind: &str,
+    original_name: &OsStr,
+    original_path: &Path,
+    marker: &GeneratedMarkerV1,
+    directory: &File,
+    initial_bytes: u64,
+) -> Result<CleanupPlanEntryV1> {
+    let original_name = original_name
+        .to_str()
+        .ok_or_else(|| eyre!("cleanup plan root name is not UTF-8"))?;
+    validate_cleanup_original_name(original_name, kind)?;
+    validate_cleanup_marker_name(marker, OsStr::new(original_name), kind)?;
+    let original_path = original_path
+        .to_str()
+        .ok_or_else(|| eyre!("cleanup plan path is not UTF-8"))?;
+    let marker_bytes = json::to_json(marker)?.into_bytes();
+    let metadata = directory.metadata()?;
+    if metadata.ino() == 0 || metadata.mode() & 0o7777 != 0o700 || initial_bytes == 0 {
+        return Err(eyre!(
+            "cleanup plan entry lacks a stable directory identity"
+        ));
+    }
+    Ok(CleanupPlanEntryV1 {
+        kind: kind.to_owned(),
+        original_name: original_name.to_owned(),
+        original_path: original_path.to_owned(),
+        marker: marker.clone(),
+        marker_sha256: sha256_hex(&marker_bytes),
+        directory_device: metadata.dev(),
+        directory_inode: metadata.ino(),
+        initial_bytes,
+    })
+}
+
+#[cfg(target_os = "linux")]
 fn open_generated_cleanup_root(
     root: &Path,
     admitted: &HostAdmission,
     kind: &str,
 ) -> Result<(File, File, OsString)> {
-    let service_root = Path::new(admitted.target.service_root());
-    require_root_directory(service_root, false, "cleanup service root")?;
     let name = root
         .file_name()
         .ok_or_else(|| eyre!("generated cleanup root has no name"))?
@@ -5584,22 +6691,10 @@ fn open_generated_cleanup_root(
     ) {
         return Err(eyre!("generated cleanup root name is not one component"));
     }
-    let parent_relative = match kind {
-        "upload" => Path::new(".public-reset-upload-v1"),
-        "release" => Path::new("releases"),
-        _ => return Err(eyre!("generated cleanup kind is not exact V1")),
-    };
-    if root != service_root.join(parent_relative).join(&name) {
+    let (parent_path, parent_file) = open_cleanup_parent(admitted, kind)?;
+    if root != parent_path.join(&name) {
         return Err(eyre!("generated cleanup root escaped its exact namespace"));
     }
-    let service = File::open(service_root)?;
-    let parent_file = File::from(rustix::fs::openat2(
-        &service,
-        parent_relative,
-        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
-        rustix::fs::Mode::empty(),
-        cleanup_resolve_flags(),
-    )?);
     let directory = File::from(
         rustix::fs::openat2(
             &parent_file,
@@ -5617,6 +6712,45 @@ fn open_generated_cleanup_root(
 }
 
 #[cfg(target_os = "linux")]
+fn cleanup_parent_relative(kind: &str) -> Result<&'static Path> {
+    match kind {
+        "upload" => Ok(Path::new(".public-reset-upload-v1")),
+        "release" => Ok(Path::new("releases")),
+        _ => Err(eyre!("generated cleanup kind is not exact V1")),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn open_cleanup_parent(admitted: &HostAdmission, kind: &str) -> Result<(PathBuf, File)> {
+    let service_root = Path::new(admitted.target.service_root());
+    require_root_directory(service_root, false, "cleanup service root")?;
+    let relative = cleanup_parent_relative(kind)?;
+    let parent_path = service_root.join(relative);
+    require_root_directory(
+        &parent_path,
+        kind == "upload",
+        "generated cleanup namespace",
+    )?;
+    let service = File::open(service_root)?;
+    let parent = File::from(rustix::fs::openat2(
+        &service,
+        relative,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+        cleanup_resolve_flags(),
+    )?);
+    let metadata = parent.metadata()?;
+    if !metadata.is_dir()
+        || metadata.uid() != 0
+        || metadata.mode() & 0o022 != 0
+        || metadata.nlink() < 2
+    {
+        return Err(eyre!("generated cleanup namespace lacks root custody"));
+    }
+    Ok((parent_path, parent))
+}
+
+#[cfg(target_os = "linux")]
 fn cleanup_resolve_flags() -> rustix::fs::ResolveFlags {
     rustix::fs::ResolveFlags::BENEATH
         | rustix::fs::ResolveFlags::NO_SYMLINKS
@@ -5629,6 +6763,7 @@ fn verify_named_root_directory(parent: &File, name: &OsStr, directory: &File) ->
     let named = rustix::fs::statat(parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
     if !metadata.is_dir()
         || metadata.uid() != 0
+        || metadata.mode() & 0o022 != 0
         || metadata.nlink() < 2
         || named.st_dev as u64 != metadata.dev()
         || named.st_ino as u64 != metadata.ino()
@@ -5712,6 +6847,9 @@ fn require_opened_entry_identity(before: &rustix::fs::Stat, opened: &File) -> Re
     if before.st_dev as u64 != metadata.dev()
         || before.st_ino as u64 != metadata.ino()
         || metadata.uid() != 0
+        || metadata.mode() & 0o022 != 0
+        || (metadata.is_file() && metadata.nlink() != 1)
+        || (metadata.is_dir() && metadata.nlink() < 2)
     {
         return Err(eyre!(
             "generated cleanup entry changed or lacks root custody"
@@ -5738,22 +6876,137 @@ fn remove_generated_tree_beneath(
             "generated cleanup marker changed after candidate admission"
         ));
     }
-    let mut entries = 0_usize;
-    remove_generated_directory_contents(
-        &candidate.directory,
-        admitted,
-        0,
-        &mut entries,
-        deleted_bytes,
-        byte_cap,
-    )?;
-    verify_named_root_directory(&candidate.parent, &candidate.name, &candidate.directory)?;
-    rustix::fs::unlinkat(
+    let tombstone_name = cleanup_tombstone_name(&candidate.name, candidate.kind)?;
+    ensure_action_deadline(admitted)?;
+    if candidate.kind == "release" {
+        ensure_cleanup_plan_entry_not_selected(
+            candidate.kind,
+            &candidate.path,
+            &validated_current_release_target(admitted)?,
+        )?;
+    }
+    ensure_action_deadline(admitted)?;
+    rustix::fs::renameat_with(
         &candidate.parent,
         &candidate.name,
-        rustix::fs::AtFlags::REMOVEDIR,
+        &candidate.parent,
+        &tombstone_name,
+        rustix::fs::RenameFlags::NOREPLACE,
     )?;
     candidate.parent.sync_all()?;
+    let tombstone = CleanupTombstone {
+        path: candidate.path.clone(),
+        kind: candidate.kind,
+        parent: candidate.parent.try_clone()?,
+        directory: candidate.directory.try_clone()?,
+        name: tombstone_name,
+        original_name: candidate.name.clone(),
+        marker: Some(marker),
+    };
+    remove_cleanup_tombstone(&tombstone, admitted, deleted_bytes, byte_cap)
+}
+
+#[cfg(target_os = "linux")]
+fn remove_cleanup_tombstone(
+    tombstone: &CleanupTombstone,
+    admitted: &HostAdmission,
+    deleted_bytes: &mut u64,
+    byte_cap: u64,
+) -> Result<()> {
+    verify_named_root_directory(&tombstone.parent, &tombstone.name, &tombstone.directory)?;
+    if let Some(expected_marker) = tombstone.marker.as_ref() {
+        let marker = validate_generic_marker_fields(
+            read_generated_marker_at(&tombstone.directory)?,
+            admitted.target.slug(),
+            tombstone.kind,
+        )?;
+        validate_cleanup_marker_name(&marker, &tombstone.original_name, tombstone.kind)?;
+        if &marker != expected_marker {
+            return Err(eyre!(
+                "generated cleanup marker changed after tombstone admission"
+            ));
+        }
+        let mut entries = 0_usize;
+        remove_generated_directory_contents(
+            &tombstone.directory,
+            admitted,
+            0,
+            &mut entries,
+            deleted_bytes,
+            byte_cap,
+        )?;
+        let marker_before = rustix::fs::statat(
+            &tombstone.directory,
+            ".public-reset-generated-v1.json",
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )?;
+        let marker_bytes = read_regular_at(
+            &tombstone.directory,
+            ".public-reset-generated-v1.json",
+            MAX_HOST_REQUEST_BYTES,
+        )?
+        .ok_or_else(|| eyre!("generated cleanup marker vanished before final unlink"))?;
+        let marker = validate_generic_marker_fields(
+            decode_generated_marker(&marker_bytes)?,
+            admitted.target.slug(),
+            tombstone.kind,
+        )?;
+        validate_cleanup_marker_name(&marker, &tombstone.original_name, tombstone.kind)?;
+        if &marker != expected_marker {
+            return Err(eyre!(
+                "generated cleanup marker changed before final unlink"
+            ));
+        }
+        let prospective = deleted_bytes
+            .checked_add(
+                u64::try_from(marker_bytes.len())
+                    .map_err(|_| eyre!("generated cleanup marker length overflow"))?,
+            )
+            .ok_or_else(|| eyre!("cleanup byte count overflow"))?;
+        if prospective > byte_cap {
+            return Err(eyre!(
+                "generated cleanup grew beyond the signed reclaim cap before marker unlink"
+            ));
+        }
+        let marker_after = rustix::fs::statat(
+            &tombstone.directory,
+            ".public-reset-generated-v1.json",
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )?;
+        require_unchanged_regular_stat(&marker_before, &marker_after)?;
+        ensure_action_deadline(admitted)?;
+        rustix::fs::unlinkat(
+            &tombstone.directory,
+            ".public-reset-generated-v1.json",
+            rustix::fs::AtFlags::empty(),
+        )?;
+        *deleted_bytes = prospective;
+        tombstone.directory.sync_all()?;
+    } else {
+        require_empty_cleanup_directory(&tombstone.directory)?;
+        tombstone.directory.sync_all()?;
+    }
+    verify_named_root_directory(&tombstone.parent, &tombstone.name, &tombstone.directory)?;
+    ensure_action_deadline(admitted)?;
+    rustix::fs::unlinkat(
+        &tombstone.parent,
+        &tombstone.name,
+        rustix::fs::AtFlags::REMOVEDIR,
+    )?;
+    tombstone.parent.sync_all()?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn require_empty_cleanup_directory(directory: &File) -> Result<()> {
+    for entry in rustix::fs::Dir::read_from(directory)? {
+        let entry = entry?;
+        if !matches!(entry.file_name().to_bytes(), b"." | b"..") {
+            return Err(eyre!(
+                "markerless cleanup tombstone contains unfinished entries"
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -5770,15 +7023,18 @@ fn remove_generated_directory_contents(
     if depth > 128 {
         return Err(eyre!("generated cleanup tree exceeds its depth bound"));
     }
-    let mut names = rustix::fs::Dir::read_from(directory)?
-        .filter_map(|entry| match entry {
-            Ok(entry) if !matches!(entry.file_name().to_bytes(), b"." | b"..") => Some(Ok(
-                OsStr::from_bytes(entry.file_name().to_bytes()).to_os_string(),
-            )),
-            Ok(_) => None,
-            Err(error) => Some(Err(error)),
-        })
-        .collect::<rustix::io::Result<Vec<_>>>()?;
+    let mut names = Vec::new();
+    for entry in rustix::fs::Dir::read_from(directory)? {
+        let entry = entry?;
+        if matches!(entry.file_name().to_bytes(), b"." | b"..") {
+            continue;
+        }
+        ensure_action_deadline(admitted)?;
+        if names.len() >= MAX_CLEANUP_ENTRIES.saturating_sub(*entries) {
+            return Err(eyre!("generated cleanup tree exceeds its entry bound"));
+        }
+        names.push(OsStr::from_bytes(entry.file_name().to_bytes()).to_os_string());
+    }
     names.sort();
     for name in names {
         *entries = entries
@@ -5788,6 +7044,9 @@ fn remove_generated_directory_contents(
             return Err(eyre!("generated cleanup tree exceeds its entry bound"));
         }
         ensure_action_deadline(admitted)?;
+        if depth == 0 && name == OsStr::new(".public-reset-generated-v1.json") {
+            continue;
+        }
         let before = rustix::fs::statat(directory, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
         match rustix::fs::FileType::from_raw_mode(before.st_mode) {
             rustix::fs::FileType::Directory => {
@@ -5812,6 +7071,7 @@ fn remove_generated_directory_contents(
                 let after =
                     rustix::fs::statat(directory, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
                 require_same_stat(&before, &after)?;
+                ensure_action_deadline(admitted)?;
                 rustix::fs::unlinkat(directory, &name, rustix::fs::AtFlags::REMOVEDIR)?;
             }
             rustix::fs::FileType::RegularFile => {
@@ -5833,7 +7093,8 @@ fn remove_generated_directory_contents(
                 }
                 let after =
                     rustix::fs::statat(directory, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
-                require_same_stat(&before, &after)?;
+                require_unchanged_regular_stat(&before, &after)?;
+                ensure_action_deadline(admitted)?;
                 rustix::fs::unlinkat(directory, &name, rustix::fs::AtFlags::empty())?;
                 *deleted_bytes = prospective;
             }
@@ -5846,8 +7107,31 @@ fn remove_generated_directory_contents(
 
 #[cfg(target_os = "linux")]
 fn require_same_stat(before: &rustix::fs::Stat, after: &rustix::fs::Stat) -> Result<()> {
-    if before.st_dev != after.st_dev || before.st_ino != after.st_ino {
+    if before.st_dev != after.st_dev
+        || before.st_ino != after.st_ino
+        || before.st_mode != after.st_mode
+        || before.st_uid != after.st_uid
+        || before.st_gid != after.st_gid
+    {
         return Err(eyre!("generated cleanup entry changed before unlink"));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn require_unchanged_regular_stat(
+    before: &rustix::fs::Stat,
+    after: &rustix::fs::Stat,
+) -> Result<()> {
+    require_same_stat(before, after)?;
+    if before.st_nlink != 1
+        || after.st_nlink != 1
+        || before.st_size != after.st_size
+        || rustix::fs::FileType::from_raw_mode(after.st_mode) != rustix::fs::FileType::RegularFile
+    {
+        return Err(eyre!(
+            "generated cleanup regular file changed before unlink"
+        ));
     }
     Ok(())
 }
@@ -8223,11 +9507,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             self.run_local_cli(args, Vec::new(), timeout_secs, "same-revision Taira doctor")?
         };
         let value = parse_json_report(&output, "same-revision Taira doctor")?;
-        validate_common_report(
-            &value,
-            "taira_doctor",
-            &self.admitted.inventory.inrou_canary.public_root,
-        )
+        validate_doctor_report(&value, &self.admitted.inventory.inrou_canary.public_root)
     }
 
     fn write_canary(&mut self, timeout_secs: u64) -> Result<()> {
@@ -8596,6 +9876,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         if bytes.is_empty() || bytes.len() > MAX_PREPARED_ENVELOPE_BYTES {
             return Err(eyre!("prepared write child envelope is empty or oversized"));
         }
+        validate_prepared_report_envelope_bytes(&report, &bytes)?;
         let transaction_hash = prepared_envelope_transaction_hash(&bytes)?;
         if (outcome == "ProofRequired") != transaction_hash.is_empty() {
             return Err(eyre!(
@@ -8651,18 +9932,13 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             Some(prepared),
         )?;
         match outcome {
-            "Applied" => Ok(PreparedMutationOutcome::Applied {
-                value,
-                evidence: process.stdout,
-            }),
+            "Applied" => {
+                let evidence = canonical_json_report_bytes(&value)?;
+                Ok(PreparedMutationOutcome::Applied { value, evidence })
+            }
             "Pending" => Ok(PreparedMutationOutcome::Pending),
             "Rejected" => Ok(PreparedMutationOutcome::Rejected(
-                value
-                    .as_object()
-                    .and_then(|object| object.get("evidence"))
-                    .and_then(norito::json::Value::as_str)
-                    .unwrap_or("ledger_rejected")
-                    .to_owned(),
+                required_report_evidence(&value, "prepared write child")?.to_owned(),
             )),
             _ => Err(eyre!("prepared write child report has an invalid outcome")),
         }
@@ -9032,6 +10308,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         if bytes.is_empty() || bytes.len() > MAX_PREPARED_ENVELOPE_BYTES {
             return Err(eyre!("prepared Inrou child envelope is empty or oversized"));
         }
+        validate_prepared_report_envelope_bytes(&report, &bytes)?;
         Ok(bytes)
     }
 
@@ -9080,18 +10357,13 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             Some(prepared),
         )?;
         match outcome {
-            "Applied" => Ok(PreparedMutationOutcome::Applied {
-                value,
-                evidence: process.stdout,
-            }),
+            "Applied" => {
+                let evidence = canonical_json_report_bytes(&value)?;
+                Ok(PreparedMutationOutcome::Applied { value, evidence })
+            }
             "Pending" => Ok(PreparedMutationOutcome::Pending),
             "Rejected" => Ok(PreparedMutationOutcome::Rejected(
-                value
-                    .as_object()
-                    .and_then(|object| object.get("evidence"))
-                    .and_then(norito::json::Value::as_str)
-                    .unwrap_or("ledger_rejected")
-                    .to_owned(),
+                required_report_evidence(&value, "prepared Inrou child")?.to_owned(),
             )),
             _ => Err(eyre!("prepared Inrou child report has an invalid outcome")),
         }
@@ -9209,16 +10481,24 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         recovery_only: bool,
     ) -> Result<()> {
         let receipt_name = format!("inrou-restart-wave-{wave}.json");
-        if self.validate_existing_local_receipt(&receipt_name, validate_inrou_check_report)? {
-            return Ok(());
-        }
-        let value = self.run_inrou_check_report_with_mode(timeout_secs, recovery_only)?;
-        validate_inrou_check_report(&value, self.admitted)?;
-        self.publish_local_receipt(&receipt_name, &value)
+        self.require_fresh_inrou_check(&receipt_name, timeout_secs, recovery_only)
     }
 
-    fn run_inrou_check_report(&mut self, timeout_secs: u64) -> Result<norito::json::Value> {
-        self.run_inrou_check_report_with_mode(timeout_secs, false)
+    fn require_fresh_inrou_check(
+        &mut self,
+        receipt_name: &str,
+        timeout_secs: u64,
+        recovery_only: bool,
+    ) -> Result<()> {
+        let had_prior_receipt = self
+            .validate_existing_local_receipt(receipt_name, validate_retained_inrou_check_report)?;
+        require_fresh_liveness_report(
+            self,
+            had_prior_receipt,
+            |transport| transport.run_inrou_check_report_with_mode(timeout_secs, recovery_only),
+            |value, transport| validate_fresh_inrou_check_report(value, transport.admitted),
+            |transport, value| transport.publish_local_receipt(receipt_name, value),
+        )
     }
 
     fn run_inrou_check_report_with_mode(
@@ -9290,11 +10570,13 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 &self.admitted.inventory,
             )?)
         };
-        if let Some(value) = self.read_local_receipt(&receipt_name)? {
+        let had_prior_receipt = if let Some(value) = self.read_local_receipt(&receipt_name)? {
             let checkpoint = validate_convergence_wave(&value, wave, &self.admitted.inventory)?;
             require_successor_checkpoint(previous.as_ref(), &checkpoint)?;
-            return Ok(());
-        }
+            true
+        } else {
+            false
+        };
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
         loop {
             let mut reports = Vec::with_capacity(4);
@@ -9376,10 +10658,12 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                         "validator_reports".to_owned(),
                         norito::json::Value::Array(reports),
                     );
-                    self.publish_local_receipt(
-                        &receipt_name,
-                        &norito::json::Value::Object(report),
-                    )?;
+                    if !had_prior_receipt {
+                        self.publish_local_receipt(
+                            &receipt_name,
+                            &norito::json::Value::Object(report),
+                        )?;
+                    }
                     return Ok(());
                 }
             }
@@ -9562,94 +10846,15 @@ fn canonical_local_report(report: &norito::json::Value) -> Result<norito::json::
     let Some(source) = report.as_object() else {
         return Err(eyre!("local CLI report root must be an object"));
     };
-    let Some(command) = source.get("command").and_then(norito::json::Value::as_str) else {
-        return Ok(report.clone());
-    };
-    let fields: &[&str] = match command {
-        "taira_write_canary" => &[
-            "command",
-            "status",
-            "public_root",
-            "failures",
-            "terminal_kind",
-            "ping_tx_hash",
-            "applied_block_height",
-            "tx_query_verified",
-            "idempotency_key",
-            "message",
-        ],
-        "taira_inrou_canary" => &[
-            "command",
-            "status",
-            "public_root",
-            "failures",
-            "service_name",
-            "service_version",
-            "mutation_mode",
-            "active_host_adverts",
-            "hosted_replica_count",
-            "route_host",
-            "route_path",
-            "bundle_hash",
-            "bundle_content_cid",
-            "bundle_manifest_digest_hex",
-            "guest_content_cid",
-            "guest_manifest_digest_hex",
-            "container_manifest_hash",
-            "service_manifest_hash",
-            "submitted_tx_hash",
-            "idempotency_key",
-            "replica_identities",
-        ],
-        "taira_inrou_check" => &[
-            "command",
-            "status",
-            "public_root",
-            "failures",
-            "service_name",
-            "service_version",
-            "active_host_adverts",
-            "hosted_replica_count",
-            "route_host",
-            "route_path",
-            "bundle_hash",
-            "bundle_content_cid",
-            "bundle_manifest_digest_hex",
-            "guest_content_cid",
-            "guest_manifest_digest_hex",
-            "container_manifest_hash",
-            "service_manifest_hash",
-            "replica_identities",
-        ],
-        _ => return Ok(report.clone()),
-    };
-    let mut canonical = norito::json::Map::new();
-    for field in fields {
-        canonical.insert(
-            (*field).to_owned(),
-            source
-                .get(*field)
-                .cloned()
-                .ok_or_else(|| eyre!("local report omits canonical field `{field}`"))?,
-        );
-    }
-    if command == "taira_inrou_canary" {
-        let key = canonical
-            .get("idempotency_key")
-            .and_then(norito::json::Value::as_str)
-            .expect("canonical field checked");
-        let transaction = canonical
-            .get("submitted_tx_hash")
-            .and_then(norito::json::Value::as_str)
-            .expect("canonical field checked");
-        let mut digest = Sha256::new();
-        digest.update(b"iroha:taira:public-reset:inrou-mutation-receipt:v1\0");
-        update_frame(&mut digest, key.as_bytes());
-        update_frame(&mut digest, transaction.as_bytes());
-        canonical.insert(
-            "mutation_response_digest".to_owned(),
-            norito::json::Value::from(hex::encode(digest.finalize())),
-        );
+    let mut canonical = source.clone();
+    if matches!(
+        source.get("command").and_then(norito::json::Value::as_str),
+        Some("taira_inrou_canary" | "taira_inrou_check")
+    ) {
+        // A fresh liveness timestamp is intentionally not part of the durable identity. Every
+        // reopen reruns the live probe; retaining it would make a crash retry conflict with an
+        // otherwise identical applied child receipt.
+        canonical.remove("observed_at_unix_ms");
     }
     Ok(norito::json::Value::Object(canonical))
 }
@@ -9869,15 +11074,11 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
             }
             ExecutionStep::EdgeVerify => {
                 self.doctor_with_mode(inventory.timeouts.canary_secs, true)?;
-                if !self.validate_existing_local_receipt(
+                self.require_fresh_inrou_check(
                     "inrou-post-edge.json",
-                    validate_inrou_check_report,
-                )? {
-                    let value = self
-                        .run_inrou_check_report_with_mode(inventory.timeouts.canary_secs, true)?;
-                    validate_inrou_check_report(&value, self.admitted)?;
-                    self.publish_local_receipt("inrou-post-edge.json", &value)?;
-                }
+                    inventory.timeouts.canary_secs,
+                    true,
+                )?;
             }
             _ => {
                 return Ok(RecoveryOutcome::Rejected("recovery_step_kind".to_owned()));
@@ -9976,14 +11177,11 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                         kind,
                     )?;
                 }
-                if !self.validate_existing_local_receipt(
+                self.require_fresh_inrou_check(
                     "inrou-post-edge.json",
-                    validate_inrou_check_report,
-                )? {
-                    let value = self.run_inrou_check_report(inventory.timeouts.canary_secs)?;
-                    validate_inrou_check_report(&value, self.admitted)?;
-                    self.publish_local_receipt("inrou-post-edge.json", &value)?;
-                }
+                    inventory.timeouts.canary_secs,
+                    false,
+                )?;
                 Ok(())
             }
             _ => Err(eyre!("step is not recovery-sensitive")),
@@ -10096,14 +11294,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 "post_edge",
                 "write-canary-post-edge.json",
             )?;
-            if !self.validate_existing_local_receipt(
-                "inrou-post-edge.json",
-                validate_inrou_check_report,
-            )? {
-                let value = self.run_inrou_check_report(canary_timeout)?;
-                validate_inrou_check_report(&value, self.admitted)?;
-                self.publish_local_receipt("inrou-post-edge.json", &value)?;
-            }
+            self.require_fresh_inrou_check("inrou-post-edge.json", canary_timeout, false)?;
         }
         Ok(())
     }
@@ -10134,10 +11325,6 @@ fn child_mutation_idempotency_key(nonce: &str, phase: &str, child_kind: &str) ->
     update_frame(&mut digest, phase.as_bytes());
     update_frame(&mut digest, child_kind.as_bytes());
     hex::encode(digest.finalize())
-}
-
-fn inrou_canary_idempotency_key(nonce: &str, phase: &str) -> String {
-    child_mutation_idempotency_key(nonce, phase, "inrou_canary")
 }
 
 fn remaining_seconds(deadline: Instant) -> Result<u64> {
@@ -10175,6 +11362,311 @@ fn prepared_envelope_transaction_hash(bytes: &[u8]) -> Result<String> {
     Ok(hash.to_owned())
 }
 
+const PREPARED_WRITE_REPORT_FIELDS: &[&str] = &[
+    "command",
+    "status",
+    "public_root",
+    "checks",
+    "warnings",
+    "failures",
+    "authorization_sha256",
+    "authorization_nonce",
+    "mutation_kind",
+    "mutation_phase",
+    "idempotency_key",
+    "operation",
+    "transaction_hash_hex",
+    "prepared_envelope_sha256",
+    "prepared_envelope_size",
+    "recovery_outcome",
+    "applied_block_height",
+    "evidence",
+    "execution_expires_at_unix_ms",
+];
+
+const PREPARED_FINAL_CANARY_REPORT_FIELDS: &[&str] = &[
+    "command",
+    "status",
+    "public_root",
+    "checks",
+    "warnings",
+    "failures",
+    "authorization_sha256",
+    "authorization_nonce",
+    "mutation_kind",
+    "mutation_phase",
+    "idempotency_key",
+    "operation",
+    "transaction_hash_hex",
+    "prepared_envelope_sha256",
+    "prepared_envelope_size",
+    "recovery_outcome",
+    "applied_block_height",
+    "evidence",
+    "execution_expires_at_unix_ms",
+    "fee_payment",
+    "fee_quote",
+];
+
+const PREPARED_INROU_REPORT_FIELDS: &[&str] = &[
+    "command",
+    "status",
+    "public_root",
+    "checks",
+    "warnings",
+    "failures",
+    "authorization_sha256",
+    "authorization_nonce",
+    "mutation_kind",
+    "mutation_phase",
+    "idempotency_key",
+    "operation",
+    "transaction_hash_hex",
+    "prepared_envelope_sha256",
+    "prepared_envelope_size",
+    "recovery_outcome",
+    "applied_block_height",
+    "evidence",
+    "execution_expires_at_unix_ms",
+    "fee_payment",
+    "fee_quote",
+    "mutation_mode",
+];
+
+const PREPARED_INROU_SERVICE_APPLIED_REPORT_FIELDS: &[&str] = &[
+    "command",
+    "status",
+    "public_root",
+    "checks",
+    "warnings",
+    "failures",
+    "authorization_sha256",
+    "authorization_nonce",
+    "mutation_kind",
+    "mutation_phase",
+    "idempotency_key",
+    "operation",
+    "transaction_hash_hex",
+    "prepared_envelope_sha256",
+    "prepared_envelope_size",
+    "recovery_outcome",
+    "applied_block_height",
+    "evidence",
+    "execution_expires_at_unix_ms",
+    "fee_payment",
+    "fee_quote",
+    "mutation_mode",
+    "service_name",
+    "service_version",
+    "route_host",
+    "route_path",
+    "active_host_adverts",
+    "hosted_replica_count",
+    "bundle_hash",
+    "bundle_content_cid",
+    "bundle_manifest_digest_hex",
+    "guest_content_cid",
+    "guest_manifest_digest_hex",
+    "container_manifest_hash",
+    "service_manifest_hash",
+    "observed_at_unix_ms",
+    "replica_identities",
+];
+
+fn require_exact_json_fields(
+    object: &norito::json::Map,
+    expected: &[&str],
+    label: &str,
+) -> Result<()> {
+    let actual = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let expected = expected.iter().copied().collect::<BTreeSet<_>>();
+    if actual != expected {
+        let missing = expected.difference(&actual).copied().collect::<Vec<_>>();
+        let unexpected = actual.difference(&expected).copied().collect::<Vec<_>>();
+        return Err(eyre!(
+            "{label} is outside its exact V1 field set (missing: {missing:?}; unexpected: {unexpected:?})"
+        ));
+    }
+    Ok(())
+}
+
+fn nullable_report_string<'a>(
+    object: &'a norito::json::Map,
+    name: &str,
+    label: &str,
+) -> Result<Option<&'a str>> {
+    match object.get(name) {
+        Some(norito::json::Value::Null) => Ok(None),
+        Some(norito::json::Value::String(value)) => Ok(Some(value)),
+        Some(_) => Err(eyre!("{label} field `{name}` must be a string or null")),
+        None => Err(eyre!("{label} omits required nullable field `{name}`")),
+    }
+}
+
+fn nullable_report_u64(object: &norito::json::Map, name: &str, label: &str) -> Result<Option<u64>> {
+    match object.get(name) {
+        Some(norito::json::Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| eyre!("{label} field `{name}` must be an unsigned integer or null")),
+        None => Err(eyre!("{label} omits required nullable field `{name}`")),
+    }
+}
+
+fn required_report_evidence<'a>(value: &'a norito::json::Value, label: &str) -> Result<&'a str> {
+    value
+        .as_object()
+        .and_then(|object| object.get("evidence"))
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("{label} omits required terminal evidence"))
+}
+
+fn canonical_json_report_bytes(value: &norito::json::Value) -> Result<Vec<u8>> {
+    let mut bytes = json::to_json(value)
+        .wrap_err("failed to canonicalize validated child report")?
+        .into_bytes();
+    bytes.push(b'\n');
+    if bytes.len() > MAX_PROCESS_OUTPUT {
+        return Err(eyre!("canonical child report exceeds its V1 byte bound"));
+    }
+    Ok(bytes)
+}
+
+fn validate_report_evidence_token(value: &str, allowed: &[&str], label: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > MAX_REPORT_EVIDENCE_TOKEN_BYTES
+        || !value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        || !allowed.contains(&value)
+    {
+        return Err(eyre!("{label} is not an allowed exact V1 evidence class"));
+    }
+    Ok(())
+}
+
+fn require_empty_report_array(object: &norito::json::Map, field: &str, label: &str) -> Result<()> {
+    if !object
+        .get(field)
+        .and_then(norito::json::Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        return Err(eyre!(
+            "{label} field `{field}` must be an explicit empty array"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_prepared_report_common_arrays(
+    object: &norito::json::Map,
+    service_applied: bool,
+    label: &str,
+) -> Result<()> {
+    require_empty_report_array(object, "warnings", label)?;
+    require_empty_report_array(object, "failures", label)?;
+    if !service_applied {
+        return require_empty_report_array(object, "checks", label);
+    }
+    let checks = object
+        .get("checks")
+        .and_then(norito::json::Value::as_array)
+        .ok_or_else(|| eyre!("{label} field `checks` must be an array"))?;
+    let expected = [
+        (
+            "inrou_authoritative_status",
+            "active_adverts=4, hosted_replicas=4",
+        ),
+        (
+            "inrou_public_routes",
+            "observed deterministic identities for replica slots 1, 2, 3, and 4",
+        ),
+    ];
+    if checks.len() != expected.len() {
+        return Err(eyre!(
+            "{label} must contain the exact two successful Inrou checks"
+        ));
+    }
+    for (check, (name, detail)) in checks.iter().zip(expected) {
+        let check = check
+            .as_object()
+            .ok_or_else(|| eyre!("{label} check must be an object"))?;
+        require_exact_json_fields(check, &["name", "http_status", "ok", "detail"], label)?;
+        if check.get("name").and_then(norito::json::Value::as_str) != Some(name)
+            || check
+                .get("http_status")
+                .and_then(norito::json::Value::as_u64)
+                != Some(200)
+            || check.get("ok").and_then(norito::json::Value::as_bool) != Some(true)
+            || check.get("detail").and_then(norito::json::Value::as_str) != Some(detail)
+        {
+            return Err(eyre!(
+                "{label} does not carry the exact successful Inrou check evidence"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_prepared_report_envelope_bytes(
+    value: &norito::json::Value,
+    bytes: &[u8],
+) -> Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| eyre!("prepared report root must be an object"))?;
+    let size = u64::try_from(bytes.len()).wrap_err("prepared envelope size exceeds u64")?;
+    let transaction_hash = prepared_envelope_transaction_hash(bytes)?;
+    let transaction_matches = if transaction_hash.is_empty() {
+        object.get("transaction_hash_hex") == Some(&norito::json::Value::Null)
+    } else {
+        object
+            .get("transaction_hash_hex")
+            .and_then(norito::json::Value::as_str)
+            == Some(transaction_hash.as_str())
+    };
+    if object
+        .get("prepared_envelope_sha256")
+        .and_then(norito::json::Value::as_str)
+        != Some(sha256_hex(bytes).as_str())
+        || object
+            .get("prepared_envelope_size")
+            .and_then(norito::json::Value::as_u64)
+            != Some(size)
+        || !transaction_matches
+    {
+        return Err(eyre!(
+            "prepared report does not bind the exact canonical envelope bytes"
+        ));
+    }
+    let envelope: norito::json::Value =
+        json::from_slice(bytes).wrap_err("prepared report envelope is not JSON")?;
+    let operation = envelope
+        .as_object()
+        .and_then(|root| root.get("operation"))
+        .and_then(norito::json::Value::as_object)
+        .and_then(|operation| operation.get("envelope"))
+        .and_then(norito::json::Value::as_object)
+        .ok_or_else(|| eyre!("prepared report envelope omits its operation payload"))?;
+    for field in ["fee_payment", "fee_quote"] {
+        if let Some(reported) = object.get(field)
+            && operation.get(field) != Some(reported)
+        {
+            return Err(eyre!(
+                "prepared report `{field}` differs from the retained envelope"
+            ));
+        }
+    }
+    if transaction_hash.is_empty() {
+        let semantic = prepared_onboarding_proof_required_result(bytes)?.semantic_hash_hex;
+        if object.get("evidence").and_then(norito::json::Value::as_str) != Some(semantic.as_str()) {
+            return Err(eyre!(
+                "proof-required prepared report does not bind its semantic evidence"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_prepared_write_report(
     value: &norito::json::Value,
     admitted: &AdmittedReset,
@@ -10184,12 +11676,35 @@ fn validate_prepared_write_report(
     expected_outcome: &str,
     retained: Option<&RetainedPreparedMutation>,
 ) -> Result<()> {
+    const PENDING_EVIDENCE: &[&str] = &[
+        "Absent",
+        "AcceptedNotVisible",
+        "OnboardingAliasConflict",
+        "OnboardingStateAbsent",
+        "Queued",
+        "Approved",
+        "Committed",
+        "Applied",
+        "Rejected",
+        "Expired",
+    ];
+    const REJECTED_EVIDENCE: &[&str] = &["Rejected", "Expired"];
     validate_common_report(
         value,
         "taira_write_canary",
         &admitted.inventory.inrou_canary.public_root,
     )?;
     let object = value.as_object().expect("common report checked object");
+    require_exact_json_fields(
+        object,
+        if kind == "write_canary" {
+            PREPARED_FINAL_CANARY_REPORT_FIELDS
+        } else {
+            PREPARED_WRITE_REPORT_FIELDS
+        },
+        "prepared write report",
+    )?;
+    validate_prepared_report_common_arrays(object, false, "prepared write report")?;
     let string = |name: &str| {
         object
             .get(name)
@@ -10199,9 +11714,19 @@ fn validate_prepared_write_report(
     let expected_operation = match kind {
         "onboarding" => "onboarding",
         "faucet" => "faucet",
-        "write_canary" => "write_canary",
+        "write_canary" => "final_canary",
         _ => return Err(eyre!("prepared write report has an invalid child kind")),
     };
+    if !matches!(
+        expected_outcome,
+        "Prepared" | "ProofRequired" | "Applied" | "Pending" | "Rejected"
+    ) || (retained.is_none() != matches!(expected_outcome, "Prepared" | "ProofRequired"))
+        || (expected_outcome == "ProofRequired" && kind != "onboarding")
+    {
+        return Err(eyre!(
+            "prepared write report outcome is outside the exact V1 transition"
+        ));
+    }
     if string("authorization_sha256")? != admitted.authorization_sha256
         || string("authorization_nonce")? != admitted.inventory.authorization_nonce
         || string("mutation_kind")? != kind
@@ -10218,37 +11743,79 @@ fn validate_prepared_write_report(
             "prepared write report does not bind its exact authorization child"
         ));
     }
+    require_lower_sha256(
+        string("prepared_envelope_sha256")?,
+        "prepared write envelope digest",
+    )?;
+    let reported_size = object
+        .get("prepared_envelope_size")
+        .and_then(norito::json::Value::as_u64)
+        .filter(|size| {
+            *size > 0 && *size <= u64::try_from(MAX_PREPARED_ENVELOPE_BYTES).expect("bounded")
+        })
+        .ok_or_else(|| eyre!("prepared write report has an invalid envelope size"))?;
+    let proof_required = kind == "onboarding"
+        && (expected_outcome == "ProofRequired"
+            || retained.is_some_and(|value| value.transaction_hash.is_empty()));
+    let transaction_hash =
+        nullable_report_string(object, "transaction_hash_hex", "prepared write report")?;
+    if proof_required {
+        if transaction_hash.is_some() {
+            return Err(eyre!(
+                "proof-required prepared write report must carry an explicit null transaction hash"
+            ));
+        }
+    } else {
+        require_lower_sha256(
+            transaction_hash
+                .ok_or_else(|| eyre!("prepared write report omits its transaction hash"))?,
+            "prepared write transaction hash",
+        )?;
+    }
+    let applied_height =
+        nullable_report_u64(object, "applied_block_height", "prepared write report")?;
+    let evidence = nullable_report_string(object, "evidence", "prepared write report")?;
+    match expected_outcome {
+        "Prepared" if applied_height.is_none() && evidence.is_none() => {}
+        "ProofRequired" if applied_height.is_none() => require_lower_sha256(
+            evidence.ok_or_else(|| eyre!("proof-required write report omits evidence"))?,
+            "proof-required semantic evidence",
+        )?,
+        "Applied" if proof_required && applied_height.is_none() => require_lower_sha256(
+            evidence.ok_or_else(|| eyre!("proof-required Applied report omits evidence"))?,
+            "proof-required semantic evidence",
+        )?,
+        "Applied" if applied_height.is_some_and(|height| height > 0) => require_lower_sha256(
+            evidence.ok_or_else(|| eyre!("Applied write report omits committed evidence"))?,
+            "prepared write committed evidence",
+        )?,
+        "Pending" if applied_height.is_none() => validate_report_evidence_token(
+            evidence.ok_or_else(|| eyre!("Pending write report omits its evidence class"))?,
+            PENDING_EVIDENCE,
+            "prepared write Pending evidence",
+        )?,
+        "Rejected" if applied_height.is_none() => validate_report_evidence_token(
+            evidence.ok_or_else(|| eyre!("Rejected write report omits its evidence class"))?,
+            REJECTED_EVIDENCE,
+            "prepared write Rejected evidence",
+        )?,
+        _ => {
+            return Err(eyre!(
+                "prepared write report height/evidence does not match its outcome"
+            ));
+        }
+    }
     if let Some(retained) = retained {
-        let transaction_matches = if retained.transaction_hash.is_empty() {
-            object.get("transaction_hash_hex") == Some(&norito::json::Value::Null)
-                && kind == "onboarding"
-                && string("operation")? == "onboarding"
-        } else {
-            string("transaction_hash_hex")? == retained.transaction_hash
-        };
-        if string("prepared_envelope_sha256")? != retained.sha256 || !transaction_matches {
+        if reported_size != u64::try_from(retained.bytes.len()).expect("bounded")
+            || string("prepared_envelope_sha256")? != retained.sha256
+            || (!retained.transaction_hash.is_empty()
+                && transaction_hash != Some(retained.transaction_hash.as_str()))
+        {
             return Err(eyre!(
                 "prepared write report does not bind the retained shared envelope"
             ));
         }
-    }
-    let applied_height = object
-        .get("applied_block_height")
-        .and_then(norito::json::Value::as_u64);
-    let proof_required = kind == "onboarding"
-        && (retained.is_some_and(|value| value.transaction_hash.is_empty())
-            || expected_outcome == "ProofRequired");
-    if expected_outcome == "Applied"
-        && if proof_required {
-            applied_height.is_some()
-        } else {
-            !applied_height.is_some_and(|height| height > 0)
-        }
-        || expected_outcome != "Applied" && applied_height.is_some()
-    {
-        return Err(eyre!(
-            "prepared write report Applied height does not match its outcome"
-        ));
+        validate_prepared_report_envelope_bytes(value, &retained.bytes)?;
     }
     Ok(())
 }
@@ -10262,12 +11829,34 @@ fn validate_prepared_inrou_report(
     expected_outcome: &str,
     retained: Option<&RetainedPreparedMutation>,
 ) -> Result<()> {
+    const PENDING_EVIDENCE: &[&str] = &[
+        "Absent",
+        "ObservationUnavailable",
+        "Queued",
+        "Approved",
+        "Committed",
+        "Applied",
+        "Rejected",
+        "Expired",
+    ];
+    const REJECTED_EVIDENCE: &[&str] = &["Rejected", "Expired"];
     validate_common_report(
         value,
         "taira_inrou_canary",
         &admitted.inventory.inrou_canary.public_root,
     )?;
     let object = value.as_object().expect("common report checked object");
+    let service_applied = kind == "inrou_canary" && expected_outcome == "Applied";
+    require_exact_json_fields(
+        object,
+        if service_applied {
+            PREPARED_INROU_SERVICE_APPLIED_REPORT_FIELDS
+        } else {
+            PREPARED_INROU_REPORT_FIELDS
+        },
+        "prepared Inrou report",
+    )?;
+    validate_prepared_report_common_arrays(object, service_applied, "prepared Inrou report")?;
     let string = |name: &str| {
         object
             .get(name)
@@ -10280,12 +11869,22 @@ fn validate_prepared_inrou_report(
         "inrou_canary" => "service_mutation",
         _ => return Err(eyre!("prepared Inrou report has an invalid child kind")),
     };
+    if !matches!(
+        expected_outcome,
+        "Prepared" | "Applied" | "Pending" | "Rejected"
+    ) || (retained.is_none() != (expected_outcome == "Prepared"))
+    {
+        return Err(eyre!(
+            "prepared Inrou report outcome is outside the exact V1 transition"
+        ));
+    }
     if string("authorization_sha256")? != admitted.authorization_sha256
         || string("authorization_nonce")? != admitted.inventory.authorization_nonce
         || string("mutation_kind")? != kind
         || string("mutation_phase")? != phase
         || string("idempotency_key")? != idempotency_key
         || string("operation")? != expected_operation
+        || string("mutation_mode")? != "deploy"
         || string("recovery_outcome")? != expected_outcome
         || object
             .get("execution_expires_at_unix_ms")
@@ -10296,8 +11895,35 @@ fn validate_prepared_inrou_report(
             "prepared Inrou report does not bind its exact authorization child"
         ));
     }
+    require_lower_sha256(
+        string("transaction_hash_hex")?,
+        "prepared Inrou transaction hash",
+    )?;
+    require_lower_sha256(
+        string("prepared_envelope_sha256")?,
+        "prepared Inrou envelope digest",
+    )?;
+    let reported_size = object
+        .get("prepared_envelope_size")
+        .and_then(norito::json::Value::as_u64)
+        .filter(|size| {
+            *size > 0 && *size <= u64::try_from(MAX_PREPARED_ENVELOPE_BYTES).expect("bounded")
+        })
+        .ok_or_else(|| eyre!("prepared Inrou report has an invalid envelope size"))?;
+    if !object
+        .get("fee_payment")
+        .is_some_and(norito::json::Value::is_object)
+        || !object
+            .get("fee_quote")
+            .is_some_and(norito::json::Value::is_object)
+    {
+        return Err(eyre!(
+            "prepared Inrou report must carry its exact fee payment and quote objects"
+        ));
+    }
     if let Some(retained) = retained {
-        if retained.transaction_hash.is_empty()
+        if reported_size != u64::try_from(retained.bytes.len()).expect("bounded")
+            || retained.transaction_hash.is_empty()
             || string("transaction_hash_hex")? != retained.transaction_hash
             || string("prepared_envelope_sha256")? != retained.sha256
         {
@@ -10305,37 +11931,63 @@ fn validate_prepared_inrou_report(
                 "prepared Inrou report does not bind the retained shared envelope"
             ));
         }
+        validate_prepared_report_envelope_bytes(value, &retained.bytes)?;
     }
-    let applied_height = object
-        .get("applied_block_height")
-        .and_then(norito::json::Value::as_u64);
-    if expected_outcome == "Applied" {
-        if !applied_height.is_some_and(|height| height > 0) {
+    let applied_height =
+        nullable_report_u64(object, "applied_block_height", "prepared Inrou report")?;
+    let evidence = nullable_report_string(object, "evidence", "prepared Inrou report")?;
+    match expected_outcome {
+        "Prepared" if applied_height.is_none() && evidence.is_none() => {}
+        "Applied" if applied_height.is_some_and(|height| height > 0) => {
+            let evidence =
+                evidence.ok_or_else(|| eyre!("Applied Inrou report omits committed evidence"))?;
+            require_lower_sha256(evidence, "prepared Inrou committed evidence")?;
+            if retained.is_none_or(|retained| evidence != retained.transaction_hash) {
+                return Err(eyre!(
+                    "Applied Inrou report evidence differs from the retained transaction"
+                ));
+            }
+        }
+        "Pending" if applied_height.is_none() => validate_report_evidence_token(
+            evidence.ok_or_else(|| eyre!("Pending Inrou report omits its evidence class"))?,
+            PENDING_EVIDENCE,
+            "prepared Inrou Pending evidence",
+        )?,
+        "Rejected" if applied_height.is_none() => validate_report_evidence_token(
+            evidence.ok_or_else(|| eyre!("Rejected Inrou report omits its evidence class"))?,
+            REJECTED_EVIDENCE,
+            "prepared Inrou Rejected evidence",
+        )?,
+        _ => {
             return Err(eyre!(
-                "prepared Inrou Applied report lacks a positive block height"
+                "prepared Inrou report height/evidence does not match its outcome"
             ));
         }
-    } else if applied_height.is_some() {
-        return Err(eyre!(
-            "non-Applied prepared Inrou report carries a block height"
-        ));
     }
-    if kind == "inrou_canary" && expected_outcome == "Applied" {
-        validate_applied_inrou_service_identity(object, admitted)?;
+    if service_applied {
+        validate_applied_inrou_service_identity(object, &admitted.inventory)?;
+        if !object
+            .get("observed_at_unix_ms")
+            .and_then(norito::json::Value::as_u64)
+            .is_some_and(|timestamp| timestamp > 0)
+        {
+            return Err(eyre!(
+                "prepared Inrou service report omits its observation timestamp"
+            ));
+        }
     }
     Ok(())
 }
 
 fn validate_applied_inrou_service_identity(
     object: &norito::json::Map,
-    admitted: &AdmittedReset,
+    inventory: &InventoryV1,
 ) -> Result<()> {
-    let canary = &admitted.inventory.inrou_canary;
+    let canary = &inventory.inrou_canary;
     let route_path = format!("{}{}", canary.route_path_prefix, canary.healthcheck_path);
     for (field, expected) in [
         ("service_name", canary.service_name.as_str()),
         ("service_version", canary.service_version.as_str()),
-        ("mutation_mode", "deploy"),
         ("route_host", canary.route_host.as_str()),
         ("route_path", route_path.as_str()),
         ("bundle_hash", canary.bundle_hash.as_str()),
@@ -10390,6 +12042,11 @@ fn validate_applied_inrou_service_identity(
         let replica = replica
             .as_object()
             .ok_or_else(|| eyre!("prepared Inrou replica identity must be an object"))?;
+        require_exact_json_fields(
+            replica,
+            &["replica_slot", "identity", "response_sha256"],
+            "prepared Inrou replica identity",
+        )?;
         let slot = u64::try_from(index + 1).expect("bounded replica slot");
         let identity = format!("{}:replica:{slot}", canary.service_name);
         let response = replica
@@ -10448,140 +12105,229 @@ fn validate_common_report(
     Ok(())
 }
 
-fn validate_inrou_check_report(
-    value: &norito::json::Value,
-    admitted: &AdmittedReset,
-) -> Result<()> {
-    validate_inrou_report(value, admitted, "taira_inrou_check", false)
-}
+const DOCTOR_EXPECTED_CHECKS: &[(&str, u64, Option<&str>)] = &[
+    ("status", 200, None),
+    ("time_now", 200, None),
+    (
+        "sumeragi_status",
+        401,
+        Some("mounted route is expected to return HTTP 401 for this preflight shape"),
+    ),
+    (
+        "pipeline_transaction_status",
+        400,
+        Some("mounted route is expected to return HTTP 400 for this preflight shape"),
+    ),
+    (
+        "retired_transaction_status_alias",
+        404,
+        Some("mounted route is expected to return HTTP 404 for this preflight shape"),
+    ),
+    ("sccp_capabilities", 200, None),
+    ("zk_proofs_count", 200, None),
+    ("public_lane_validators", 200, None),
+    (
+        "contracts_state",
+        400,
+        Some("mounted route is expected to return HTTP 400 for this preflight shape"),
+    ),
+    (
+        "musubi_ordered_prefix",
+        401,
+        Some("mounted route is expected to return HTTP 401 for this preflight shape"),
+    ),
+    (
+        "soracloud_status",
+        401,
+        Some("mounted route is expected to return HTTP 401 for this preflight shape"),
+    ),
+    ("mcp_get", 200, None),
+    ("mcp_initialize", 200, None),
+    ("mcp_tools_list", 200, None),
+    (
+        "mcp_required_tools",
+        200,
+        Some("all required curated tools are present"),
+    ),
+];
 
-fn validate_inrou_report(
-    value: &norito::json::Value,
-    admitted: &AdmittedReset,
-    command: &str,
-    require_mode: bool,
-) -> Result<()> {
-    let canary = &admitted.inventory.inrou_canary;
-    validate_common_report(value, command, &canary.public_root)?;
+fn validate_doctor_report(value: &norito::json::Value, public_root: &str) -> Result<()> {
+    validate_common_report(value, "taira_doctor", public_root)?;
     let object = value.as_object().expect("common report checked object");
-    if object
-        .get("service_name")
-        .and_then(norito::json::Value::as_str)
-        != Some(canary.service_name.as_str())
-        || object
-            .get("service_version")
-            .and_then(norito::json::Value::as_str)
-            != Some(canary.service_version.as_str())
-        || (require_mode
-            && object
-                .get("mutation_mode")
-                .and_then(norito::json::Value::as_str)
-                != Some("deploy"))
-        || object
-            .get("active_host_adverts")
-            .and_then(norito::json::Value::as_u64)
-            != Some(4)
-        || object
-            .get("hosted_replica_count")
-            .and_then(norito::json::Value::as_u64)
-            != Some(4)
-        || object
-            .get("route_host")
-            .and_then(norito::json::Value::as_str)
-            != Some(canary.route_host.as_str())
-        || object
-            .get("route_path")
-            .and_then(norito::json::Value::as_str)
-            != Some(format!("{}{}", canary.route_path_prefix, canary.healthcheck_path).as_str())
+    require_exact_json_fields(
+        object,
+        &[
+            "command",
+            "status",
+            "public_root",
+            "checks",
+            "warnings",
+            "failures",
+        ],
+        "Taira doctor report",
+    )?;
+    require_empty_report_array(object, "failures", "Taira doctor report")?;
+    let warnings = object
+        .get("warnings")
+        .and_then(norito::json::Value::as_array)
+        .ok_or_else(|| eyre!("Taira doctor warnings must be an array"))?;
+    if warnings.len() > 32
+        || warnings.iter().any(|warning| {
+            warning.as_str().is_none_or(|warning| {
+                warning.is_empty()
+                    || warning.len() > 1_024
+                    || warning.bytes().any(|byte| byte.is_ascii_control())
+            })
+        })
     {
         return Err(eyre!(
-            "Inrou receipt identity/version/mode/four-replica posture drifted"
+            "Taira doctor warnings are outside the exact V1 bound"
         ));
     }
-    for (field, expected) in [
-        ("bundle_hash", canary.bundle_hash.as_str()),
-        ("bundle_content_cid", canary.bundle_content_cid.as_str()),
-        (
-            "bundle_manifest_digest_hex",
-            canary.bundle_manifest_digest_hex.as_str(),
-        ),
-        ("guest_content_cid", canary.guest_content_cid.as_str()),
-        (
-            "guest_manifest_digest_hex",
-            canary.guest_manifest_digest_hex.as_str(),
-        ),
-        (
-            "container_manifest_hash",
-            canary.container_manifest_hash.as_str(),
-        ),
-        (
-            "service_manifest_hash",
-            canary.service_manifest_hash.as_str(),
-        ),
-    ] {
-        if object.get(field).and_then(norito::json::Value::as_str) != Some(expected) {
-            return Err(eyre!(
-                "Inrou report differs from retained stage field `{field}`"
-            ));
-        }
-    }
-    if require_mode {
-        let submitted = object
-            .get("submitted_tx_hash")
-            .and_then(norito::json::Value::as_str)
-            .ok_or_else(|| eyre!("Inrou mutation receipt omits submitted transaction hash"))?;
-        let response = object
-            .get("mutation_response_digest")
-            .and_then(norito::json::Value::as_str)
-            .ok_or_else(|| eyre!("Inrou mutation receipt omits response digest"))?;
-        let idempotency_key = object
-            .get("idempotency_key")
-            .and_then(norito::json::Value::as_str)
-            .ok_or_else(|| eyre!("Inrou mutation receipt omits idempotency key"))?;
-        if submitted.parse::<iroha_crypto::Hash>().is_err()
-            || idempotency_key
-                != inrou_canary_idempotency_key(&admitted.inventory.authorization_nonce, "pre_edge")
-        {
-            return Err(eyre!(
-                "Inrou mutation receipt lacks canonical transaction/idempotency evidence"
-            ));
-        }
-        require_lower_sha256(response, "Inrou mutation response digest")?;
-    }
-    let replicas = object
-        .get("replica_identities")
+    let checks = object
+        .get("checks")
         .and_then(norito::json::Value::as_array)
-        .ok_or_else(|| eyre!("Inrou receipt omits replica identities"))?;
-    if replicas.len() != 4 {
-        return Err(eyre!("Inrou receipt must contain four replica identities"));
+        .ok_or_else(|| eyre!("Taira doctor checks must be an array"))?;
+    if checks.len() != DOCTOR_EXPECTED_CHECKS.len() {
+        return Err(eyre!("Taira doctor report must contain exactly 15 checks"));
     }
-    for (index, replica) in replicas.iter().enumerate() {
-        let replica = replica
+    for (check, &(name, http_status, detail)) in checks.iter().zip(DOCTOR_EXPECTED_CHECKS) {
+        let check = check
             .as_object()
-            .ok_or_else(|| eyre!("Inrou replica identity must be an object"))?;
-        let slot = u64::try_from(index + 1).expect("bounded replica index");
-        let expected_identity = format!("{}:replica:{slot}", canary.service_name);
-        let response_sha256 = replica
-            .get("response_sha256")
-            .and_then(norito::json::Value::as_str)
-            .ok_or_else(|| eyre!("Inrou replica response hash is missing"))?;
-        if replica
-            .get("replica_slot")
-            .and_then(norito::json::Value::as_u64)
-            != Some(slot)
-            || replica
-                .get("identity")
-                .and_then(norito::json::Value::as_str)
-                != Some(expected_identity.as_str())
-            || response_sha256.len() != 64
-            || !response_sha256
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            .ok_or_else(|| eyre!("Taira doctor check must be an object"))?;
+        require_exact_json_fields(
+            check,
+            if detail.is_some() {
+                &["name", "http_status", "ok", "detail"]
+            } else {
+                &["name", "http_status", "ok"]
+            },
+            "Taira doctor check",
+        )?;
+        if check.get("name").and_then(norito::json::Value::as_str) != Some(name)
+            || check
+                .get("http_status")
+                .and_then(norito::json::Value::as_u64)
+                != Some(http_status)
+            || check.get("ok").and_then(norito::json::Value::as_bool) != Some(true)
+            || detail.is_some_and(|detail| {
+                check.get("detail").and_then(norito::json::Value::as_str) != Some(detail)
+            })
         {
-            return Err(eyre!(
-                "Inrou replica identities/hashes are not exact slots 1 through 4"
-            ));
+            return Err(eyre!("Taira doctor check `{name}` is not exact V1"));
         }
+    }
+    Ok(())
+}
+
+fn require_fresh_liveness_report<C>(
+    context: &mut C,
+    had_prior_receipt: bool,
+    run: impl FnOnce(&mut C) -> Result<norito::json::Value>,
+    validate: impl FnOnce(&norito::json::Value, &mut C) -> Result<()>,
+    publish: impl FnOnce(&mut C, &norito::json::Value) -> Result<()>,
+) -> Result<()> {
+    let value = run(context)?;
+    validate(&value, context)?;
+    if !had_prior_receipt {
+        publish(context, &value)?;
+    }
+    Ok(())
+}
+
+const FRESH_INROU_CHECK_REPORT_FIELDS: &[&str] = &[
+    "command",
+    "status",
+    "public_root",
+    "checks",
+    "warnings",
+    "failures",
+    "service_name",
+    "service_version",
+    "route_host",
+    "route_path",
+    "active_host_adverts",
+    "hosted_replica_count",
+    "bundle_hash",
+    "bundle_content_cid",
+    "bundle_manifest_digest_hex",
+    "guest_content_cid",
+    "guest_manifest_digest_hex",
+    "container_manifest_hash",
+    "service_manifest_hash",
+    "observed_at_unix_ms",
+    "replica_identities",
+];
+
+const RETAINED_INROU_CHECK_REPORT_FIELDS: &[&str] = &[
+    "command",
+    "status",
+    "public_root",
+    "checks",
+    "warnings",
+    "failures",
+    "service_name",
+    "service_version",
+    "route_host",
+    "route_path",
+    "active_host_adverts",
+    "hosted_replica_count",
+    "bundle_hash",
+    "bundle_content_cid",
+    "bundle_manifest_digest_hex",
+    "guest_content_cid",
+    "guest_manifest_digest_hex",
+    "container_manifest_hash",
+    "service_manifest_hash",
+    "replica_identities",
+];
+
+fn validate_fresh_inrou_check_report(
+    value: &norito::json::Value,
+    admitted: &AdmittedReset,
+) -> Result<()> {
+    validate_exact_inrou_check_report(value, admitted, true)
+}
+
+fn validate_retained_inrou_check_report(
+    value: &norito::json::Value,
+    admitted: &AdmittedReset,
+) -> Result<()> {
+    validate_exact_inrou_check_report(value, admitted, false)
+}
+
+fn validate_exact_inrou_check_report(
+    value: &norito::json::Value,
+    admitted: &AdmittedReset,
+    fresh: bool,
+) -> Result<()> {
+    let canary = &admitted.inventory.inrou_canary;
+    validate_common_report(value, "taira_inrou_check", &canary.public_root)?;
+    let object = value.as_object().expect("common report checked object");
+    require_exact_json_fields(
+        object,
+        if fresh {
+            FRESH_INROU_CHECK_REPORT_FIELDS
+        } else {
+            RETAINED_INROU_CHECK_REPORT_FIELDS
+        },
+        if fresh {
+            "fresh Inrou check report"
+        } else {
+            "retained Inrou check report"
+        },
+    )?;
+    validate_prepared_report_common_arrays(object, true, "Inrou check report")?;
+    validate_applied_inrou_service_identity(object, &admitted.inventory)?;
+    if fresh
+        && !object
+            .get("observed_at_unix_ms")
+            .and_then(norito::json::Value::as_u64)
+            .is_some_and(|timestamp| timestamp > 0)
+    {
+        return Err(eyre!(
+            "fresh Inrou check report omits its observation timestamp"
+        ));
     }
     Ok(())
 }
@@ -11118,6 +12864,267 @@ fn verify_remote_reservation_receipt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(clap::Parser)]
+    struct HostProtocolProbe {
+        #[command(flatten)]
+        host: PublicResetHost,
+    }
+
+    #[test]
+    fn host_dispatch_requires_explicit_exact_v1_protocol() {
+        let parsed = <HostProtocolProbe as clap::Parser>::try_parse_from([
+            "host-dispatch",
+            "--protocol",
+            "v1",
+        ])
+        .expect("explicit exact V1 protocol");
+        assert_eq!(parsed.host.protocol, "v1");
+
+        for malformed in ["v0", "V1", "v1 "] {
+            <HostProtocolProbe as clap::Parser>::try_parse_from([
+                "host-dispatch",
+                "--protocol",
+                malformed,
+            ])
+            .expect_err("noncanonical protocol marker must fail during argument admission");
+        }
+        <HostProtocolProbe as clap::Parser>::try_parse_from(["host-dispatch"])
+            .expect_err("omitting the hidden protocol marker must fail closed");
+    }
+
+    #[test]
+    fn retained_liveness_receipt_never_suppresses_a_fresh_failure() {
+        #[derive(Default)]
+        struct Probe {
+            runs: usize,
+            publications: usize,
+        }
+
+        let mut success = Probe::default();
+        require_fresh_liveness_report(
+            &mut success,
+            true,
+            |probe| {
+                probe.runs += 1;
+                Ok(norito::json::Value::from("fresh"))
+            },
+            |value, _| {
+                if value.as_str() == Some("fresh") {
+                    Ok(())
+                } else {
+                    Err(eyre!("fresh liveness value drifted"))
+                }
+            },
+            |probe, _| {
+                probe.publications += 1;
+                Ok(())
+            },
+        )
+        .expect("a valid fresh observation succeeds");
+        assert_eq!(success.runs, 1);
+        assert_eq!(success.publications, 0);
+
+        let mut first = Probe::default();
+        require_fresh_liveness_report(
+            &mut first,
+            false,
+            |probe| {
+                probe.runs += 1;
+                Ok(norito::json::Value::from("fresh"))
+            },
+            |_, _| Ok(()),
+            |probe, _| {
+                probe.publications += 1;
+                Ok(())
+            },
+        )
+        .expect("the first fresh observation is retained");
+        assert_eq!(first.runs, 1);
+        assert_eq!(first.publications, 1);
+
+        let mut failure = Probe::default();
+        let error = require_fresh_liveness_report(
+            &mut failure,
+            true,
+            |probe| {
+                probe.runs += 1;
+                Err(eyre!("live Inrou route is unavailable"))
+            },
+            |_, _| Ok(()),
+            |probe, _| {
+                probe.publications += 1;
+                Ok(())
+            },
+        )
+        .expect_err("old evidence must not hide current liveness failure");
+        assert!(
+            error
+                .to_string()
+                .contains("live Inrou route is unavailable")
+        );
+        assert_eq!(failure.runs, 1);
+        assert_eq!(failure.publications, 0);
+    }
+
+    #[test]
+    fn cleanup_tombstones_use_one_exact_first_release_name() {
+        let upload = OsString::from("a".repeat(32));
+        let upload_tombstone =
+            cleanup_tombstone_name(&upload, "upload").expect("canonical upload tombstone");
+        assert_eq!(
+            cleanup_original_name_from_tombstone(&upload_tombstone, "upload")
+                .expect("parse upload tombstone"),
+            Some(upload)
+        );
+
+        let release = OsString::from("1".repeat(40));
+        let release_tombstone =
+            cleanup_tombstone_name(&release, "release").expect("canonical release tombstone");
+        assert_eq!(
+            cleanup_original_name_from_tombstone(&release_tombstone, "release")
+                .expect("parse release tombstone"),
+            Some(release)
+        );
+
+        assert!(
+            cleanup_original_name_from_tombstone(OsStr::new("ordinary-release"), "release")
+                .expect("ordinary entry is not a tombstone")
+                .is_none()
+        );
+        assert!(
+            cleanup_original_name_from_tombstone(
+                OsStr::new(".public-reset-cleanup-v1-short.tombstone"),
+                "upload",
+            )
+            .is_err()
+        );
+        assert!(
+            cleanup_tombstone_name(OsStr::new("A2345678901234567890123456789012"), "upload")
+                .is_err()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt as _;
+
+            let mut reserved_bytes = CLEANUP_TOMBSTONE_PREFIX.as_bytes().to_vec();
+            reserved_bytes.push(0xff);
+            assert!(
+                cleanup_original_name_from_tombstone(
+                    &OsString::from_vec(reserved_bytes),
+                    "upload",
+                )
+                .is_err()
+            );
+            assert!(
+                cleanup_original_name_from_tombstone(
+                    &OsString::from_vec(vec![b'o', b't', b'h', b'e', b'r', 0xff]),
+                    "upload",
+                )
+                .expect("non-reserved non-UTF-8 entry remains foreign")
+                .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn cleanup_plan_binds_retry_evidence_and_signed_cap() {
+        let admitted = progress_admission();
+        let original_name = admitted.inventory.authorization_nonce.clone();
+        let marker = GeneratedMarkerV1 {
+            schema: GENERATED_MARKER_SCHEMA_V1.to_owned(),
+            kind: "upload".to_owned(),
+            host_slug: admitted.target.slug().to_owned(),
+            inventory_sha256: admitted.inventory_sha256.clone(),
+            authorization_nonce: original_name.clone(),
+            revision: admitted.inventory.revision.commit.clone(),
+            created_at_unix_ms: 1,
+        };
+        let marker_sha256 = sha256_hex(json::to_json(&marker).expect("marker JSON").as_bytes());
+        let entry = CleanupPlanEntryV1 {
+            kind: "upload".to_owned(),
+            original_name: original_name.clone(),
+            original_path: Path::new(&admitted.guard.upload_parent)
+                .join(&original_name)
+                .to_string_lossy()
+                .into_owned(),
+            marker,
+            marker_sha256,
+            directory_device: 1,
+            directory_inode: 1,
+            initial_bytes: 1,
+        };
+        let plan = CleanupPlanV1 {
+            schema: CLEANUP_PLAN_SCHEMA_V1.to_owned(),
+            action: HostAction::Cleanup.label().to_owned(),
+            host_slug: admitted.target.slug().to_owned(),
+            request_sha256: admitted.request_sha256.clone(),
+            inventory_sha256: admitted.inventory_sha256.clone(),
+            authorization_sha256: admitted.authorization_sha256.clone(),
+            authorization_nonce: admitted.inventory.authorization_nonce.clone(),
+            max_reclaim_bytes: admitted.inventory.cleanup.max_reclaim_bytes_per_host,
+            bytes_before: 1,
+            entries: vec![entry],
+        };
+        validate_cleanup_plan(&admitted, &plan).expect("exact cleanup plan");
+        assert_eq!(
+            cleanup_plan_detail(&plan),
+            format!(
+                "removed marker-authorized paths: {}",
+                plan.entries[0].original_path
+            )
+        );
+
+        let mut wrong_request = plan.clone();
+        wrong_request.request_sha256 = "0".repeat(64);
+        validate_cleanup_plan(&admitted, &wrong_request)
+            .expect_err("another request cannot replay the plan");
+
+        let mut duplicate = plan.clone();
+        duplicate.entries.push(duplicate.entries[0].clone());
+        duplicate.bytes_before = 2;
+        validate_cleanup_plan(&admitted, &duplicate)
+            .expect_err("duplicate cleanup roots are not canonical");
+
+        let mut oversized = plan;
+        oversized.entries[0].initial_bytes = oversized.max_reclaim_bytes + 1;
+        oversized.bytes_before = oversized.entries[0].initial_bytes;
+        validate_cleanup_plan(&admitted, &oversized)
+            .expect_err("cleanup plan cannot exceed the signed cap");
+    }
+
+    #[test]
+    fn cleanup_plan_accounts_only_tombstone_or_completed_prefixes() {
+        assert_eq!(
+            cleanup_plan_deleted_prefix(100, 100, false).expect("unchanged candidate"),
+            0
+        );
+        cleanup_plan_deleted_prefix(100, 99, false)
+            .expect_err("an unrenamed candidate cannot be partially deleted");
+        assert_eq!(
+            cleanup_plan_deleted_prefix(100, 40, true).expect("partial tombstone"),
+            60
+        );
+        assert_eq!(
+            cleanup_plan_deleted_prefix(100, 0, true).expect("durably completed root"),
+            100
+        );
+        cleanup_plan_deleted_prefix(100, 101, true)
+            .expect_err("a planned root cannot grow past its admitted byte closure");
+    }
+
+    #[test]
+    fn cleanup_plan_rechecks_the_selected_release_before_mutation() {
+        let planned =
+            Path::new("/srv/taira/node/releases/1111111111111111111111111111111111111111");
+        let other = Path::new("/srv/taira/node/releases/2222222222222222222222222222222222222222");
+        ensure_cleanup_plan_entry_not_selected("release", planned, other)
+            .expect("an unselected old release remains eligible");
+        ensure_cleanup_plan_entry_not_selected("release", planned, planned)
+            .expect_err("a release selected after planning must never be deleted");
+        ensure_cleanup_plan_entry_not_selected("upload", planned, planned)
+            .expect("the release selector does not govern upload roots");
+    }
 
     #[expect(
         clippy::too_many_lines,
@@ -11688,37 +13695,455 @@ mod tests {
     }
 
     #[test]
-    fn canonical_write_receipt_discards_retry_variant_fields() {
-        let base = norito::json!({
-            "command": "taira_write_canary",
+    fn canonical_local_report_preserves_prepared_identity_and_drops_only_fresh_time() {
+        let report = norito::json!({
+            "command": "taira_inrou_canary",
             "status": "ok",
             "public_root": "https://taira.sora.org",
+            "checks": [],
+            "warnings": [],
             "failures": [],
-            "terminal_kind": "Applied",
-            "ping_tx_hash": ("11".repeat(32)),
+            "authorization_sha256": ("11".repeat(32)),
+            "authorization_nonce": ("22".repeat(32)),
+            "mutation_kind": "inrou_bundle_pin",
+            "mutation_phase": "pre_edge",
+            "idempotency_key": ("33".repeat(32)),
+            "operation": "bundle_pin",
+            "transaction_hash_hex": ("44".repeat(32)),
+            "prepared_envelope_sha256": ("55".repeat(32)),
+            "prepared_envelope_size": 1024,
+            "recovery_outcome": "Applied",
             "applied_block_height": 7,
-            "tx_query_verified": true,
-            "idempotency_key": ("22".repeat(32)),
-            "message": (format!("taira-public-reset-write-canary-v1:{}", "22".repeat(32))),
-            "faucet_tx_hash": ("33".repeat(32)),
-            "recovered": false,
+            "evidence": ("44".repeat(32)),
+            "execution_expires_at_unix_ms": 99,
+            "fee_payment": {},
+            "fee_quote": {},
+            "mutation_mode": "deploy",
             "observed_at_unix_ms": 1,
         });
-        let mut retry = base.clone();
-        let object = retry.as_object_mut().expect("object");
-        object.insert(
-            "faucet_tx_hash".to_owned(),
-            norito::json::Value::from("44".repeat(32)),
-        );
-        object.insert("recovered".to_owned(), norito::json::Value::from(true));
-        object.insert(
-            "observed_at_unix_ms".to_owned(),
-            norito::json::Value::from(2_u64),
-        );
+        let canonical = canonical_local_report(&report).expect("canonical prepared receipt");
+        let canonical = canonical.as_object().expect("canonical object");
+        assert!(!canonical.contains_key("observed_at_unix_ms"));
+        for field in [
+            "authorization_sha256",
+            "authorization_nonce",
+            "mutation_kind",
+            "mutation_phase",
+            "idempotency_key",
+            "operation",
+            "transaction_hash_hex",
+            "prepared_envelope_sha256",
+            "prepared_envelope_size",
+            "recovery_outcome",
+            "applied_block_height",
+            "evidence",
+        ] {
+            assert_eq!(
+                canonical.get(field),
+                report.get(field),
+                "retained `{field}`"
+            );
+        }
+    }
+
+    fn admitted_reset_fixture() -> AdmittedReset {
+        let remote = progress_admission();
+        let inventory_bytes = json::to_vec(&remote.inventory).expect("fixture inventory JSON");
+        let authorization_bytes =
+            json::to_vec(&remote.authorization).expect("fixture authorization JSON");
+        let ssh = File::open("/dev/null").expect("open fixture SSH input");
+        let ssh_snapshot = super::super::file_snapshot(&ssh.metadata().expect("SSH metadata"))
+            .expect("SSH snapshot");
+        let known_hosts = File::open("/dev/null").expect("open fixture known-hosts input");
+        let known_hosts_snapshot =
+            super::super::file_snapshot(&known_hosts.metadata().expect("known-hosts metadata"))
+                .expect("known-hosts snapshot");
+        AdmittedReset {
+            inventory: remote.inventory,
+            inventory_bytes,
+            inventory_sha256: remote.inventory_sha256,
+            authorization_bytes,
+            authorization_sha256: remote.authorization_sha256,
+            trusted_key_bytes: Vec::new(),
+            authorization: remote.authorization,
+            trusted_key: TrustedKeyV1 {
+                schema: "iroha.taira.public-reset.trusted-key.v1".to_owned(),
+                algorithm: "ed25519".to_owned(),
+                public_key: "ed0120".to_owned(),
+            },
+            pinned_artifacts: Vec::new(),
+            ssh_identity: super::super::PinnedInput {
+                path: PathBuf::from("/dev/null"),
+                file: ssh,
+                snapshot: ssh_snapshot,
+            },
+            known_hosts: super::super::PinnedInput {
+                path: PathBuf::from("/dev/null"),
+                file: known_hosts,
+                snapshot: known_hosts_snapshot,
+            },
+        }
+    }
+
+    fn prepared_write_report_fixture(
+        admitted: &AdmittedReset,
+        kind: &str,
+        idempotency_key: &str,
+    ) -> norito::json::Value {
+        let operation = match kind {
+            "onboarding" => "onboarding",
+            "faucet" => "faucet",
+            "write_canary" => "final_canary",
+            _ => panic!("unsupported write fixture kind"),
+        };
+        let mut report = norito::json!({
+            "command": "taira_write_canary",
+            "status": "ok",
+            "public_root": (admitted.inventory.inrou_canary.public_root.clone()),
+            "checks": [],
+            "warnings": [],
+            "failures": [],
+            "authorization_sha256": (admitted.authorization_sha256.clone()),
+            "authorization_nonce": (admitted.inventory.authorization_nonce.clone()),
+            "mutation_kind": kind,
+            "mutation_phase": "pre_edge",
+            "idempotency_key": idempotency_key,
+            "operation": operation,
+            "transaction_hash_hex": ("4".repeat(64)),
+            "prepared_envelope_sha256": ("5".repeat(64)),
+            "prepared_envelope_size": 128,
+            "recovery_outcome": "Prepared",
+            "applied_block_height": null,
+            "evidence": null,
+            "execution_expires_at_unix_ms": admitted.authorization.claims.execution_expires_at_unix_ms,
+        });
+        if kind == "write_canary" {
+            let object = report.as_object_mut().expect("write report object");
+            object.insert("fee_payment".to_owned(), norito::json!({}));
+            object.insert("fee_quote".to_owned(), norito::json!({}));
+        }
+        report
+    }
+
+    fn prepared_inrou_report_fixture(
+        admitted: &AdmittedReset,
+        idempotency_key: &str,
+    ) -> norito::json::Value {
+        norito::json!({
+            "command": "taira_inrou_canary",
+            "status": "ok",
+            "public_root": (admitted.inventory.inrou_canary.public_root.clone()),
+            "checks": [],
+            "warnings": [],
+            "failures": [],
+            "authorization_sha256": (admitted.authorization_sha256.clone()),
+            "authorization_nonce": (admitted.inventory.authorization_nonce.clone()),
+            "mutation_kind": "inrou_bundle_pin",
+            "mutation_phase": "pre_edge",
+            "idempotency_key": idempotency_key,
+            "operation": "bundle_pin",
+            "transaction_hash_hex": ("4".repeat(64)),
+            "prepared_envelope_sha256": ("5".repeat(64)),
+            "prepared_envelope_size": 128,
+            "recovery_outcome": "Prepared",
+            "applied_block_height": null,
+            "evidence": null,
+            "execution_expires_at_unix_ms": admitted.authorization.claims.execution_expires_at_unix_ms,
+            "fee_payment": {},
+            "fee_quote": {},
+            "mutation_mode": "deploy",
+        })
+    }
+
+    #[test]
+    fn prepared_write_report_rejects_every_missing_or_extra_v1_field() {
+        let admitted = admitted_reset_fixture();
+        let idempotency_key = "3".repeat(64);
+        let canonical = prepared_write_report_fixture(&admitted, "faucet", &idempotency_key);
+        validate_prepared_write_report(
+            &canonical,
+            &admitted,
+            "pre_edge",
+            "faucet",
+            &idempotency_key,
+            "Prepared",
+            None,
+        )
+        .expect("canonical prepared write report");
+        for field in PREPARED_WRITE_REPORT_FIELDS {
+            let mut missing = canonical.clone();
+            missing
+                .as_object_mut()
+                .expect("write report object")
+                .remove(*field);
+            validate_prepared_write_report(
+                &missing,
+                &admitted,
+                "pre_edge",
+                "faucet",
+                &idempotency_key,
+                "Prepared",
+                None,
+            )
+            .expect_err("every prepared write report field is mandatory");
+        }
+        let mut extra = canonical;
+        extra
+            .as_object_mut()
+            .expect("write report object")
+            .insert("legacy_terminal_kind".to_owned(), "Applied".into());
+        validate_prepared_write_report(
+            &extra,
+            &admitted,
+            "pre_edge",
+            "faucet",
+            &idempotency_key,
+            "Prepared",
+            None,
+        )
+        .expect_err("unknown prepared write report fields must fail closed");
+    }
+
+    #[test]
+    fn prepared_final_canary_report_requires_its_exact_operation_name() {
+        let admitted = admitted_reset_fixture();
+        let idempotency_key = "3".repeat(64);
+        let mut report = prepared_write_report_fixture(&admitted, "write_canary", &idempotency_key);
+        validate_prepared_write_report(
+            &report,
+            &admitted,
+            "pre_edge",
+            "write_canary",
+            &idempotency_key,
+            "Prepared",
+            None,
+        )
+        .expect("canonical final-canary report");
+        report
+            .as_object_mut()
+            .expect("final-canary report object")
+            .insert("operation".to_owned(), "write_canary".into());
+        validate_prepared_write_report(
+            &report,
+            &admitted,
+            "pre_edge",
+            "write_canary",
+            &idempotency_key,
+            "Prepared",
+            None,
+        )
+        .expect_err("retired operation spelling must fail closed");
+    }
+
+    #[test]
+    fn prepared_inrou_report_rejects_every_missing_or_extra_v1_field() {
+        let admitted = admitted_reset_fixture();
+        let idempotency_key = "3".repeat(64);
+        let canonical = prepared_inrou_report_fixture(&admitted, &idempotency_key);
+        validate_prepared_inrou_report(
+            &canonical,
+            &admitted,
+            "pre_edge",
+            "inrou_bundle_pin",
+            &idempotency_key,
+            "Prepared",
+            None,
+        )
+        .expect("canonical prepared Inrou report");
+        for field in PREPARED_INROU_REPORT_FIELDS {
+            let mut missing = canonical.clone();
+            missing
+                .as_object_mut()
+                .expect("Inrou report object")
+                .remove(*field);
+            validate_prepared_inrou_report(
+                &missing,
+                &admitted,
+                "pre_edge",
+                "inrou_bundle_pin",
+                &idempotency_key,
+                "Prepared",
+                None,
+            )
+            .expect_err("every prepared Inrou report field is mandatory");
+        }
+        let mut extra = canonical;
+        extra
+            .as_object_mut()
+            .expect("Inrou report object")
+            .insert("submitted_tx_hash".to_owned(), "4".repeat(64).into());
+        validate_prepared_inrou_report(
+            &extra,
+            &admitted,
+            "pre_edge",
+            "inrou_bundle_pin",
+            &idempotency_key,
+            "Prepared",
+            None,
+        )
+        .expect_err("retired prepared Inrou report fields must fail closed");
+    }
+
+    #[test]
+    fn report_evidence_classes_and_durable_json_are_exact() {
+        validate_report_evidence_token("Rejected", &["Rejected", "Expired"], "rejection")
+            .expect("canonical rejection class");
+        for invalid in ["", "ledger_rejected", "Rejected\n"] {
+            validate_report_evidence_token(invalid, &["Rejected", "Expired"], "rejection")
+                .expect_err("synthetic, unbounded, or noncanonical evidence must fail");
+        }
+        validate_report_evidence_token(&"R".repeat(33), &["Rejected", "Expired"], "rejection")
+            .expect_err("unbounded evidence must fail");
+
+        let report = norito::json!({"status": "ok", "evidence": "Rejected"});
+        let pretty = json::to_json_pretty(&report).expect("pretty report");
+        let canonical = canonical_json_report_bytes(&report).expect("canonical durable report");
+        assert_ne!(canonical, pretty.into_bytes());
+        assert_eq!(canonical.last(), Some(&b'\n'));
         assert_eq!(
-            canonical_local_report(&base).expect("canonical initial"),
-            canonical_local_report(&retry).expect("canonical retry")
+            json::from_slice::<norito::json::Value>(&canonical).expect("canonical report JSON"),
+            report
         );
+    }
+
+    fn exact_inrou_check_report_fixture(admitted: &AdmittedReset) -> norito::json::Value {
+        let canary = &admitted.inventory.inrou_canary;
+        let replicas = (1_u64..=4)
+            .map(|slot| {
+                norito::json!({
+                    "replica_slot": slot,
+                    "identity": (format!("{}:replica:{slot}", canary.service_name)),
+                    "response_sha256": (format!("{slot}").repeat(64)),
+                })
+            })
+            .collect::<Vec<_>>();
+        norito::json!({
+            "command": "taira_inrou_check",
+            "status": "ok",
+            "public_root": (canary.public_root.clone()),
+            "checks": [
+                {
+                    "name": "inrou_authoritative_status",
+                    "http_status": 200,
+                    "ok": true,
+                    "detail": "active_adverts=4, hosted_replicas=4",
+                },
+                {
+                    "name": "inrou_public_routes",
+                    "http_status": 200,
+                    "ok": true,
+                    "detail": "observed deterministic identities for replica slots 1, 2, 3, and 4",
+                },
+            ],
+            "warnings": [],
+            "failures": [],
+            "service_name": (canary.service_name.clone()),
+            "service_version": (canary.service_version.clone()),
+            "route_host": (canary.route_host.clone()),
+            "route_path": (format!("{}{}", canary.route_path_prefix, canary.healthcheck_path)),
+            "active_host_adverts": 4,
+            "hosted_replica_count": 4,
+            "bundle_hash": (canary.bundle_hash.clone()),
+            "bundle_content_cid": (canary.bundle_content_cid.clone()),
+            "bundle_manifest_digest_hex": (canary.bundle_manifest_digest_hex.clone()),
+            "guest_content_cid": (canary.guest_content_cid.clone()),
+            "guest_manifest_digest_hex": (canary.guest_manifest_digest_hex.clone()),
+            "container_manifest_hash": (canary.container_manifest_hash.clone()),
+            "service_manifest_hash": (canary.service_manifest_hash.clone()),
+            "observed_at_unix_ms": 1,
+            "replica_identities": replicas,
+        })
+    }
+
+    #[test]
+    fn fresh_and_retained_inrou_checks_have_distinct_exact_v1_schemas() {
+        let admitted = admitted_reset_fixture();
+        let fresh = exact_inrou_check_report_fixture(&admitted);
+        validate_fresh_inrou_check_report(&fresh, &admitted)
+            .expect("exact fresh Inrou check report");
+        let retained = canonical_local_report(&fresh).expect("retained Inrou check report");
+        validate_retained_inrou_check_report(&retained, &admitted)
+            .expect("exact retained Inrou check report");
+        validate_fresh_inrou_check_report(&retained, &admitted)
+            .expect_err("retained schema cannot masquerade as fresh evidence");
+        validate_retained_inrou_check_report(&fresh, &admitted)
+            .expect_err("fresh timestamp is outside the retained schema");
+
+        for field in FRESH_INROU_CHECK_REPORT_FIELDS {
+            let mut missing = fresh.clone();
+            missing
+                .as_object_mut()
+                .expect("Inrou check object")
+                .remove(*field);
+            validate_fresh_inrou_check_report(&missing, &admitted)
+                .expect_err("every fresh Inrou check field is mandatory");
+        }
+        let mut extra = fresh;
+        extra
+            .as_object_mut()
+            .expect("Inrou check object")
+            .insert("mutation_mode".to_owned(), "deploy".into());
+        validate_fresh_inrou_check_report(&extra, &admitted)
+            .expect_err("retired mixed-mode fields must fail closed");
+    }
+
+    fn exact_doctor_report_fixture(public_root: &str) -> norito::json::Value {
+        let checks = DOCTOR_EXPECTED_CHECKS
+            .iter()
+            .map(|&(name, http_status, detail)| {
+                let mut check = norito::json::Map::new();
+                check.insert("name".to_owned(), name.into());
+                check.insert("http_status".to_owned(), http_status.into());
+                check.insert("ok".to_owned(), true.into());
+                if let Some(detail) = detail {
+                    check.insert("detail".to_owned(), detail.into());
+                }
+                norito::json::Value::Object(check)
+            })
+            .collect::<Vec<_>>();
+        norito::json!({
+            "command": "taira_doctor",
+            "status": "ok",
+            "public_root": public_root,
+            "checks": checks,
+            "warnings": [],
+            "failures": [],
+        })
+    }
+
+    #[test]
+    fn doctor_report_requires_the_exact_first_release_check_surface() {
+        let public_root = "https://taira.sora.org";
+        let canonical = exact_doctor_report_fixture(public_root);
+        validate_doctor_report(&canonical, public_root).expect("exact doctor report");
+
+        let mut sparse = canonical.clone();
+        sparse
+            .as_object_mut()
+            .expect("doctor object")
+            .remove("warnings");
+        validate_doctor_report(&sparse, public_root)
+            .expect_err("sparse doctor report must fail closed");
+
+        let mut extra = canonical.clone();
+        extra
+            .as_object_mut()
+            .expect("doctor object")
+            .insert("legacy_routes".to_owned(), norito::json!([]));
+        validate_doctor_report(&extra, public_root)
+            .expect_err("unknown doctor report fields must fail closed");
+
+        let mut substituted = canonical;
+        substituted
+            .as_object_mut()
+            .and_then(|root| root.get_mut("checks"))
+            .and_then(norito::json::Value::as_array_mut)
+            .and_then(|checks| checks.first_mut())
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("first doctor check")
+            .insert("name".to_owned(), "health".into());
+        validate_doctor_report(&substituted, public_root)
+            .expect_err("substituted doctor route name must fail closed");
     }
 
     #[test]
@@ -11897,6 +14322,8 @@ mod tests {
             "command": "taira_write_canary",
             "status": "ok",
             "public_root": (admitted.inventory.inrou_canary.public_root.clone()),
+            "checks": [],
+            "warnings": [],
             "failures": [],
             "authorization_sha256": (admitted.authorization_sha256.clone()),
             "authorization_nonce": (admitted.inventory.authorization_nonce.clone()),
@@ -11906,9 +14333,11 @@ mod tests {
             "operation": "onboarding",
             "recovery_outcome": "Applied",
             "prepared_envelope_sha256": (prepared.prepared_sha256.clone()),
+            "prepared_envelope_size": u64::try_from(envelope.len()).expect("bounded envelope"),
             "transaction_hash_hex": null,
             "applied_block_height": null,
             "evidence": (result.semantic_hash_hex),
+            "execution_expires_at_unix_ms": admitted.authorization.claims.execution_expires_at_unix_ms,
         });
         let mut bytes = json::to_json(&report)
             .expect("canonical proof-required evidence")

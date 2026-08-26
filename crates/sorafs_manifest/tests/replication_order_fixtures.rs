@@ -23,7 +23,7 @@ fn replication_order_fixture_roundtrip() {
     );
     assert_eq!(
         hex::encode(order.order_id),
-        "abababababababababababababababababababababababababababababababab",
+        "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
         "fixture order id changed"
     );
     assert_eq!(

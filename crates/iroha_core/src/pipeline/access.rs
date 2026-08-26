@@ -2429,7 +2429,7 @@ where
     host.set_crypto_config(state_ro.crypto());
     host.set_zk_config(state_ro.zk());
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
-    host.set_vrf_epoch_seeds_from_world(state_ro.world());
+    host.set_vrf_epoch_seeds_from_state(state_ro);
     host.set_query_state(state_ro);
     host.set_chain_id(state_ro.chain_id());
     if let Some(authorization) = contract_call_context

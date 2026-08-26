@@ -1,10 +1,11 @@
 //! Shared BN254 canonical-limb helpers for FASTPQ GPU backends.
-#[cfg(test)]
 use core::convert::TryInto;
 use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
 use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
 /// Canonical BN254 scalars are represented as four little-endian `u64` limbs.
 pub const BN254_LIMBS: usize = 4;
+/// Maximum canonical-limb bytes staged for a single BN254 FFT twiddle table.
+pub const MAX_STAGED_TWIDDLE_BYTES: u64 = 1 << 30;
 /// Return the supported 2-adicity of the BN254 scalar field.
 pub fn two_adicity() -> u32 {
     Bn254Fr::S
@@ -41,6 +42,19 @@ pub fn scalar_from_canonical_limbs(
     Bn254Scalar::from_bytes(&bytes)
         .map_err(|_| "BN254 canonical limbs decode produced invalid field element")
 }
+/// Validate a dense slice of canonical BN254 scalar limbs.
+pub fn validate_canonical_limbs(limbs: &[u64]) -> Result<(), &'static str> {
+    if !limbs.len().is_multiple_of(BN254_LIMBS) {
+        return Err("BN254 canonical input length must be a multiple of four limbs");
+    }
+    for chunk in limbs.chunks_exact(BN254_LIMBS) {
+        let scalar_limbs: [u64; BN254_LIMBS] = chunk
+            .try_into()
+            .expect("chunks_exact yields four BN254 limbs");
+        scalar_from_canonical_limbs(&scalar_limbs)?;
+    }
+    Ok(())
+}
 /// Decode a four-limb slice into a BN254 scalar.
 #[cfg(test)]
 pub fn limbs_slice_to_scalar(slice: &[u64]) -> Result<Bn254Scalar, &'static str> {
@@ -50,11 +64,19 @@ pub fn limbs_slice_to_scalar(slice: &[u64]) -> Result<Bn254Scalar, &'static str>
     scalar_from_canonical_limbs(&limbs)
 }
 /// Compute the staged BN254 twiddle factors in scalar form for a radix-2 FFT.
+#[cfg(any(test, all(feature = "fastpq-gpu", target_os = "macos")))]
 pub fn stage_twiddles_scalars(log_size: u32) -> Result<Vec<Bn254Scalar>, &'static str> {
+    validate_staged_twiddle_resources(log_size)?;
     validate_log(log_size)?;
     let n = 1usize << log_size;
-    let stage_span = n / 2;
-    let mut twiddles = vec![Bn254Scalar::zero(); (log_size as usize) * stage_span];
+    let twiddle_count = n
+        .checked_sub(1)
+        .ok_or("BN254 staged twiddle count exceeds platform limits")?;
+    let mut twiddles = Vec::new();
+    twiddles
+        .try_reserve_exact(twiddle_count)
+        .map_err(|_| "BN254 staged twiddle scalars exceed available host memory")?;
+    twiddles.resize(twiddle_count, Bn254Scalar::zero());
     let max_log = two_adicity();
     let mut omega = Bn254Scalar::from(Bn254Fr::ROOT_OF_UNITY);
     let exponent = 1u64 << (max_log - log_size);
@@ -63,7 +85,7 @@ pub fn stage_twiddles_scalars(log_size: u32) -> Result<Vec<Bn254Scalar>, &'stati
         let len = 1usize << (stage + 1);
         let half = len / 2;
         let stride = n / len;
-        let stage_offset = stage as usize * stage_span;
+        let stage_offset = half - 1;
         let stride_twiddle = omega.pow_u64(stride as u64);
         let mut value = Bn254Scalar::one();
         for pair in 0..half {
@@ -74,31 +96,38 @@ pub fn stage_twiddles_scalars(log_size: u32) -> Result<Vec<Bn254Scalar>, &'stati
             }
             twiddles[stage_offset + pair] = value;
         }
-        if half < stage_span {
-            for idx in half..stage_span {
-                twiddles[stage_offset + idx] = twiddles[stage_offset + idx % half];
-            }
-        }
     }
     Ok(twiddles)
 }
 /// Compute the staged BN254 twiddle factors as canonical limbs.
 pub fn stage_twiddles_limbs(log_size: u32) -> Result<Vec<[u64; BN254_LIMBS]>, &'static str> {
-    let scalars = stage_twiddles_scalars(log_size)?;
-    let twiddles: Vec<[u64; BN254_LIMBS]> = scalars
-        .into_iter()
-        .map(|scalar| scalar_to_canonical_limbs(&scalar))
-        .collect();
+    validate_staged_twiddle_resources(log_size)?;
+    validate_log(log_size)?;
+    let n = 1usize << log_size;
+    let twiddle_count = n
+        .checked_sub(1)
+        .ok_or("BN254 staged twiddle count exceeds platform limits")?;
+    let mut twiddles = Vec::new();
+    twiddles
+        .try_reserve_exact(twiddle_count)
+        .map_err(|_| "BN254 staged twiddle limbs exceed available host memory")?;
+    let max_log = two_adicity();
+    let mut omega = Bn254Scalar::from(Bn254Fr::ROOT_OF_UNITY);
+    omega = omega.pow_u64(1u64 << (max_log - log_size));
+    for stage in 0..log_size {
+        let len = 1usize << (stage + 1);
+        let half = len / 2;
+        let stride_twiddle = omega.pow_u64((n / len) as u64);
+        let mut value = Bn254Scalar::one();
+        for pair in 0..half {
+            if pair != 0 {
+                value = value.mul(stride_twiddle);
+            }
+            twiddles.push(scalar_to_canonical_limbs(&value));
+        }
+    }
     validate_twiddles_shape(log_size, &twiddles)?;
     Ok(twiddles)
-}
-/// Flatten staged BN254 twiddles into a single limb buffer.
-pub fn flatten_twiddles(twiddles: &[[u64; BN254_LIMBS]]) -> Vec<u64> {
-    let mut flat = Vec::with_capacity(twiddles.len() * BN254_LIMBS);
-    for limbs in twiddles {
-        flat.extend_from_slice(limbs);
-    }
-    flat
 }
 /// Validate that the staged twiddle table matches the requested FFT log size.
 pub fn validate_twiddles_shape(
@@ -111,11 +140,26 @@ pub fn validate_twiddles_shape(
     }
     Ok(())
 }
-/// Return the number of staged BN254 twiddles required for an FFT of `2^log_size`.
+/// Return the number of packed staged BN254 twiddles required for an FFT of `2^log_size`.
 pub fn fft_twiddle_len(log_size: u32) -> Result<usize, &'static str> {
     validate_log(log_size)?;
     let n = 1usize << log_size;
-    Ok((log_size as usize) * (n / 2))
+    n.checked_sub(1)
+        .ok_or("BN254 staged twiddle count exceeds platform limits")
+}
+/// Return the canonical-limb byte size of the staged BN254 twiddle table.
+pub fn staged_twiddle_byte_len(log_size: u32) -> Result<u64, &'static str> {
+    let bytes = fft_twiddle_len(log_size)?
+        .checked_mul(core::mem::size_of::<[u64; BN254_LIMBS]>())
+        .ok_or("BN254 staged twiddle byte length exceeds platform limits")?;
+    u64::try_from(bytes).map_err(|_| "BN254 staged twiddle byte length exceeds 64-bit limits")
+}
+/// Reject staged BN254 twiddle tables whose host construction could exhaust memory.
+pub fn validate_staged_twiddle_resources(log_size: u32) -> Result<(), &'static str> {
+    if staged_twiddle_byte_len(log_size)? > MAX_STAGED_TWIDDLE_BYTES {
+        return Err("BN254 staged twiddle table exceeds the 1 GiB safety limit");
+    }
+    Ok(())
 }
 /// Return the number of staged BN254 twiddles required for an LDE evaluation.
 #[cfg(test)]
@@ -171,7 +215,7 @@ pub fn cpu_fft(columns: &mut [Vec<Bn254Scalar>], log_size: u32, twiddles: &[Bn25
         for stage in 0..log_size {
             let len = 1usize << (stage + 1);
             let half = len / 2;
-            let stage_offset = stage as usize * (n / 2);
+            let stage_offset = half - 1;
             for block in (0..n).step_by(len) {
                 for pair in 0..half {
                     let idx = block + pair;
@@ -276,9 +320,41 @@ mod tests {
         assert_eq!(scalar_from_canonical_limbs(&limbs).unwrap(), value);
     }
     #[test]
+    fn canonical_limb_validation_rejects_modulus_and_all_ones() {
+        const MODULUS: [u64; BN254_LIMBS] = [
+            0x43e1_f593_f000_0001,
+            0x2833_e848_79b9_7091,
+            0xb850_45b6_8181_585d,
+            0x3064_4e72_e131_a029,
+        ];
+        validate_canonical_limbs(&scalar_to_canonical_limbs(&Bn254Scalar::from(1u64)))
+            .expect("one is canonical");
+        assert!(validate_canonical_limbs(&MODULUS).is_err());
+        assert!(validate_canonical_limbs(&[u64::MAX; BN254_LIMBS]).is_err());
+        assert!(validate_canonical_limbs(&[0; BN254_LIMBS - 1]).is_err());
+    }
+    #[test]
     fn twiddle_len_matches_fft_shape() {
-        assert_eq!(fft_twiddle_len(2).unwrap(), 4);
-        assert_eq!(lde_twiddle_len(2, 1).unwrap(), 12);
+        assert_eq!(fft_twiddle_len(2).unwrap(), 3);
+        assert_eq!(lde_twiddle_len(2, 1).unwrap(), 7);
+    }
+    #[test]
+    fn packed_limb_twiddles_match_scalar_staging() {
+        let scalars = stage_twiddles_scalars(4).expect("scalar twiddles");
+        let limbs = stage_twiddles_limbs(4).expect("limb twiddles");
+        let expected = scalars
+            .iter()
+            .map(scalar_to_canonical_limbs)
+            .collect::<Vec<_>>();
+        assert_eq!(limbs, expected);
+        assert_eq!(limbs.len(), (1usize << 4) - 1);
+    }
+    #[test]
+    fn staged_twiddle_resource_limit_rejects_oom_scale_domains() {
+        validate_staged_twiddle_resources(25).expect("log-25 staging stays below one GiB");
+        assert!(validate_staged_twiddle_resources(26).is_err());
+        assert!(stage_twiddles_scalars(26).is_err());
+        assert!(validate_staged_twiddle_resources(two_adicity()).is_err());
     }
     #[test]
     fn validate_log_rejects_zero() {

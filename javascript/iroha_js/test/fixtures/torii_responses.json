@@ -13,15 +13,20 @@
     "proposalDeployContract": {
       "found": true,
       "proposal": {
-        "proposer": "34mSYmhpgCPNxWQs5cVbkLKGozajDgsRT6UneZ6ZUUsDauwCPqJMJz5zmsCPzxpLNUvnWzMkx",
+        "proposer": "sorauﾛ1P738ｷﾈｹｵﾙﾍﾉﾂUｿﾚｹﾑbﾄ1xYﾆｷvWzﾒkﾒ5ﾛﾘuE1ﾌsﾛXB6V1Y",
         "created_height": 42,
-        "status": "Approved",
+        "status": "Enacted",
         "kind": {
-          "DeployContract": {
+          "kind": "DeployContract",
+          "payload": {
             "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-            "code_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "abi_hash_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            "abi_version": "1"
+            "code_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "abi_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "abi_version": 1,
+            "manifest_provenance": {
+              "signer": "ed012017CB79FB2B4120F2B1EC65E4198D6E08B28E813FEB01E4A400839B85E18080CE",
+              "signature": "C74557F062FDC5799D64FD2561103F6B13263B1FCE11F3148D48A34781F43D6C3ACB87C885BA666624A98D848AF3BF48A0A0C79FB3F28B244703269A52128809"
+            }
           }
         }
       }
@@ -67,7 +72,7 @@
       "proposal_id": "CDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCD",
       "tx_instructions": [
         {
-          "wire_id": "FinalizeReferendum",
+          "wire_id": "CreateParliamentGovernanceAttemptV1",
           "payload_hex": "0XAAAAAAAA"
         },
         {
@@ -76,11 +81,11 @@
       ]
     },
     "deployContractDraft": {
-      "ok": true,
       "proposal_id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
       "tx_instructions": [
         {
-          "wire_id": "ProposeDeployContract"
+          "wire_id": "iroha_data_model::isi::governance::ProposeDeployContract",
+          "payload_hex": "00"
         }
       ]
     },

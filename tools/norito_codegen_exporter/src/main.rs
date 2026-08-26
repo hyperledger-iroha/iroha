@@ -129,9 +129,13 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::governance::ProposeDeployContract);
         $macro!(iroha_data_model::isi::governance::CastZkBallot);
         $macro!(iroha_data_model::isi::governance::CastPlainBallot);
-        $macro!(iroha_data_model::isi::governance::EnactReferendum);
-        $macro!(iroha_data_model::isi::governance::FinalizeReferendum);
         $macro!(iroha_data_model::isi::governance::PersistCouncilForEpoch);
+        $macro!(
+            iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1
+        );
+        $macro!(
+            iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1
+        );
         $macro!(iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade);
         $macro!(iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade);
         $macro!(iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade);
@@ -237,7 +241,7 @@ impl InstructionSpec {
         T: IntoSchema + 'static,
     {
         let type_name = std::any::type_name::<T>();
-        let wire_id = registry.wire_id(type_name).unwrap_or(type_name).to_owned();
+        let wire_id = required_instruction_wire_id(registry, type_name).to_owned();
         let layout = layout_for::<T>();
         let schema_hash_hex = hex_lower(&norito::core::type_name_schema_hash::<T>());
         let documentation = docs
@@ -310,6 +314,14 @@ impl InstructionSpec {
     fn builder_name(&self) -> String {
         format!("{}Builder", sanitize_identifier(self.type_name))
     }
+}
+fn required_instruction_wire_id(
+    registry: &InstructionRegistry,
+    type_name: &'static str,
+) -> &'static str {
+    registry.wire_id(type_name).unwrap_or_else(|| {
+        panic!("instruction type `{type_name}` has no registered V1 wire identifier")
+    })
 }
 fn build_manifest(specs: &[InstructionSpec], timestamp: &str) -> Value {
     object([
@@ -848,6 +860,11 @@ mod tests {
         );
     }
     #[test]
+    #[should_panic(expected = "has no registered V1 wire identifier")]
+    fn instruction_spec_rejects_type_name_fallback() {
+        let _ = InstructionSpec::new::<Sample>(&instruction_registry::default(), None);
+    }
+    #[test]
     fn asset_quantity_instructions_use_the_live_nominal_type() {
         let specs = gather_instruction_specs(&instruction_registry::default(), None);
         for expected in [
@@ -887,6 +904,30 @@ mod tests {
             110,
             "first-release generated instruction count"
         );
+        let governance_specs = specs
+            .iter()
+            .filter(|spec| spec.type_name.contains("::isi::governance::"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            governance_specs.len(),
+            6,
+            "first-release generated governance instruction count"
+        );
+        for expected in [
+            std::any::type_name::<
+                iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1,
+            >(),
+            std::any::type_name::<
+                iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
+            >(),
+        ] {
+            assert!(
+                governance_specs
+                    .iter()
+                    .any(|spec| spec.type_name == expected),
+                "missing first-release Parliament lifecycle instruction `{expected}`"
+            );
+        }
         let retired = [
             ("zk", ["Sh", "ield"].concat()),
             ("zk", ["Zk", "Transfer"].concat()),
@@ -917,8 +958,8 @@ mod tests {
             std::any::type_name::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>(),
         ] {
             assert!(
-                registry.contains(specialized_type),
-                "specialized privacy instruction must remain registered: {specialized_type}"
+                registry.wire_id(specialized_type).is_some(),
+                "specialized privacy instruction must remain registered for encoding: {specialized_type}"
             );
         }
     }

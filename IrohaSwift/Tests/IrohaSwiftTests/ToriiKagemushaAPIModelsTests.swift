@@ -212,7 +212,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         #if canImport(Darwin)
         try requireNativeTestCapability(
             KagemushaRecursiveSpend.hasRequiredNativeSymbols,
-            "ABI-22 bridge is not linked in this test host"
+            "ABI-23 bridge is not linked in this test host"
         )
         let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
 
@@ -238,7 +238,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         #if canImport(Darwin)
         try requireNativeTestCapability(
             KagemushaRecursiveSpend.hasRequiredNativeSymbols,
-            "ABI-22 bridge is not linked in this test host"
+            "ABI-23 bridge is not linked in this test host"
         )
         let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
         let address = try AccountAddress.parseEncodedSwiftOnly(
@@ -295,7 +295,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             noritoArchive: archive,
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
         )
-        let finalityProof = try KagemushaTopUpFinalityProof(
+        let finalityProof = try KagemushaTopUpFinalityProofArchive(
             noritoArchive: canonicalTopUpFinalityProofArchive()
         )
         XCTAssertEqual(anchor.noritoArchive(), archive)
@@ -478,7 +478,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             noritoArchive: canonicalTopUpAnchorArchive(),
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
         )
-        let finalityProof = try KagemushaTopUpFinalityProof(
+        let finalityProof = try KagemushaTopUpFinalityProofArchive(
             noritoArchive: canonicalTopUpFinalityProofArchive()
         )
         for (finalizedBlockHeight, serverTimeMs, field) in [

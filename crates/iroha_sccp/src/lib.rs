@@ -165,9 +165,9 @@ pub const SCCP_DOMAIN_SOLANA: u32 = 3;
 pub const SCCP_DOMAIN_TRON: u32 = 5;
 /// Public TAIRA chain label retained as SCCP deployment metadata.
 pub const SCCP_TAIRA_CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
-/// Exact TAIRA genesis hash bound into TAIRA-origin SCCP finality proofs.
+/// Canonical checked TAIRA network identity bound into TAIRA-origin SCCP finality proofs.
 pub const SCCP_TAIRA_FINALITY_NETWORK_ID_V1: &str =
-    "82531ce8eae8bff6beeca4698bfd13a3bc8bec5f0ee0d23d428c97fc17ab0f3b";
+    "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94";
 /// Return the exact genesis-derived TAIRA network identity governed by SCCP V1.
 #[must_use]
 pub fn sccp_taira_finality_network_id_v1() -> NetworkId {

@@ -45,21 +45,14 @@ pub use small::SmallBls as BlsSmall;
 pub use small::SmallPrivateKey as BlsSmallPrivateKey;
 /// Compact BLS public key (smaller signatures).
 pub use small::SmallPublicKey as BlsSmallPublicKey;
-// Select backend implementation module
-// - Default: compat w3f-bls (arkworks-based) when `bls-backend-blstrs` is NOT set
-// - New: pure blstrs backend when `bls-backend-blstrs` is set
 mod ethereum;
-#[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
-mod implementation;
-#[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-#[path = "implementation_blstrs.rs"]
 mod implementation;
 pub use ethereum::{
     ETHEREUM_BLS_POP_DST, ethereum_bls_pop_fast_aggregate_verify,
     ethereum_bls_pop_validate_public_key,
 };
 /// This version is the "normal" BLS signature scheme with the public key group in G1 and signature
-/// group in G2. 192 byte signatures and 97 byte public keys
+/// group in G2. Canonical compressed signatures are 96 bytes and public keys are 48 bytes.
 mod normal {
     use super::{implementation, implementation::BlsConfiguration};
     use crate::Algorithm;
@@ -67,26 +60,15 @@ mod normal {
     pub struct NormalConfiguration;
     impl BlsConfiguration for NormalConfiguration {
         const ALGORITHM: Algorithm = Algorithm::BlsNormal;
-        #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
         type Engine = w3f_bls::ZBLS;
-        #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-        const NORMAL: bool = true;
     }
     /// Default (non-compact) BLS signature suite.
     pub type NormalBls = implementation::BlsImpl<NormalConfiguration>;
     /// Public key type for the default BLS suite.
-    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
     pub type NormalPublicKey =
         w3f_bls::PublicKey<<NormalConfiguration as BlsConfiguration>::Engine>;
     /// Private key type for the default BLS suite.
-    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
     pub type NormalPrivateKey = implementation::ManagedSecretKey<NormalConfiguration>;
-    /// Public key type for the default BLS suite (blstrs backend).
-    #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-    pub type NormalPublicKey = implementation::PublicKey<NormalConfiguration>;
-    /// Private key type for the default BLS suite (blstrs backend).
-    #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-    pub type NormalPrivateKey = implementation::SecretKey<NormalConfiguration>;
 }
 /// Small BLS signature scheme results in smaller signatures but slower
 /// operations and bigger public key.
@@ -99,25 +81,14 @@ mod small {
     pub struct SmallConfiguration;
     impl BlsConfiguration for SmallConfiguration {
         const ALGORITHM: Algorithm = Algorithm::BlsSmall;
-        #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
         type Engine = w3f_bls::TinyBLS381;
-        #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-        const NORMAL: bool = false;
     }
     /// Compact BLS signature suite with smaller signatures.
     pub type SmallBls = implementation::BlsImpl<SmallConfiguration>;
     /// Public key type for the compact BLS suite.
-    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
     pub type SmallPublicKey = w3f_bls::PublicKey<<SmallConfiguration as BlsConfiguration>::Engine>;
     /// Private key type for the compact BLS suite.
-    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
     pub type SmallPrivateKey = implementation::ManagedSecretKey<SmallConfiguration>;
-    /// Public key type for the compact BLS suite (blstrs backend).
-    #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-    pub type SmallPublicKey = implementation::PublicKey<SmallConfiguration>;
-    /// Private key type for the compact BLS suite (blstrs backend).
-    #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-    pub type SmallPrivateKey = implementation::SecretKey<SmallConfiguration>;
 }
 #[cfg(test)]
 mod tests;
@@ -148,7 +119,6 @@ pub(crate) fn verify_aggregate_same_message_small(
 /// Exact per-signature verification across distinct messages, normal variant.
 ///
 /// Success proves every signature is valid for the public key and message at the same index.
-#[allow(dead_code)]
 pub fn verify_aggregate_multi_message_normal(
     messages: &[&[u8]],
     signatures: &[&[u8]],
@@ -163,7 +133,6 @@ pub fn verify_aggregate_multi_message_normal(
 /// Exact per-signature verification across distinct messages, small variant.
 ///
 /// Success proves every signature is valid for the public key and message at the same index.
-#[allow(dead_code)]
 pub fn verify_aggregate_multi_message_small(
     messages: &[&[u8]],
     signatures: &[&[u8]],

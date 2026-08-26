@@ -132,7 +132,7 @@ internal object HttpErrorMessageExtractor {
             }
             val firstSize = encodedSizes[0]
             return if (firstSize != null) {
-                val child = NoritoDecoder(decoder.readBytes(firstSize), decoder.flags, decoder.flagsHint)
+                val child = NoritoDecoder(decoder.readBytes(firstSize), decoder.flags)
                 val value = optionalString.decode(child)
                 require(child.remaining() == 0) { "Packed reject_code field did not consume all bytes" }
                 value.orElse(null)

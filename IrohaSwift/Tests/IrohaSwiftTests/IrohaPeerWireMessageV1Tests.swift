@@ -253,7 +253,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
             )
         }
         XCTAssertNoThrow(try IrohaPeerWireMessageV1(
-            profile: .kagemushaRecursiveSpend,
+            profile: .kagemusha,
             kind: .payment,
             schemaVersion: 0x0102,
             canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
@@ -263,7 +263,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
             limits: tight
         ))
         XCTAssertThrowsError(try IrohaPeerWireMessageV1(
-            profile: .kagemushaRecursiveSpend,
+            profile: .kagemusha,
             kind: .payment,
             schemaVersion: 0x0102,
             canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(

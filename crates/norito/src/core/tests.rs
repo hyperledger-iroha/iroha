@@ -246,10 +246,10 @@ fn decode_field_canonical_honors_payload_context_flags() {
     };
     let mut bytes = Vec::new();
     {
-        let _flags = DecodeFlagsGuard::enter_with_hint(0, 0);
+        let _flags = DecodeFlagsGuard::enter(0);
         serialize_to_buffer(&expected, &mut bytes).expect("encode fixed-width field frames");
     }
-    set_payload_ctx_state(&bytes, None, Some(0), Some(0));
+    set_payload_ctx_state(&bytes, None, Some(0));
 
     let (decoded, used) =
         decode_field_canonical::<CanonicalStruct>(&bytes).expect("decode advertised layout");
@@ -364,7 +364,6 @@ fn erased_field_slot_drops_value_after_consumption_error() {
     assert!(matches!(error, Error::LengthMismatch));
     assert_eq!(FIELD_SLOT_DROPS.load(Ordering::Relaxed), 1);
 }
-#[cfg(feature = "strict-safe")]
 #[test]
 fn erased_field_decoder_preserves_panic_type_name() {
     #[derive(Debug)]
@@ -380,7 +379,7 @@ fn erased_field_decoder_preserves_panic_type_name() {
         }
     }
     let error = decode_field_canonical::<PanicDuringFieldDecode>(&[0])
-        .expect_err("strict-safe field decode must suppress the panic");
+        .expect_err("field decode must suppress the panic");
     assert!(matches!(
         error,
         Error::DecodePanic { context }
@@ -461,6 +460,52 @@ fn decode_archived_field_uses_one_charged_overaligned_copy() {
     );
 }
 #[test]
+fn decode_archived_field_charges_padding_and_aligned_copy() {
+    #[derive(Debug, PartialEq, Eq)]
+    #[repr(C, align(64))]
+    struct ShortOveralignedField([u8; 64]);
+    impl<'de> NoritoDeserialize<'de> for ShortOveralignedField {
+        fn deserialize(_archived: &'de Archived<Self>) -> Self {
+            Self([0; 64])
+        }
+    }
+
+    let bytes = [0xA5];
+    let allocation_bytes = 2 * archived_payload_size::<ShortOveralignedField>();
+    let limits = DecodeLimits::new(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        allocation_bytes,
+        usize::MAX,
+    );
+    let (decoded, usage) = with_decode_limits_measured(limits, || {
+        decode_archived_field::<ShortOveralignedField>(&bytes)
+    });
+    assert_eq!(
+        decoded.expect("an exact budget must cover padding and its aligned copy"),
+        ShortOveralignedField([0; 64])
+    );
+    assert_eq!(usage.total_allocated_bytes(), allocation_bytes);
+
+    let limits = DecodeLimits::new(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        allocation_bytes - 1,
+        usize::MAX,
+    );
+    let error = with_decode_limits(limits, || {
+        decode_archived_field::<ShortOveralignedField>(&bytes)
+    })
+    .expect_err("one byte less must reject the second temporary allocation");
+    assert!(matches!(
+        error,
+        Error::TotalAllocationExceeded { attempted, limit }
+            if attempted == allocation_bytes as u64 && limit == (allocation_bytes - 1) as u64
+    ));
+}
+#[test]
 fn decode_archived_field_preserves_deserializer_errors() {
     #[derive(Debug)]
     struct Rejected;
@@ -486,7 +531,7 @@ fn decode_archived_field_contains_deserializer_panics() {
         }
     }
     let error = decode_archived_field::<PanicDuringArchivedFieldDecode>(&[])
-        .expect_err("strict-safe archived-field decoding must contain panics");
+        .expect_err("archived-field decoding must contain panics");
     assert!(matches!(
         error,
         Error::DecodePanic { context }
@@ -515,6 +560,23 @@ fn decode_vec_u8_from_slice_serial_reports_prefix_used() {
     with_tail.extend_from_slice(&[0xAA, 0xBB]);
     let (decoded, used) =
         decode_vec_from_slice_serial::<u8>(&with_tail).expect("decode byte sequence prefix");
+    assert_eq!(decoded, value);
+    assert_eq!(used, bytes.len());
+    assert!(matches!(
+        decode_field_canonical::<Vec<u8>>(&with_tail),
+        Err(Error::LengthMismatch)
+    ));
+    reset_decode_state();
+}
+#[test]
+fn decode_vec_u8_from_slice_reports_prefix_used() {
+    reset_decode_state();
+    let value = vec![3_u8, 5, 8, 13];
+    let bytes = encode_adaptive(&value);
+    let mut with_tail = bytes.clone();
+    with_tail.extend_from_slice(&[0xAA, 0xBB]);
+    let (decoded, used) =
+        decode_field_prefix::<Vec<u8>>(&with_tail).expect("decode raw byte sequence prefix");
     assert_eq!(decoded, value);
     assert_eq!(used, bytes.len());
     assert!(matches!(
@@ -1177,7 +1239,7 @@ impl<'de> crate::NoritoDeserialize<'de> for RootAware {
 #[test]
 fn decode_field_canonical_installs_root_span() {
     let (payload, flags) = encode_with_header_flags(&RootAware(99));
-    let _flags_guard = DecodeFlagsGuard::enter_with_hint(flags, flags);
+    let _flags_guard = DecodeFlagsGuard::enter(flags);
     let (decoded, used) = decode_field_canonical::<RootAware>(&payload).expect("root-aware decode");
     assert_eq!(used, payload.len());
     assert_eq!(decoded.0, 99);
@@ -1299,7 +1361,7 @@ fn archived_from_slice_realigns_payload() {
     );
     let archived =
         archived_from_slice::<AlignSensitive>(misaligned).expect("realign archived payload");
-    let _flags = DecodeFlagsGuard::enter_with_hint(flags, flags);
+    let _flags = DecodeFlagsGuard::enter(flags);
     let _payload = PayloadCtxGuard::enter(archived.bytes());
     let decoded = <AlignSensitive as NoritoDeserialize>::try_deserialize(archived.as_ref())
         .expect("decode misaligned AlignSensitive");
@@ -1553,29 +1615,6 @@ fn archived_box_aligns_payload() {
     assert_eq!(archived.bytes(), &[0xAA]);
 }
 #[test]
-fn frame_bare_with_default_header_prefers_recorded_flags() {
-    reset_decode_state();
-    let value = vec![1u32, 2, 3];
-    let bare = encode_adaptive(&value);
-    // Override the recorded header flags with a combination that differs from
-    // compile-time defaults to ensure the framing helper uses it.
-    let expected = header_flags::PACKED_SEQ | header_flags::COMPACT_LEN;
-    record_last_header_flags(expected);
-    let stored = take_last_header_flags().expect("recorded flags should be present");
-    assert_eq!(stored, expected);
-    record_last_header_flags(stored);
-    let framed =
-        frame_bare_with_default_header::<Vec<u32>>(&bare).expect("frame payload with header");
-    assert_eq!(framed[Header::SIZE - 1], expected,);
-    let mut cursor = std::io::Cursor::new(&framed);
-    let header = Header::read(&mut cursor).expect("read framed header");
-    assert_eq!(header.flags & !supported_header_flags(), 0);
-    assert_eq!(
-        header.flags & (header_flags::PACKED_SEQ | header_flags::COMPACT_LEN),
-        expected,
-    );
-}
-#[test]
 fn write_bare_frame_with_header_flags_matches_vec_framer() {
     reset_decode_state();
     let value = vec![9u32, 8, 7, 6];
@@ -1603,15 +1642,6 @@ fn frame_current_payload_preserves_active_flags() {
     reset_decode_state();
 }
 #[test]
-fn frame_bare_with_default_header_requires_layout_metadata() {
-    reset_decode_state();
-    let _ = take_last_header_flags();
-    let payload = vec![0u8; 4];
-    let err = frame_bare_with_default_header::<Vec<u8>>(&payload)
-        .expect_err("missing flags should surface an error");
-    matches!(err, Error::MissingLayoutFlags);
-}
-#[test]
 fn frame_current_payload_requires_negotiated_flags() {
     reset_decode_state();
     let bytes = vec![0u8; 8];
@@ -1621,7 +1651,7 @@ fn frame_current_payload_requires_negotiated_flags() {
     matches!(err, Error::MissingLayoutFlags);
 }
 #[test]
-fn encode_with_header_flags_exposes_recorded_layout() {
+fn encode_with_header_flags_exposes_explicit_layout() {
     reset_decode_state();
     let value = vec![5u64, 6, 7];
     let (bare, flags) = crate::codec::encode_with_header_flags(&value);
@@ -1679,10 +1709,7 @@ fn read_len_readers_honor_compact_flags() {
     }
 }
 #[test]
-fn decode_flags_guard_clears_hint_between_payloads() {
-    if (default_encode_flags() & header_flags::PACKED_SEQ) == 0 {
-        return;
-    }
+fn decode_flags_guard_clears_state_between_payloads() {
     reset_decode_state();
     {
         let _packed = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ | header_flags::COMPACT_LEN);
@@ -1697,7 +1724,10 @@ fn decode_flags_guard_clears_hint_between_payloads() {
     assert!(!decode_flags_active());
     assert_eq!(get_decode_flags(), 0);
     assert!(!use_packed_seq());
-    assert!(!use_compact_len());
+    assert!(
+        use_compact_len(),
+        "without an explicit guard, helpers use the V1 default layout"
+    );
     {
         let _neutral = DecodeFlagsGuard::enter(0);
         assert!(decode_flags_active());
@@ -1720,6 +1750,12 @@ fn decode_flags_guard_overrides_active_payload_context() {
         let _neutral = DecodeFlagsGuard::enter(0);
         assert_eq!(current_decode_flags_effective(), Some(0));
         assert!(!use_compact_len());
+        let _nested = PayloadCtxGuard::enter(&payload);
+        assert_eq!(current_decode_flags_effective(), Some(0));
+        assert!(
+            !use_compact_len(),
+            "a nested payload must not restore stale outer layout flags"
+        );
     }
     reset_decode_state();
 }
@@ -2137,7 +2173,7 @@ fn vec_header_is_u64() {
         | header_flags::PACKED_STRUCT
         | header_flags::FIELD_BITSET
         | header_flags::COMPACT_LEN;
-    let guard = DecodeFlagsGuard::enter_with_hint(flags, flags);
+    let guard = DecodeFlagsGuard::enter(flags);
     let bytes = encode_adaptive(&value);
     drop(guard);
     assert!(bytes.len() >= 8);
@@ -2238,20 +2274,17 @@ struct PayloadContextFingerprint {
     schema: Option<[u8; 16]>,
     max_access: usize,
     flags: u8,
-    flags_hint: u8,
     flags_active: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DecodeStateFingerprint {
     flags: u8,
-    flags_hint: u8,
     flags_active: bool,
     payload: Option<PayloadContextFingerprint>,
 }
 fn decode_state_fingerprint() -> DecodeStateFingerprint {
     DecodeStateFingerprint {
         flags: get_decode_flags(),
-        flags_hint: decode_flags_hint(),
         flags_active: decode_flags_active(),
         payload: payload_ctx_state().map(|state| PayloadContextFingerprint {
             base: state.base,
@@ -2259,7 +2292,6 @@ fn decode_state_fingerprint() -> DecodeStateFingerprint {
             schema: state.schema,
             max_access: state.max_access,
             flags: state.flags,
-            flags_hint: state.flags_hint,
             flags_active: state.flags_active,
         }),
     }
@@ -2275,10 +2307,9 @@ fn archive_view_is_pure_and_scopes_custom_decode_state() {
     let ambient_payload = [0xA1, 0xA2, 0xA3];
     let ambient_schema = [0x5A; 16];
     let ambient_flags = default_encode_flags();
-    let ambient_guard = PayloadCtxGuard::enter_with_schema_flags_hint(
+    let ambient_guard = PayloadCtxGuard::enter_with_schema_and_flags(
         &ambient_payload,
         ambient_schema,
-        ambient_flags,
         ambient_flags,
     );
     let ambient_state = decode_state_fingerprint();
@@ -2292,7 +2323,6 @@ fn archive_view_is_pure_and_scopes_custom_decode_state() {
             let state = payload_ctx_state().expect("view decode payload context");
             assert_eq!(state.schema, Some(outer.schema()));
             assert_eq!(state.flags, outer.flags());
-            assert_eq!(state.flags_hint, outer.flags_hint());
             Ok((payload[0], payload.len()))
         })
         .expect("decode outer view");
@@ -2411,34 +2441,26 @@ fn archive_view_rejects_noncanonical_boolean_tags() {
 }
 #[test]
 fn header_driven_compact_len_string_decode() {
-    #[cfg(not(feature = "compact-len"))]
+    // Build a varint-length encoded string payload: len=3, data="abc"
+    let mut payload = Vec::new();
     {
-        // Compact-len feature disabled; no additional coverage required.
+        let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
+        write_len_to_vec(&mut payload, 3);
     }
-    #[cfg(feature = "compact-len")]
-    {
-        // Build a varint-length encoded string payload: len=3, data="abc"
-        let mut payload = Vec::new();
-        {
-            let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
-            write_len_to_vec(&mut payload, 3);
-        }
-        payload.extend_from_slice(b"abc");
-        // Compose header with COMPACT_LEN flag set
-        let mut bytes = Vec::new();
-        let mut header = Header::new(
-            <String as NoritoSerialize>::schema_hash(),
-            payload.len() as u64,
-            crc64(&payload),
-        );
-        header.flags |= header_flags::COMPACT_LEN;
-        header.write(&mut bytes).unwrap();
-        bytes.extend_from_slice(&payload);
-        let decoded: String = decode_from_bytes(&bytes).unwrap();
-        assert_eq!(decoded, "abc");
-    }
+    payload.extend_from_slice(b"abc");
+    // Compose header with COMPACT_LEN flag set
+    let mut bytes = Vec::new();
+    let mut header = Header::new(
+        <String as NoritoSerialize>::schema_hash(),
+        payload.len() as u64,
+        crc64(&payload),
+    );
+    header.flags |= header_flags::COMPACT_LEN;
+    header.write(&mut bytes).unwrap();
+    bytes.extend_from_slice(&payload);
+    let decoded: String = decode_from_bytes(&bytes).unwrap();
+    assert_eq!(decoded, "abc");
 }
-#[cfg(feature = "compact-len")]
 #[test]
 fn write_len_marks_compact_len_usage() {
     reset_decode_state();
@@ -2492,7 +2514,7 @@ fn header_driven_fixed_len_string_decode() {
 #[test]
 fn seq_len_respects_explicit_flags() {
     reset_decode_state();
-    let guard = DecodeFlagsGuard::enter_with_hint(0, default_encode_flags());
+    let guard = DecodeFlagsGuard::enter(0);
     let mut fixed_len_buf = Vec::new();
     fixed_len_buf.extend_from_slice(&(4u64.to_le_bytes()));
     let (len, used) = read_seq_len_slice(&fixed_len_buf).expect("fallback fixed len");
@@ -2519,7 +2541,7 @@ fn strict_safe_read_len_and_decode_from_slice() {
 #[test]
 fn fixed_u64_length_respects_usize_limits() {
     reset_decode_state();
-    let _guard = DecodeFlagsGuard::enter_with_hint(0, 0);
+    let _guard = DecodeFlagsGuard::enter(0);
     let overflow = (usize::MAX as u128)
         .checked_add(1)
         .and_then(|value| u64::try_from(value).ok());
@@ -2546,7 +2568,7 @@ fn fixed_u64_length_respects_usize_limits() {
 #[test]
 fn owned_payload_len_respects_usize_limits() {
     reset_decode_state();
-    let guard = DecodeFlagsGuard::enter_with_hint(0, 0);
+    let guard = DecodeFlagsGuard::enter(0);
     let overflow = (usize::MAX as u128)
         .checked_add(1)
         .and_then(|value| u64::try_from(value).ok());
@@ -2595,7 +2617,7 @@ fn decode_slice_usize_isize_respects_width() {
 #[test]
 fn vec_decode_rejects_impossible_header_sizes() {
     reset_decode_state();
-    let _guard = DecodeFlagsGuard::enter_with_hint(0, 0);
+    let _guard = DecodeFlagsGuard::enter(0);
     let len = usize::MAX / 8 + 1;
     let len_u64 = u64::try_from(len).expect("len fits u64");
     let mut buf = Vec::new();
@@ -2619,7 +2641,7 @@ fn vec_u8_encodes_as_len_plus_raw_bytes() {
 #[test]
 fn vec_u8_decode_rejects_len_prefixed_elements() {
     reset_decode_state();
-    let guard = DecodeFlagsGuard::enter_with_hint(0, 0);
+    let guard = DecodeFlagsGuard::enter(0);
     let value: Vec<u8> = vec![1, 2, 3, 4];
     let mut payload = Vec::new();
     payload.extend_from_slice(&(value.len() as u64).to_le_bytes());

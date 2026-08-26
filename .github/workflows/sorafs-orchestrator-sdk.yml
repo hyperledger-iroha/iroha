@@ -95,7 +95,7 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-      - name: Verify Python ABI-22 evidence retention contract
+      - name: Verify Python ABI-23 evidence retention contract
         run: bash scripts/tests/check_sorafs_python_native_sdk_evidence_contract.sh
       - name: Bind the canonical mobile Python
         run: |
@@ -123,15 +123,28 @@ jobs:
           cache-dependency-path: javascript/iroha_js/package-lock.json
       - name: Install Apple Rust targets
         run: |
-          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
+          rustup_source="$(command -v rustup)"
+          rustup_source="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_source")"
+          [[ "$rustup_source" == /* && -f "$rustup_source" && ! -L "$rustup_source" && -x "$rustup_source" ]]
+          rustup_tools="$RUNNER_TEMP/iroha-sorafs-apple-tools"
+          mkdir -p "$rustup_tools"
+          chmod 0700 "$rustup_tools"
+          rustup_path="$rustup_tools/rustup"
+          test ! -e "$rustup_path"
+          /bin/cp "$rustup_source" "$rustup_path"
+          chmod 0700 "$rustup_path"
+          rustup_path="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_path")"
+          [[ "$rustup_path" == /* && "${rustup_path##*/}" == rustup && -f "$rustup_path" && ! -L "$rustup_path" && -x "$rustup_path" ]]
+          echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" >> "$GITHUB_ENV"
+          "$rustup_path" target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
           cargo fetch --locked
       - name: Bind the first-release Apple Cargo envelope
         run: |
           cargo_target="$RUNNER_TEMP/iroha-sorafs-apple-cargo"
           mkdir -p "$cargo_target"
           cargo_target="$(cd "$cargo_target" && pwd -P)"
-          rustc_path="$(rustup which --toolchain 1.93.1 rustc)"
-          rustdoc_path="$(rustup which --toolchain 1.93.1 rustdoc)"
+          rustc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustc)"
+          rustdoc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustdoc)"
           echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
           echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
           echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
@@ -148,18 +161,18 @@ jobs:
           echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
-      - name: Build exact ABI-22 NoritoBridge XCFramework
+      - name: Build exact ABI-23 NoritoBridge XCFramework
         run: scripts/build_norito_xcframework.sh
       - name: Authenticate Apple native artifact
         run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
-      - name: Run exact Python 3.12 ABI-22 native reference parity
+      - name: Run exact Python 3.12 ABI-23 native reference parity
         env:
           SORAFS_PYTHON_SDK_EVIDENCE_DIR: ${{ runner.temp }}/iroha-sorafs-python-native-abi22-evidence
           SORAFS_PYTHON_SDK_PYTHON_BIN: python3
         run: bash ci/check_sorafs_python_native_sdk.sh
       - name: Run Rust, Python, JavaScript, and Swift fixture parity
         run: bash ci/sdk_sorafs_orchestrator.sh
-      - name: Upload verified Python ABI-22 evidence
+      - name: Upload verified Python ABI-23 evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -239,7 +252,7 @@ jobs:
           echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
       - name: Fetch the locked Rust dependency graph
         run: cargo fetch --locked
-      - name: Require fresh ABI-22 JNI bridge in complete Kotlin and Java suites
+      - name: Require fresh ABI-23 JNI bridge in complete Kotlin and Java suites
         env:
           KAGEMUSHA_JVM_NATIVE_EVIDENCE_DIR: ${{ runner.temp }}/iroha-kotlin-zk-asset-localnet-evidence
         run: >-
@@ -274,7 +287,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: sorafs-orchestrator-csharp-parity
-      - name: Build and authenticate the exact ABI-22 C# bridge
+      - name: Build and authenticate the exact ABI-23 C# bridge
         shell: bash
         run: |
           target=x86_64-unknown-linux-gnu
@@ -301,6 +314,6 @@ jobs:
       - name: Build C# SDK with warnings denied
         working-directory: csharp
         run: dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror
-      - name: Run complete C# ABI-22 parity suite
+      - name: Run complete C# ABI-23 parity suite
         working-directory: csharp
         run: dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build

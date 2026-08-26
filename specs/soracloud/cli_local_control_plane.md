@@ -73,12 +73,12 @@ authentication, and no recipient-discovery or execution route exists in V1.
 
 ## Runtime Provenance Signature Framing
 
-Model-host heartbeats and Inrou host advertisements use one canonical V1
-signature preimage. It is the canonical Norito tuple
+Inrou host advertisements and withdrawals use one canonical V1 signature
+preimage. It is the canonical Norito tuple
 `(domain_tag_bytes, version, purpose_wire_id, canonical_payload_bytes)`, where
 the fixed domain is `iroha:soracloud:runtime-provenance:v1\0`, the version is
-`1`, and the immutable purpose ids are `1` for model-host heartbeat and `2` for
-Inrou host advertisement. The byte fields are length-delimited by Norito.
+`1`, and the immutable purpose ids are `1` for Inrou host advertisement and `2`
+for Inrou host withdrawal. The byte fields are length-delimited by Norito.
 
 External signing adapters receive the expected purpose and framed preimage as
 separate inputs and must reject any disagreement before signing. Ledger
@@ -252,15 +252,15 @@ commands are Torii-backed and require `--torii-url`.
   - keep rollback and rollout control aligned with manifest workspaces
   - when driven by `--container` plus `--service`, attach the same local
     `service_plan` projection that `plan` reports
-- `iroha soracloud hf deploy`, `hf-status`, `hf-lease-renew`, and `hf-lease-leave`
+- `iroha soracloud hf join`, `hf-status`, `hf-lease-renew`, and `hf-lease-leave`
   - accept `--service-name` directly or resolve the bound service from
     `--container` plus `--service` when a service name applies
   - keep HF shared-lease membership aligned with manifest workspaces
-  - generated HF bundles are metadata-only in V1: they expose the internal
-    `metadata` handler and do not expose an inference handler, inference tool,
-    peer inference proxy, or `agent autonomy-run` command
-  - generated HF source and runtime status remains `PendingImport`; V1 does not
-    advertise an inert metadata bundle as inference-ready
+  - HF lease/source records are metadata-only in V1: no service or apartment
+    runtime is generated, and no inference handler, inference tool, peer
+    inference proxy, or `agent autonomy-run` command is exposed
+  - the authoritative HF source status is `Admitted`; V1 does not advertise
+    inert metadata as inference-ready
   - when driven by `--container` plus `--service`, attach the same local
     `service_plan` projection that `plan` reports
 - `iroha soracloud model training-job-*`
@@ -416,26 +416,38 @@ do not select shipping behavior. Shipping enablement comes only from the exact
 `soracloud_runtime.inrou` configuration.
 
 PortableVm atomically copies the verified base image into a standalone mutable
-raw root disk. Its authenticated replica-and-base-image binding is persisted before the
-copy, so interruption cannot strand an unbound published root disk. The sandbox
-never needs the host base-image path, and startup never gives root `qemu-img` a
-guest-mutated root image to parse. Every root and non-root lease volume becomes
-an exact-size persistent raw block device for one replica only; no disk image is
-shared or multi-attached between replica slots. Each replica-private disk has a
-root-private authenticated sidecar binding its service, revision, bundle,
-volume kind/path/size, filesystem, and deterministic ext4 UUID. A separate
-initialized marker is committed only after the mounted guest has passed its
-health check.
+raw root disk. Its authenticated replica-and-base-image binding is persisted
+before the copy, so interruption cannot strand an unbound published root disk.
+The sandbox never needs the host base-image path, and startup never gives root
+`qemu-img` a guest-mutated root image to parse. Every root and non-root lease
+volume is an exact-size persistent raw block device for one replica only; no
+disk image is shared or multi-attached between replica slots. Each
+replica-private disk has a root-private authenticated sidecar binding its
+service, revision, bundle, volume kind/path/size, storage class, authoritative
+generation, filesystem, and deterministic ext4 UUID.
+
+For a new lease disk, the supervisor runs root-custodied standard-path `mke2fs`
+against an exclusive staging file with an empty `mke2fs.conf` and the exact V1
+feature, 4-KiB block, 256-byte inode, inode-count, block-group, flex-group,
+16-MiB journal, label, and logical-volume-derived UUID profile. Lease sizes are
+positive multiples of one 128-MiB block group. The supervisor validates that
+complete static superblock contract, syncs the file, and only then atomically
+publishes `lease.raw`. An existing published disk must retain the exact size,
+UUID, geometry, and feature masks; the only additional incompatible feature
+accepted is ext4's dynamic journal-recovery bit. The supervisor never
+reformats it.
+
 PID 1 owns one mandatory hardened `.mount` unit per volume; preparation never
-mounts storage and has no `CAP_SYS_ADMIN`. A bound
-oneshot attester verifies the exact device, target, filesystem, UUID, options,
-owner, mode, and a fresh create/fsync/remove probe before the tenant unit may
-start. Missing or lost mounts stop the tenant unit. Interrupted first-format
-remains pending and is retry-safe only for a blank disk or the exact expected
-ext4 UUID; every other existing signature, sidecar substitution, or unbound
-disk fails without reformatting. Tenant stdout/stderr and the QEMU serial
-console are disabled, core dumps are prohibited, and undeclared service scratch
-state is a private tmpfs; persistent state must use declared lease volumes. The
+mounts storage and has no `CAP_SYS_ADMIN`. A bound oneshot attester verifies the
+exact device, target, filesystem, UUID, options, owner, mode, and a fresh
+create/fsync/remove probe before the tenant unit may start. Guest cloud-init
+verifies the filesystem type before mounting it and never runs a formatter.
+Missing or lost mounts stop the tenant unit, and a separate initialized marker
+is committed only after the mounted guest has passed its health check. Every
+signature, sidecar, geometry, or generation mismatch fails closed without
+destructive reinitialization. Tenant stdout/stderr and the QEMU serial console
+are disabled, core dumps are prohibited, and undeclared service scratch state
+is a private tmpfs; persistent state must use declared lease volumes. The
 NoCloud seed and application archive remain separate read-only devices.
 
 Inrou V1 accepts only `Isolated` networking. `Open` and `Allowlist` are

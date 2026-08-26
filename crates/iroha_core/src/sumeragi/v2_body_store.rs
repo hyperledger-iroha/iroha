@@ -1069,6 +1069,8 @@ pub(crate) struct V2BodyStore {
     context: wire::HeightContext,
     signature_policy: BlockSignaturePolicy,
     directory: PathBuf,
+    /// Emergency Fast owners are empty and may neither publish nor retire files.
+    emergency_read_only: bool,
     entries: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
     manifests: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), wire::PayloadManifest>,
     /// Structurally authenticated restart markers which have not yet crossed
@@ -1446,6 +1448,13 @@ impl V2BodyRetirementJob {
     }
 }
 impl V2BodyStore {
+    fn ensure_mutable(&self) -> Result<(), V2BodyStoreError> {
+        if self.emergency_read_only {
+            return Err(V2BodyStoreError::EmergencyFastReadOnly);
+        }
+        Ok(())
+    }
+
     /// Consume a freshly opened store into recovered-startup quarantine.
     ///
     /// Pending disk markers are allowed because the unified factory must
@@ -1466,6 +1475,10 @@ impl V2BodyStore {
     /// Project a comparison-only identity before moving this store to its worker.
     pub(crate) fn instance_identity(&self) -> V2BodyStoreInstanceIdentity {
         V2BodyStoreInstanceIdentity(Arc::clone(&self.identity))
+    }
+    /// Return whether this is the inert emergency owner which skipped disk inventory.
+    pub(in crate::sumeragi) const fn emergency_read_only(&self) -> bool {
+        self.emergency_read_only
     }
     /// Authenticate one cold reducer-produced next Vote against this store.
     ///
@@ -1657,6 +1670,7 @@ impl V2BodyStore {
             context,
             signature_policy,
             directory,
+            emergency_read_only: false,
             entries: BTreeMap::new(),
             manifests: BTreeMap::new(),
             pending_revalidation: BTreeMap::new(),
@@ -1733,6 +1747,38 @@ impl V2BodyStore {
         }
         Ok(store)
     }
+    /// Construct an empty, read-only owner without opening or inventorying the
+    /// active context directory.
+    ///
+    /// Emergency Fast mode is locally passive, so recovered body authority is
+    /// supplied only by the bounded WAL/finality joins. Ignored files remain
+    /// untouched for a Strict restart, and every mutation entry point rejects
+    /// this owner before it can replace one of those files.
+    pub(crate) fn open_emergency_fast_read_only(
+        root: impl AsRef<Path>,
+        context: wire::HeightContext,
+        signature_policy: BlockSignaturePolicy,
+    ) -> Result<Self, V2BodyStoreError> {
+        context.validate()?;
+        if matches!(signature_policy, BlockSignaturePolicy::GenesisAuthority(_))
+            && (context.height != 1 || context.parent_commit_qc.is_some())
+        {
+            return Err(V2BodyStoreError::InvalidSignaturePolicy);
+        }
+        Ok(Self {
+            identity: Arc::new(V2BodyStoreInstanceIdentityMarker),
+            directory: root.as_ref().join(hex::encode(context.id().0.as_ref())),
+            context,
+            signature_policy,
+            emergency_read_only: true,
+            entries: BTreeMap::new(),
+            manifests: BTreeMap::new(),
+            pending_revalidation: BTreeMap::new(),
+            retired_revalidation: BTreeMap::new(),
+            validated: BTreeMap::new(),
+            rejected: BTreeMap::new(),
+        })
+    }
     /// Open an empty, context-addressed store for non-cryptographic lifecycle fixtures.
     ///
     /// Production must use [`Self::open_with_policy`]. This helper exists only
@@ -1754,6 +1800,7 @@ impl V2BodyStore {
             context,
             signature_policy,
             directory,
+            emergency_read_only: false,
             entries: BTreeMap::new(),
             manifests: BTreeMap::new(),
             pending_revalidation: BTreeMap::new(),
@@ -2270,8 +2317,6 @@ impl V2BodyStore {
         {
             return Err(V2BodyStoreError::ReceiptMismatch);
         }
-        let block = decode_framed_signed_block(&envelope.canonical_wire)
-            .map_err(|error| V2BodyStoreError::BlockDecode(error.to_string()))?;
         if let Some(validated) = self.validated.get(&key) {
             if validated.durable() != &durable {
                 return Err(V2BodyStoreError::ReceiptMismatch);
@@ -2286,6 +2331,16 @@ impl V2BodyStore {
             }
             return Ok(rejected.sealed_outcome());
         }
+        if let Some(execution_commitment) =
+            self.reusable_validated_commitment_for_exact_body(&durable, &envelope)?
+        {
+            let validated = self.persist_validated_receipt(&durable, execution_commitment)?;
+            return Ok(DurableBodyValidationOutcome(
+                DurableBodyValidationOutcomeBody::Validated(validated),
+            ));
+        }
+        let block = decode_framed_signed_block(&envelope.canonical_wire)
+            .map_err(|error| V2BodyStoreError::BlockDecode(error.to_string()))?;
         match validator(&block) {
             Ok(execution_commitment) => {
                 let validated = self.persist_validated_receipt(&durable, execution_commitment)?;
@@ -2308,6 +2363,51 @@ impl V2BodyStore {
                 Ok(rejected.sealed_outcome())
             }
         }
+    }
+    /// Reuse an already authenticated semantic result for an unchanged body.
+    ///
+    /// A locked-body reproposal changes the manifest round but retains the
+    /// exact signed block bytes and subject. Deterministic validation consumes
+    /// those bytes under this immutable height context, not the proposal
+    /// round. Reloading and comparing the checksummed canonical bytes keeps
+    /// this shortcut behind the same body-store authority as ordinary
+    /// validation. The caller still persists a fresh round-local marker before
+    /// the result can authorize a vote.
+    fn reusable_validated_commitment_for_exact_body(
+        &self,
+        durable: &DurableBodyReceipt,
+        current: &StoredBodyEnvelope,
+    ) -> Result<Option<wire::ExecutionCommitment>, V2BodyStoreError> {
+        let Some(((source_round, source_subject), validated)) = self
+            .validated
+            .iter()
+            .filter(|((round, subject), _)| {
+                *subject == durable.subject()
+                    && round.context_id == durable.context_id()
+                    && round.height == durable.round().height
+                    && round.view < durable.round().view
+            })
+            .max_by_key(|((round, _), _)| round.view)
+        else {
+            return Ok(None);
+        };
+        if *source_round != validated.durable().round()
+            || *source_subject != validated.durable().subject()
+        {
+            return Err(V2BodyStoreError::ReceiptMismatch);
+        }
+        let previous = self.load_envelope(validated.durable())?;
+        let same_manifest_body = previous.manifest.subject == current.manifest.subject
+            && previous.manifest.payload_size_bytes == current.manifest.payload_size_bytes
+            && previous.manifest.layout == current.manifest.layout
+            && previous.manifest.chunk_hashes == current.manifest.chunk_hashes
+            && previous.manifest.chunk_root == current.manifest.chunk_root;
+        if !same_manifest_body || previous.canonical_wire != current.canonical_wire {
+            return Err(V2BodyStoreError::ConflictingBody);
+        }
+        let commitment = validated.execution_commitment();
+        commitment.validate()?;
+        Ok(Some(commitment))
     }
     // DURABLE_BODY_VALIDATION_API_END
     /// Durably persist the exact body carried by an authenticated certified
@@ -2356,6 +2456,7 @@ impl V2BodyStore {
         manifest: wire::PayloadManifest,
         canonical_wire: Vec<u8>,
     ) -> Result<DurableBodyReceipt, V2BodyStoreError> {
+        self.ensure_mutable()?;
         let envelope = StoredBodyEnvelope {
             version: STORE_VERSION,
             context_id: self.context.id(),
@@ -2478,6 +2579,7 @@ impl V2BodyStore {
         receipt: &DurableBodyReceipt,
         execution_commitment: wire::ExecutionCommitment,
     ) -> Result<ValidatedBodyReceipt, V2BodyStoreError> {
+        self.ensure_mutable()?;
         self.verify_receipt(receipt)?;
         execution_commitment.validate()?;
         let key = (receipt.round, receipt.subject);
@@ -2568,6 +2670,7 @@ impl V2BodyStore {
         identity_code: u8,
         reason: String,
     ) -> Result<RevalidatedRejectedBody, V2BodyStoreError> {
+        self.ensure_mutable()?;
         self.verify_receipt(receipt)?;
         if BodyValidationRejectionIdentity::from_canonical_code(identity_code).is_none() {
             return Err(V2BodyStoreError::UnknownValidationRejectionIdentity(
@@ -2718,6 +2821,7 @@ impl V2BodyStore {
         self,
         kura_receipt: &KuraV2CommitReceipt,
     ) -> Result<V2BodyRetirementJob, V2BodyStoreError> {
+        self.ensure_mutable()?;
         if kura_receipt.context_id() != self.context.id()
             || kura_receipt.height() != self.context.height
         {
@@ -3151,6 +3255,9 @@ pub(crate) enum V2BodyStoreError {
     /// Selected signature policy is incompatible with the frozen height.
     #[error("Sumeragi v2 genesis signature policy is valid only at height one without a parent")]
     InvalidSignaturePolicy,
+    /// Emergency Fast startup owns an inert body store and cannot mutate it.
+    #[error("Sumeragi v2 body store is read-only during emergency Fast startup")]
+    EmergencyFastReadOnly,
     /// Body contains no expected block signature.
     #[error("Sumeragi v2 body is missing its expected block signature")]
     MissingExpectedSignature,

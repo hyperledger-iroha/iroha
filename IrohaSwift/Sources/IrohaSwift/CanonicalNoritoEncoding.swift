@@ -378,17 +378,17 @@ struct CanonicalNoritoWriter {
 
     mutating func writeUInt16LE(_ value: UInt16) {
         var le = value.littleEndian
-        data.append(contentsOf: withUnsafeBytes(of: &le, Array.init))
+        withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
     }
 
     mutating func writeUInt32LE(_ value: UInt32) {
         var le = value.littleEndian
-        data.append(contentsOf: withUnsafeBytes(of: &le, Array.init))
+        withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
     }
 
     mutating func writeUInt64LE(_ value: UInt64) {
         var le = value.littleEndian
-        data.append(contentsOf: withUnsafeBytes(of: &le, Array.init))
+        withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
     }
 
     mutating func writeLength(_ value: UInt64) {
@@ -403,6 +403,20 @@ struct CanonicalNoritoWriter {
         writeLength(UInt64(payload.count))
         writeBytes(payload)
     }
+
+    mutating func writeByteFields<Bytes: Collection>(_ bytes: Bytes) where Bytes.Element == UInt8 {
+        let (fieldBytes, fieldBytesOverflow) = bytes.count.multipliedReportingOverflow(by: 9)
+        if !fieldBytesOverflow {
+            let (capacity, capacityOverflow) = data.count.addingReportingOverflow(fieldBytes)
+            if !capacityOverflow {
+                data.reserveCapacity(capacity)
+            }
+        }
+        for byte in bytes {
+            writeUInt64LE(1)
+            writeUInt8(byte)
+        }
+    }
 }
 
 struct CompactNoritoWriter {
@@ -414,17 +428,17 @@ struct CompactNoritoWriter {
 
     mutating func writeUInt16LE(_ value: UInt16) {
         var le = value.littleEndian
-        data.append(contentsOf: withUnsafeBytes(of: &le, Array.init))
+        withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
     }
 
     mutating func writeUInt32LE(_ value: UInt32) {
         var le = value.littleEndian
-        data.append(contentsOf: withUnsafeBytes(of: &le, Array.init))
+        withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
     }
 
     mutating func writeUInt64LE(_ value: UInt64) {
         var le = value.littleEndian
-        data.append(contentsOf: withUnsafeBytes(of: &le, Array.init))
+        withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
     }
 
     mutating func writeLength(_ value: UInt64) {
@@ -443,6 +457,20 @@ struct CompactNoritoWriter {
     mutating func writeField(_ payload: Data) {
         writeLength(UInt64(payload.count))
         writeBytes(payload)
+    }
+
+    mutating func writeByteFields<Bytes: Collection>(_ bytes: Bytes) where Bytes.Element == UInt8 {
+        let (fieldBytes, fieldBytesOverflow) = bytes.count.multipliedReportingOverflow(by: 2)
+        if !fieldBytesOverflow {
+            let (capacity, capacityOverflow) = data.count.addingReportingOverflow(fieldBytes)
+            if !capacityOverflow {
+                data.reserveCapacity(capacity)
+            }
+        }
+        for byte in bytes {
+            data.append(1)
+            data.append(byte)
+        }
     }
 
     mutating func wipe() {
@@ -519,9 +547,7 @@ enum CompactNorito {
     static func encodeConstVec(_ bytes: Data) -> Data {
         var writer = CompactNoritoWriter()
         writer.writeUInt64LE(UInt64(bytes.count))
-        for byte in bytes {
-            writer.writeField(Data([byte]))
-        }
+        writer.writeByteFields(bytes)
         return writer.data
     }
 
@@ -633,10 +659,7 @@ public enum CanonicalNorito {
     static func encodeConstVec(_ bytes: Data) -> Data {
         var writer = CanonicalNoritoWriter()
         writer.writeLength(UInt64(bytes.count))
-        for byte in bytes {
-            writer.writeLength(1)
-            writer.writeUInt8(byte)
-        }
+        writer.writeByteFields(bytes)
         return writer.data
     }
 
@@ -720,10 +743,7 @@ public enum CanonicalNorito {
 
     private static func encodeCompactByteElementArray(_ bytes: Data) -> Data {
         var writer = CompactNoritoWriter()
-        for byte in bytes {
-            writer.writeLength(1)
-            writer.writeUInt8(byte)
-        }
+        writer.writeByteFields(bytes)
         return writer.data
     }
 
@@ -945,10 +965,7 @@ public enum CanonicalNorito {
             throw CanonicalNoritoError.invalidAssetId(literal)
         }
         var writer = CanonicalNoritoWriter()
-        for byte in uuidBytes {
-            writer.writeLength(1)
-            writer.writeUInt8(byte)
-        }
+        writer.writeByteFields(uuidBytes)
         return writer.data
     }
 
@@ -1038,35 +1055,6 @@ public enum CanonicalNorito {
     static func publicKeyMultihash(algorithm: SigningAlgorithm, payload: Data) -> String {
         let functionCode = multihashFunctionCode(for: algorithm)
         return formatPublicKeyMultihash(functionCode: functionCode, payload: payload)
-    }
-
-    private static func parseAlgorithmPrefix(_ value: String) -> SigningAlgorithm? {
-        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "ed25519", "ed":
-            return .ed25519
-        case "secp256k1", "secp":
-            return .secp256k1
-        case "ml-dsa", "mldsa", "ml_dsa":
-            return .mlDsa
-        case "bls_normal", "bls-normal", "blsnormal":
-            return .blsNormal
-        case "bls_small", "bls-small", "blssmall":
-            return .blsSmall
-        case "gost256a", "gost-256-a", "gost3410-2012-256-paramset-a":
-            return .gost2012_256A
-        case "gost256b", "gost-256-b", "gost3410-2012-256-paramset-b":
-            return .gost2012_256B
-        case "gost256c", "gost-256-c", "gost3410-2012-256-paramset-c":
-            return .gost2012_256C
-        case "gost512a", "gost-512-a", "gost3410-2012-512-paramset-a":
-            return .gost2012_512A
-        case "gost512b", "gost-512-b", "gost3410-2012-512-paramset-b":
-            return .gost2012_512B
-        case "sm2":
-            return .sm2
-        default:
-            return nil
-        }
     }
 
     private static func formatPublicKeyMultihash(functionCode: UInt64, payload: Data) -> String {

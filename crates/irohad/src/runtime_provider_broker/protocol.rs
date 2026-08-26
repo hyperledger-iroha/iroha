@@ -125,6 +125,10 @@ const MAX_PROVIDER_HANDLE_BYTES_V1: usize = 1024;
 const MAX_CATALOG_ENTRIES_V1: usize = RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1;
 const MAX_BOOTLE_LANTERN_AUTH_CREDENTIAL_BYTES_V1: usize = 4 * 1024;
 const MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1: usize = 256 * 1024;
+// Complete public adaptive-DKG transcripts are bounded unary metadata. The
+// ceiling covers the maximum first-release committee transcript plus Norito
+// framing while keeping signer operations far below the generic 32 MiB cap.
+const MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1: usize = 4 * 1024 * 1024;
 const BOOTLE_LANTERN_AUTHORIZATION_BYTES_V1: usize =
     iroha_core::privacy_engines::bootle_lantern::codec::BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1;
 const BOOTLE_LANTERN_REQUEST_BYTES_V1: usize =

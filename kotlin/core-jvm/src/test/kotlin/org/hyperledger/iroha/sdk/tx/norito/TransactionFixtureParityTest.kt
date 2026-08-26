@@ -915,7 +915,7 @@ class TransactionFixtureParityTest {
     }
 
     private fun canonicalDecoder(payload: ByteArray): NoritoDecoder =
-        NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS)
 
     private fun decodeCanonicalFrame(
         name: String,

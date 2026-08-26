@@ -53,9 +53,8 @@ fn adaptive_roundtrip_large_prefers_ncb_and_view_works() {
     }
 }
 #[test]
-#[cfg(feature = "compact-len")]
 fn golden_bytes_small_sample() {
-    // With compact-len enabled, the adaptive AoS encoding of two rows must be stable.
+    // The default compact V1 adaptive AoS encoding of two rows must be stable.
     let rows = [
         (1u64, "alice".to_string(), true),
         (2, "bob".to_string(), false),
@@ -71,7 +70,6 @@ fn golden_bytes_small_sample() {
     let expected_hex = "000201010000000000000005616c69636501020000000000000003626f6200";
     assert_eq!(to_hex(&bytes), expected_hex);
 }
-#[cfg(feature = "compact-len")]
 fn to_hex(bs: &[u8]) -> String {
     let mut s = String::with_capacity(bs.len() * 2);
     for b in bs {

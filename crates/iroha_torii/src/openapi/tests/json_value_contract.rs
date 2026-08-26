@@ -1,0 +1,190 @@
+#[test]
+fn json_value_openapi_schema_is_the_canonical_arbitrary_json_union() {
+    let schemas = openapi_schemas();
+    assert_eq!(
+        schemas
+            .get("JsonValue")
+            .expect("JsonValue component schema"),
+        &norito::json!({
+            "additionalProperties": true,
+            "description": "Arbitrary JSON payload.",
+            "type": ["object", "array", "string", "number", "boolean", "null"]
+        })
+    );
+}
+
+#[test]
+fn recovered_torii_component_schemas_match_their_wire_fields() {
+    let schemas = openapi_schemas();
+    let contracts: &[(&str, &[&str])] = &[
+        (
+            "HealthComplianceReportResponse",
+            &[
+                "schema_version",
+                "service_name",
+                "jurisdiction_tag",
+                "generated_at_sequence",
+                "total_access_events",
+                "break_glass_events",
+                "non_break_glass_events",
+                "consent_evidence_present_events",
+                "consent_evidence_coverage_bps",
+                "recent_access_events",
+                "jurisdiction_stats",
+                "data_flow_attestations",
+                "policy_diff_history",
+            ],
+        ),
+        (
+            "HealthDataFlowAttestation",
+            &[
+                "service_name",
+                "current_version",
+                "binding_name",
+                "key_prefix",
+                "encryption",
+                "mutability",
+            ],
+        ),
+        (
+            "HealthJurisdictionStat",
+            &[
+                "jurisdiction_tag",
+                "access_event_count",
+                "break_glass_event_count",
+            ],
+        ),
+        (
+            "HealthPolicyDiffEntry",
+            &[
+                "policy_name",
+                "jurisdiction_tag",
+                "policy_snapshot_hash",
+                "first_seen_sequence",
+                "last_seen_sequence",
+                "event_count",
+            ],
+        ),
+        (
+            "HfSharedLeaseJoinPayload",
+            &[
+                "repo_id",
+                "revision",
+                "service_name",
+                "apartment_name",
+                "storage_class",
+                "lease_term_ms",
+                "lease_asset_definition_id",
+                "base_fee",
+            ],
+        ),
+        (
+            "HfLeaseLeavePayload",
+            &[
+                "repo_id",
+                "revision",
+                "storage_class",
+                "lease_term_ms",
+                "service_name",
+                "apartment_name",
+            ],
+        ),
+        (
+            "HfLeaseRenewPayload",
+            &[
+                "repo_id",
+                "revision",
+                "service_name",
+                "apartment_name",
+                "storage_class",
+                "lease_term_ms",
+                "lease_asset_definition_id",
+                "base_fee",
+            ],
+        ),
+        (
+            "HfSharedLeaseStatusResponse",
+            &[
+                "schema_version",
+                "source",
+                "pool",
+                "member",
+                "latest_audit_event",
+                "audit_event_count",
+                "storage_base_fee",
+            ],
+        ),
+        ("LanePrivacyProof", &["commitment_id", "witness"]),
+        ("ManifestProvenance", &["signer", "signature"]),
+        (
+            "ModelArtifactRegisterPayload",
+            &[
+                "service_name",
+                "model_name",
+                "training_job_id",
+                "weight_artifact_hash",
+                "dataset_ref",
+                "training_config_hash",
+                "reproducibility_hash",
+                "provenance_attestation_hash",
+            ],
+        ),
+        (
+            "ModelArtifactStatusEntry",
+            &[
+                "service_name",
+                "model_name",
+                "artifact_id",
+                "training_job_id",
+                "weight_version",
+                "weight_artifact_hash",
+                "dataset_ref",
+                "training_config_hash",
+                "reproducibility_hash",
+                "provenance_attestation_hash",
+                "registered_sequence",
+                "consumed_by_version",
+                "chunk_manifest_root",
+            ],
+        ),
+        (
+            "ModelArtifactStatusResponse",
+            &[
+                "schema_version",
+                "service_name",
+                "model_name",
+                "artifact_count",
+                "artifact",
+                "artifacts",
+            ],
+        ),
+        (
+            "ModelWeightPromotePayload",
+            &[
+                "service_name",
+                "model_name",
+                "weight_version",
+                "gate_approved",
+                "gate_report_hash",
+            ],
+        ),
+        (
+            "ModelWeightRegisterPayload",
+            &[
+                "service_name",
+                "model_name",
+                "weight_version",
+                "training_job_id",
+                "parent_version",
+                "weight_artifact_hash",
+                "dataset_ref",
+                "training_config_hash",
+                "reproducibility_hash",
+                "provenance_attestation_hash",
+            ],
+        ),
+    ];
+    for (name, fields) in contracts {
+        assert_strict_object_schema(&schemas, name, fields, &[]);
+    }
+}

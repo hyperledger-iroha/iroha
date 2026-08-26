@@ -16,7 +16,7 @@ Pod::Spec.new do |s|
   s.summary          = 'Swift SDK for Hyperledger Iroha 3 and SORA Nexus Torii.'
   s.description      = <<-DESC
 A Swift library for interacting with Hyperledger Iroha 3 and SORA Nexus:
-- Torii HTTP(S) client (balances, transactions, ZK attachments, prover reports)
+- Torii HTTP(S) client (balances, transactions, ZK attachments)
 - Norito envelope encoder and Connect codec with required bridge-backed signing
 - Transaction/transfer builders and Ed25519 key management via CryptoKit
 DESC

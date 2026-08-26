@@ -26,7 +26,7 @@ import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.SchemaHash;
 
 /**
- * Native bridge ABI 22 for Kagemusha ABI-21/V4 artifact streaming and capabilities.
+ * Native bridge ABI 23 for Kagemusha ABI-21/V4 artifact streaming and capabilities.
  *
  * <p>This is the sole first-release offline-cash surface. It authenticates the opaque eight-file proof
  * artifact set and validates exact typed request/payment/acknowledgement and proof-bound membership
@@ -61,7 +61,7 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  public static final int V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 22;
+  public static final int V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 23;
   public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
   /** Mandatory sender-final peer-cash handoff/finality contract. */
   public static final String CASH_HANDOFF_CAPABILITY_V1 = "cash_handoff_v1";
@@ -85,7 +85,9 @@ public final class KagemushaRecursiveSpendProver {
   public static final int MAX_ARTIFACT_CHUNK_BYTES = 1024 * 1024;
   public static final int MAX_TRUSTED_RELEASE_POLICY_BYTES = 64 * 1024;
   public static final int MAX_RELEASE_ATTESTATION_BYTES = 1024 * 1024;
+  public static final int MAX_INTERNAL_VALIDATION_RECEIPT_BYTES = 1024 * 1024;
   public static final int MAX_RELEASE_EVIDENCE_BYTES = 16 * 1024 * 1024;
+  public static final int MAX_CRYPTOGRAPHIC_REVIEW_BYTES = 1024 * 1024;
   public static final int MAX_PROMOTION_RECORD_BYTES = 1024 * 1024;
   public static final int MAX_PEER_TEXT_ENVELOPE_BYTES = 12 * 1024;
   public static final int MAX_PEER_TEXT_ARCHIVE_BYTES =
@@ -3940,7 +3942,7 @@ public final class KagemushaRecursiveSpendProver {
             "cashHandoffCapability must be the exact cash_handoff_v1 contract");
       }
       if (requiredBridgeAbiVersion != REQUIRED_NATIVE_BRIDGE_ABI_VERSION) {
-        throw new IllegalArgumentException("requiredBridgeAbiVersion must be 22");
+        throw new IllegalArgumentException("requiredBridgeAbiVersion must be 23");
       }
       if (maximumHops != MAXIMUM_PEER_HOPS) {
         throw new IllegalArgumentException(
@@ -4323,13 +4325,14 @@ public final class KagemushaRecursiveSpendProver {
    * Locally trusted material required to authenticate one published Kagemusha release.
    *
    * <p>The policy must be provisioned from the deployment trust root rather than copied from the
-   * downloaded release. Native code verifies the signed role thresholds and hashes both evidence
-   * files before validating the candidate-bound promotion record and consuming any finalized
-   * artifact handle.
+   * downloaded release. Native code authenticates the runner-signed internal-validation receipt,
+   * verifies the signed role thresholds, and hashes both external evidence files before validating
+   * the candidate-bound promotion record and consuming any finalized artifact handle.
    */
   public static final class ReleaseAuthentication {
     private final byte[] trustedPolicyNorito;
     private final byte[] releaseAttestationNorito;
+    private final byte[] internalValidationReceiptNorito;
     private final byte[] benchmarkEvidence;
     private final byte[] cryptographicReview;
     private final byte[] promotionRecordNorito;
@@ -4337,6 +4340,7 @@ public final class KagemushaRecursiveSpendProver {
     public ReleaseAuthentication(
         final byte[] trustedPolicyNorito,
         final byte[] releaseAttestationNorito,
+        final byte[] internalValidationReceiptNorito,
         final byte[] benchmarkEvidence,
         final byte[] cryptographicReview,
         final byte[] promotionRecordNorito) {
@@ -4348,6 +4352,10 @@ public final class KagemushaRecursiveSpendProver {
           releaseAttestationNorito,
           "releaseAttestationNorito",
           MAX_RELEASE_ATTESTATION_BYTES);
+      this.internalValidationReceiptNorito = requireBoundedBytes(
+          internalValidationReceiptNorito,
+          "internalValidationReceiptNorito",
+          MAX_INTERNAL_VALIDATION_RECEIPT_BYTES);
       this.benchmarkEvidence = requireBoundedBytes(
           benchmarkEvidence,
           "benchmarkEvidence",
@@ -4355,7 +4363,7 @@ public final class KagemushaRecursiveSpendProver {
       this.cryptographicReview = requireBoundedBytes(
           cryptographicReview,
           "cryptographicReview",
-          MAX_RELEASE_EVIDENCE_BYTES);
+          MAX_CRYPTOGRAPHIC_REVIEW_BYTES);
       this.promotionRecordNorito = requireBoundedBytes(
           promotionRecordNorito,
           "promotionRecordNorito",
@@ -4369,6 +4377,7 @@ public final class KagemushaRecursiveSpendProver {
     private final byte[] manifestSha256;
     private final byte[] trustedPolicyNorito;
     private final byte[] releaseAttestationNorito;
+    private final byte[] internalValidationReceiptNorito;
     private final byte[] benchmarkEvidence;
     private final byte[] cryptographicReview;
     private final byte[] promotionRecordNorito;
@@ -4389,6 +4398,9 @@ public final class KagemushaRecursiveSpendProver {
       this.releaseAttestationNorito = Arrays.copyOf(
           releaseAuthentication.releaseAttestationNorito,
           releaseAuthentication.releaseAttestationNorito.length);
+      this.internalValidationReceiptNorito = Arrays.copyOf(
+          releaseAuthentication.internalValidationReceiptNorito,
+          releaseAuthentication.internalValidationReceiptNorito.length);
       this.benchmarkEvidence = Arrays.copyOf(
           releaseAuthentication.benchmarkEvidence,
           releaseAuthentication.benchmarkEvidence.length);
@@ -4443,6 +4455,7 @@ public final class KagemushaRecursiveSpendProver {
                 manifestSha256,
                 trustedPolicyNorito,
                 releaseAttestationNorito,
+                internalValidationReceiptNorito,
                 benchmarkEvidence,
                 cryptographicReview,
                 promotionRecordNorito,
@@ -4558,6 +4571,7 @@ public final class KagemushaRecursiveSpendProver {
       byte[] manifestSha256,
       byte[] trustedPolicyNorito,
       byte[] releaseAttestationNorito,
+      byte[] internalValidationReceiptNorito,
       byte[] benchmarkEvidence,
       byte[] cryptographicReview,
       byte[] promotionRecordNorito,

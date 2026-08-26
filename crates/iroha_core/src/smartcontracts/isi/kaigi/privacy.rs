@@ -11,10 +11,9 @@ use crate::state::StateTransaction;
 use crate::zk;
 use iroha_config::parameters::actual::VerifyingKeyRef;
 use iroha_crypto::Hash;
-use iroha_data_model::{
-    kaigi::{KaigiParticipantCommitment, KaigiParticipantNullifier},
-    prelude::AccountId,
-};
+use iroha_data_model::kaigi::{KaigiParticipantCommitment, KaigiParticipantNullifier};
+#[cfg(feature = "kaigi_privacy_mocks")]
+use iroha_data_model::prelude::AccountId;
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 use iroha_data_model::{
     proof::{ProofBox, VerifyingKeyId},
@@ -54,8 +53,10 @@ fn ensure_ledger_safe_identity_artifacts(
 #[derive(Debug)]
 pub struct PrivacyArtifacts<'a> {
     /// Roster subject represented by the proof or signed instruction.
+    #[cfg(feature = "kaigi_privacy_mocks")]
     pub subject: &'a AccountId,
     /// Host account responsible for the Kaigi session.
+    #[cfg(feature = "kaigi_privacy_mocks")]
     pub host: &'a AccountId,
     /// Optional commitment provided in the instruction.
     pub commitment: Option<&'a KaigiParticipantCommitment>,
@@ -276,50 +277,6 @@ pub fn verify_host_action(
     }
     #[allow(unreachable_code)]
     Err(privacy_error("kaigi privacy mode unavailable"))
-}
-#[cfg(not(feature = "kaigi_privacy_mocks"))]
-#[allow(dead_code)]
-fn validate_roster_artifacts<'a>(
-    artifacts: &'a PrivacyArtifacts<'a>,
-    expected_root: &Hash,
-) -> Result<&'a [u8], Error> {
-    let commitment = artifacts
-        .commitment
-        .ok_or_else(|| privacy_error("privacy mode requires commitment"))?;
-    let nullifier = artifacts
-        .nullifier
-        .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-    ensure_ledger_safe_identity_artifacts(commitment, nullifier)?;
-    if artifacts.host == artifacts.subject {
-        return Err(privacy_error("host must not re-enter privacy roster"));
-    }
-    let proof_bytes = artifacts
-        .proof
-        .ok_or_else(|| privacy_error("privacy mode requires proof"))?;
-    if proof_bytes.is_empty() {
-        return Err(privacy_error("privacy proof payload must be non-empty"));
-    }
-    let Some(advertised_root) = artifacts.roster_root else {
-        return Err(privacy_error("privacy mode requires roster root"));
-    };
-    if advertised_root != expected_root {
-        return Err(privacy_error("roster root mismatch"));
-    }
-    let envelope = decode_privacy_proof_envelope(proof_bytes)?;
-    if envelope.circuit_id != KAIGI_ROSTER_BACKEND {
-        return Err(privacy_error(
-            "privacy roster proof must use the canonical Kaigi roster circuit",
-        ));
-    }
-    let instance_cols = crate::zk::extract_pasta_fp_instances(&envelope.proof_bytes)
-        .ok_or_else(|| privacy_error("failed to parse roster privacy proof instances"))?;
-    verify_roster_public_inputs(
-        &instance_cols,
-        expected_root,
-        &commitment.commitment,
-        &nullifier.digest,
-    )?;
-    Ok(proof_bytes)
 }
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 #[allow(dead_code)]

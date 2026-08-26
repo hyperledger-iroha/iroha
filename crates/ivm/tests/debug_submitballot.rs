@@ -17,7 +17,7 @@ fn decode_submit_ballot_roundtrip() {
     let decoded: dm::InstructionBox =
         norito::decode_from_bytes(&bytes).expect("decode InstructionBox");
     // Downcast to SubmitBallot via Instruction::as_any peeler
-    let instr: &dyn dm::Instruction = &decoded;
+    let instr: &dyn dm::Instruction = &*decoded;
     let recovered = instr
         .as_any()
         .downcast_ref::<dm::zk::SubmitBallot>()

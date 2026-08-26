@@ -3262,6 +3262,26 @@ impl Kura {
             return Ok(());
         }
         self.ensure_nonzero_lineage_root(lineage_root)?;
+        if self.emergency_fast_startup_enabled() {
+            let (blocks_path, merge_path, _) = Self::emergency_fast_configured_primary_paths(
+                &self.store_root,
+                authoritative.primary(),
+            )?;
+            if blocks_path != *self.active_blocks_dir.lock()
+                || merge_path != *self.active_merge_path.lock()
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "emergency Fast snapshot primary differs from the opened Kura paths",
+                ));
+            }
+            *self.lane_storage_entries.lock() =
+                Self::lane_storage_entries_from_config(authoritative);
+            iroha_logger::warn!(
+                "emergency Fast startup deferred lane-geometry journal recovery and archive GC"
+            );
+            return Ok(());
+        }
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
@@ -12282,6 +12302,80 @@ impl Kura {
     }
     pub(crate) fn lane_geometry_journal_path(&self) -> PathBuf {
         self.store_root.join(JOURNAL_FILE_NAME)
+    }
+    /// Select the configured primary lane for emergency Fast startup without
+    /// decoding or reconciling the lane-geometry journal.
+    ///
+    /// Fast is only valid for an already initialized current-layout store. Any
+    /// temporary geometry publication requires a Strict restart; otherwise the
+    /// configured primary paths and their fixed set of canonical files are
+    /// checked by metadata only.
+    pub(super) fn emergency_fast_configured_primary_paths(
+        store_root: &Path,
+        configured: &LaneConfigEntry,
+    ) -> Result<(PathBuf, PathBuf, bool)> {
+        let reject_existing = |path: PathBuf, label: &'static str| -> Result<()> {
+            match fs::symlink_metadata(&path) {
+                Ok(_) => Err(Error::EmergencyFastAuxiliaryUnavailable { subsystem: label }),
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(Error::IO(error, path)),
+            }
+        };
+        reject_existing(
+            store_root.join(JOURNAL_TEMP_FILE_NAME),
+            "pending lane-geometry publication",
+        )?;
+        reject_existing(
+            store_root.join(JOURNAL_RESTORE_TEMP_FILE_NAME),
+            "pending lane-geometry restoration",
+        )?;
+
+        let blocks_path = configured.blocks_dir(store_root);
+        let merge_path = configured.merge_log_path(store_root);
+        let require_directory = |path: &Path| -> Result<()> {
+            let metadata =
+                fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.into()))?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "emergency Fast primary block path is not a direct directory",
+                    ),
+                    path.into(),
+                ));
+            }
+            Ok(())
+        };
+        let require_regular = |path: &Path| -> Result<()> {
+            let metadata =
+                fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.into()))?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "emergency Fast primary storage entry is not a regular file",
+                    ),
+                    path.into(),
+                ));
+            }
+            Ok(())
+        };
+        require_directory(&blocks_path)?;
+        reject_existing(
+            blocks_path.join(MARKER_TEMP_FILE_NAME),
+            "pending primary-lane marker publication",
+        )?;
+        for name in [
+            INDEX_FILE_NAME,
+            DATA_FILE_NAME,
+            HASHES_FILE_NAME,
+            COUNT_FILE_NAME,
+            MARKER_FILE_NAME,
+        ] {
+            require_regular(&blocks_path.join(name))?;
+        }
+        require_regular(&merge_path)?;
+        Ok((blocks_path, merge_path, true))
     }
     /// Resolve any interrupted primary-lane relabel before opening canonical files.
     ///

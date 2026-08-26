@@ -112,7 +112,9 @@ impl ExecuteKaigiAuthorized for CreateKaigi {
         match template.privacy_mode {
             KaigiPrivacyMode::Transparent => {
                 privacy::ensure_transparent_payload(&PrivacyArtifacts {
+                    #[cfg(feature = "kaigi_privacy_mocks")]
                     subject: authority,
+                    #[cfg(feature = "kaigi_privacy_mocks")]
                     host: template.host(),
                     commitment: commitment.as_ref(),
                     nullifier: nullifier.as_ref(),
@@ -331,7 +333,9 @@ impl ExecuteKaigiAuthorized for EndKaigi {
                 match record.privacy_mode {
                     KaigiPrivacyMode::Transparent => {
                         privacy::ensure_transparent_payload(&PrivacyArtifacts {
+                            #[cfg(feature = "kaigi_privacy_mocks")]
                             subject: authority,
+                            #[cfg(feature = "kaigi_privacy_mocks")]
                             host: &record.host,
                             commitment: commitment.as_ref(),
                             nullifier: nullifier.as_ref(),
@@ -1627,7 +1631,9 @@ fn process_join(
         KaigiPrivacyMode::Transparent => {
             let authority = authorization.signed_account();
             privacy::ensure_transparent_payload(&PrivacyArtifacts {
+                #[cfg(feature = "kaigi_privacy_mocks")]
                 subject: authority,
+                #[cfg(feature = "kaigi_privacy_mocks")]
                 host: &record.host,
                 commitment: commitment.as_ref(),
                 nullifier: nullifier.as_ref(),
@@ -1672,7 +1678,9 @@ fn process_join(
                 .take()
                 .ok_or_else(|| privacy_error("privacy mode requires roster root"))?;
             let artifacts = PrivacyArtifacts {
+                #[cfg(feature = "kaigi_privacy_mocks")]
                 subject: proof_subject,
+                #[cfg(feature = "kaigi_privacy_mocks")]
                 host: &record.host,
                 commitment: Some(&commitment),
                 nullifier: Some(&nullifier),
@@ -1719,7 +1727,9 @@ fn process_leave(
     match record.privacy_mode {
         KaigiPrivacyMode::Transparent => {
             privacy::ensure_transparent_payload(&PrivacyArtifacts {
+                #[cfg(feature = "kaigi_privacy_mocks")]
                 subject: authority,
+                #[cfg(feature = "kaigi_privacy_mocks")]
                 host: &record.host,
                 commitment: commitment.as_ref(),
                 nullifier: nullifier.as_ref(),
@@ -1831,9 +1841,12 @@ mod tests {
     }
     #[test]
     fn transparent_preconditions_accept_empty_payload() {
+        #[cfg(feature = "kaigi_privacy_mocks")]
         let (_domain, host, participant) = sample_ids();
         let artifacts = PrivacyArtifacts {
+            #[cfg(feature = "kaigi_privacy_mocks")]
             subject: &participant,
+            #[cfg(feature = "kaigi_privacy_mocks")]
             host: &host,
             commitment: None,
             nullifier: None,
@@ -1844,10 +1857,13 @@ mod tests {
     }
     #[test]
     fn transparent_preconditions_reject_privacy_artifacts() {
+        #[cfg(feature = "kaigi_privacy_mocks")]
         let (_domain, host, participant) = sample_ids();
         let commitment = sample_commitment();
         let artifacts = PrivacyArtifacts {
+            #[cfg(feature = "kaigi_privacy_mocks")]
             subject: &participant,
+            #[cfg(feature = "kaigi_privacy_mocks")]
             host: &host,
             commitment: Some(&commitment),
             nullifier: None,
@@ -1872,7 +1888,9 @@ mod tests {
         let proof = [9, 9, 9];
         let expected_root = iroha_crypto::Hash::prehashed([0u8; 32]);
         let artifacts = PrivacyArtifacts {
+            #[cfg(feature = "kaigi_privacy_mocks")]
             subject: &participant,
+            #[cfg(feature = "kaigi_privacy_mocks")]
             host: &host,
             commitment: Some(&commitment),
             nullifier: Some(&nullifier),
@@ -3189,6 +3207,7 @@ mod tests {
                     Name::from_str("retained-feedback").expect("call name"),
                 ),
                 relay_id: relay_id.clone(),
+                reported_by: relay_id.clone(),
                 status: KaigiRelayHealthStatus::Healthy,
                 reported_at_ms: 1,
                 notes: None,
@@ -3250,6 +3269,7 @@ mod tests {
                         Name::from_str("corrupt-feedback").expect("call name"),
                     ),
                     relay_id: payload_relay.clone(),
+                    reported_by: payload_relay.clone(),
                     status: KaigiRelayHealthStatus::Healthy,
                     reported_at_ms: 1,
                     notes: None,

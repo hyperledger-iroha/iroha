@@ -13,7 +13,7 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetBalancePolicy, AssetDefinition},
     isi::{
-        Instruction, InstructionBox, Register, decode_instruction_from_pair,
+        Instruction, InstructionBox, InstructionRegistry, Register, decode_instruction_from_pair,
         frame_instruction_payload,
     },
     metadata::Metadata,
@@ -1547,7 +1547,7 @@ fn wire_payloads_from_encoded(encoded: &[u8]) -> Result<Vec<WireInstructionPaylo
     let mut out = Vec::new();
     for instruction in payload.instructions().explicit_instructions() {
         let type_name = Instruction::id(&**instruction);
-        let wire_name = registry.wire_id(type_name).unwrap_or(type_name);
+        let wire_name = required_instruction_wire_id(&registry, type_name)?;
         let payload = Instruction::dyn_encode(&**instruction);
         let framed =
             frame_instruction_payload(type_name, &payload).map_err(|err| eyre!(err.to_string()))?;
@@ -1557,6 +1557,14 @@ fn wire_payloads_from_encoded(encoded: &[u8]) -> Result<Vec<WireInstructionPaylo
         });
     }
     Ok(out)
+}
+fn required_instruction_wire_id(
+    registry: &InstructionRegistry,
+    type_name: &'static str,
+) -> Result<&'static str> {
+    registry
+        .wire_id(type_name)
+        .ok_or_else(|| eyre!("instruction type `{type_name}` has no registered V1 wire identifier"))
 }
 fn apply_wire_payloads_to_payload_json(
     payload: &mut Value,
@@ -3474,6 +3482,17 @@ mod tests {
             decode_instruction_from_pair("iroha.register", &framed).expect("decode instruction");
         assert_eq!(Instruction::id(&*decoded), type_name);
         assert_eq!(Instruction::dyn_encode(&*decoded), payload);
+    }
+    #[test]
+    fn fixture_export_rejects_type_name_fallback() {
+        let registry = iroha_data_model::instruction_registry::default();
+        let error = required_instruction_wire_id(&registry, "legacy::UnregisteredInstruction")
+            .expect_err("an unregistered type must not become its own wire identifier");
+        assert!(
+            error
+                .to_string()
+                .contains("has no registered V1 wire identifier")
+        );
     }
     fn sample_manifest() -> Manifest {
         Manifest {

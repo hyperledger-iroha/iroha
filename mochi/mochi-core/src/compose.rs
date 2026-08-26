@@ -410,7 +410,7 @@ impl TransactionPreview {
     pub fn encoded_hex(&self) -> &str {
         &self.encoded_hex
     }
-    /// Versioned Norito payload bytes ready to POST to `/transaction`.
+    /// Versioned Norito payload bytes ready to POST to `/v1/pipeline/transactions`.
     #[must_use]
     pub fn encoded_bytes(&self) -> Vec<u8> {
         self.signed.encode_versioned()

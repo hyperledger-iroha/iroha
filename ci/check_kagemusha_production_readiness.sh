@@ -2614,8 +2614,8 @@ def validate_kagami_verification_report(
     }
     if set(report) != exact_keys:
         raise ValueError("Kagami verification report fields are not exact")
-    if report.get("status") != "verified" or report.get("bridge_abi_version") != 22:
-        raise ValueError("Kagami did not report one verified native-ABI-22 release")
+    if report.get("status") != "verified" or report.get("bridge_abi_version") != 23:
+        raise ValueError("Kagami did not report one verified native-ABI-23 release")
     if report.get("envelope_sha256") != directory.name:
         raise ValueError("Kagami manifest envelope differs from the release directory")
     if report.get("release_policy_sha256") != policy_sha256:
@@ -4559,7 +4559,7 @@ def promotion_errors() -> list[str]:
             continue
         if manifest.get("schema") != "kagemusha.offline.recursive_spend.artifact_manifest.v4":
             errors.append(f"{directory.name}: manifest schema is not V4")
-        if manifest.get("bridge_abi_version") != 22 or manifest.get("source_repo_dirty") is not False:
+        if manifest.get("bridge_abi_version") != 23 or manifest.get("source_repo_dirty") is not False:
             errors.append(f"{directory.name}: ABI/source-tree promotion binding is invalid")
         for field in (
             "authenticated_source_seal_projection_sha256",
@@ -4979,7 +4979,7 @@ if self_test:
             errors.append(f"readiness self-test helper failed unexpectedly: {error}")
 if errors:
     print(
-        f"Kagemusha ABI-21/V4 (native bridge ABI 22) {mode} corridor failed:",
+        f"Kagemusha ABI-21/V4 (native bridge ABI 23) {mode} corridor failed:",
         file=sys.stderr,
     )
     for error in errors:
@@ -4987,12 +4987,12 @@ if errors:
     raise SystemExit(1)
 if mode == "candidate":
     print(
-        "Kagemusha ABI-21/V4 (native bridge ABI 22) static candidate corridor passed; "
+        "Kagemusha ABI-21/V4 (native bridge ABI 23) static candidate corridor passed; "
         "production promotion was not evaluated."
     )
 else:
     print(
-        "Kagemusha ABI-21/V4 (native bridge ABI 22) production promotion verification "
+        "Kagemusha ABI-21/V4 (native bridge ABI 23) production promotion verification "
         "corridor passed; no publication or activation was performed."
     )
 PY

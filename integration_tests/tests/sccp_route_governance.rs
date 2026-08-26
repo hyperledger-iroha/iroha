@@ -304,8 +304,7 @@ async fn direct_sccp_route_governance_is_rejected_on_four_peers() -> Result<()> 
         .expect_err("an account without CanManageSccpGovernance must be rejected");
     let unauthorized_text = error_chain_text(&unauthorized);
     assert!(
-        unauthorized_text.contains("finalized threshold referendum")
-            || unauthorized_text.contains("direct SCCP route mutation is retired"),
+        unauthorized_text.contains("direct SCCP route mutation is retired"),
         "unexpected direct-mutation rejection: {unauthorized_text}"
     );
     let after_unauthorized = wait_for_route_states(&network, &[(&key, None)]).await?;
@@ -315,11 +314,10 @@ async fn direct_sccp_route_governance_is_rejected_on_four_peers() -> Result<()> 
             register_action(route.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .expect_err("legacy SCCP managers must not bypass threshold referendum enactment");
+        .expect_err("legacy SCCP managers must not bypass automatic certificate execution");
     let legacy_manager_text = error_chain_text(&legacy_manager);
     assert!(
-        legacy_manager_text.contains("finalized threshold referendum")
-            || legacy_manager_text.contains("direct SCCP route mutation is retired"),
+        legacy_manager_text.contains("direct SCCP route mutation is retired"),
         "unexpected legacy-manager rejection: {legacy_manager_text}"
     );
     let after_legacy_manager = wait_for_route_states(&network, &[(&key, None)]).await?;

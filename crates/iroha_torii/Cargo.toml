@@ -173,7 +173,7 @@ hyper = "1.7.0"
 ivm = { path = "../ivm", default-features = false, features = ["runtime"] }
 iroha = { workspace = true }
 iroha_telemetry = { workspace = true }
-iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests", "finality-test-fixtures"] }
+iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests"] }
 iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore", "circuit-params"] }
 iroha_test_samples = { path = "../iroha_test_samples" }

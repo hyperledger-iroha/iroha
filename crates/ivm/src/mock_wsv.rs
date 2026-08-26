@@ -2516,12 +2516,7 @@ impl WsvHost {
         if policy.manifest_root.iter().all(|byte| *byte == 0) {
             return Err(VMError::PermissionDenied);
         }
-        if proof.payload.is_empty() {
-            return Err(VMError::NoritoInvalid);
-        }
-        if proof.expiry_slot == Some(0) {
-            return Err(VMError::NoritoInvalid);
-        }
+        axt::validate_proof_blob(proof)?;
         if let Some(expiry_slot) = proof.expiry_slot {
             let expiry_with_skew = self.axt_expiry_slot_with_skew(expiry_slot);
             let current_slot = policy.current_slot;
@@ -4772,6 +4767,35 @@ mod tests_peer_json {
 #[cfg(test)]
 mod tests_axt_policy_snapshot {
     use super::*;
+    use iroha_data_model::nexus::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES;
+
+    #[test]
+    fn axt_proof_validation_rejects_oversized_payload_before_decode() {
+        let dsid = DataSpaceId::new(6);
+        let mut wsv = MockWorldStateView::new();
+        wsv.set_axt_policy(
+            dsid,
+            DataspaceAxtPolicy {
+                manifest_root: [0x11; 32],
+                ..DataspaceAxtPolicy::default()
+            },
+        );
+        let caller: AccountId = test_account_id(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            "wonderland",
+        );
+        let host = WsvHost::new_with_subject(wsv, caller, HashMap::new());
+        let proof = ProofBlob {
+            payload: vec![0; MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1],
+            expiry_slot: None,
+        };
+
+        assert_eq!(
+            host.validate_axt_proof(dsid, &proof),
+            Err(VMError::NoritoInvalid)
+        );
+    }
+
     #[test]
     fn axt_policy_snapshot_model_roundtrips() {
         let mut wsv = MockWorldStateView::new();

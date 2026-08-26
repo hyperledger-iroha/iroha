@@ -119,6 +119,7 @@ All commands emit Norito JSON responses. Filters match the HTTP query parameters
   - `torii_zk_prover_budget_exhausted_total{reason}` (counter)
   - `zk_verify_latency_ms` and `zk_verify_proof_bytes` (histograms, labelled by `backend`)
 - Metrics surface under `/metrics` when telemetry is enabled with a profile that allows metrics exposure.
-- Reports older than the TTL are garbage-collected on every scan tick. Manual deletions remain available through `/v1/zk/prover/reports`.
+- Reports older than the TTL are garbage-collected on every scan tick. Reports
+  are node-local worker state and have no HTTP deletion surface.
 
 Nightly Milestone 0 runs scrape the new histograms and publish rollups alongside the existing Torii operator dashboard, ensuring proof verification latency regressions surface quickly.

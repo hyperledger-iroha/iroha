@@ -586,6 +586,58 @@ impl PendingRuntimeEffectBinding {
             .then_some(projected)
     }
 
+    /// Recover the exact Store predecessor binding retained by a direct
+    /// lifecycle Validate successor.
+    ///
+    /// This is an ordinal-free inverse of the reviewed Store-to-Validate
+    /// projection. It is usable only when projecting the reconstructed Store
+    /// forward produces this byte-identical pending binding, so matching body
+    /// coordinates cannot manufacture another causal root or authority class.
+    pub(in crate::sumeragi) fn project_validate_store_predecessor(
+        &self,
+        successor: &AdapterEffect,
+        predecessor: &AdapterEffect,
+    ) -> Option<Self> {
+        let (
+            AdapterEffect::ValidateBody {
+                tag: successor_tag,
+                round: successor_round,
+                subject: successor_subject,
+            },
+            AdapterEffect::StoreBody {
+                tag: predecessor_tag,
+                round: predecessor_round,
+                subject: predecessor_subject,
+            },
+        ) = (successor, predecessor)
+        else {
+            return None;
+        };
+        if predecessor_tag != successor_tag
+            || predecessor_round != successor_round
+            || predecessor_subject != successor_subject
+            || !self.validate_exact(successor)
+        {
+            return None;
+        }
+        let inherited = self.candidate_statement?;
+        let candidate =
+            production_adapter_effect_candidate_binding(predecessor, Some(&inherited)).ok()??;
+        if candidate.kind != RUNTIME_CANDIDATE_KIND_STORE_BODY
+            || candidate.statement != Some(inherited)
+        {
+            return None;
+        }
+        let predecessor_binding =
+            Self::from_effect_candidate(self.causal_lifecycle_key, predecessor, Some(&candidate));
+        (predecessor_binding.validate_exact(predecessor)
+            && predecessor_binding
+                .project_store_validate_successor(predecessor, successor)
+                .as_ref()
+                == Some(self))
+        .then_some(predecessor_binding)
+    }
+
     /// Project an ordinary Proposal Store into the exact Commit-refined
     /// `ValidateBody` owner retained after a durable Decision.
     ///

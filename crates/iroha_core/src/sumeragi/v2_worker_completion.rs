@@ -763,6 +763,18 @@ enum V2IoCompletion {
     Failed(String),
 }
 impl V2IoCompletion {
+    const fn is_dedicated_lifecycle_completion(&self) -> bool {
+        matches!(
+            self,
+            Self::CertifiedFetchBodyPersisted(_)
+                | Self::RecoveredDecisionFetchBodyPersisted(_)
+                | Self::LifecycleDecisionApply(_)
+                | Self::RecoveredLifecycleSign(_)
+                | Self::LifecycleValidate(_)
+                | Self::LifecycleCertifiedServe(_)
+        )
+    }
+
     fn lifecycle_decision_apply_key(&self) -> Option<LifecycleDecisionApplyDispatchKeyV1> {
         match self {
             Self::LifecycleDecisionApply(guarded) => Some(guarded.result().dispatch_key()),

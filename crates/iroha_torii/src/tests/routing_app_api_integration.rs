@@ -2656,7 +2656,7 @@ mod app_api_integration_tests {
             .signature_payload_bytes()
             .expect("serialize advert signature envelope");
         advert.signature.signature = signing_key.sign(&signature_payload).to_bytes().to_vec();
-        let (vrf_public, vrf_private) = iroha_crypto::BlsNormal::keypair(
+        let (vrf_public, vrf_private) = iroha_crypto::BlsNormal::try_keypair(
             iroha_crypto::KeyGenOption::UseSeed(provider_id.to_vec()),
         )
         .expect("derive provider VRF fixture key");

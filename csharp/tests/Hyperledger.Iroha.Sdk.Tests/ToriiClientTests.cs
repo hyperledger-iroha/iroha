@@ -777,10 +777,7 @@ public sealed partial class ToriiClientTests
             }
             """;
 
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(responseBody),
-        });
+        using var handler = new RecordingHandler(_ => JsonResponse(responseBody));
 
         using var client = CreateRuntimeAuthenticatedClient(handler);
         var capabilities = await client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken);
@@ -8952,7 +8949,7 @@ public sealed partial class ToriiClientTests
             Assert.Equal("application/x-norito", request.Content!.Headers.ContentType!.MediaType);
             Assert.Equal("application/json", request.Headers.Accept.Single().MediaType);
             Assert.Equal(
-                transaction.NoritoBytes,
+                transaction.VersionedNoritoBytes,
                 request.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult());
             return JsonResponse(
                 $$"""{"status":"submitted","tx_hash_hex":"{{transactionHashHex}}","manifest_digest_hex":"{{manifestDigestHex}}"}""",
@@ -12582,7 +12579,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task SubmitTransactionAsyncRejectsEmptyNoritoPayloadBeforeDispatch()
+    public async Task SubmitTransactionAsyncRejectsEmptyVersionedPayloadBeforeDispatch()
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("empty transaction reached HTTP dispatch"));
@@ -12591,8 +12588,28 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.SubmitTransactionAsync(ReadOnlyMemory<byte>.Empty, cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Equal("noritoBytes", error.ParamName);
+        Assert.Equal("versionedNoritoBytes", error.ParamName);
         Assert.Contains("must not be empty", error.Message);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Theory]
+    [InlineData("01")]
+    [InlineData("02FF")]
+    [InlineData("8A00")]
+    public async Task SubmitTransactionAsyncRejectsNonV1WireBeforeDispatch(string wireHex)
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("non-V1 transaction reached HTTP dispatch"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.SubmitTransactionAsync(
+                Convert.FromHexString(wireHex),
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal("versionedNoritoBytes", error.ParamName);
+        Assert.Contains("canonical V1 versioned wire", error.Message);
         Assert.Null(handler.LastRequest);
     }
 
@@ -12605,18 +12622,16 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Assert.Equal("/v1/pipeline/transactions/status", request.RequestUri!.AbsolutePath);
             Assert.Equal(transactionHash, QueryParameter(request.RequestUri.Query, "hash"));
             Assert.Equal("global", QueryParameter(request.RequestUri.Query, "scope"));
+            Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
 
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("""
+            return JsonResponse("""
                 {
                   "hash": "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
                   "status": { "kind": "Applied", "block_height": 9 },
                   "scope": "global",
                   "resolved_from": "state"
                 }
-                """),
-            };
+                """);
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
@@ -12641,17 +12656,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var handler = new RecordingHandler(request =>
         {
             Assert.Equal("local", QueryParameter(request.RequestUri!.Query, "scope"));
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent($$"""
-                    {
-                      "hash": "{{transactionHash}}",
-                      "status": { "kind": "Queued" },
-                      "scope": "local",
-                      "resolved_from": "queue"
-                    }
-                    """),
-            };
+            return JsonResponse($$"""
+                {
+                  "hash": "{{transactionHash}}",
+                  "status": { "kind": "Queued" },
+                  "scope": "local",
+                  "resolved_from": "queue"
+                }
+                """);
         });
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
@@ -12674,17 +12686,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     public async Task GetPipelineTransactionStatusAsyncKeepsCachedTerminalHintsPending(string kind)
     {
         const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent($$"""
+        using var handler = new RecordingHandler(_ => JsonResponse($$"""
                 {
                   "hash": "{{transactionHash}}",
                   "status": { "kind": "{{kind}}", "block_height": 9 },
                   "scope": "global",
                   "resolved_from": "cache"
                 }
-                """),
-        });
+                """));
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var status = await client.GetPipelineTransactionStatusAsync(
@@ -12716,6 +12725,32 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(statusCode, error.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("text/plain")]
+    [InlineData("application/x-norito")]
+    public async Task GetPipelineTransactionStatusAsyncRejectsNonJsonContentType(
+        string? mediaType)
+    {
+        const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
+        using var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
+            HttpContent content = mediaType is null
+                ? new ByteArrayContent("{}"u8.ToArray())
+                : new StringContent("{}", Encoding.UTF8, mediaType);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<JsonException>(() =>
+            client.GetPipelineTransactionStatusAsync(
+                transactionHash,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("application/json media type", error.Message);
     }
 
     [Fact]
@@ -12763,17 +12798,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     public async Task GetPipelineTransactionStatusAsyncRejectsDuplicateJsonResponseKeys()
     {
         const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent($$"""
+        using var handler = new RecordingHandler(_ => JsonResponse($$"""
                 {
                   "hash": "{{transactionHash}}",
                   "status": { "kind": "Applied", "kind": "Rejected" },
                   "scope": "global",
                   "resolved_from": "state"
                 }
-                """),
-        });
+                """));
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
@@ -12787,9 +12819,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     public async Task GetPipelineTransactionStatusAsyncRejectsRetiredSensitiveFields()
     {
         const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("""
+        using var handler = new RecordingHandler(_ => JsonResponse("""
                 {
                   "hash": "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
                   "status": { "kind": "Rejected", "rejection_reason": "secret" },
@@ -12800,8 +12830,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                   "scope": "global",
                   "resolved_from": "state"
                 }
-                """),
-        });
+                """));
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var error = await Assert.ThrowsAsync<JsonException>(() =>
@@ -12813,17 +12842,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     public async Task GetPipelineTransactionStatusAsyncRejectsUnknownStatusKinds()
     {
         const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("""
+        using var handler = new RecordingHandler(_ => JsonResponse("""
                 {
                   "hash": "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
                   "status": { "kind": "Finalizing", "block_height": 42 },
                   "scope": "global",
                   "resolved_from": "state"
                 }
-                """),
-        });
+                """));
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var error = await Assert.ThrowsAsync<JsonException>(() =>
@@ -12915,6 +12941,19 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             }
             """,
             "unsigned integer",
+        };
+        yield return new object[]
+        {
+            "status.block_height",
+            $$"""
+            {
+              "hash": "{{transactionHash}}",
+              "status": { "kind": "Applied", "block_height": 0 },
+              "scope": "global",
+              "resolved_from": "state"
+            }
+            """,
+            "positive",
         };
         yield return new object[]
         {
@@ -13030,10 +13069,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         string expectedMessage)
     {
         const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(json),
-        });
+        using var handler = new RecordingHandler(_ => JsonResponse(json));
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
@@ -13052,7 +13088,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     [InlineData("da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b ", "whitespace")]
     [InlineData("0x da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b", "whitespace")]
     [InlineData("da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b\u0001", "control characters")]
-    [InlineData("0xda01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b", "64 lowercase")]
+    [InlineData("0xda01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b", "canonical typed form")]
     [InlineData("DA01F3A369D10E6AD78F241C86F4FE2D5481FF13ACE97E6FB5DB5C30240BDB3B", "canonical typed form")]
     [InlineData("abc123", "canonical typed form")]
     [InlineData("gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg", "canonical typed form")]
@@ -13104,17 +13140,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     [Fact]
     public async Task GetPipelineTransactionStatusAsyncRejectsMalformedResponseHash()
     {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("""
+        using var handler = new RecordingHandler(_ => JsonResponse("""
                 {
                   "hash": " da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
                   "status": { "kind": "Applied" },
                   "scope": "global",
                   "resolved_from": "state"
                 }
-                """),
-        });
+                """));
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
@@ -18099,10 +18132,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 _ => throw new InvalidOperationException("Unexpected route."),
             };
 
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(body),
-            };
+            return JsonResponse(body);
         });
 
         using var client = CreateRuntimeAuthenticatedClient(handler);

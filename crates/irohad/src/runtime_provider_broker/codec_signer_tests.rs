@@ -867,7 +867,7 @@ fn soracloud_broker_admission_rejects_explicit_purpose_mismatch() {
     let mismatched_payload = encode_canonical(
         &SoracloudProvenanceSignRequestWireV1 {
             purpose:
-                iroha_data_model::soracloud::SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat
+                iroha_data_model::soracloud::SoracloudRuntimeProvenancePurposeV1::InrouHostWithdraw
                     .wire_id(),
             preimage,
         },

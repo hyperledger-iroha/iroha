@@ -24,8 +24,6 @@ chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features
 blake3 = "1.8.2"
 iroha_audio = { path = "../iroha_audio" }
 ryu = "1.0.20"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 zstd.workspace = true
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
@@ -151,21 +149,17 @@ required-features = ["dev-tools"]
 default = ["node-codec"]
 dev-tools = []
 # Minimum currently compilable codec surface. `json` remains here until the
-# existing unconditional JSON helpers are made feature-independent.
-base-codec = ["json", "strict-safe"]
+# existing unconditional JSON helpers are made feature-independent. Panic
+# containment is part of every decoder and is not feature-selectable.
+base-codec = ["json"]
 # Canonical codec surface used by node, CLI, and network-facing crates.
 # Hardware backends remain explicit leaf features.
-node-codec = ["base-codec", "derive", "compression", "columnar", "json-std-io"]
+node-codec = ["base-codec", "compression", "columnar", "json-std-io"]
 simd-accel = []
-strict-safe = []
-derive = []
 compression = []
-compact-len = []
 gpu-compression = ["compression"]
-std = []
 schema-structural = ["iroha_audio/schema-structural"]
 json = []
-json-raw-value = []
 json-std-io = []
 bench-internal = []
 bench = []
@@ -178,15 +172,12 @@ streaming-fixed-point-dct = []
 codec-gpu = ["codec-gpu-metal", "codec-gpu-cuda"]
 codec-gpu-metal = ["metal-stage1", "metal-crc64"]
 codec-gpu-cuda = ["cuda-stage1", "cuda-crc64"]
-packed-seq = []
-packed-struct = []
 simdutf8-validate = ["simdutf8"]
 columnar = []
 stage1-validate = []
 crc-key-hash = []
 parallel-stage1 = []
 parallel-stage1-rayon = ["rayon", "parallel-stage1"]
-parallel-decode = ["rayon"]
 adaptive-telemetry = []
 adaptive-telemetry-log = ["adaptive-telemetry"]
 

@@ -17,6 +17,7 @@ public struct NexusAppError: Error, LocalizedError, Equatable {
 
 public struct NexusAppConfig: Sendable {
     public let chainId: String
+    public let accountChainDiscriminant: UInt16
     public let appId: String?
     public let relayURL: URL?
     public let node: URL?
@@ -25,6 +26,7 @@ public struct NexusAppConfig: Sendable {
     public let appMetadata: [String: String]
 
     public init(chainId: String,
+                accountChainDiscriminant: UInt16,
                 appId: String? = nil,
                 relayURL: URL? = nil,
                 node: URL? = nil,
@@ -32,6 +34,7 @@ public struct NexusAppConfig: Sendable {
                 signingPublicKey: Data? = nil,
                 appMetadata: [String: String] = [:]) {
         self.chainId = chainId
+        self.accountChainDiscriminant = accountChainDiscriminant
         self.appId = appId
         self.relayURL = relayURL
         self.node = node
@@ -101,6 +104,7 @@ public struct NexusConnectSession: Sendable {
     }
 }
 
+/// Wallet approval result. Transports leave `session` nil; the facade supplies its caller copy.
 public struct NexusApprovedAccount: Sendable {
     public let accountID: String
     public let signingPublicKey: Data?
@@ -274,12 +278,24 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
                                      authority: String) throws -> Data {
         try SwiftNexusTransferPayloadEncoder.encode(input: input,
                                                     chainId: config.chainId,
+                                                    accountChainDiscriminant: config.accountChainDiscriminant,
                                                     authority: authority)
     }
 
-    public func buildTransferInstructionBox(input: NexusTransferInput) throws -> Data {
+    public func buildTransferInstructionBox(input: NexusTransferInput,
+                                            accountChainDiscriminant: UInt16) throws -> Data {
         let quantity = try KotodamaNumericV1Codec.decodeQuantityJSON(input.quantity).canonicalString
         if let parsed = CanonicalNorito.parsePublicAssetIdLiteral(input.sourceAssetID) {
+            try Self.requireCanonicalAccountID(
+                parsed.accountId,
+                accountChainDiscriminant: accountChainDiscriminant,
+                context: "Transfer source asset owner"
+            )
+            try Self.requireCanonicalAccountID(
+                input.destinationAccountID,
+                accountChainDiscriminant: accountChainDiscriminant,
+                context: "Transfer destination account"
+            )
             let nativeAssetDefinitionId: String
             if let dataspaceId = parsed.dataspaceId {
                 nativeAssetDefinitionId = "\(parsed.assetDefinitionId)#dataspace:\(dataspaceId)"
@@ -307,8 +323,39 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
                 ttlMs: input.ttlMs,
                 nonce: input.nonce,
                 metadata: input.metadata
-            )
+            ),
+            accountChainDiscriminant: accountChainDiscriminant
         )
+    }
+
+    private static func requireCanonicalAccountID(
+        _ value: String,
+        accountChainDiscriminant: UInt16,
+        context: String
+    ) throws {
+        guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            throw NexusAppError(
+                code: "invalid_account_id",
+                message: "\(context) must be an exact canonical I105 account for chain discriminant \(accountChainDiscriminant)."
+            )
+        }
+        do {
+            let address = try AccountAddress.parseEncoded(
+                value,
+                expectedPrefix: accountChainDiscriminant
+            )
+            guard try address.toI105(chainDiscriminant: accountChainDiscriminant) == value else {
+                throw NexusAppError(code: "invalid_account_id",
+                                    message: "\(context) must use its exact canonical I105 form.")
+            }
+        } catch let error as NexusAppError {
+            throw error
+        } catch {
+            throw NexusAppError(
+                code: "invalid_account_id",
+                message: "\(context) must be an exact canonical I105 account for chain discriminant \(accountChainDiscriminant)."
+            )
+        }
     }
 
     public func finalizeSignedTransaction(signable: NexusSignableTransaction,
@@ -345,10 +392,7 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
     private static func encodeSignature(_ signature: Data) -> Data {
         var writer = CompactNoritoWriter()
         writer.writeUInt64LE(UInt64(signature.count))
-        for byte in signature {
-            writer.writeLength(1)
-            writer.writeUInt8(byte)
-        }
+        writer.writeByteFields(signature)
         return writer.data
     }
 }
@@ -383,34 +427,71 @@ public final class NexusAppClient {
                                 message: "Connect transport is required to await wallet approval.")
         }
         let approved = try await connectTransport.awaitApproval(session: session, config: config)
+        guard approved.session == nil else {
+            throw NexusAppError(
+                code: "approval_session_mismatch",
+                message: "Wallet approval must not replace the caller's Connect session."
+            )
+        }
         guard !approved.accountID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw NexusAppError(code: "approval_missing_account",
                                 message: "Wallet approval did not include an account.")
         }
-        guard let signingPublicKey = approved.signingPublicKey ?? session.signingPublicKey ?? config.signingPublicKey,
-              !signingPublicKey.isEmpty else {
-            throw NexusAppError(code: "missing_signing_public_key",
-                                message: "Wallet approval did not include a signing public key.")
+        try requireCanonicalAccountID(approved.accountID,
+                                      context: "Wallet approval account")
+        for (context, assertedAccount) in [
+            ("Configured authority", config.authority),
+            ("Connect session approved account", session.approvedAccount),
+        ] {
+            if let assertedAccount {
+                try requireCanonicalAccountID(assertedAccount, context: context)
+                guard assertedAccount == approved.accountID else {
+                    throw NexusAppError(
+                        code: "approval_account_mismatch",
+                        message: "\(context) does not match the wallet approval account."
+                    )
+                }
+            }
         }
-        try validateEd25519PublicKey(signingPublicKey)
-        let approvedSession = approved.session ?? session.withApproval(account: approved.accountID,
-                                                                       signingPublicKey: signingPublicKey)
+        let signingPublicKey = try requireAccountSigningKey(
+            approved.accountID,
+            context: "Wallet approval account",
+            sources: [
+                ("Wallet approval signingPublicKey", approved.signingPublicKey),
+                ("Connect session signingPublicKey", session.signingPublicKey),
+                ("Config signingPublicKey", config.signingPublicKey),
+            ]
+        )
+        let approvedSession = session.withApproval(account: approved.accountID,
+                                                   signingPublicKey: signingPublicKey)
         return NexusApprovedAccount(accountID: approved.accountID,
                                     signingPublicKey: signingPublicKey,
                                     session: approvedSession)
     }
 
     public func buildTransferDraft(input: NexusTransferInput) throws -> NexusTransferDraft {
+        if let configuredAuthority = config.authority {
+            try requireCanonicalAccountID(configuredAuthority,
+                                          context: "Configured authority")
+        }
         guard let authority = input.authority ?? config.authority,
               !authority.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw NexusAppError(code: "missing_authority",
                                 message: "Transfer authority is required.")
         }
-        guard let signingPublicKey = input.signingPublicKey ?? config.signingPublicKey else {
-            throw NexusAppError(code: "missing_signing_public_key",
-                                message: "Signing public key is required for an externally signed transfer.")
-        }
-        try validateEd25519PublicKey(signingPublicKey)
+        try requireCanonicalAccountID(authority, context: "Transfer authority")
+        try requireCanonicalAccountID(input.destinationAccountID,
+                                      context: "Transfer destination account")
+        try requireCanonicalAccountID(Self.sourceAssetOwner(input.sourceAssetID),
+                                      context: "Transfer source asset owner")
+        let signingPublicKey = try requireAccountSigningKey(
+            authority,
+            context: "Transfer authority",
+            sources: [
+                ("Transfer input signingPublicKey", input.signingPublicKey),
+                ("Config signingPublicKey", config.signingPublicKey),
+            ]
+        )
         let quantity = try KotodamaNumericV1Codec
             .decodeQuantityJSON(input.quantity).canonicalString
         let normalized = NexusTransferInput(
@@ -441,6 +522,35 @@ public final class NexusAppClient {
             throw NexusAppError(code: "connect_transport_unavailable",
                                 message: "Connect transport is required to request a wallet signature.")
         }
+        try requireCanonicalAccountID(signable.authority, context: "Signable authority")
+        if let configuredAuthority = config.authority {
+            try requireCanonicalAccountID(configuredAuthority,
+                                          context: "Configured authority")
+        }
+        if let approvedAccount = session.approvedAccount {
+            try requireCanonicalAccountID(approvedAccount,
+                                          context: "Connect session approved account")
+        }
+        for (context, assertedAccount) in [
+            ("Configured authority", config.authority),
+            ("Connect session approved account", session.approvedAccount),
+        ] {
+            if let assertedAccount, assertedAccount != signable.authority {
+                throw NexusAppError(
+                    code: "approval_account_mismatch",
+                    message: "\(context) does not match the signable authority."
+                )
+            }
+        }
+        _ = try requireAccountSigningKey(
+            signable.authority,
+            context: "Signable authority",
+            sources: [
+                ("Signable signingPublicKey", signable.signingPublicKey),
+                ("Connect session signingPublicKey", session.signingPublicKey),
+                ("Config signingPublicKey", config.signingPublicKey),
+            ]
+        )
         try ensureEd25519(signable.signatureAlgorithm)
         let signature = try await connectTransport.requestSignature(session: session,
                                                                     signable: signable,
@@ -453,6 +563,14 @@ public final class NexusAppClient {
     public func finalizeAndSubmit(signable: NexusSignableTransaction,
                                   signature: NexusWalletSignature,
                                   options: NexusFinalizeOptions = NexusFinalizeOptions()) async throws -> NexusTransferReceipt {
+        _ = try requireAccountSigningKey(
+            signable.authority,
+            context: "Signable authority",
+            sources: [
+                ("Signable signingPublicKey", signable.signingPublicKey),
+                ("Config signingPublicKey", config.signingPublicKey),
+            ]
+        )
         try ensureEd25519(signable.signatureAlgorithm)
         try ensureEd25519(signature.algorithm)
         try validateEd25519PublicKey(signable.signingPublicKey)
@@ -508,6 +626,15 @@ public final class NexusAppClient {
     public func transferWithWallet(session: NexusConnectSession,
                                    input: NexusTransferInput,
                                    options: NexusFinalizeOptions = NexusFinalizeOptions()) async throws -> NexusTransferReceipt {
+        for (context, account) in [
+            ("Connect session approved account", session.approvedAccount),
+            ("Transfer authority", input.authority),
+            ("Configured authority", config.authority),
+        ] {
+            if let account {
+                try requireCanonicalAccountID(account, context: context)
+            }
+        }
         guard let authority = input.authority ?? session.approvedAccount ?? config.authority else {
             throw NexusAppError(code: "missing_authority",
                                 message: "Transfer authority is required.")
@@ -518,16 +645,118 @@ public final class NexusAppClient {
             throw NexusAppError(code: "approval_account_mismatch",
                                 message: "Transfer authority does not match the approved wallet account.")
         }
-        guard let signingPublicKey = input.signingPublicKey ?? session.signingPublicKey ?? config.signingPublicKey else {
-            throw NexusAppError(code: "missing_signing_public_key",
-                                message: "Approved account did not provide a signing public key.")
-        }
+        let signingPublicKey = try requireAccountSigningKey(
+            authority,
+            context: "Transfer authority",
+            sources: [
+                ("Transfer input signingPublicKey", input.signingPublicKey),
+                ("Connect session signingPublicKey", session.signingPublicKey),
+                ("Config signingPublicKey", config.signingPublicKey),
+            ]
+        )
         let draft = try buildTransferDraft(input: input.with(authority: authority,
                                                             signingPublicKey: signingPublicKey))
         let walletSignature = try await requestSignature(session: session, signable: draft.signable)
         return try await finalizeAndSubmit(signable: draft.signable,
                                            signature: walletSignature,
                                            options: options)
+    }
+
+    private func requireCanonicalAccountID(_ value: String,
+                                           context: String) throws {
+        guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            throw NexusAppError(
+                code: "invalid_account_id",
+                message: "\(context) must be an exact canonical I105 account for chain discriminant \(config.accountChainDiscriminant)."
+            )
+        }
+        do {
+            let address = try AccountAddress.parseEncoded(
+                value,
+                expectedPrefix: config.accountChainDiscriminant
+            )
+            guard try address.toI105(chainDiscriminant: config.accountChainDiscriminant) == value else {
+                throw NexusAppError(code: "invalid_account_id",
+                                    message: "\(context) must use its exact canonical I105 form.")
+            }
+        } catch let error as NexusAppError {
+            throw error
+        } catch {
+            throw NexusAppError(
+                code: "invalid_account_id",
+                message: "\(context) must be an exact canonical I105 account for chain discriminant \(config.accountChainDiscriminant)."
+            )
+        }
+    }
+
+    private func requireAccountSigningKey(
+        _ accountID: String,
+        context: String,
+        sources: [(String, Data?)]
+    ) throws -> Data {
+        try requireCanonicalAccountID(accountID, context: context)
+        let address: AccountAddress
+        do {
+            address = try AccountAddress.parseEncoded(
+                accountID,
+                expectedPrefix: config.accountChainDiscriminant
+            )
+        } catch {
+            throw NexusAppError(
+                code: "missing_signing_public_key",
+                message: "\(context) must encode one Ed25519 controller."
+            )
+        }
+        guard let controller = address.singleControllerInfo(),
+              controller.algorithm == .ed25519 else {
+            throw NexusAppError(
+                code: "missing_signing_public_key",
+                message: "\(context) must encode one Ed25519 controller."
+            )
+        }
+        try validateEd25519PublicKey(controller.publicKey)
+        var supplied = false
+        for (field, value) in sources {
+            guard let value else { continue }
+            supplied = true
+            try validateEd25519PublicKey(value)
+            guard value == controller.publicKey else {
+                throw NexusAppError(
+                    code: "approval_account_mismatch",
+                    message: "\(field) does not control \(context)."
+                )
+            }
+        }
+        guard supplied else {
+            throw NexusAppError(
+                code: "missing_signing_public_key",
+                message: "\(context) did not provide a signing public key."
+            )
+        }
+        return controller.publicKey
+    }
+
+    private static func sourceAssetOwner(_ sourceAssetID: String) throws -> String {
+        let parts = sourceAssetID.split(separator: "#", omittingEmptySubsequences: false)
+        guard (2...3).contains(parts.count), !parts[1].isEmpty else {
+            throw NexusAppError(code: "invalid_account_id",
+                                message: "Transfer source asset must contain one canonical owner account.")
+        }
+        if parts.count == 3 {
+            let scope = String(parts[2])
+            let prefix = "dataspace:"
+            let digits = scope.hasPrefix(prefix) ? String(scope.dropFirst(prefix.count)) : ""
+            guard !digits.isEmpty,
+                  digits.utf8.allSatisfy({ $0 >= 0x30 && $0 <= 0x39 }),
+                  digits == "0" || digits.utf8.first != 0x30,
+                  UInt64(digits) != nil else {
+                throw NexusAppError(
+                    code: "invalid_account_id",
+                    message: "Transfer source asset scope must be a canonical dataspace:<u64> suffix."
+                )
+            }
+        }
+        return String(parts[1])
     }
 }
 
@@ -544,6 +773,7 @@ private enum SwiftNexusTransferPayloadEncoder {
 
     static func encode(input: NexusTransferInput,
                        chainId: String,
+                       accountChainDiscriminant: UInt16,
                        authority: String) throws -> Data {
         let quantity = try KotodamaNumericV1Codec.decodeQuantityJSON(input.quantity).canonicalString
         let instruction = TransferInstructionInput(
@@ -554,6 +784,7 @@ private enum SwiftNexusTransferPayloadEncoder {
         return try encodePayload(
             instructions: [instruction],
             chainId: chainId,
+            accountChainDiscriminant: accountChainDiscriminant,
             authority: authority,
             creationTimeMs: input.creationTimeMs ?? currentTimeMillis(),
             ttlMs: input.ttlMs,
@@ -565,6 +796,7 @@ private enum SwiftNexusTransferPayloadEncoder {
 
     private static func encodePayload(instructions instructionInputs: [TransferInstructionInput],
                                       chainId: String,
+                                      accountChainDiscriminant: UInt16,
                                       authority: String,
                                       creationTimeMs: UInt64,
                                       ttlMs: UInt64?,
@@ -578,7 +810,12 @@ private enum SwiftNexusTransferPayloadEncoder {
         var instructions = CompactNoritoWriter()
         instructions.writeUInt64LE(UInt64(instructionInputs.count))
         for input in instructionInputs {
-            instructions.writeField(try encodeTransferInstruction(input: input))
+            instructions.writeField(
+                try encodeTransferInstruction(
+                    input: input,
+                    accountChainDiscriminant: accountChainDiscriminant
+                )
+            )
         }
 
         var executable = CompactNoritoWriter()
@@ -587,7 +824,10 @@ private enum SwiftNexusTransferPayloadEncoder {
 
         var payload = CompactNoritoWriter()
         payload.writeField(encodeChainId(chainId))
-        payload.writeField(try encodeAccountId(authority))
+        payload.writeField(
+            try encodeAccountId(authority,
+                                accountChainDiscriminant: accountChainDiscriminant)
+        )
         payload.writeField(CompactNorito.encodeUInt64(creationTimeMs))
         payload.writeField(executable.data)
         payload.writeField(try CompactNorito.encodeOption(ttlMs, encode: CompactNorito.encodeUInt64))
@@ -599,21 +839,30 @@ private enum SwiftNexusTransferPayloadEncoder {
         return payload.data
     }
 
-    static func encodeInstructionBox(input: NexusTransferInput) throws -> Data {
+    static func encodeInstructionBox(input: NexusTransferInput,
+                                     accountChainDiscriminant: UInt16) throws -> Data {
         try encodeTransferInstruction(
             input: TransferInstructionInput(
                 sourceAssetID: input.sourceAssetID,
                 quantity: input.quantity,
                 destinationAccountID: input.destinationAccountID
-            )
+            ),
+            accountChainDiscriminant: accountChainDiscriminant
         )
     }
 
-    private static func encodeTransferInstruction(input: TransferInstructionInput) throws -> Data {
+    private static func encodeTransferInstruction(input: TransferInstructionInput,
+                                                  accountChainDiscriminant: UInt16) throws -> Data {
         var transfer = CompactNoritoWriter()
-        transfer.writeField(try encodeAssetId(input.sourceAssetID))
+        transfer.writeField(
+            try encodeAssetId(input.sourceAssetID,
+                              accountChainDiscriminant: accountChainDiscriminant)
+        )
         transfer.writeField(try encodeNumeric(input.quantity))
-        transfer.writeField(try encodeAccountId(input.destinationAccountID))
+        transfer.writeField(
+            try encodeAccountId(input.destinationAccountID,
+                                accountChainDiscriminant: accountChainDiscriminant)
+        )
 
         var transferBox = CompactNoritoWriter()
         transferBox.writeUInt32LE(transferBoxAssetDiscriminant)
@@ -634,19 +883,18 @@ private enum SwiftNexusTransferPayloadEncoder {
         return writer.data
     }
 
-    private static func encodeAccountId(_ value: String) throws -> Data {
+    private static func encodeAccountId(_ value: String,
+                                        accountChainDiscriminant: UInt16) throws -> Data {
         do {
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmed.utf8.elementsEqual(value.utf8) else {
                 throw CanonicalNoritoError.invalidAccountId(value)
             }
-            let chainDiscriminant = try AccountAddress
-                .inspectI105NetworkPrefix(trimmed).chainDiscriminant
             let address = try AccountAddress.parseEncodedSwiftOnly(
                 trimmed,
-                expectedPrefix: chainDiscriminant
+                expectedPrefix: accountChainDiscriminant
             )
-            guard try address.toI105(networkPrefix: chainDiscriminant).utf8
+            guard try address.toI105(networkPrefix: accountChainDiscriminant).utf8
                 .elementsEqual(trimmed.utf8) else {
                 throw CanonicalNoritoError.invalidAccountId(value)
             }
@@ -656,13 +904,17 @@ private enum SwiftNexusTransferPayloadEncoder {
         }
     }
 
-    private static func encodeAssetId(_ assetId: String) throws -> Data {
+    private static func encodeAssetId(_ assetId: String,
+                                      accountChainDiscriminant: UInt16) throws -> Data {
         guard let parsed = CanonicalNorito.parsePublicAssetIdLiteral(assetId),
               let definitionBytes = AssetDefinitionAddress.decode(parsed.assetDefinitionId) else {
             throw CanonicalNoritoError.invalidAssetId(assetId)
         }
         var writer = CompactNoritoWriter()
-        writer.writeField(try encodeAccountId(parsed.accountId))
+        writer.writeField(
+            try encodeAccountId(parsed.accountId,
+                                accountChainDiscriminant: accountChainDiscriminant)
+        )
         writer.writeField(encodeAssetDefinitionAddress(definitionBytes))
         writer.writeField(encodeAssetBalanceScope(dataspaceId: parsed.dataspaceId))
         return writer.data
@@ -670,10 +922,7 @@ private enum SwiftNexusTransferPayloadEncoder {
 
     private static func encodeAssetDefinitionAddress(_ bytes: Data) -> Data {
         var writer = CompactNoritoWriter()
-        for byte in bytes {
-            writer.writeLength(1)
-            writer.writeUInt8(byte)
-        }
+        writer.writeByteFields(bytes)
         return writer.data
     }
 

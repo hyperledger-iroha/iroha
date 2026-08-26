@@ -752,6 +752,7 @@ const TEMPDIR_MAX_KEEP: usize = 256;
 const KEEP_TEMPDIR_ENV: &str = "IROHA_TEST_NETWORK_KEEP_DIRS";
 const PROGRAM_IROHAD_ENV: &str = "TEST_NETWORK_BIN_IROHAD";
 const PROGRAM_IROHAD_MESSAGE_CONTROL_ENV: &str = "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL";
+const PROGRAM_IROHAD_PARLIAMENT_SIGNERS_ENV: &str = "TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS";
 const PROGRAM_IROHAD_FEATURES_ENV: &str = "TEST_NETWORK_IROHAD_FEATURES";
 const PROGRAM_IROHA_ENV: &str = "TEST_NETWORK_BIN_IROHA";
 /// Utility to get the root of the repository
@@ -904,6 +905,9 @@ pub enum Program {
     /// Feature-isolated daemon used only by explicit consensus fault-injection tests.
     #[doc(hidden)]
     IrohadMessageControl,
+    /// Feature-isolated daemon with exact-seat Parliament beacon and TLE share providers.
+    #[doc(hidden)]
+    IrohadParliamentSigners,
     /// Iroha Client CLI
     Iroha,
 }
@@ -920,8 +924,14 @@ impl Program {
         match self {
             Self::Irohad => ReleasePrebuiltBinary::Irohad,
             Self::IrohadMessageControl => ReleasePrebuiltBinary::IrohadMessageControl,
+            // The test signer is explicitly rejected whenever a release-prebuilt
+            // contract is active. This value is therefore an unreachable sentinel.
+            Self::IrohadParliamentSigners => ReleasePrebuiltBinary::Irohad,
             Self::Iroha => ReleasePrebuiltBinary::Iroha,
         }
+    }
+    const fn release_prebuilt_allowed(self) -> bool {
+        !matches!(self, Self::IrohadParliamentSigners)
     }
     fn spec(&self) -> ProgramSpec {
         match self {
@@ -960,6 +970,21 @@ impl Program {
                 .collect(),
                 isolated_target_subdir: Some("message-control"),
             },
+            Self::IrohadParliamentSigners => ProgramSpec {
+                name: "iroha3d",
+                env: PROGRAM_IROHAD_PARLIAMENT_SIGNERS_ENV,
+                pkg: "irohad",
+                build_args: [
+                    "--bin",
+                    "iroha3d",
+                    "--features",
+                    "test-network-parliament-signers",
+                ]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+                isolated_target_subdir: Some("parliament-signers"),
+            },
             Self::Iroha => ProgramSpec {
                 name: "iroha",
                 env: PROGRAM_IROHA_ENV,
@@ -973,6 +998,7 @@ impl Program {
 // Cache resolved binary paths to avoid redundant rebuilds/resolution per peer
 static IROHAD_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_MESSAGE_CONTROL_BIN: OnceLock<PathBuf> = OnceLock::new();
+static IROHAD_PARLIAMENT_SIGNERS_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHA_BIN: OnceLock<PathBuf> = OnceLock::new();
 const BUILD_CACHE_DIR: &str = ".iroha_test_network";
 const BUILD_STAMP_VERSION: u32 = 3;
@@ -2489,6 +2515,11 @@ impl Program {
         } = self.spec();
         let repo = repo_root();
         let release_contract = release_program_contract(&repo)?;
+        if release_contract.is_some() && !self.release_prebuilt_allowed() {
+            return Err(eyre!(
+                "the feature-isolated Parliament signer daemon is forbidden in release-prebuilt corridors"
+            ));
+        }
         let release_binary = self.release_prebuilt_binary();
         // 1) Explicit override
         if let Ok(path) = std::env::var(env) {
@@ -2520,6 +2551,9 @@ impl Program {
         let cached = match self {
             Program::Irohad => cached_binary_if_present(&IROHAD_BIN),
             Program::IrohadMessageControl => cached_binary_if_present(&IROHAD_MESSAGE_CONTROL_BIN),
+            Program::IrohadParliamentSigners => {
+                cached_binary_if_present(&IROHAD_PARLIAMENT_SIGNERS_BIN)
+            }
             Program::Iroha => cached_binary_if_present(&IROHA_BIN),
         };
         if let Some(path) = cached {
@@ -2608,6 +2642,9 @@ impl Program {
                     Program::IrohadMessageControl => {
                         let _ = IROHAD_MESSAGE_CONTROL_BIN.set(found.clone());
                     }
+                    Program::IrohadParliamentSigners => {
+                        let _ = IROHAD_PARLIAMENT_SIGNERS_BIN.set(found.clone());
+                    }
                     Program::Iroha => {
                         let _ = IROHA_BIN.set(found.clone());
                     }
@@ -2649,6 +2686,9 @@ impl Program {
                 }
                 Program::IrohadMessageControl => {
                     let _ = IROHAD_MESSAGE_CONTROL_BIN.set(found.clone());
+                }
+                Program::IrohadParliamentSigners => {
+                    let _ = IROHAD_PARLIAMENT_SIGNERS_BIN.set(found.clone());
                 }
                 Program::Iroha => {
                     let _ = IROHA_BIN.set(found.clone());
@@ -5372,6 +5412,7 @@ pub struct NetworkBuilder {
     auto_populate_trusted_peer_pops: bool,
     npos_genesis_bootstrap_stake: Option<Quantity>,
     consensus_message_control: bool,
+    parliament_test_signers: bool,
     initial_consensus_message_control: Option<InitialConsensusMessageControl>,
 }
 type InitialConsensusMessageControlFactory =
@@ -6344,6 +6385,7 @@ impl NetworkBuilder {
                 SumeragiNposParameters::default().min_self_bond().clone(),
             ),
             consensus_message_control: false,
+            parliament_test_signers: false,
             initial_consensus_message_control: None,
         };
         let mut default_layer = Table::new();
@@ -6438,7 +6480,23 @@ impl NetworkBuilder {
     /// Use a separately built, feature-isolated daemon with receiver-local
     /// authenticated Sumeragi v2 message control for adversarial network tests.
     pub fn with_consensus_message_control(mut self) -> Self {
+        assert!(
+            !self.parliament_test_signers,
+            "the feature-isolated Parliament signer has a separate daemon binary"
+        );
         self.consensus_message_control = true;
+        self
+    }
+    /// Use a separately built, feature-isolated daemon whose runtime dependency
+    /// returns one proof-valid global-beacon share and one proof-valid TLE share
+    /// for each validator's exact local seat. Consensus and release validation
+    /// remain unchanged.
+    pub fn with_parliament_test_signers(mut self) -> Self {
+        assert!(
+            !self.consensus_message_control,
+            "the Parliament signer and message-control daemons are separate test binaries"
+        );
+        self.parliament_test_signers = true;
         self
     }
     /// Stage receiver-local authenticated consensus rules before controlled
@@ -6455,6 +6513,10 @@ impl NetworkBuilder {
     where
         F: Fn(usize, &[PeerId]) -> Vec<ConsensusMessageControlRule> + Send + Sync + 'static,
     {
+        assert!(
+            !self.parliament_test_signers,
+            "the feature-isolated Parliament signer has a separate daemon binary"
+        );
         self.consensus_message_control = true;
         self.initial_consensus_message_control = Some(InitialConsensusMessageControl {
             queue_capacity,
@@ -6788,6 +6850,7 @@ impl NetworkBuilder {
             auto_populate_trusted_peer_pops,
             npos_genesis_bootstrap_stake,
             consensus_message_control,
+            parliament_test_signers,
             initial_consensus_message_control,
         } = self;
         let max_validator_capacity = max_validator_capacity.unwrap_or(n_peers);
@@ -6841,19 +6904,18 @@ impl NetworkBuilder {
             }
             config_layers.push(nexus_accounts_layer);
         }
+        let validator_program = match (consensus_message_control, parliament_test_signers) {
+            (false, false) => Program::Irohad,
+            (true, false) => Program::IrohadMessageControl,
+            (false, true) => Program::IrohadParliamentSigners,
+            (true, true) => unreachable!("builder methods reject combined test daemons"),
+        };
         let mut peers: Vec<_> = (0..n_peers)
             .map(|i| {
                 let seed = seed.as_ref().map(|x| format!("{x}-peer-{i}"));
                 NetworkPeerBuilder::new()
                     .with_seed(seed.as_ref().map(|x| x.as_bytes()))
-                    .build_with_program(
-                        &env,
-                        if consensus_message_control {
-                            Program::IrohadMessageControl
-                        } else {
-                            Program::Irohad
-                        },
-                    )
+                    .build_with_program(&env, validator_program)
             })
             .collect();
         let mut observers: Vec<_> = (0..observer_count)
@@ -8809,25 +8871,16 @@ impl NetworkPeer {
             iroha_data_model::domain::DomainId::try_new("default", "universal")
                 .expect("explicit client convenience domain")
                 .to_string();
+        let network_id = self
+            .network_id
+            .get()
+            .copied()
+            .expect("peer must be attached to a network before creating clients");
         let config = ConfigReader::new()
             .with_toml_source(TomlSource::inline(
                 Table::new()
                     .write("chain", config::chain_id().to_string())
-                    .write(
-                        "network_id",
-                        norito::literal::format(
-                            "hash",
-                            &self
-                                .network_id
-                                .get()
-                                .copied()
-                                .expect(
-                                    "peer must be attached to a network before creating clients",
-                                )
-                                .to_string()
-                                .to_ascii_uppercase(),
-                        ),
-                    )
+                    .write("network_id", network_id.to_string())
                     .write(["account", "domain"], default_account_domain)
                     .write(
                         ["account", "public_key"],
@@ -13883,6 +13936,92 @@ mod tests {
         );
     }
     #[test]
+    fn parliament_signer_daemon_is_feature_target_and_release_isolated() {
+        let spec = Program::IrohadParliamentSigners.spec();
+        let args = spec
+            .build_args
+            .iter()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(spec.env, PROGRAM_IROHAD_PARLIAMENT_SIGNERS_ENV);
+        assert_eq!(spec.isolated_target_subdir, Some("parliament-signers"));
+        assert!(
+            args.windows(2)
+                .any(|pair| { pair == ["--features", "test-network-parliament-signers"] })
+        );
+        assert!(!Program::IrohadParliamentSigners.release_prebuilt_allowed());
+
+        let daemon_manifest = include_str!("../../irohad/Cargo.toml");
+        let default_feature = daemon_manifest
+            .split_once("default = [")
+            .and_then(|(_, tail)| tail.split_once(']'))
+            .map(|(value, _)| value)
+            .expect("irohad default feature declaration");
+        let daemon_feature = daemon_manifest
+            .split_once("daemon = [")
+            .and_then(|(_, tail)| tail.split_once(']'))
+            .map(|(value, _)| value)
+            .expect("irohad daemon feature declaration");
+        for shipping_feature in [default_feature, daemon_feature] {
+            assert!(
+                !shipping_feature.contains("test-network-parliament-signers"),
+                "ordinary daemon construction must not compile the test signer"
+            );
+        }
+        let core_manifest = include_str!("../../iroha_core/Cargo.toml");
+        let core_default_feature = core_manifest
+            .split_once("default = [")
+            .and_then(|(_, tail)| tail.split_once(']'))
+            .map(|(value, _)| value)
+            .expect("iroha_core default feature declaration");
+        let core_node_feature = core_manifest
+            .split_once("node = [")
+            .and_then(|(_, tail)| tail.split_once(']'))
+            .map(|(value, _)| value)
+            .expect("iroha_core node feature declaration");
+        for shipping_feature in [core_default_feature, core_node_feature] {
+            assert!(
+                !shipping_feature.contains("test-network-parliament-signers"),
+                "ordinary Core construction must not compile the test signer"
+            );
+        }
+        let integration_manifest = include_str!("../../../integration_tests/Cargo.toml");
+        assert!(integration_manifest.contains("required-features = [\"parliament-test-signers\"]"));
+        assert!(integration_manifest.contains(
+            "parliament-test-signers = [\"iroha_core/test-network-parliament-signers\"]"
+        ));
+        let daemon_source = include_str!("../../irohad/src/main.rs");
+        assert!(daemon_source.contains("not(debug_assertions)"));
+        assert!(daemon_source.contains(
+            "the feature-isolated Parliament fixture signers cannot be compiled into an optimized daemon"
+        ));
+
+        let beacon_provider =
+            include_str!("../../iroha_core/src/beacon/parliament_test_network_signer.rs");
+        let tle_provider =
+            include_str!("../../iroha_core/src/tle_release/parliament_test_network_signer.rs");
+        assert!(beacon_provider.contains("GlobalThresholdBeaconPartialSignerV1"));
+        assert!(tle_provider.contains("TlePartialReleaseSignerV1"));
+        for provider in [beacon_provider, tle_provider] {
+            assert!(
+                provider.contains("#[cfg(not(debug_assertions))]"),
+                "the Core provider itself must reject optimized compilation"
+            );
+            for forbidden in [
+                "FinalizedGlobalThresholdBeaconPulseV1",
+                "TleFinalReleaseSignatureV1",
+                "ParliamentLifecycleTransitionV1",
+                "StateTransaction",
+                "put_parliament_attempt",
+            ] {
+                assert!(
+                    !provider.contains(forbidden),
+                    "test signer providers must return partial shares only, not `{forbidden}`"
+                );
+            }
+        }
+    }
+    #[test]
     fn program_spec_irohad_includes_features_from_env() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let old_env = env::var(super::PROGRAM_IROHAD_FEATURES_ENV).ok();
@@ -14019,6 +14158,7 @@ mod tests {
             .api_address();
         let client = network.client();
         let expected_host = expected.host_str();
+        assert_eq!(client.network_id, network.network_id());
         assert_eq!(client.torii_url.host_str(), Some(expected_host.as_ref()));
         assert_eq!(
             client.torii_url.port_or_known_default(),

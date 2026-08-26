@@ -366,6 +366,7 @@ pub async fn handler_post_da_ingest(
 ) -> Result<Response, ResponseError> {
     let format = utils::negotiate_response_format(headers.get(axum::http::header::ACCEPT))
         .map_err(ResponseError::from)?;
+    reject_emergency_fast_da_service(app.as_ref(), format)?;
     let authenticated_owner =
         authenticate_da_ingest_request(&request, &verified_principal, app.state.network_id_ref())
             .map_err(|(status, message)| {
@@ -1086,6 +1087,7 @@ pub async fn handler_get_da_manifest(
     utils::negotiate_json_only_response(headers.get(axum::http::header::ACCEPT))
         .map_err(ResponseError::from)?;
     let format = ResponseFormat::Json;
+    reject_emergency_fast_da_service(app.as_ref(), format)?;
     let ticket_bytes = match parse_storage_ticket_hex(ticket_hex.trim()) {
         Ok(bytes) => bytes,
         Err(message) => {
@@ -1200,6 +1202,20 @@ pub async fn handler_get_da_manifest(
         response,
         format,
     )
+}
+
+fn reject_emergency_fast_da_service(
+    app: &crate::AppState,
+    format: ResponseFormat,
+) -> Result<(), ResponseError> {
+    if app.kura.emergency_fast_startup_enabled() {
+        return Err(ResponseError::from(build_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DA ingest and manifest storage are unavailable during emergency Fast startup",
+            format,
+        )));
+    }
+    Ok(())
 }
 fn attach_pdp_commitment_header_from_spool(
     spool_dir: &Path,

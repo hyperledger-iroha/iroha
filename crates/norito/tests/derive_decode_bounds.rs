@@ -54,7 +54,7 @@ fn derive_decode_rejects_overlong_field() {
     let mut cursor = Cursor::new(payload);
     let decoded = Wrapper::decode(&mut cursor);
     match decoded {
-        Err(Error::LengthMismatch) => {}
+        Err(Error::LengthMismatch | Error::FieldLengthExceeded { .. }) => {}
         Err(err) => panic!("unexpected decode error: {err:?}"),
         Ok(_) => panic!("expected decode failure for truncated payload"),
     }

@@ -102,7 +102,7 @@ public final class CancelAssetLockWirePayloadEncoder {
           decodeSizedRawField(decoder, "Quantity.mantissa");
       final NoritoDecoder mantissaDecoder =
           new NoritoDecoder(
-              mantissaPayload, decoder.flags(), decoder.flagsHint());
+              mantissaPayload, decoder.flags());
       final int byteLength =
           checkedLength(
               mantissaDecoder.readUInt(32), "Quantity.mantissa byte length");
@@ -123,7 +123,7 @@ public final class CancelAssetLockWirePayloadEncoder {
             "Quantity.scale must contain exactly four bytes");
       }
       final NoritoDecoder scaleDecoder =
-          new NoritoDecoder(scalePayload, decoder.flags(), decoder.flagsHint());
+          new NoritoDecoder(scalePayload, decoder.flags());
       final int scale = Math.toIntExact(UINT32_ADAPTER.decode(scaleDecoder));
       if (scaleDecoder.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after Quantity.scale");
@@ -162,7 +162,7 @@ public final class CancelAssetLockWirePayloadEncoder {
       final String fieldName) {
     final byte[] payload = decodeSizedRawField(decoder, fieldName);
     final NoritoDecoder child =
-        new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+        new NoritoDecoder(payload, decoder.flags());
     final T value = adapter.decode(child);
     if (child.remaining() != 0) {
       throw new IllegalArgumentException("Trailing bytes after " + fieldName);

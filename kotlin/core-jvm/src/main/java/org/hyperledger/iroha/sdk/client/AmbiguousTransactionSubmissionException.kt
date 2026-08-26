@@ -13,8 +13,16 @@ import java.util.concurrent.CompletableFuture
 class AmbiguousTransactionSubmissionException internal constructor(
     @JvmField val hashHex: String,
     @JvmField val statusCode: Int?,
+    rejectCode: String?,
+    responseBody: String?,
     cause: Throwable?,
-) : RuntimeException(buildMessage(hashHex, statusCode), cause) {
+) : RuntimeException(buildMessage(hashHex, statusCode, rejectCode, responseBody), cause) {
+
+    @JvmField
+    val rejectCode: String? = rejectCode?.trim()?.ifBlank { null }
+
+    @JvmField
+    val responseBody: String? = responseBody?.ifBlank { null }
 
     /** Poll the authoritative pipeline status for the exact transaction hash. */
     @JvmOverloads
@@ -24,10 +32,22 @@ class AmbiguousTransactionSubmissionException internal constructor(
     ): CompletableFuture<Map<String, Any>> = client.waitForTransactionStatus(hashHex, options)
 
     private companion object {
-        fun buildMessage(hashHex: String, statusCode: Int?): String = buildString {
+        fun buildMessage(
+            hashHex: String,
+            statusCode: Int?,
+            rejectCode: String?,
+            responseBody: String?,
+        ): String = buildString {
             append("Transaction ").append(hashHex)
             append(" had exactly one dispatch attempt, but its admission outcome is unknown")
             if (statusCode != null) append(" after HTTP status ").append(statusCode)
+            val trimmedCode = rejectCode?.trim()
+            if (!trimmedCode.isNullOrBlank()) {
+                append(" (reject_code=").append(trimmedCode).append(")")
+            }
+            if (!responseBody.isNullOrBlank()) {
+                append(". body=").append(responseBody)
+            }
             append(". Do not resend the signed bytes; reconcile by transaction hash.")
         }
     }

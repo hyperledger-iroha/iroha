@@ -84,15 +84,6 @@ fn soracloud_runtime_json_deserialize_applies_explicit_overrides() {
                 "allowed_hosts":["cdn.sora.test"],
                 "rate_per_minute":120,
                 "max_bytes_per_minute":262144
-            },
-            "hf":{
-                "hub_base_url":"https://mirror.hf.test",
-                "api_base_url":"https://mirror.hf.test/api",
-                "request_timeout_ms":21000,
-                "import_max_files":48,
-                "import_max_file_bytes":777777,
-                "import_max_total_bytes":9999999,
-                "import_file_allowlist":["config.json","*.safetensors"]
             }
         }"#;
     let parsed: SoracloudRuntime =
@@ -161,15 +152,6 @@ fn soracloud_runtime_json_deserialize_rejects_removed_legacy_runtime_field() {
             "egress":{
                 "default_allow":true,
                 "allowed_hosts":["cdn.sora.test"]
-            },
-            "hf":{
-                "hub_base_url":"https://mirror.hf.test",
-                "api_base_url":"https://mirror.hf.test/api",
-                "request_timeout_ms":21000,
-                "import_max_files":48,
-                "import_max_file_bytes":777777,
-                "import_max_total_bytes":9999999,
-                "import_file_allowlist":["config.json","*.safetensors"]
             }
         }"#
     .replace(
@@ -187,28 +169,6 @@ fn nexus_hf_shared_leases_defaults_apply() {
         actual.nexus.hf_shared_leases.drain_grace,
         StdDuration::from_millis(defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS)
     );
-    assert_eq!(
-        actual.nexus.hf_shared_leases.warmup_no_show_slash_bps,
-        defaults::nexus::hf_shared_leases::WARMUP_NO_SHOW_SLASH_BPS
-    );
-    assert_eq!(
-        actual
-            .nexus
-            .hf_shared_leases
-            .assigned_heartbeat_miss_slash_bps,
-        defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_SLASH_BPS
-    );
-    assert_eq!(
-        actual
-            .nexus
-            .hf_shared_leases
-            .assigned_heartbeat_miss_strike_threshold,
-        defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_STRIKE_THRESHOLD
-    );
-    assert_eq!(
-        actual.nexus.hf_shared_leases.advert_contradiction_slash_bps,
-        defaults::nexus::hf_shared_leases::ADVERT_CONTRADICTION_SLASH_BPS
-    );
 }
 #[test]
 fn nexus_hf_shared_leases_parse_applies_explicit_overrides() {
@@ -220,40 +180,11 @@ fn nexus_hf_shared_leases_parse_applies_explicit_overrides() {
         .expect("nexus table");
     let mut hf_shared_leases = Table::new();
     hf_shared_leases.insert("drain_grace_ms".into(), Value::Integer(12_345));
-    hf_shared_leases.insert("warmup_no_show_slash_bps".into(), Value::Integer(777));
-    hf_shared_leases.insert(
-        "assigned_heartbeat_miss_slash_bps".into(),
-        Value::Integer(222),
-    );
-    hf_shared_leases.insert(
-        "assigned_heartbeat_miss_strike_threshold".into(),
-        Value::Integer(4),
-    );
-    hf_shared_leases.insert("advert_contradiction_slash_bps".into(), Value::Integer(999));
     nexus.insert("hf_shared_leases".into(), Value::Table(hf_shared_leases));
     let actual = load_root(table);
     assert_eq!(
         actual.nexus.hf_shared_leases.drain_grace,
         StdDuration::from_millis(12_345)
-    );
-    assert_eq!(actual.nexus.hf_shared_leases.warmup_no_show_slash_bps, 777);
-    assert_eq!(
-        actual
-            .nexus
-            .hf_shared_leases
-            .assigned_heartbeat_miss_slash_bps,
-        222
-    );
-    assert_eq!(
-        actual
-            .nexus
-            .hf_shared_leases
-            .assigned_heartbeat_miss_strike_threshold,
-        4
-    );
-    assert_eq!(
-        actual.nexus.hf_shared_leases.advert_contradiction_slash_bps,
-        999
     );
 }
 #[test]
@@ -520,11 +451,11 @@ fn network_parse_clamps_zero_periods() {
 #[test]
 fn sumeragi_v2_exact_output_geometry_accepts_network_source_boundary() {
     let mut table = base_table();
-    let network = table
+    table
         .get_mut("network")
         .and_then(Value::as_table_mut)
-        .expect("network table");
-    network.insert("max_total_connections".into(), Value::Integer(97));
+        .expect("network table")
+        .insert("max_total_connections".into(), Value::Integer(2));
     let sumeragi = table
         .entry("sumeragi")
         .or_insert_with(|| Value::Table(Table::new()))
@@ -536,6 +467,23 @@ fn sumeragi_v2_exact_output_geometry_accepts_network_source_boundary() {
         .as_table_mut()
         .expect("sumeragi.queues table");
     queues.insert("commands".into(), Value::Integer(8_192));
+    let provisional = load_root(table.clone());
+    let shared_capacity = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
+        (provisional.sumeragi.queues.commands.get()
+            / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
+            .max(1),
+        provisional.sumeragi.queues.bodies.get(),
+    )
+    .expect("fixture capacity must be representable");
+    let source_boundary = shared_capacity / defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT;
+    table
+        .get_mut("network")
+        .and_then(Value::as_table_mut)
+        .expect("network table")
+        .insert(
+            "max_total_connections".into(),
+            Value::Integer(i64::try_from(source_boundary).expect("source boundary fits i64")),
+        );
     let actual = load_root(table.clone());
     assert_eq!(actual.sumeragi.queues.commands.get(), 8_192);
     assert_eq!(
@@ -543,20 +491,29 @@ fn sumeragi_v2_exact_output_geometry_accepts_network_source_boundary() {
             .network
             .max_total_connections
             .map(std::num::NonZeroUsize::get),
-        Some(97),
+        Some(source_boundary),
     );
+    let rejected_source_capacity = source_boundary + 1;
     table
         .get_mut("network")
         .and_then(Value::as_table_mut)
         .expect("network table")
-        .insert("max_total_connections".into(), Value::Integer(98));
+        .insert(
+            "max_total_connections".into(),
+            Value::Integer(
+                i64::try_from(rejected_source_capacity).expect("rejected source capacity fits i64"),
+            ),
+        );
     let error = actual::Root::from_toml_source(TomlSource::inline(table))
-        .expect_err("the next reply-source slot exceeds lifecycle capacity");
+        .expect_err("the next reply-source slot exceeds exact-output capacity");
     let report = format!("{error:?}");
+    let rejected_fanout = rejected_source_capacity
+        .checked_mul(defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT)
+        .expect("fixture fanout fits usize");
     assert!(
-        report.contains(
-            "Sumeragi v2 lifecycle record capacity 66084 exceeds maximum 65536; configured network reply-source capacity is 98"
-        ),
+        report.contains(&format!(
+            "Sumeragi v2 outbound shared ownership capacity {shared_capacity} is below one maximum fanout {rejected_fanout}; configured network reply-source capacity is {rejected_source_capacity}"
+        )),
         "{report}",
     );
 }

@@ -251,6 +251,85 @@ let ingress_predecessors = state
         errors,
     )
 
+    selection_scopes = rust_enum_items(
+        ingress_source, "FairV2IngressCheckedSelectionScope"
+    )
+    if len(selection_scopes) != 1:
+        errors.append(
+            f"{ingress_path}: checked fair-ingress selection scope must have "
+            f"exactly one enum declaration; found {len(selection_scopes)}"
+        )
+        selection_scope = None
+    else:
+        selection_scope = selection_scopes[0]
+    _require_rust_item_token_sha256(
+        ingress_path,
+        selection_scope,
+        _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
+            "FairV2IngressCheckedSelectionScope"
+        ],
+        "closed ordinary-or-lane-local fair-ingress selection scope",
+        errors,
+    )
+
+    lifecycle_scope_projection = _require_rust_item(
+        ingress_path,
+        ingress_source,
+        "is_lifecycle_lane_local",
+        errors,
+    )
+    _require_rust_item_context(
+        ingress_path,
+        lifecycle_scope_projection,
+        (("impl", "FairV2IngressCheckedSelectionScope"),),
+        "lane-local checked-selection scope projection",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        ingress_path,
+        lifecycle_scope_projection,
+        _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256["is_lifecycle_lane_local"],
+        "lane-local checked-selection scope projection",
+        errors,
+    )
+
+    lifecycle_lane_local_selector = _require_rust_item(
+        ingress_path,
+        ingress_source,
+        "try_recv_lifecycle_lane_local_checked",
+        errors,
+    )
+    _require_rust_item_context(
+        ingress_path,
+        lifecycle_lane_local_selector,
+        (("impl", "FairV2Ingress"),),
+        "sealed lifecycle lane-local fair-ingress selector wrapper",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        ingress_path,
+        lifecycle_lane_local_selector,
+        _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
+            "try_recv_lifecycle_lane_local_checked"
+        ],
+        "sealed lifecycle lane-local fair-ingress selector wrapper",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        lifecycle_lane_local_selector,
+        """
+self.try_recv_if_at_checked_classified(
+    Instant::now(),
+    false,
+    FairV2IngressCheckedSelectionScope::LifecycleLaneLocal { _permit: permit },
+    |inbound| inbound.message().is_lane_local(),
+)
+""",
+        "blocked ordinary ingress must delegate only lane-local traffic to the shared classifier",
+        errors,
+    )
+
     ordinary_selector = _require_rust_item(
         ingress_path,
         ingress_source,
@@ -276,7 +355,14 @@ let ingress_predecessors = state
     _require_rust_token_sequence(
         ingress_path,
         ordinary_selector,
-        "self.try_recv_if_at_checked_classified(service_attempt_at, false, predicate)",
+        """
+self.try_recv_if_at_checked_classified(
+    service_attempt_at,
+    false,
+    FairV2IngressCheckedSelectionScope::Ordinary,
+    predicate,
+)
+""",
         "ordinary timestamped ingress must delegate to the single classifier",
         errors,
     )
@@ -366,14 +452,22 @@ let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection(
         ingress_path,
         selector,
         """
-let verdict = fair_v2_ingress_queue_gate_verdict(
-    source,
-    lane,
-    index,
-    &leader_wire_projection,
-);
+let verdict = if selection_scope.is_lifecycle_lane_local() {
+    if entry.inbound.message().is_lane_local() {
+        FairV2IngressQueueGateVerdict::Dependency
+    } else {
+        FairV2IngressQueueGateVerdict::Blocked
+    }
+} else {
+    fair_v2_ingress_queue_gate_verdict(
+        source,
+        lane,
+        index,
+        &leader_wire_projection,
+    )
+};
 """,
-        "every candidate must use the sealed queue-local gate verdict",
+        "the sealed lifecycle scope must expose only lane-local dependencies while ordinary selection preserves the queue-local gate",
         errors,
     )
     _require_rust_token_sequence(
