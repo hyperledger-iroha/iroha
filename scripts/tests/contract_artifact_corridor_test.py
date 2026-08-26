@@ -706,7 +706,11 @@ def test_evm_tooling_is_locked_audited_hardhat_without_ganache() -> None:
         "hardhat": "3.9.1",
         "solc": "file:../authenticated-solc",
     }
-    assert package["overrides"] == {"adm-zip": "0.6.0", "ws": "8.21.0"}
+    assert package["overrides"] == {
+        "adm-zip": "0.6.0",
+        "undici": "6.28.0",
+        "ws": "8.21.0",
+    }
     assert all("ganache" not in name.casefold() for name in package_lock["packages"])
     for name, value in package_lock["packages"].items():
         if not name or "resolved" not in value:
@@ -720,6 +724,10 @@ def test_evm_tooling_is_locked_audited_hardhat_without_ganache() -> None:
     provider = (tooling / "hardhat-provider.js").read_text(encoding="utf-8")
     assert 'rawRequest("eth_chainId", [])' in provider
     assert "reported the wrong chain id" in provider
+    assert 'path.basename(packageRoot) !== "hardhat"' in provider
+    assert 'path.basename(nodeModules) !== "node_modules"' in provider
+    assert 'path.join(installation.runtimeRoot, ".iroha-sccp-hardhat-")' in provider
+    assert "os.tmpdir()" not in provider
     smoke = (ROOT / "scripts" / "sccp_evm_contract_smoke.sh").read_text(
         encoding="utf-8"
     )
