@@ -102,23 +102,35 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         )
     }
 
-    func testTerminalFailureSanitizerRejectsHostileCodeAndBoundsUnicode() {
-        let failure = KagemushaOperationTerminalFailure(
-            code: " BAD\u{0000}CODE ",
-            message: " \u{0000}" + String(repeating: "é", count: 2_000) + "\u{0007} "
+    func testTerminalFailureRequiresExactWireInvariants() throws {
+        let maximumMessage = String(repeating: "😀", count: 1_024)
+        let failure = try KagemushaOperationTerminalFailure(
+            code: KagemushaOperationErrorEnvelope.rejectionCode,
+            message: maximumMessage
         )
 
         XCTAssertEqual(failure.code, "offline_operation_rejected")
-        XCTAssertLessThanOrEqual(
-            failure.message.utf8.count,
-            KagemushaOperationTerminalFailure.maximumMessageUTF8Bytes
-        )
-        XCTAssertFalse(
-            failure.message.unicodeScalars.contains {
-                CharacterSet.controlCharacters.contains($0)
+        XCTAssertEqual(failure.message, maximumMessage)
+
+        for (code, message) in [
+            ("rejected", "Rejected by policy."),
+            ("offline_operation_rejected", ""),
+            ("offline_operation_rejected", " Rejected by policy."),
+            ("offline_operation_rejected", "Rejected\u{0000} by policy."),
+            ("offline_operation_rejected", String(repeating: "😀", count: 1_025)),
+        ] {
+            XCTAssertThrowsError(
+                try KagemushaOperationTerminalFailure(
+                    code: code,
+                    message: message
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaOperationFinalityError,
+                    .continuityViolation("rejected error")
+                )
             }
-        )
-        XCTAssertNotEqual(failure.message.last, "�")
+        }
     }
 
     func testDefinitiveFailureCodableIsStrictAndDropsBinaryDiagnostics() throws {
@@ -373,7 +385,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
     func testOnlyAuthoritative404AllowsDurableMarkerThenSubmission() async throws {
         for kind in [KagemushaOperationKind.topUp, .redeem] {
             let operationId = id(kind == .topUp ? 0x11 : 0x12)
-            let transactionHash = id(kind == .topUp ? 0x21 : 0x22)
+            let transactionHash = markedHash(kind == .topUp ? 0x21 : 0x22)
             let harness = Harness(
                 operationId: operationId,
                 kind: kind,
@@ -437,7 +449,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
 
     func testStatusFirstAppliedSkipsReadinessMarkerAndSubmission() async throws {
         let operationId = id(0x31)
-        let transactionHash = id(0x32)
+        let transactionHash = markedHash(0x32)
         let harness = Harness(
             operationId: operationId,
             kind: .redeem,
@@ -457,7 +469,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
 
     func testInitialTransientStatusFailureNeverAuthorizesSubmission() async throws {
         let operationId = id(0x41)
-        let transactionHash = id(0x42)
+        let transactionHash = markedHash(0x42)
         for initialFailure in [
             ToriiClientError.transport(URLError(.timedOut)),
             ToriiClientError.httpStatus(
@@ -506,7 +518,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
 
     func testAmbiguousSubmissionIsPolledWithoutSecondPost() async throws {
         let operationId = id(0x51)
-        let transactionHash = id(0x52)
+        let transactionHash = markedHash(0x52)
         let harness = Harness(
             operationId: operationId,
             kind: .redeem,
@@ -543,7 +555,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
             "PRTRY:ROUTE_UNRESOLVED",
         ].enumerated() {
             let operationId = id(UInt8(0x55 + index * 2))
-            let transactionHash = id(UInt8(0x56 + index * 2))
+            let transactionHash = markedHash(UInt8(0x56 + index * 2))
             let first = Harness(
                 operationId: operationId,
                 kind: .redeem,
@@ -604,7 +616,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
 
     func testPostAcceptanceServerFailureIsStatusPolledWithoutReplay() async throws {
         let operationId = id(0x53)
-        let transactionHash = id(0x54)
+        let transactionHash = markedHash(0x54)
         for failure in [
             ToriiClientError.httpStatus(
                 code: 503,
@@ -764,7 +776,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
     func testSubstitutedAcceptedReferenceFailsBeforeAcceptanceOrPolling() async throws {
         let operationId = id(0x71)
         let otherOperationId = id(0x72)
-        let transactionHash = id(0x73)
+        let transactionHash = markedHash(0x73)
         let harness = Harness(
             operationId: operationId,
             kind: .topUp,
@@ -789,8 +801,9 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
 
     func testTransactionHashSubstitutionFailsBeforeSecondPersistence() async throws {
         let operationId = id(0x81)
-        let firstHash = id(0x82)
-        let substitutedHash = id(0x83)
+        let firstHash = markedHash(0x82)
+        let substitutedHash = markedHash(0x83)
+        XCTAssertNotEqual(firstHash, substitutedHash)
         let harness = Harness(
             operationId: operationId,
             kind: .redeem,
@@ -815,7 +828,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
 
     func testSubmittedTimestampSubstitutionFailsBeforeSecondPersistence() async throws {
         let operationId = id(0x84)
-        let transactionHash = id(0x85)
+        let transactionHash = markedHash(0x85)
         let harness = Harness(
             operationId: operationId,
             kind: .redeem,
@@ -851,12 +864,12 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
 
     func testRestartContinuitySeedRejectsHashAndTimestampSubstitution() async throws {
         let operationId = id(0x86)
-        let transactionHash = id(0x87)
+        let transactionHash = markedHash(0x87)
         for status in [
             try pending(
                 operationId,
                 .redeem,
-                id(0x88),
+                markedHash(0x88),
                 submittedAtMs: 9
             ),
             try pending(
@@ -889,11 +902,12 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
 
     func testInvalidRestartContinuitySeedsFailBeforeAnySideEffect() async throws {
         let operationId = id(0x89)
-        let validHash = id(0x8a)
+        let validHash = markedHash(0x8a)
         let cases: [(String, UInt64?)] = [
             (validHash, 0),
             (String(repeating: "0", count: 64), 1),
             (String(repeating: "A", count: 64), 1),
+            (String(repeating: "22", count: 32), 1),
         ]
         for (hash, timestamp) in cases {
             let harness = Harness(
@@ -917,7 +931,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
 
     func testHashOnlyRestartSeedSupportsTerminalFirstStatus() async throws {
         let operationId = id(0x8b)
-        let transactionHash = id(0x8c)
+        let transactionHash = markedHash(0x8c)
         let harness = Harness(
             operationId: operationId,
             kind: .redeem,
@@ -944,7 +958,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
             steps: [.failure(notFound)]
         )
         harness.continuity = .accepted(
-            transactionHash: id(0x8e),
+            transactionHash: markedHash(0x8e),
             submittedAtMs: nil
         )
         harness.submitHook = {
@@ -969,7 +983,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
             operationId: operationId,
             kind: .topUp,
             steps: [
-                .status(try pending(operationId, .redeem, id(0x92))),
+                .status(try pending(operationId, .redeem, markedHash(0x92))),
             ]
         )
 
@@ -983,10 +997,11 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         XCTAssertNil(harness.journal.transactionHash)
     }
 
-    func testRejectedStatusIsBoundedPersistedThenSurfaced() async throws {
+    func testRejectedStatusIsPersistedAndSurfacedWithoutCoercion() async throws {
         let operationId = id(0xa1)
-        let transactionHash = id(0xa2)
-        let oversizedMessage = String(repeating: "é", count: 2_000)
+        let transactionHash = markedHash(0xa2)
+        let wireMessage = String(repeating: "😀", count: 1_024)
+        XCTAssertEqual(wireMessage.unicodeScalars.count, 1_024)
         let harness = Harness(
             operationId: operationId,
             kind: .redeem,
@@ -996,7 +1011,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
                         operationId,
                         .redeem,
                         transactionHash,
-                        message: oversizedMessage
+                        message: wireMessage
                     )
                 ),
             ]
@@ -1007,10 +1022,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
             return XCTFail("expected terminal rejected resolution")
         }
         XCTAssertEqual(rejection.failure.code, "offline_operation_rejected")
-        XCTAssertLessThanOrEqual(
-            rejection.failure.message.utf8.count,
-            KagemushaOperationTerminalFailure.maximumMessageUTF8Bytes
-        )
+        XCTAssertEqual(rejection.failure.message, wireMessage)
         XCTAssertTrue(resolution.state.rejected)
         XCTAssertTrue(harness.journal.rejected)
         XCTAssertEqual(harness.journal.transactionHash, transactionHash)
@@ -1022,7 +1034,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
 
     func testPollingIsExactlyBoundedAndSleepsOnlyBetweenAttempts() async throws {
         let operationId = id(0xb1)
-        let transactionHash = id(0xb2)
+        let transactionHash = markedHash(0xb2)
         let status = try pending(operationId, .redeem, transactionHash)
         let harness = Harness(
             operationId: operationId,
@@ -1135,7 +1147,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
 
     func testCancellationDuringSubmissionRecoversStatusFirstAfterRestart() async throws {
         let operationId = id(0xc5)
-        let transactionHash = id(0xc6)
+        let transactionHash = markedHash(0xc6)
         let first = Harness(
             operationId: operationId,
             kind: .redeem,
@@ -1169,7 +1181,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
 
     func testAcceptancePersistenceErrorsAreNeverMisclassifiedAsTransportAmbiguity() async throws {
         let operationId = id(0xd1)
-        let transactionHash = id(0xd2)
+        let transactionHash = markedHash(0xd2)
         let harness = Harness(
             operationId: operationId,
             kind: .redeem,
@@ -1381,7 +1393,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
     func testTypedOperationBindsStatusAndSubmissionToEmbeddedRequestIdentity() async throws {
         let operationBytes = Data(repeating: 0xe1, count: 32)
         let operationId = id(0xe1)
-        let transactionHash = id(0xe2)
+        let transactionHash = markedHash(0xe2)
         let request = try KagemushaRedeemRequest(
             noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.redeemRequestWireName,
@@ -1452,7 +1464,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
     func testConcurrentSameOperationFailsFastAndSubmitsOnlyOnce() async throws {
         let operation = try redeemOperation(0xe3)
         let operationId = operation.operationId
-        let transactionHash = id(0xe4)
+        let transactionHash = markedHash(0xe4)
         let transport = LeaseFinalityTransport(
             expectedOperation: operation,
             reference: try reference(operationId, .redeem, transactionHash),
@@ -1481,7 +1493,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
 
     func testOverallDeadlineReleasesLeaseWhenTransportIgnoresCancellation() async throws {
         let operation = try redeemOperation(0xec)
-        let transactionHash = id(0xed)
+        let transactionHash = markedHash(0xed)
         let configuration = try KagemushaOperationFinalityConfiguration(
             maximumPollAttempts: 1,
             pollingIntervalNanoseconds: 1_000_000_000,
@@ -1522,11 +1534,11 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
             reference: try reference(
                 firstOperation.operationId,
                 .redeem,
-                id(0xe7)
+                markedHash(0xe7)
             ),
             terminalStatus: try appliedRedeem(
                 firstOperation.operationId,
-                id(0xe7)
+                markedHash(0xe7)
             )
         )
         let secondTransport = LeaseFinalityTransport(
@@ -1534,11 +1546,11 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
             reference: try reference(
                 secondOperation.operationId,
                 .redeem,
-                id(0xe8)
+                markedHash(0xe8)
             ),
             terminalStatus: try appliedRedeem(
                 secondOperation.operationId,
-                id(0xe8)
+                markedHash(0xe8)
             )
         )
         let first = Task {
@@ -1571,6 +1583,12 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
 
     private func id(_ byte: UInt8) -> String {
         String(repeating: String(format: "%02x", byte), count: 32)
+    }
+
+    private func markedHash(_ byte: UInt8) -> String {
+        var bytes = [UInt8](repeating: byte, count: CanonicalIrohaHashText.byteCount)
+        bytes[bytes.index(before: bytes.endIndex)] |= 1
+        return bytes.map { String(format: "%02x", $0) }.joined()
     }
 
     private func pending(

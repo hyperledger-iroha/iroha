@@ -6,11 +6,11 @@ import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.crypto.KeyProviderMetadata;
 
 /**
- * Placeholder interface capturing the operations required from the Android Keystore runtime.
+ * Operations supplied by the Android Keystore runtime.
  *
- * <p>The actual implementation will live in the Android-specific source set where the Android SDK is
- * available. This marker is provided so the main sources can reference the class without introducing
- * a hard dependency on android.jar in the desktop build.
+ * <p>{@link SystemAndroidKeystoreBackend} provides the platform implementation. Keeping this interface
+ * in the shared source set lets desktop callers detect that the Android runtime is unavailable without
+ * introducing a hard dependency on {@code android.jar}.
  */
 public interface AndroidKeystoreBackend extends KeystoreBackend {
 

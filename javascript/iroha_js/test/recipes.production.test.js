@@ -83,6 +83,25 @@ test("the source-checkout batching recipe runs offline end to end", () => {
   assert.equal(result.stderr, "");
 });
 
+test("application recipes pin generated default identities to Taira 369", () => {
+  for (const recipe of [
+    "assets_iterators.mjs",
+    "batching.mjs",
+    "governance.mjs",
+    "nexus_app_transfer.mjs",
+    "nft_account_iteration.mjs",
+    "walletlessFollowGame.mjs",
+  ]) {
+    const source = readFileSync(join(ROOT, "recipes", recipe), "utf8");
+    assert.match(source, /\.toI105\(369\)/u, `${recipe} must pin Taira 369`);
+    assert.doesNotMatch(
+      source,
+      /\.toI105\(\)/u,
+      `${recipe} must not inherit the generic Sora renderer default`,
+    );
+  }
+});
+
 test("live recipes reject ambiguous security flags before I/O", () => {
   const iterator = spawnSync(
     process.execPath,

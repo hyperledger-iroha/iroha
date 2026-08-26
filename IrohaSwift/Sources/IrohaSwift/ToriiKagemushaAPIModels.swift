@@ -478,142 +478,27 @@ package enum KagemushaOperationResult: Equatable, Sendable {
     case redeem(KagemushaRedeemResult)
 }
 
-package struct KagemushaQueueErrorSnapshot: Equatable, Sendable {
-    public let state: String
-    public let queued: UInt64
-    public let capacity: UInt64
-    public let saturated: Bool
-
-    public init(state: String, queued: UInt64, capacity: UInt64, saturated: Bool) throws {
-        self.state = try KagemushaOperationValidation.exactToken(
-            state,
-            field: "error.details.queue.state"
-        )
-        self.queued = queued
-        self.capacity = capacity
-        self.saturated = saturated
-    }
-}
-
-package struct KagemushaAxtErrorDetails: Equatable, Sendable {
-    public let code: String?
-    public let reason: String?
-    public let snapshotVersion: UInt64?
-    public let dataspace: UInt64?
-    public let lane: UInt32?
-    public let activeHandleEra: UInt64?
-    public let nextHandleCounter: UInt64?
-
-    public init(
-        code: String? = nil,
-        reason: String? = nil,
-        snapshotVersion: UInt64? = nil,
-        dataspace: UInt64? = nil,
-        lane: UInt32? = nil,
-        activeHandleEra: UInt64? = nil,
-        nextHandleCounter: UInt64? = nil
-    ) throws {
-        self.code = try code.map {
-            try KagemushaOperationValidation.exactText($0, field: "error.details.axt.code")
-        }
-        self.reason = try reason.map {
-            try KagemushaOperationValidation.exactText($0, field: "error.details.axt.reason")
-        }
-        self.snapshotVersion = snapshotVersion
-        self.dataspace = dataspace
-        self.lane = lane
-        self.activeHandleEra = activeHandleEra
-        self.nextHandleCounter = nextHandleCounter
-    }
-}
-
-package struct KagemushaOperationErrorDetails: Equatable, Sendable {
-    public let layer: String?
-    public let rejectCode: String?
-    public let queue: KagemushaQueueErrorSnapshot?
-    public let retryAfterSeconds: UInt64?
-    public let endpoint: String?
-    public let field: String?
-    public let expected: String?
-    public let actual: String?
-    public let profile: String?
-    public let chainDiscriminant: UInt16?
-    public let entrypointHash: String?
-    public let transactionHash: String?
-    public let lastStatus: String?
-    public let hint: String?
-    public let axt: KagemushaAxtErrorDetails?
-
-    public init(
-        layer: String? = nil,
-        rejectCode: String? = nil,
-        queue: KagemushaQueueErrorSnapshot? = nil,
-        retryAfterSeconds: UInt64? = nil,
-        endpoint: String? = nil,
-        field: String? = nil,
-        expected: String? = nil,
-        actual: String? = nil,
-        profile: String? = nil,
-        chainDiscriminant: UInt16? = nil,
-        entrypointHash: String? = nil,
-        transactionHash: String? = nil,
-        lastStatus: String? = nil,
-        hint: String? = nil,
-        axt: KagemushaAxtErrorDetails? = nil
-    ) throws {
-        self.layer = try Self.exactOptionalText(layer, field: "error.details.layer")
-        self.rejectCode = try rejectCode.map {
-            try KagemushaOperationValidation.exactText($0, field: "error.details.reject_code")
-        }
-        self.queue = queue
-        self.retryAfterSeconds = retryAfterSeconds
-        self.endpoint = try Self.exactOptionalText(endpoint, field: "error.details.endpoint")
-        self.field = try Self.exactOptionalText(field, field: "error.details.field")
-        self.expected = try Self.exactOptionalText(expected, field: "error.details.expected")
-        self.actual = try Self.exactOptionalText(actual, field: "error.details.actual")
-        self.profile = try Self.exactOptionalText(profile, field: "error.details.profile")
-        self.chainDiscriminant = chainDiscriminant
-        self.entrypointHash = try entrypointHash.map {
-            try KagemushaOperationValidation.transactionHash(
-                $0,
-                field: "error.details.entrypoint_hash"
-            )
-        }
-        self.transactionHash = try transactionHash.map {
-            try KagemushaOperationValidation.transactionHash(
-                $0,
-                field: "error.details.transaction_hash"
-            )
-        }
-        self.lastStatus = try Self.exactOptionalText(
-            lastStatus,
-            field: "error.details.last_status"
-        )
-        self.hint = try Self.exactOptionalText(hint, field: "error.details.hint")
-        self.axt = axt
-    }
-
-    private static func exactOptionalText(_ value: String?, field: String) throws -> String? {
-        try value.map { try KagemushaOperationValidation.exactText($0, field: field) }
-    }
-}
-
+/// Exact terminal rejection carried by the first-release offline operation status.
+///
+/// Torii's generic error envelope may expose structured details on unrelated
+/// routes. The Offline Cash V1 status contract deliberately narrows that wire
+/// type to one stable code, one bounded message, and an absent details field.
 package struct KagemushaOperationErrorEnvelope: Equatable, Sendable {
+    public static let rejectionCode = "offline_operation_rejected"
+    public static let maximumMessageUnicodeScalars = 1_024
+
     public let code: String
     public let message: String
-    public let details: KagemushaOperationErrorDetails?
 
-    public init(
-        code: String,
-        message: String,
-        details: KagemushaOperationErrorDetails? = nil
-    ) throws {
-        self.code = try KagemushaOperationValidation.stableCode(code, field: "error.code")
-        self.message = try KagemushaOperationValidation.exactText(
+    public init(code: String, message: String) throws {
+        guard code == Self.rejectionCode else {
+            throw KagemushaOperationError.invalidField("error.code")
+        }
+        self.code = code
+        self.message = try KagemushaOperationValidation.rejectionMessage(
             message,
             field: "error.message"
         )
-        self.details = details
     }
 }
 
@@ -945,132 +830,7 @@ package enum KagemushaOperationCodec {
         let message = try readField(&reader, compact: compact) {
             try readString(&$0, compact: compact)
         }
-        let details = try readField(&reader, compact: compact) {
-            try decodeOption(&$0, compact: compact) {
-                try decodeErrorDetails(&$0, compact: compact)
-            }
-        }
-        return try KagemushaOperationErrorEnvelope(code: code, message: message, details: details)
-    }
-
-    private static func decodeErrorDetails(
-        _ reader: inout CanonicalNoritoReader,
-        compact: Bool
-    ) throws -> KagemushaOperationErrorDetails {
-        let layer = try readOptionalStringField(&reader, compact: compact)
-        let rejectCode = try readOptionalStringField(&reader, compact: compact)
-        let queue = try readField(&reader, compact: compact) {
-            try decodeOption(&$0, compact: compact) {
-                try decodeQueueSnapshot(&$0, compact: compact)
-            }
-        }
-        let retryAfterSeconds = try readOptionalScalarField(
-            &reader,
-            compact: compact,
-            decode: { try $0.readUInt64LE() }
-        )
-        let endpoint = try readOptionalStringField(&reader, compact: compact)
-        let field = try readOptionalStringField(&reader, compact: compact)
-        let expected = try readOptionalStringField(&reader, compact: compact)
-        let actual = try readOptionalStringField(&reader, compact: compact)
-        let profile = try readOptionalStringField(&reader, compact: compact)
-        let chainDiscriminant = try readOptionalScalarField(
-            &reader,
-            compact: compact,
-            decode: { try $0.readUInt16LE() }
-        )
-        let entrypointHash = try readOptionalStringField(&reader, compact: compact)
-        let transactionHash = try readOptionalStringField(&reader, compact: compact)
-        let lastStatus = try readOptionalStringField(&reader, compact: compact)
-        let hint = try readOptionalStringField(&reader, compact: compact)
-        let axt = try readField(&reader, compact: compact) {
-            try decodeOption(&$0, compact: compact) {
-                try decodeAxtDetails(&$0, compact: compact)
-            }
-        }
-        return try KagemushaOperationErrorDetails(
-            layer: layer,
-            rejectCode: rejectCode,
-            queue: queue,
-            retryAfterSeconds: retryAfterSeconds,
-            endpoint: endpoint,
-            field: field,
-            expected: expected,
-            actual: actual,
-            profile: profile,
-            chainDiscriminant: chainDiscriminant,
-            entrypointHash: entrypointHash,
-            transactionHash: transactionHash,
-            lastStatus: lastStatus,
-            hint: hint,
-            axt: axt
-        )
-    }
-
-    private static func decodeQueueSnapshot(
-        _ reader: inout CanonicalNoritoReader,
-        compact: Bool
-    ) throws -> KagemushaQueueErrorSnapshot {
-        let state = try readField(&reader, compact: compact) {
-            try readString(&$0, compact: compact)
-        }
-        let queued = try readField(&reader, compact: compact) { try $0.readUInt64LE() }
-        let capacity = try readField(&reader, compact: compact) { try $0.readUInt64LE() }
-        let saturated = try readField(&reader, compact: compact) {
-            switch try $0.readUInt8() {
-            case 0: return false
-            case 1: return true
-            default: throw KagemushaOperationError.invalidField("queue.saturated")
-            }
-        }
-        return try KagemushaQueueErrorSnapshot(
-            state: state,
-            queued: queued,
-            capacity: capacity,
-            saturated: saturated
-        )
-    }
-
-    private static func decodeAxtDetails(
-        _ reader: inout CanonicalNoritoReader,
-        compact: Bool
-    ) throws -> KagemushaAxtErrorDetails {
-        let code = try readOptionalStringField(&reader, compact: compact)
-        let reason = try readOptionalStringField(&reader, compact: compact)
-        let snapshotVersion = try readOptionalScalarField(
-            &reader,
-            compact: compact,
-            decode: { try $0.readUInt64LE() }
-        )
-        let dataspace = try readOptionalScalarField(
-            &reader,
-            compact: compact,
-            decode: { try $0.readUInt64LE() }
-        )
-        let lane = try readOptionalScalarField(
-            &reader,
-            compact: compact,
-            decode: { try $0.readUInt32LE() }
-        )
-        let activeHandleEra = try readOptionalScalarField(
-            &reader,
-            compact: compact,
-            decode: { try $0.readUInt64LE() }
-        )
-        let nextHandleCounter = try readOptionalScalarField(
-            &reader,
-            compact: compact,
-            decode: { try $0.readUInt64LE() }
-        )
-        return try KagemushaAxtErrorDetails(
-            code: code,
-            reason: reason,
-            snapshotVersion: snapshotVersion,
-            dataspace: dataspace,
-            lane: lane,
-            activeHandleEra: activeHandleEra,
-            nextHandleCounter: nextHandleCounter
-        )
+        return try KagemushaOperationErrorEnvelope(code: code, message: message)
     }
 
     private static func readOperationIdField(
@@ -1104,51 +864,6 @@ package enum KagemushaOperationCodec {
             try readString(&$0, compact: compact)
         }
         return try KagemushaOperationValidation.exactText(value, field: field)
-    }
-
-    private static func readOptionalStringField(
-        _ reader: inout CanonicalNoritoReader,
-        compact: Bool
-    ) throws -> String? {
-        try readField(&reader, compact: compact) {
-            try decodeOption(&$0, compact: compact) {
-                try readString(&$0, compact: compact)
-            }
-        }
-    }
-
-    private static func readOptionalScalarField<T>(
-        _ reader: inout CanonicalNoritoReader,
-        compact: Bool,
-        decode: (inout CanonicalNoritoReader) throws -> T
-    ) throws -> T? {
-        try readField(&reader, compact: compact) {
-            try decodeOption(&$0, compact: compact, decode: decode)
-        }
-    }
-
-    private static func decodeOption<T>(
-        _ reader: inout CanonicalNoritoReader,
-        compact: Bool,
-        decode: (inout CanonicalNoritoReader) throws -> T
-    ) throws -> T? {
-        switch try reader.readUInt8() {
-        case 0:
-            guard reader.remaining() == 0 else {
-                throw KagemushaOperationError.invalidNoritoArchive
-            }
-            return nil
-        case 1:
-            let payload = compact ? try reader.readCompactField() : try reader.readField()
-            var child = CanonicalNoritoReader(data: payload)
-            let value = try decode(&child)
-            guard child.remaining() == 0, reader.remaining() == 0 else {
-                throw KagemushaOperationError.invalidNoritoArchive
-            }
-            return value
-        default:
-            throw KagemushaOperationError.invalidField("option")
-        }
     }
 
     private static func readField<T>(
@@ -1203,13 +918,7 @@ private enum KagemushaOperationValidation {
     }
 
     static func transactionHash(_ value: String, field: String) throws -> String {
-        let bytes = Array(value.utf8)
-        guard bytes.count == 64,
-              bytes.contains(where: { $0 != UInt8(ascii: "0") }),
-              bytes.allSatisfy({
-                  ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
-                      || ($0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "f"))
-              }) else {
+        guard CanonicalIrohaHashText.decode(value) != nil else {
             throw KagemushaOperationError.invalidField(field)
         }
         return value
@@ -1219,19 +928,6 @@ private enum KagemushaOperationValidation {
         let expected = "\(KagemushaToriiAPI.Endpoint.operations.path)/\(operationId)"
         guard value == expected else {
             throw KagemushaOperationError.invalidField("status_uri")
-        }
-        return value
-    }
-
-    static func stableCode(_ value: String, field: String) throws -> String {
-        let bytes = Array(value.utf8)
-        guard (1...64).contains(bytes.count),
-              let first = bytes.first,
-              isLowercaseLetter(first) || isDigit(first),
-              bytes.allSatisfy({
-                  isLowercaseLetter($0) || isDigit($0) || $0 == UInt8(ascii: "_")
-              }) else {
-            throw KagemushaOperationError.invalidField(field)
         }
         return value
     }
@@ -1248,21 +944,17 @@ private enum KagemushaOperationValidation {
         return value
     }
 
-    static func exactToken(_ value: String, field: String) throws -> String {
-        let exact = try exactText(value, field: field)
-        guard !exact.unicodeScalars.contains(where: CharacterSet.whitespacesAndNewlines.contains)
-        else {
+    static func rejectionMessage(_ value: String, field: String) throws -> String {
+        let utf8 = Data(value.utf8)
+        guard !value.isEmpty,
+              value.unicodeScalars.count
+                <= KagemushaOperationErrorEnvelope.maximumMessageUnicodeScalars,
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value,
+              !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
+              String(data: utf8, encoding: .utf8) == value else {
             throw KagemushaOperationError.invalidField(field)
         }
-        return exact
-    }
-
-    private static func isDigit(_ byte: UInt8) -> Bool {
-        byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9")
-    }
-
-    private static func isLowercaseLetter(_ byte: UInt8) -> Bool {
-        byte >= UInt8(ascii: "a") && byte <= UInt8(ascii: "z")
+        return value
     }
 
     static func requestArchive(

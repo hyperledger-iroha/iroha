@@ -29,6 +29,7 @@ public static partial class CanonicalRequest
     private static readonly byte[] NetworkDomain = Encoding.UTF8.GetBytes("iroha.app.request.network.v1\0");
     private static readonly Uri CanonicalPathBaseUri = new("https://canonical.invalid", UriKind.Absolute);
 
+    /// <summary>Builds canonical request headers for the public Taira testnet.</summary>
     public static CanonicalRequestHeaders BuildHeaders(
         NetworkId networkId,
         string accountId,
@@ -40,9 +41,37 @@ public static partial class CanonicalRequest
         long? timestampMs = null,
         string? nonce = null)
     {
+        return BuildHeaders(
+            networkId,
+            AccountAddress.TairaTestnetChainDiscriminant,
+            accountId,
+            privateKeySeed,
+            method,
+            path,
+            query,
+            body,
+            timestampMs,
+            nonce);
+    }
+
+    public static CanonicalRequestHeaders BuildHeaders(
+        NetworkId networkId,
+        ushort chainDiscriminant,
+        string accountId,
+        ReadOnlySpan<byte> privateKeySeed,
+        string method,
+        string path,
+        string? query = null,
+        ReadOnlySpan<byte> body = default,
+        long? timestampMs = null,
+        string? nonce = null)
+    {
         ArgumentNullException.ThrowIfNull(networkId);
         var exactAccountId = RequireExactNonBlank(accountId, nameof(accountId));
-        var canonicalAccountId = RequireCanonicalAccountId(exactAccountId, nameof(accountId));
+        var canonicalAccountId = RequireCanonicalAccountId(
+            exactAccountId,
+            nameof(accountId),
+            chainDiscriminant);
         var exactMethod = RequireHttpMethodToken(method, nameof(method));
         var exactPath = RequireHttpTransportPath(path, nameof(path));
         var exactQuery = RequireHttpTransportQuery(query, exactPath);
@@ -289,6 +318,22 @@ public static partial class CanonicalRequest
 
     internal static string RequireCanonicalAccountId(string? value, string paramName)
     {
+        return RequireCanonicalAccountId(value, paramName, expectedChainDiscriminant: null);
+    }
+
+    internal static string RequireCanonicalAccountId(
+        string? value,
+        string paramName,
+        ushort expectedChainDiscriminant)
+    {
+        return RequireCanonicalAccountId(value, paramName, (ushort?)expectedChainDiscriminant);
+    }
+
+    private static string RequireCanonicalAccountId(
+        string? value,
+        string paramName,
+        ushort? expectedChainDiscriminant)
+    {
         var exact = RequireExactNonBlank(value, paramName);
         if (Encoding.UTF8.GetByteCount(exact) > MaxAccountLiteralBytesV1)
         {
@@ -296,7 +341,7 @@ public static partial class CanonicalRequest
                 $"{paramName} must not exceed {MaxAccountLiteralBytesV1} UTF-8 bytes.",
                 paramName);
         }
-        if (TryParseCanonicalI105Account(exact, out _)
+        if (TryParseCanonicalI105Account(exact, expectedChainDiscriminant, out _)
             || IsCanonicalAsciiAccountAlias(exact))
         {
             return exact;
@@ -322,7 +367,7 @@ public static partial class CanonicalRequest
         ReadOnlySpan<byte> privateKeySeed,
         string accountParamName)
     {
-        if (!TryParseCanonicalI105Account(accountId, out _))
+        if (!TryParseCanonicalI105Account(accountId, expectedChainDiscriminant: null, out var parsedAccount))
         {
             // An alias is resolved to its controller by Torii; the SDK cannot
             // prove that state-dependent binding before sending the request.
@@ -330,28 +375,30 @@ public static partial class CanonicalRequest
         }
 
         var publicKey = Ed25519Signer.GetPublicKey(privateKeySeed);
-        var expectedAccountId = AccountAddress.FromPublicKey(publicKey, "ed25519")
-            .ToI105(AccountAddress.DefaultChainDiscriminant);
-        if (!string.Equals(expectedAccountId, accountId, StringComparison.Ordinal))
+        var expectedAccount = AccountAddress.FromPublicKey(publicKey, "ed25519");
+        if (!string.Equals(expectedAccount.CanonicalHex, parsedAccount!.CanonicalHex, StringComparison.Ordinal))
         {
             throw new ArgumentException(
-                $"accountId must match the account derived from privateKeySeed: {expectedAccountId}.",
+                "accountId must match the account derived from privateKeySeed.",
                 accountParamName);
         }
     }
 
     internal static string CanonicalAccountHeaderValue(string accountId)
     {
-        return TryParseCanonicalI105Account(accountId, out var address)
+        return TryParseCanonicalI105Account(accountId, expectedChainDiscriminant: null, out var address)
             ? address!.CanonicalHex
             : accountId;
     }
 
-    private static bool TryParseCanonicalI105Account(string value, out AccountAddress? address)
+    private static bool TryParseCanonicalI105Account(
+        string value,
+        ushort? expectedChainDiscriminant,
+        out AccountAddress? address)
     {
         try
         {
-            address = AccountAddress.Parse(value, AccountAddress.DefaultChainDiscriminant);
+            address = AccountAddress.Parse(value, expectedChainDiscriminant);
             return true;
         }
         catch (AccountAddressException)

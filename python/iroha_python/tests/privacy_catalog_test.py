@@ -1,4 +1,4 @@
-"""Canonical first-release privacy capability snapshot tests."""
+"""Retired JSON privacy-capability inspection tests."""
 
 from __future__ import annotations
 
@@ -12,16 +12,14 @@ import pytest
 
 import iroha_python
 from iroha_python.privacy_catalog import (
-    PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1,
+    LEGACY_PRIVACY_CAPABILITY_INSPECTION_MAX_JSON_BYTES_V1,
     PRIVACY_PROTOCOL_IDS_V1,
-    PrivacyCapabilitySnapshotError,
-    parse_privacy_capability_snapshot_json_v1,
-    parse_privacy_capability_snapshot_v1,
+    LegacyPrivacyCapabilityInspectionError,
+    parse_legacy_privacy_capability_inspection_json_v1,
+    parse_legacy_privacy_capability_inspection_v1,
 )
 
-MATRIX_PATH = (
-    Path(__file__).resolve().parents[3] / "fixtures" / "privacy" / "exact12_v1.tsv"
-)
+MATRIX_PATH = Path(__file__).resolve().parents[3] / "fixtures" / "privacy" / "exact12_v1.tsv"
 MATRIX_BYTES = MATRIX_PATH.read_bytes()
 MATRIX_TEXT = MATRIX_BYTES.decode("utf-8", errors="strict")
 MATRIX_ROWS = tuple(
@@ -83,7 +81,7 @@ def _tagged(protocol: str) -> dict[str, object]:
     return {"protocol": protocol, "value": None}
 
 
-def _snapshot() -> dict[str, object]:
+def _legacy_inspection_payload() -> dict[str, object]:
     return {
         "version": 1,
         "committed_height": 42,
@@ -95,8 +93,7 @@ def _snapshot() -> dict[str, object]:
                 "max_action_bytes": 9 * 1024 * 1024,
                 "max_privacy_bytes_per_transaction": 9 * 1024 * 1024,
                 "max_privacy_bytes_per_block": 18 * 1024 * 1024,
-                "max_statement_and_encrypted_output_bytes_per_transaction": 256
-                * 1024,
+                "max_statement_and_encrypted_output_bytes_per_transaction": 256 * 1024,
                 "max_nullifiers_per_action": 8,
                 "max_commitments_per_action": 8,
                 "retained_root_count": 2048,
@@ -178,23 +175,23 @@ def test_shared_exact12_matrix_binds_routes_typed_envelopes_and_retired_ids() ->
     assert set(RETIRED_PROTOCOL_IDS).isdisjoint(EXPECTED_PROTOCOL_IDS)
 
 
-def test_snapshot_parser_defensively_copies_the_closed_shape() -> None:
-    source = _snapshot()
-    parsed = parse_privacy_capability_snapshot_v1(source)
-    assert parsed["consensus_policy"]["current_limits"][
-        "max_proof_bytes_per_action"
-    ] == 9 * 1024 * 1024
-    assert parsed["consensus_policy"]["current_limits"][
-        "max_privacy_bytes_per_block"
-    ] == 18 * 1024 * 1024
-    assert tuple(
-        row["protocol_id"]["protocol"] for row in parsed["protocols"]
-    ) == EXPECTED_PROTOCOL_IDS
-    source["protocols"][0]["protocol_id"]["protocol"] = "tampered"
+def test_legacy_inspection_parser_defensively_copies_the_closed_shape() -> None:
+    source = _legacy_inspection_payload()
+    parsed = parse_legacy_privacy_capability_inspection_v1(source)
     assert (
-        parsed["protocols"][0]["protocol_id"]["protocol"]
-        == "zk-ace-pq-authorization-v0"
+        parsed["consensus_policy"]["current_limits"]["max_proof_bytes_per_action"]
+        == 9 * 1024 * 1024
     )
+    assert (
+        parsed["consensus_policy"]["current_limits"]["max_privacy_bytes_per_block"]
+        == 18 * 1024 * 1024
+    )
+    assert (
+        tuple(row["protocol_id"]["protocol"] for row in parsed["protocols"])
+        == EXPECTED_PROTOCOL_IDS
+    )
+    source["protocols"][0]["protocol_id"]["protocol"] = "tampered"
+    assert parsed["protocols"][0]["protocol_id"]["protocol"] == "zk-ace-pq-authorization-v0"
 
 
 @pytest.mark.parametrize(
@@ -204,9 +201,7 @@ def test_snapshot_parser_defensively_copies_the_closed_shape() -> None:
         lambda value: value.update({"version": 2}),
         lambda value: value["protocols"].pop(),
         lambda value: value["protocols"].reverse(),
-        lambda value: value["protocols"][0]["protocol_id"].update(
-            {"protocol": "ZK-ACE"}
-        ),
+        lambda value: value["protocols"][0]["protocol_id"].update({"protocol": "ZK-ACE"}),
         lambda value: value["protocols"][3]["protocol_id"].update(
             {"protocol": "zk-ams-recursive-admission-v0"}
         ),
@@ -214,9 +209,7 @@ def test_snapshot_parser_defensively_copies_the_closed_shape() -> None:
             {"protocol": "zk-x509-onchain-identity-v0"}
         ),
         lambda value: value["protocols"][0].update({"unknown": True}),
-        lambda value: value["consensus_policy"]["current_limits"].update(
-            {"unknown": 1}
-        ),
+        lambda value: value["consensus_policy"]["current_limits"].update({"unknown": 1}),
         lambda value: value.update({"committed_height": True}),
         lambda value: value["consensus_policy"]["current_limits"].update(
             {"max_actions_per_transaction": 1.5}
@@ -235,25 +228,25 @@ def test_snapshot_parser_defensively_copies_the_closed_shape() -> None:
         ),
     ),
 )
-def test_snapshot_parser_rejects_aliases_unknown_fields_and_malformed_rows(
+def test_legacy_inspection_rejects_aliases_unknown_fields_and_malformed_rows(
     mutate,
 ) -> None:
-    hostile = _snapshot()
+    hostile = _legacy_inspection_payload()
     mutate(hostile)
-    with pytest.raises(PrivacyCapabilitySnapshotError):
-        parse_privacy_capability_snapshot_v1(hostile)
+    with pytest.raises(LegacyPrivacyCapabilityInspectionError):
+        parse_legacy_privacy_capability_inspection_v1(hostile)
 
 
 @pytest.mark.parametrize("retired_protocol", RETIRED_PROTOCOL_IDS)
 def test_every_retired_matrix_protocol_is_rejected(retired_protocol: str) -> None:
-    hostile = _snapshot()
+    hostile = _legacy_inspection_payload()
     hostile["protocols"][0]["protocol_id"]["protocol"] = retired_protocol
-    with pytest.raises(PrivacyCapabilitySnapshotError):
-        parse_privacy_capability_snapshot_v1(hostile)
+    with pytest.raises(LegacyPrivacyCapabilityInspectionError):
+        parse_legacy_privacy_capability_inspection_v1(hostile)
 
 
-def test_snapshot_parser_accepts_only_matching_compiled_and_governed_bindings() -> None:
-    valid = _snapshot()
+def test_legacy_inspection_accepts_only_matching_compiled_and_governed_bindings() -> None:
+    valid = _legacy_inspection_payload()
     profile = _profile()
     valid["protocols"][1]["compiled_profile"] = {
         "status": "available",
@@ -272,50 +265,61 @@ def test_snapshot_parser_accepts_only_matching_compiled_and_governed_bindings() 
         "pending_protocol_limits_tightening": None,
         "assurance": {"assurance": "experimental", "value": None},
     }
-    parsed = parse_privacy_capability_snapshot_v1(valid)
+    parsed = parse_legacy_privacy_capability_inspection_v1(valid)
     assert parsed["protocols"][1]["compiled_profile"]["status"] == "available"
 
     hostile = copy.deepcopy(valid)
     hostile["protocols"][1]["activation"]["parameter_digest"] = [9] * 32
     with pytest.raises(
-        PrivacyCapabilitySnapshotError, match="does not match compiled profile"
+        LegacyPrivacyCapabilityInspectionError, match="does not match compiled profile"
     ):
-        parse_privacy_capability_snapshot_v1(hostile)
+        parse_legacy_privacy_capability_inspection_v1(hostile)
 
 
 def test_json_parser_rejects_duplicates_non_finite_numbers_utf8_and_oversize() -> None:
-    encoded = json.dumps(_snapshot(), separators=(",", ":")).encode()
-    assert parse_privacy_capability_snapshot_json_v1(encoded)["version"] == 1
+    encoded = json.dumps(_legacy_inspection_payload(), separators=(",", ":")).encode()
+    assert parse_legacy_privacy_capability_inspection_json_v1(encoded)["version"] == 1
 
-    with pytest.raises(PrivacyCapabilitySnapshotError, match="duplicate JSON key"):
-        parse_privacy_capability_snapshot_json_v1(
+    with pytest.raises(LegacyPrivacyCapabilityInspectionError, match="duplicate JSON key"):
+        parse_legacy_privacy_capability_inspection_json_v1(
             encoded.replace(b'{"version":1', b'{"version":1,"version":1', 1)
         )
-    with pytest.raises(PrivacyCapabilitySnapshotError, match="not permitted"):
-        parse_privacy_capability_snapshot_json_v1(
+    with pytest.raises(LegacyPrivacyCapabilityInspectionError, match="not permitted"):
+        parse_legacy_privacy_capability_inspection_json_v1(
             encoded.replace(b'"committed_height":42', b'"committed_height":NaN', 1)
         )
-    with pytest.raises(PrivacyCapabilitySnapshotError, match="strict UTF-8"):
-        parse_privacy_capability_snapshot_json_v1(b"\xff")
-    with pytest.raises(PrivacyCapabilitySnapshotError, match="262144-byte"):
-        parse_privacy_capability_snapshot_json_v1(
-            b" " * (PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1 + 1)
+    with pytest.raises(LegacyPrivacyCapabilityInspectionError, match="strict UTF-8"):
+        parse_legacy_privacy_capability_inspection_json_v1(b"\xff")
+    with pytest.raises(LegacyPrivacyCapabilityInspectionError, match="262144-byte"):
+        parse_legacy_privacy_capability_inspection_json_v1(
+            b" " * (LEGACY_PRIVACY_CAPABILITY_INSPECTION_MAX_JSON_BYTES_V1 + 1)
         )
 
 
-def test_package_root_exports_only_the_typed_snapshot_contract() -> None:
+def test_package_root_exports_only_explicit_legacy_inspection_names() -> None:
     for name in (
-        "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
+        "LEGACY_PRIVACY_CAPABILITY_INSPECTION_VERSION_V1",
         "PRIVACY_PROTOCOL_IDS_V1",
-        "PrivacyCapabilitySnapshotError",
-        "parse_privacy_capability_snapshot_json_v1",
-        "parse_privacy_capability_snapshot_v1",
+        "LegacyPrivacyCapabilityInspectionError",
+        "parse_legacy_privacy_capability_inspection_json_v1",
+        "parse_legacy_privacy_capability_inspection_v1",
     ):
         assert hasattr(iroha_python, name)
         assert name in iroha_python.__all__
     for name in RETIRED_EXPORTS:
         assert not hasattr(iroha_python, name)
         assert name not in iroha_python.__all__
+    for ambiguous in (
+        "PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1",
+        "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
+        "PrivacyCapabilityRowV1",
+        "PrivacyCapabilitySnapshotError",
+        "PrivacyCapabilitySnapshotV1",
+        "parse_privacy_capability_snapshot_json_v1",
+        "parse_privacy_capability_snapshot_v1",
+    ):
+        assert not hasattr(iroha_python, ambiguous)
+        assert ambiguous not in iroha_python.__all__
 
 
 def test_retired_free_form_helper_modules_are_deleted() -> None:

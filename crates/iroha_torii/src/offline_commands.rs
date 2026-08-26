@@ -1255,10 +1255,10 @@ fn rejected_offline_operation_status(
         operation_id: hex::encode(operation_id),
         kind: kind.into(),
         transaction_hash: transaction_hash.to_string(),
-        error: iroha_torii_shared::ErrorEnvelope::new(
-            "offline_operation_rejected",
+        error: iroha_torii_shared::offline_api::OfflineOperationRejectionError::try_new(
             canonical_offline_rejection_message(message),
-        ),
+        )
+        .expect("canonical_offline_rejection_message always returns a valid public message"),
     }
 }
 fn terminal_rejected_or_expired_offline_operation_status(
@@ -2764,11 +2764,13 @@ mod tests {
                 operation_id: actual_operation_id,
                 kind,
                 transaction_hash: actual_transaction_hash,
-                ..
+                error,
             } => {
                 assert_eq!(actual_operation_id, hex::encode(operation_id));
                 assert_eq!(kind, OfflineOperationKind::TopUp);
                 assert_eq!(actual_transaction_hash, transaction_hash.to_string());
+                assert_eq!(error.code(), "offline_operation_rejected");
+                assert!(crate::utils::is_valid_error_message(error.message()));
             }
             other => panic!("canonical rejection returned the wrong status: {other:?}"),
         }

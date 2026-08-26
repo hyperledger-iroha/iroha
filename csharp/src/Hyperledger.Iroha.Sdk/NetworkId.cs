@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -46,6 +48,47 @@ public sealed class NetworkId : IEquatable<NetworkId>
 
     internal ReadOnlySpan<byte> AsSpan() => bytes;
 
+    internal string ToNoritoJsonLiteral()
+    {
+        var body = Convert.ToHexString(bytes);
+        var checksum = Crc16(Encoding.ASCII.GetBytes($"hash:{body}"));
+        return $"hash:{body}#{checksum:X4}";
+    }
+
+    internal static NetworkId ParseNoritoJsonLiteral(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        if (value.Length != 74
+            || !value.StartsWith("hash:", StringComparison.Ordinal)
+            || value[69] != '#')
+        {
+            throw new FormatException(
+                "NetworkId JSON must be a canonical checksummed Norito Hash literal.");
+        }
+
+        var body = value.AsSpan(5, 64);
+        var checksum = value.AsSpan(70, 4);
+        if (body.IndexOfAnyExcept("0123456789ABCDEF".AsSpan()) >= 0
+            || checksum.IndexOfAnyExcept("0123456789ABCDEF".AsSpan()) >= 0
+            || !ushort.TryParse(
+                checksum,
+                NumberStyles.HexNumber,
+                CultureInfo.InvariantCulture,
+                out var supplied)
+            || supplied != Crc16(Encoding.ASCII.GetBytes($"hash:{body.ToString()}")))
+        {
+            throw new FormatException(
+                "NetworkId JSON has a malformed or invalid Norito Hash checksum.");
+        }
+
+        var decoded = Convert.FromHexString(body);
+        if ((decoded[^1] & 1) == 0)
+        {
+            throw new FormatException("NetworkId JSON hash marker bit must be set.");
+        }
+        return new NetworkId(Convert.ToHexString(decoded).ToLowerInvariant(), decoded);
+    }
+
     public bool Equals(NetworkId? other) =>
         other is not null && bytes.AsSpan().SequenceEqual(other.bytes);
 
@@ -62,6 +105,22 @@ public sealed class NetworkId : IEquatable<NetworkId>
 
     private static bool IsLowerHex(char value) =>
         value is >= '0' and <= '9' or >= 'a' and <= 'f';
+
+    private static ushort Crc16(ReadOnlySpan<byte> bytes)
+    {
+        var crc = 0xffff;
+        foreach (var value in bytes)
+        {
+            crc ^= value << 8;
+            for (var bit = 0; bit < 8; bit++)
+            {
+                crc = (crc & 0x8000) != 0
+                    ? ((crc << 1) ^ 0x1021) & 0xffff
+                    : (crc << 1) & 0xffff;
+            }
+        }
+        return (ushort)crc;
+    }
 }
 
 internal sealed class NetworkIdJsonConverter : JsonConverter<NetworkId>
@@ -74,16 +133,16 @@ internal sealed class NetworkIdJsonConverter : JsonConverter<NetworkId>
         }
         try
         {
-            return NetworkId.Parse(reader.GetString()!);
+            return NetworkId.ParseNoritoJsonLiteral(reader.GetString()!);
         }
         catch (FormatException error)
         {
             throw new JsonException(
-                "NetworkId must be exactly 64 lowercase hexadecimal characters with its marker bit set.",
+                "NetworkId JSON must be a canonical checksummed Norito Hash literal with its marker bit set.",
                 error);
         }
     }
 
     public override void Write(Utf8JsonWriter writer, NetworkId value, JsonSerializerOptions options) =>
-        writer.WriteStringValue(value.ToString());
+        writer.WriteStringValue(value.ToNoritoJsonLiteral());
 }

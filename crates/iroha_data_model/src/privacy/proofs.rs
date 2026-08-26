@@ -2278,6 +2278,7 @@ mod exact12_fixture {
         statement: PrivacyStatementV1,
         row_index: usize,
     ) -> Result<PrivacyExact12CompleteRowV1, PrivacyExact12FixtureErrorV1> {
+        let transaction_network_id = statement.context().network_id.clone();
         let envelope = try_envelope(statement)?;
         let signing_key = exact12_signing_key_pair_v1();
         let authority = AccountId::new(signing_key.public_key().clone());
@@ -2293,7 +2294,7 @@ mod exact12_fixture {
                 )
             })?;
         let mut payload = TransactionPayload {
-            domain: TransactionDomain::Network(network_id(0xA5)),
+            domain: TransactionDomain::Network(transaction_network_id),
             authority,
             creation_time_ms: 1_700_000_000_000_u64
                 .checked_add(row_offset)

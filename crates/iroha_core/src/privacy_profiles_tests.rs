@@ -409,6 +409,27 @@ mod tests {
         }
     }
     #[test]
+    fn parallel_compiled_profile_catalog_builder_preserves_canonical_serial_bytes() {
+        let parallel =
+            build_compiled_privacy_profile_catalog_v1().expect("parallel compiled-profile catalog");
+        let serial = PrivacyCompiledProfileCatalogV1 {
+            version: PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1,
+            protocols: PrivacyProtocolIdV1::ALL
+                .into_iter()
+                .map(|protocol_id| PrivacyCompiledProfileCatalogRowV1 {
+                    protocol_id,
+                    compiled_profile: compiled_privacy_profile_snapshot_result_v1(protocol_id),
+                })
+                .collect(),
+        };
+        serial.validate().expect("serial compiled-profile catalog");
+        assert_eq!(
+            norito::encode_canonical(&parallel).expect("parallel catalog archive"),
+            norito::encode_canonical(&serial).expect("serial catalog archive"),
+            "bounded parallel construction must preserve the exact canonical catalog bytes"
+        );
+    }
+    #[test]
     fn compiled_profile_catalog_cache_returns_owned_isolated_clones() {
         let canonical = compiled_privacy_profile_catalog_v1().expect("compiled profile catalog");
         canonical.validate().expect("canonical compiled catalog");
@@ -496,7 +517,9 @@ mod tests {
             PrivacyProtocolIdV1::PqMaspStarkV0,
         ];
         if require_activation_readiness_v1(zk_x509_activation_readiness_v1()).is_ok() {
-            expected.push(PrivacyProtocolIdV1::IrohaZkX509StarkP256V0);
+            let zk_x509 = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
+            let insertion = expected.partition_point(|protocol| *protocol < zk_x509);
+            expected.insert(insertion, zk_x509);
         }
         assert!(
             zk_x509_release_candidate_profile_material_v1().is_ok(),

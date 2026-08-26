@@ -38,6 +38,7 @@ import {
   buildRemoveRwaKeyValueInstruction,
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
+  buildRegisterAssetDefinitionInstruction,
   buildRegisterMultisigInstruction,
   buildCreateKaigiInstruction,
   buildJoinKaigiInstruction,
@@ -2966,6 +2967,7 @@ export function buildRegisterMultisigTransaction(input) {
 const buildRegisterAssetDefinitionInstructions =
   createRegisterAssetDefinitionInstructionBuilder({
     normalizeTransactionAssetDefinitionId,
+    buildRegisterAssetDefinitionInstruction,
     buildMintAssetInstruction,
   });
 

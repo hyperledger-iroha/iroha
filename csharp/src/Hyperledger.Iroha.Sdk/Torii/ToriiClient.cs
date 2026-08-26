@@ -737,12 +737,12 @@ public sealed partial class ToriiClient : IDisposable
         ToriiAccountOnboardingPlanBodyEncoder canonicalBodyEncoder,
         CancellationToken cancellationToken = default)
     {
+        var exactOnboardingToken = RequireAccountOnboardingToken(onboardingToken);
         ToriiAccountOnboardingReceiptVerifier.RequirePinned(
             receipt,
             expectedAuthority,
             expectedNetworkId,
             canonicalBodyEncoder);
-        var exactOnboardingToken = RequireAccountOnboardingToken(onboardingToken);
         var response = await PostAccountOnboardingAsync<ToriiAccountOnboardingApplyRequest, ToriiAccountOnboardingResponse>(
             "/v1/accounts/onboard",
             new ToriiAccountOnboardingApplyRequest { Receipt = receipt },
@@ -1096,6 +1096,17 @@ public sealed partial class ToriiClient : IDisposable
         {
             throw new InvalidOperationException(
                 "Canonical request account must equal the unsigned transaction authority.");
+        }
+        var signingContext = Options.LocalSigningContext
+            ?? throw new InvalidOperationException(
+                "Fee quoting requires ToriiClientOptions.LocalSigningContext.");
+        if (!string.Equals(
+                payload.Domain.Value,
+                signingContext.NetworkId.ToNoritoJsonLiteral(),
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Unsigned transaction network must equal ToriiClientOptions.LocalSigningContext.NetworkId.");
         }
 
         var response = await PostAsync<ToriiFeeQuoteRequest, ToriiFeeQuoteResponse>(
@@ -1942,9 +1953,11 @@ public sealed partial class ToriiClient : IDisposable
                 }
             }
             var bodyBytes = content is null ? Array.Empty<byte>() : await content.ReadAsByteArrayAsync(cancellationToken);
+            var signingContext = Options.LocalSigningContext
+                ?? throw new InvalidOperationException("Canonical request authentication requires ToriiClientOptions.LocalSigningContext.");
             var headers = CanonicalRequest.BuildHeaders(
-                Options.LocalSigningContext?.NetworkId
-                    ?? throw new InvalidOperationException("Canonical request authentication requires ToriiClientOptions.LocalSigningContext."),
+                signingContext.NetworkId,
+                signingContext.ChainDiscriminant,
                 Options.CanonicalRequestCredentials.AccountId,
                 Options.CanonicalRequestCredentials.PrivateKeySeed,
                 exactMethod,

@@ -334,7 +334,8 @@ final class MusubiSdkV1Tests: XCTestCase {
             )
             XCTAssertEqual(
                 try roundTripResponse(routePath, data: response),
-                try jsonObject(response)
+                try jsonObject(response),
+                routePath
             )
         }
     }

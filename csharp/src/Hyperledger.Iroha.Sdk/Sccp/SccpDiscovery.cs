@@ -245,8 +245,14 @@ internal static class SccpExactParser
         var root = document.RootElement;
         HashSet<string> required =
         [
-            "version", "registry_revision", "registry_path", "message_bundle_path",
-            "proof_request_path", "recent_messages_path", "registry_limits", "resource_limits",
+            "version",
+            "registry_revision",
+            "registry_path",
+            "message_bundle_path",
+            "proof_request_path",
+            "recent_messages_path",
+            "registry_limits",
+            "resource_limits",
         ];
         var allowed = new HashSet<string>(required, StringComparer.Ordinal)
         {
@@ -279,8 +285,10 @@ internal static class SccpExactParser
         SccpJson.ExactFields(
             item,
             [
-                "max_governed_lanes", "max_live_governed_routes",
-                "max_live_routes_per_lane", "max_retained_routes_per_lane",
+                "max_governed_lanes",
+                "max_live_governed_routes",
+                "max_live_routes_per_lane",
+                "max_retained_routes_per_lane",
                 "max_retained_native_trust_anchors_per_lane",
             ],
             "SCCP registry limits");
@@ -312,9 +320,12 @@ internal static class SccpExactParser
                 "max_outbound_message_payload_bytes",
                 "max_pending_outbound_messages",
                 "max_pending_outbound_payload_bytes",
-                "max_proofs_per_transaction", "max_proofs_per_block",
-                "max_proof_bytes_per_proof", "max_proof_bytes_per_transaction",
-                "max_proof_bytes_per_block", "max_native_headers_per_transaction",
+                "max_proofs_per_transaction",
+                "max_proofs_per_block",
+                "max_proof_bytes_per_proof",
+                "max_proof_bytes_per_transaction",
+                "max_proof_bytes_per_block",
+                "max_native_headers_per_transaction",
                 "max_native_headers_per_block",
                 "max_ethereum_light_client_updates_per_transaction",
                 "max_ethereum_light_client_updates_per_block",
@@ -672,10 +683,22 @@ internal static class SccpExactParser
         var root = document.RootElement;
         SccpJson.ExactFields(root,
         [
-            "version", "backend", "source_network", "target_network", "public_inputs", "verifying_key",
-            "verifier_key_hash", "semantic_proof_profile", "semantic_proof_profile_hash",
-            "sora_finality_anchor", "sora_finality_anchor_hash", "bundle_bytes", "statement_hash",
-            "destination_binding_hash", "route_configuration_hash", "request_hash",
+            "version",
+            "backend",
+            "source_network",
+            "target_network",
+            "public_inputs",
+            "verifying_key",
+            "verifier_key_hash",
+            "semantic_proof_profile",
+            "semantic_proof_profile_hash",
+            "sora_finality_anchor",
+            "sora_finality_anchor_hash",
+            "bundle_bytes",
+            "statement_hash",
+            "destination_binding_hash",
+            "route_configuration_hash",
+            "request_hash",
         ], "SCCP proof request");
         RequireVersion(root, "SCCP proof request");
         var backend = ParseDestinationBackend(Object(root, "backend"));
@@ -799,9 +822,18 @@ internal static class SccpExactParser
             var item = values[index];
             HashSet<string> required =
             [
-                "height", "commitment_index", "message_id_hex", "kind", "source_profile", "target_profile",
-                "destination_binding_hash", "route_configuration_hash", "target_domain", "amount",
-                "payload_projection", "links",
+                "height",
+                "commitment_index",
+                "message_id_hex",
+                "kind",
+                "source_profile",
+                "target_profile",
+                "destination_binding_hash",
+                "route_configuration_hash",
+                "target_domain",
+                "amount",
+                "payload_projection",
+                "links",
             ];
             var allowed = new HashSet<string>(required, StringComparer.Ordinal)
             {
@@ -933,8 +965,15 @@ internal static class SccpExactParser
     {
         SccpJson.ExactFields(item,
             [
-                "lane_id", "route_id", "asset_key", "revision", "activation",
-                "inbound_finality_cutoff", "source_identity", "destination", "settlement",
+                "lane_id",
+                "route_id",
+                "asset_key",
+                "revision",
+                "activation",
+                "inbound_finality_cutoff",
+                "source_identity",
+                "destination",
+                "settlement",
             ],
             label);
         var lane = ParseInboundLane(Object(item, "lane_id"), $"{label}.lane_id");
@@ -994,14 +1033,16 @@ internal static class SccpExactParser
         AccountAddress custodyAddress;
         try
         {
-            custodyAddress = AccountAddress.Parse(custody, AccountAddress.DefaultChainDiscriminant);
+            custodyAddress = AccountAddress.Parse(
+                custody,
+                AccountAddress.TairaTestnetChainDiscriminant);
         }
         catch (Exception error) when (error is ArgumentException or FormatException)
         {
             throw new ArgumentException($"{label}.custody_owner must be canonical.", error);
         }
 
-        if (custodyAddress.ToI105() != custody)
+        if (custodyAddress.ToI105(AccountAddress.TairaTestnetChainDiscriminant) != custody)
         {
             throw new ArgumentException($"{label}.custody_owner must be canonical.");
         }
@@ -1042,9 +1083,16 @@ internal static class SccpExactParser
         var deployment = Object(item, "deployment");
         SccpJson.ExactFields(deployment,
         [
-            "token_address", "token_code_hash", "verifier_address", "verifier_code_hash",
-            "verifying_key", "verifier_key_hash", "outbound_proof_policy", "route_address",
-            "route_code_hash", "taira_to_token_multiplier",
+            "token_address",
+            "token_code_hash",
+            "verifier_address",
+            "verifier_code_hash",
+            "verifying_key",
+            "verifier_key_hash",
+            "outbound_proof_policy",
+            "route_address",
+            "route_code_hash",
+            "taira_to_token_multiplier",
         ], $"{label}.deployment");
         var addresses = new[]
         {
@@ -1094,9 +1142,15 @@ internal static class SccpExactParser
         var anchor = ParseFinalityAnchor(Object(item, "sora_finality_anchor"), $"{label}.sora_finality_anchor");
         RequireDistinctBytes(
         [
-            semantic.CircuitCommitment, semantic.WitnessGeneratorCommitment, semantic.PublicSignalSchemaHash,
-            semantic.ProfileHash, anchor.ChainIdHash, anchor.CheckpointBlockHash,
-            anchor.CheckpointContextId, anchor.CheckpointFinalityArtifactHash, anchor.AnchorHash,
+            semantic.CircuitCommitment,
+            semantic.WitnessGeneratorCommitment,
+            semantic.PublicSignalSchemaHash,
+            semantic.ProfileHash,
+            anchor.ChainIdHash,
+            anchor.CheckpointBlockHash,
+            anchor.CheckpointContextId,
+            anchor.CheckpointFinalityArtifactHash,
+            anchor.AnchorHash,
         ], $"{label} hashes");
         return (semantic, anchor);
     }
@@ -1132,8 +1186,14 @@ internal static class SccpExactParser
     {
         SccpJson.ExactFields(item,
         [
-            "version", "source_network", "protocol_version", "chain_id_hash", "checkpoint_height",
-            "checkpoint_block_hash", "checkpoint_context_id", "checkpoint_finality_artifact_hash",
+            "version",
+            "source_network",
+            "protocol_version",
+            "chain_id_hash",
+            "checkpoint_height",
+            "checkpoint_block_hash",
+            "checkpoint_context_id",
+            "checkpoint_finality_artifact_hash",
         ], label);
         RequireVersion(item, label);
         if (ParseNetwork(Object(item, "source_network"), $"{label}.source_network") != SccpNetworkV1.SoraTaira)
@@ -1377,9 +1437,21 @@ internal static class SccpExactParser
     {
         SccpJson.ExactFields(item,
         [
-            "version", "source_domain", "dest_domain", "nonce", "route_revision", "asset_home_domain",
-            "asset_id_codec", "asset_id", "amount", "sender_codec", "sender", "recipient_codec",
-            "recipient", "route_id_codec", "route_id",
+            "version",
+            "source_domain",
+            "dest_domain",
+            "nonce",
+            "route_revision",
+            "asset_home_domain",
+            "asset_id_codec",
+            "asset_id",
+            "amount",
+            "sender_codec",
+            "sender",
+            "recipient_codec",
+            "recipient",
+            "route_id_codec",
+            "route_id",
         ], "SCCP transfer payload");
         RequireVersion(item, "SCCP transfer payload");
         if (SccpJson.UInt32(item, "source_domain", 0, 5) != lane.Source.DomainId()
@@ -1472,8 +1544,17 @@ internal static class SccpExactParser
         SccpJson.ExactFields(
             transfer,
             [
-                "version", "source_domain", "dest_domain", "nonce", "route_revision",
-                "asset_home_domain", "asset_id", "amount", "sender", "recipient", "route_id",
+                "version",
+                "source_domain",
+                "dest_domain",
+                "nonce",
+                "route_revision",
+                "asset_home_domain",
+                "asset_id",
+                "amount",
+                "sender",
+                "recipient",
+                "route_id",
             ],
             $"{label}.Transfer");
         if (SccpJson.UInt64(transfer, "version", 1) != 1

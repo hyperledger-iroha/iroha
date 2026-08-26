@@ -141,12 +141,12 @@ test("broad browser facade omits the native catalog and retains the live Torii p
     ["dist", distPrivacyCapabilities],
   ]) {
     assert.equal(
-      typeof capabilities.getPrivacyCapabilitiesV1,
+      typeof capabilities.getLegacyPrivacyCapabilityInspectionV1,
       "function",
       `${label} keeps the live Torii capability client`,
     );
     assert.equal(
-      typeof capabilities.parsePrivacyCapabilitySnapshotV1,
+      typeof capabilities.parseLegacyPrivacyCapabilityInspectionSnapshotV1,
       "function",
       `${label} keeps the authoritative snapshot parser`,
     );

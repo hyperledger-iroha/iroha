@@ -870,6 +870,16 @@ int32_t connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4(
     uint8_t** out_request_ptr,
     unsigned long* out_request_len);
 
+// Canonically decodes and validates one signed top-up submission request.
+// On success the allocated output is exactly 72 bytes: raw NetworkId [0,32),
+// operation id [32,64), and unsigned big-endian issued_at_ms [64,72).
+// Release the output with connect_norito_free.
+int32_t connect_norito_kagemusha_project_top_up_submission_request_v4(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_projection_ptr,
+    unsigned long* out_projection_len);
+
 int32_t connect_norito_kagemusha_recursive_spend_topup_v4(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
@@ -918,6 +928,27 @@ int32_t connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4(
     uint8_t** out_result_ptr,
     unsigned long* out_result_len);
 
+// Canonically decodes and validates one signed redemption submission request.
+// On success the allocated output is exactly 72 bytes: raw NetworkId [0,32),
+// operation id [32,64), and unsigned big-endian issued_at_ms [64,72).
+// Release the output with connect_norito_free.
+int32_t connect_norito_kagemusha_project_redeem_submission_request_v4(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_projection_ptr,
+    unsigned long* out_projection_len);
+
+// Canonically decodes and validates one Offline Cash V1 operation status.
+// Applied top-ups must bind the operation id, transaction hash, finalized
+// height, proof anchor, proof height context, and NetworkId to the returned
+// finalized anchor. Success returns the byte-identical canonical status archive.
+// Release the output with connect_norito_free.
+int32_t connect_norito_kagemusha_validate_operation_status_v4(
+    const uint8_t* status_norito_ptr,
+    unsigned long status_norito_len,
+    uint8_t** out_status_ptr,
+    unsigned long* out_status_len);
+
 // V4 accepts its explicit local carrier with
 // the owned opening, exact membership/dummy paths, exact scaled public amount,
 // optional private change opening plus mandatory change insertion paths, and
@@ -944,8 +975,9 @@ void connect_norito_free(uint8_t* ptr);
 // memory before release.
 // The catalog describes only profiles compiled into this binary. It contains
 // no committed height, consensus policy, activation, lifecycle, or readiness
-// state. Fetch a fresh PrivacyCapabilitySnapshotV1 from live Torii before
-// treating a protocol as ready for proof submission.
+// state. Fetch and validate a fresh canonical
+// PrivacyExact12CapabilityManifestV1 from live Torii, then require the exact
+// native compiled-profile tuple before treating a protocol as ready.
 typedef enum iroha_privacy_compiled_profile_catalog_validation_status_v1 {
     IROHA_PRIVACY_COMPILED_PROFILE_CATALOG_VALID_V1 = 0,
     IROHA_PRIVACY_COMPILED_PROFILE_CATALOG_NULL_POINTER_V1 = 1,

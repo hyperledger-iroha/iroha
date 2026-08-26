@@ -68,6 +68,11 @@ const SIGNABLE_AUTHORITY_PAYLOAD_MISMATCH_MESSAGE = "signable.authority does not
 const UINT16_MAX = 0xffffn;
 const UINT32_MAX = 0xffff_ffffn;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
+// Keep the browser-only encoder byte-for-byte aligned with
+// TransactionBuilder::new. The Rust builder always binds this lifetime when
+// callers omit (or pass null for) ttlMs; there is no unsigned-payload form
+// with an absent ordinary-transaction TTL.
+const DEFAULT_TRANSACTION_TTL_MS = 100_000n;
 const MAX_METADATA_JSON_BYTES = 64 * 1024;
 const MAX_METADATA_ENTRIES = 64;
 const MAX_METADATA_DEPTH = 32;
@@ -906,9 +911,15 @@ function rustPlainJsonString(value) {
       case "\t":
         output += "\\t";
         break;
+      case "\b":
+        output += "\\b";
+        break;
+      case "\f":
+        output += "\\f";
+        break;
       default:
         if (codePoint < 0x20) {
-          output += `\\u00${codePoint.toString(16).toUpperCase().padStart(2, "0")}`;
+          output += `\\u00${codePoint.toString(16).padStart(2, "0")}`;
         } else {
           output += character;
         }
@@ -1174,8 +1185,12 @@ function normalizeTransactionInputTail(
     UINT64_MAX,
     "creationTimeMs",
   );
-  let ttlMs = normalizeOptionalUnsigned(input.ttlMs, UINT64_MAX, "ttlMs");
-  if (ttlMs === 0n) ttlMs = 1n;
+  const ttlMs =
+    input.ttlMs === undefined || input.ttlMs === null
+      ? DEFAULT_TRANSACTION_TTL_MS
+      : normalizeOptionalUnsigned(input.ttlMs, UINT64_MAX, "ttlMs", {
+          nonZero: true,
+        });
   const nonce = normalizeOptionalUnsigned(input.nonce, UINT32_MAX, "nonce", {
     nonZero: true,
   });
@@ -2902,17 +2917,36 @@ export function browserSignedTransactionHashHex(signedTransaction) {
     );
   }
   const bare = versioned.subarray(1);
-  const reader = new Reader(bare, "signed transaction");
-  const signatureValue = new Reader(reader.readField("signature"), "signed transaction.signature");
-  const rawSignature = validateConstVecBytes(
-    signatureValue.readField("payload"),
-    "signed transaction.signature.payload",
-    64,
-  );
-  signatureValue.assertEof();
-  const payload = reader.readField("payload");
-  const multisig = reader.readField("multisigSignatures");
-  reader.assertEof();
+  let rawSignature;
+  let payload;
+  let multisig;
+  try {
+    const reader = new Reader(bare, "signed transaction");
+    const signatureValue = new Reader(
+      reader.readField("signature"),
+      "signed transaction.signature",
+    );
+    rawSignature = validateConstVecBytes(
+      signatureValue.readField("payload"),
+      "signed transaction.signature.payload",
+      64,
+    );
+    signatureValue.assertEof();
+    payload = reader.readField("payload");
+    multisig = reader.readField("multisigSignatures");
+    reader.assertEof();
+  } catch (error) {
+    if (
+      error instanceof BrowserTransactionCodecError &&
+      error.code === MALFORMED_PAYLOAD
+    ) {
+      fail(
+        MALFORMED_SIGNED_TRANSACTION,
+        `signedTransaction has a malformed outer envelope (${error.message})`,
+      );
+    }
+    throw error;
+  }
   if (
     rawSignature.length !== 64 ||
     !multisig.equals(Buffer.of(0)) ||

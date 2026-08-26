@@ -1,10 +1,12 @@
+using System.Buffers.Binary;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Hyperledger.Iroha.Norito;
 
 namespace Hyperledger.Iroha.Torii;
 
 /// <summary>
-/// One machine-readable reason why an asset is not ready for Kagemusha issuance.
+/// One canonical reason why Offline Cash V1 is not production-ready.
 /// </summary>
 public sealed record class ToriiKagemushaReadinessBlocker
 {
@@ -16,126 +18,27 @@ public sealed record class ToriiKagemushaReadinessBlocker
 }
 
 /// <summary>
-/// Registry identity of a verifier selected at a readiness snapshot.
+/// Universally compiled, asset-neutral Offline Cash V1 capability projection.
 /// </summary>
-public sealed record class ToriiKagemushaVerifierId
+public sealed record class ToriiOfflineStatus
 {
-    [JsonPropertyName("backend")]
-    public string Backend { get; init; } = string.Empty;
+    [JsonPropertyName("mandatory")]
+    public bool Mandatory { get; init; }
 
-    [JsonPropertyName("name")]
-    public string Name { get; init; } = string.Empty;
-}
+    [JsonPropertyName("cash_handoff_capability")]
+    public string CashHandoffCapability { get; init; } = string.Empty;
 
-/// <summary>
-/// Key-material-free verifier record returned by Torii.
-/// </summary>
-public sealed record class ToriiKagemushaActiveVerifier
-{
-    [JsonPropertyName("id")]
-    public ToriiKagemushaVerifierId Id { get; init; } = new();
-
-    [JsonPropertyName("version")]
-    public uint Version { get; init; }
-
-    [JsonPropertyName("circuit_id")]
-    public string CircuitId { get; init; } = string.Empty;
-
-    [JsonPropertyName("commitment")]
-    public string Commitment { get; init; } = string.Empty;
-
-    [JsonPropertyName("public_inputs_schema_hash")]
-    public string PublicInputsSchemaHash { get; init; } = string.Empty;
-
-    [JsonPropertyName("max_proof_bytes")]
-    public uint MaxProofBytes { get; init; }
-
-    [JsonPropertyName("activation_height")]
-    public ulong ActivationHeight { get; init; }
-
-    [JsonPropertyName("withdrawal_height")]
-    public ulong? WithdrawalHeight { get; init; }
-}
-
-/// <summary>
-/// Authenticated Kagemusha V4/manifest-V4 release selected by Torii.
-/// </summary>
-public sealed record class ToriiKagemushaAuthenticatedArtifactSetV4
-{
-    [JsonPropertyName("generation")]
-    public string Generation { get; init; } = string.Empty;
-
-    [JsonPropertyName("manifest_sha256")]
-    public string ManifestSha256 { get; init; } = string.Empty;
-
-    [JsonPropertyName("release_policy_sha256")]
-    public string ReleasePolicySha256 { get; init; } = string.Empty;
-
-    [JsonPropertyName("release_attestation_sha256")]
-    public string ReleaseAttestationSha256 { get; init; } = string.Empty;
-
-    [JsonPropertyName("activation_height")]
-    public ulong ActivationHeight { get; init; }
-
-    [JsonPropertyName("withdrawal_height")]
-    public ulong WithdrawalHeight { get; init; }
-
-    [JsonPropertyName("max_proof_bytes")]
-    public uint MaxProofBytes { get; init; }
-
-    [JsonPropertyName("asset_scale")]
-    public uint AssetScale { get; init; }
-}
-
-/// <summary>
-/// Snapshot-bound bridge ABI-22 / Kagemusha V4 readiness projection.
-/// </summary>
-public sealed record class ToriiKagemushaReadinessV4
-{
     [JsonPropertyName("required_bridge_abi_version")]
     public uint RequiredBridgeAbiVersion { get; init; }
 
     [JsonPropertyName("max_hops")]
     public uint MaxHops { get; init; }
 
-    [JsonPropertyName("asset_definition_id")]
-    public string AssetDefinitionId { get; init; } = string.Empty;
-
-    [JsonPropertyName("asset_scale")]
-    public uint? AssetScale { get; init; }
-
-    [JsonPropertyName("evaluated_block_height")]
-    public ulong EvaluatedBlockHeight { get; init; }
-
-    [JsonPropertyName("evaluated_block_hash")]
-    public string EvaluatedBlockHash { get; init; } = string.Empty;
-
-    [JsonPropertyName("active_transfer_verifier")]
-    public ToriiKagemushaActiveVerifier? ActiveTransferVerifier { get; init; }
-
-    [JsonPropertyName("active_topup_shield_verifier")]
-    public ToriiKagemushaActiveVerifier? ActiveTopUpShieldVerifier { get; init; }
-
-    [JsonPropertyName("active_unshield_verifier")]
-    public ToriiKagemushaActiveVerifier? ActiveUnshieldVerifier { get; init; }
-
-    [JsonPropertyName("active_recursive_step_eq_verifier")]
-    public ToriiKagemushaActiveVerifier? ActiveRecursiveStepEqVerifier { get; init; }
-
-    [JsonPropertyName("active_recursive_step_ep_verifier")]
-    public ToriiKagemushaActiveVerifier? ActiveRecursiveStepEpVerifier { get; init; }
-
-    [JsonPropertyName("artifact_set")]
-    public ToriiKagemushaAuthenticatedArtifactSetV4? ArtifactSet { get; init; }
-
-    [JsonPropertyName("proof_backend_available")]
-    public bool ProofBackendAvailable { get; init; }
-
-    [JsonPropertyName("recursive_lineage_supported")]
-    public bool RecursiveLineageSupported { get; init; }
-
     [JsonPropertyName("ready")]
     public bool Ready { get; init; }
+
+    [JsonPropertyName("assets")]
+    public JsonElement[] Assets { get; init; } = [];
 
     [JsonPropertyName("blockers")]
     public ToriiKagemushaReadinessBlocker[] Blockers { get; init; } = [];
@@ -148,18 +51,42 @@ public sealed class ToriiKagemushaTopUpRequestV4
 {
     private readonly byte[] norito;
 
-    public ToriiKagemushaTopUpRequestV4(string operationId, ReadOnlySpan<byte> norito)
+    public ToriiKagemushaTopUpRequestV4(ReadOnlySpan<byte> norito)
     {
-        OperationId = ToriiKagemushaTransport.RequireOperationId(operationId, nameof(operationId));
-        this.norito = ToriiKagemushaTransport.RequireNoritoArchive(
+        var validated = ToriiKagemushaTransport.RequireNoritoRequestArchive(
             norito,
+            ToriiKagemushaTransport.TopUpRequestSchemaName,
+            fieldCount: 8,
+            operationIdFieldIndex: 6,
             ToriiKagemushaTransport.MaxTopUpNoritoRequestBytes,
             nameof(norito));
+        OperationId = validated.OperationId;
+        IssuedAtMilliseconds = validated.IssuedAtMilliseconds;
+        NetworkId = validated.NetworkId;
+        this.norito = validated.Archive;
+    }
+
+    public ToriiKagemushaTopUpRequestV4(string operationId, ReadOnlySpan<byte> norito)
+        : this(norito)
+    {
+        var exactOperationId = ToriiKagemushaTransport.RequireOperationId(
+            operationId,
+            nameof(operationId));
+        if (!string.Equals(exactOperationId, OperationId, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Kagemusha operation id must match the signed Norito request body.",
+                nameof(operationId));
+        }
     }
 
     public int Version => ToriiKagemushaTransport.ManifestVersion;
 
     public string OperationId { get; }
+
+    public ulong IssuedAtMilliseconds { get; }
+
+    public NetworkId NetworkId { get; }
 
     public byte[] Norito => norito.ToArray();
 }
@@ -171,18 +98,42 @@ public sealed class ToriiKagemushaRedeemRequestV4
 {
     private readonly byte[] norito;
 
-    public ToriiKagemushaRedeemRequestV4(string operationId, ReadOnlySpan<byte> norito)
+    public ToriiKagemushaRedeemRequestV4(ReadOnlySpan<byte> norito)
     {
-        OperationId = ToriiKagemushaTransport.RequireOperationId(operationId, nameof(operationId));
-        this.norito = ToriiKagemushaTransport.RequireNoritoArchive(
+        var validated = ToriiKagemushaTransport.RequireNoritoRequestArchive(
             norito,
+            ToriiKagemushaTransport.RedeemRequestSchemaName,
+            fieldCount: 10,
+            operationIdFieldIndex: 8,
             ToriiKagemushaTransport.MaxRedeemNoritoRequestBytes,
             nameof(norito));
+        OperationId = validated.OperationId;
+        IssuedAtMilliseconds = validated.IssuedAtMilliseconds;
+        NetworkId = validated.NetworkId;
+        this.norito = validated.Archive;
+    }
+
+    public ToriiKagemushaRedeemRequestV4(string operationId, ReadOnlySpan<byte> norito)
+        : this(norito)
+    {
+        var exactOperationId = ToriiKagemushaTransport.RequireOperationId(
+            operationId,
+            nameof(operationId));
+        if (!string.Equals(exactOperationId, OperationId, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Kagemusha operation id must match the signed Norito request body.",
+                nameof(operationId));
+        }
     }
 
     public int Version => ToriiKagemushaTransport.ManifestVersion;
 
     public string OperationId { get; }
+
+    public ulong IssuedAtMilliseconds { get; }
+
+    public NetworkId NetworkId { get; }
 
     public byte[] Norito => norito.ToArray();
 }
@@ -255,8 +206,6 @@ public sealed record class ToriiKagemushaOperationError
     public required string Code { get; init; }
 
     public required string Message { get; init; }
-
-    public JsonElement? Details { get; init; }
 }
 
 /// <summary>
@@ -288,6 +237,19 @@ internal static class ToriiKagemushaTransport
     internal const int MaxHops = 8;
     internal const int MaxTopUpNoritoRequestBytes = 512 * 1024;
     internal const int MaxRedeemNoritoRequestBytes = 48 * 1024 * 1024;
+    internal const string TopUpRequestSchemaName = "iroha.torii.v1.offline.top_up.request";
+    internal const string RedeemRequestSchemaName = "iroha.torii.v1.offline.redeem.request";
+
+    private const int RequestHeaderPaddingBytes = 8;
+    private const int AuthorizationFieldCount = 10;
+    private const int AuthorizationOperationIdFieldIndex = 3;
+    private const int AuthorizationIssuedAtFieldIndex = 4;
+    private const int TopUpCurrentNoteFieldIndex = 3;
+    private const int CurrentNoteFieldCount = 5;
+    private const int RedeemBundleFieldIndex = 1;
+    private const int RecursiveBundleFieldCount = 3;
+    private const int RecursiveStatementFieldIndex = 0;
+    private const int RecursiveStatementFieldCount = 13;
 
     internal static string RequireOperationId(string? value, string parameterName)
     {
@@ -304,19 +266,205 @@ internal static class ToriiKagemushaTransport
         return value;
     }
 
-    internal static byte[] RequireNoritoArchive(
+    internal static ValidatedRequestArchive RequireNoritoRequestArchive(
         ReadOnlySpan<byte> value,
+        string schemaName,
+        int fieldCount,
+        int operationIdFieldIndex,
         int maximumBytes,
         string parameterName)
     {
-        if (value.Length < 40 || value.Length > maximumBytes
-            || !value[..4].SequenceEqual("NRT0"u8))
+        if (value.Length <= NoritoHeader.EncodedLength + RequestHeaderPaddingBytes
+            || value.Length > maximumBytes)
         {
             throw new ArgumentException(
-                $"Kagemusha V4 request must be a Norito archive between 40 and {maximumBytes} bytes.",
+                $"Kagemusha V4 request must be a canonical Norito archive no larger than {maximumBytes} bytes.",
                 parameterName);
         }
 
-        return value.ToArray();
+        byte[] payload;
+        byte flags;
+        try
+        {
+            (payload, flags) = NoritoCodec.Decode(schemaName, value);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new ArgumentException(
+                "Kagemusha V4 request must use its exact canonical Norito schema and framing.",
+                parameterName,
+                exception);
+        }
+
+        var paddingLength = value.Length - NoritoHeader.EncodedLength - payload.Length;
+        if (flags != NoritoCodec.CanonicalLayoutFlags
+            || paddingLength != RequestHeaderPaddingBytes)
+        {
+            throw new ArgumentException(
+                "Kagemusha V4 request must use compact canonical Norito framing and exact alignment.",
+                parameterName);
+        }
+
+        var reader = new CanonicalNoritoReader(
+            payload,
+            "Kagemusha V4 request",
+            parameterName);
+        var fields = new byte[fieldCount][];
+        for (var index = 0; index < fields.Length; index++)
+        {
+            fields[index] = reader.ReadField($"fields[{index}]").ToArray();
+        }
+        reader.RequireEnd();
+
+        if (fields[0].Length != sizeof(ushort)
+            || BinaryPrimitives.ReadUInt16LittleEndian(fields[0]) != ManifestVersion)
+        {
+            throw new ArgumentException(
+                $"Kagemusha request version must be exactly {ManifestVersion}.",
+                parameterName);
+        }
+
+        var operationIdBytes = RequireOperationIdBytes(
+            fields[operationIdFieldIndex],
+            "request operation id",
+            parameterName);
+        var authorization = new CanonicalNoritoReader(
+            fields[^1],
+            "Kagemusha request authorization",
+            parameterName);
+        var authorizationFields = new byte[AuthorizationFieldCount][];
+        for (var index = 0; index < authorizationFields.Length; index++)
+        {
+            authorizationFields[index] = authorization.ReadField($"fields[{index}]").ToArray();
+        }
+        authorization.RequireEnd();
+
+        var authorizationOperationId = RequireOperationIdBytes(
+            authorizationFields[AuthorizationOperationIdFieldIndex],
+            "authorization operation id",
+            parameterName);
+        if (!authorizationOperationId.AsSpan().SequenceEqual(operationIdBytes))
+        {
+            throw new ArgumentException(
+                "Kagemusha request and authorization operation ids must match exactly.",
+                parameterName);
+        }
+
+        var issuedAtBytes = authorizationFields[AuthorizationIssuedAtFieldIndex];
+        if (issuedAtBytes.Length != sizeof(ulong))
+        {
+            throw new ArgumentException(
+                "Kagemusha authorization issued_at_ms must be an exact UInt64.",
+                parameterName);
+        }
+        var issuedAtMilliseconds = BinaryPrimitives.ReadUInt64LittleEndian(issuedAtBytes);
+        if (issuedAtMilliseconds == 0)
+        {
+            throw new ArgumentException(
+                "Kagemusha authorization issued_at_ms must be at least 1.",
+                parameterName);
+        }
+
+        var networkId = RequireRequestNetworkId(
+            fields,
+            schemaName,
+            parameterName);
+
+        return new ValidatedRequestArchive(
+            value.ToArray(),
+            Convert.ToHexString(operationIdBytes).ToLowerInvariant(),
+            issuedAtMilliseconds,
+            networkId);
     }
+
+    private static NetworkId RequireRequestNetworkId(
+        byte[][] fields,
+        string schemaName,
+        string parameterName)
+    {
+        byte[] networkIdBytes;
+        if (string.Equals(schemaName, TopUpRequestSchemaName, StringComparison.Ordinal))
+        {
+            var currentNoteFields = ReadStructFields(
+                fields[TopUpCurrentNoteFieldIndex],
+                CurrentNoteFieldCount,
+                "Kagemusha top-up current note",
+                parameterName);
+            networkIdBytes = currentNoteFields[0];
+        }
+        else if (string.Equals(schemaName, RedeemRequestSchemaName, StringComparison.Ordinal))
+        {
+            var bundleFields = ReadStructFields(
+                fields[RedeemBundleFieldIndex],
+                RecursiveBundleFieldCount,
+                "Kagemusha redemption bundle",
+                parameterName);
+            var statementFields = ReadStructFields(
+                bundleFields[RecursiveStatementFieldIndex],
+                RecursiveStatementFieldCount,
+                "Kagemusha redemption statement",
+                parameterName);
+            networkIdBytes = statementFields[0];
+        }
+        else
+        {
+            throw new ArgumentException(
+                "Kagemusha request uses an unsupported schema.",
+                parameterName);
+        }
+
+        if (networkIdBytes.Length != NetworkId.ByteLength)
+        {
+            throw new ArgumentException(
+                "Kagemusha signed request NetworkId must contain exactly 32 bytes.",
+                parameterName);
+        }
+        try
+        {
+            return NetworkId.Parse(Convert.ToHexString(networkIdBytes).ToLowerInvariant());
+        }
+        catch (FormatException error)
+        {
+            throw new ArgumentException(
+                "Kagemusha signed request NetworkId must set the Iroha hash marker bit.",
+                parameterName,
+                error);
+        }
+    }
+
+    private static byte[][] ReadStructFields(
+        ReadOnlySpan<byte> value,
+        int fieldCount,
+        string context,
+        string parameterName)
+    {
+        var reader = new CanonicalNoritoReader(value, context, parameterName);
+        var fields = new byte[fieldCount][];
+        for (var index = 0; index < fields.Length; index++)
+        {
+            fields[index] = reader.ReadField($"fields[{index}]").ToArray();
+        }
+        reader.RequireEnd();
+        return fields;
+    }
+
+    private static byte[] RequireOperationIdBytes(
+        byte[] value,
+        string field,
+        string parameterName)
+    {
+        if (value.Length != 32 || value.All(static item => item == 0))
+        {
+            throw new ArgumentException(
+                $"Kagemusha {field} must be exactly 32 non-zero bytes.",
+                parameterName);
+        }
+        return value;
+    }
+
+    internal sealed record ValidatedRequestArchive(
+        byte[] Archive,
+        string OperationId,
+        ulong IssuedAtMilliseconds,
+        NetworkId NetworkId);
 }

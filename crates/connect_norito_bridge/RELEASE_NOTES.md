@@ -28,9 +28,10 @@ feature edge, or block-tampering helpers.
 
 The native privacy metadata ABI exports only the local
 `PrivacyCompiledProfileCatalogV1`. It intentionally has no committed height,
-policy, activation, lifecycle, or readiness projection. SDKs must fetch a
-fresh authoritative `PrivacyCapabilitySnapshotV1` from live Torii before
-submitting a privacy proof.
+policy, activation, lifecycle, or readiness projection. SDKs must fetch and
+validate a fresh canonical `PrivacyExact12CapabilityManifestV1` from live
+Torii and require the exact native compiled-profile tuple before submitting a
+privacy proof.
 
 ABI 22 now also requires the terminal Offline Cash V1 boundary. A release is
 usable only after the bridge has streamed and reauthenticated the exact ordered

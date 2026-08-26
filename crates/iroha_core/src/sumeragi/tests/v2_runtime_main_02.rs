@@ -1015,66 +1015,6 @@ fn missing_nonempty_effect_ownership_latches_runtime_fail_closed() {
     );
 }
 #[test]
-fn retryable_backpressure_restores_the_exact_recovery_fifo_owner_once() {
-    let start = Instant::now();
-    let owner_tag = tag(0);
-    let mut driver = FakeDriver::new(owner_tag);
-    assert!(driver.retry_once.insert(7));
-    let (mut runtime, _) = SerializedV2Runtime::with_driver(
-        driver,
-        start,
-        Duration::from_secs(10),
-        RuntimeQueueConfig::new(4, 1, 1),
-        Vec::new(),
-    )
-    .expect("construct unarmed recovery runtime");
-    enqueue_fake(
-        &mut runtime,
-        owner_tag,
-        CommandClass::Completion,
-        FakeCommand::record(7),
-    )
-    .expect("recovery owner fits");
-    let original_owner = runtime
-        .ingress
-        .commands
-        .front()
-        .expect("recovery owner is present")
-        .lifecycle_owner()
-        .expect("recovery owner is exact");
-    assert!(matches!(
-        runtime.step_recovery(start),
-        Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
-    ));
-    let evidence = runtime
-        .last_scheduler_ownership()
-        .expect("retrying recovery retains scheduler ownership");
-    assert_eq!(
-        evidence.selected,
-        RuntimeSelectedOwnerKind::RecoveryFifoRetryRetained
-    );
-    assert_eq!(evidence.queue_before.len, evidence.queue_after.len);
-    assert_eq!(evidence.validate_exact(), Ok(()));
-    assert_eq!(
-        runtime
-            .ingress
-            .commands
-            .front()
-            .expect("recovery retry remains physically admitted")
-            .lifecycle_owner()
-            .expect("restored recovery owner is exact"),
-        original_owner
-    );
-    assert!(runtime.take_last_scheduler_ownership().is_some());
-    assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
-    assert!(matches!(
-        runtime.step_recovery_and_take_scheduler_ownership_for_test(start),
-        Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 1
-    ));
-    assert_eq!(runtime.driver.delivered, vec![(owner_tag, 7)]);
-    assert_eq!(runtime.queued_commands(), 0);
-}
-#[test]
 fn adapter_command_identity_is_derived_from_exact_immutable_payload() {
     let owner_tag = tag(4);
     let command = AdapterCommand::SignatureCompleted(vec![0x11, 0x22, 0x33]);
@@ -1109,7 +1049,7 @@ fn adapter_command_identity_is_derived_from_exact_immutable_payload() {
     assert_eq!(candidate.fifo_position, 0);
 }
 #[test]
-fn scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches() {
+fn scheduler_owner_carrier_covers_live_and_typed_deferred_branches() {
     let start = Instant::now();
     let owner_tag = tag(0);
     let mut idle = runtime(
@@ -1154,65 +1094,6 @@ fn scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches() {
         idle.last_scheduler_ownership()
             .map(|evidence| evidence.selected),
         Some(RuntimeSelectedOwnerKind::Timeout)
-    );
-    let (mut recovery, _) = SerializedV2Runtime::with_driver(
-        FakeDriver::new(owner_tag),
-        start,
-        Duration::from_secs(10),
-        RuntimeQueueConfig::new(6, 2, 1),
-        Vec::new(),
-    )
-    .expect("construct unarmed recovery runtime");
-    enqueue_fake(
-        &mut recovery,
-        owner_tag,
-        CommandClass::Completion,
-        FakeCommand::record(7),
-    )
-    .expect("recovery FIFO owner fits");
-    assert!(matches!(
-        recovery.step_recovery(start),
-        Ok(RuntimeStep::Advanced(_))
-    ));
-    assert_eq!(
-        recovery
-            .last_scheduler_ownership()
-            .map(|evidence| evidence.selected),
-        Some(RuntimeSelectedOwnerKind::RecoveryFifo)
-    );
-    assert_eq!(
-        recovery
-            .last_scheduler_ownership()
-            .expect("recovery FIFO retains evidence")
-            .validate_exact(),
-        Ok(())
-    );
-    assert!(
-        !recovery
-            .last_scheduler_ownership()
-            .expect("recovery FIFO retains evidence")
-            .live_mode
-    );
-    assert!(recovery.take_last_scheduler_ownership().is_some());
-    recovery
-        .take_effect_ownership(1)
-        .expect("the recovery executor consumes the delivered effect owner");
-    assert!(matches!(
-        recovery.step_recovery(start),
-        Ok(RuntimeStep::Idle)
-    ));
-    assert_eq!(
-        recovery
-            .last_scheduler_ownership()
-            .map(|evidence| evidence.selected),
-        Some(RuntimeSelectedOwnerKind::RecoveryIdle)
-    );
-    assert_eq!(
-        recovery
-            .last_scheduler_ownership()
-            .expect("recovery idle retains evidence")
-            .validate_exact(),
-        Ok(())
     );
     let mut deferred_driver = FakeDriver::new(owner_tag);
     deferred_driver

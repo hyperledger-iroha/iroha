@@ -361,6 +361,15 @@ payload. Use `getFeeSponsorProgram(programId, canonicalAuth)` to inspect one
 exact lifecycle record before selecting its revision. Contract/IVM drafts must
 include a positive gas bound in the intent.
 
+Fee quoting accepts only the ABI-22 `TransactionPayload` field set:
+`domain`, `authority`, `creation_time_ms`, `instructions`,
+`time_to_live_ms`, optional `nonce`, `fee_payment`, `admission_intent`,
+`metadata`, and required `attachments`. The domain must be exactly
+`{"kind":"network","value":"hash:<64 uppercase hex>#<CRC16>"}` and must
+equal `ClientConfig.localSigningContext()` when that context is configured.
+Legacy chain aliases, the genesis marker, unknown or missing fields, retired
+fee metadata, and malformed attachment bytes fail before dispatch.
+
 The metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and
 rejected. A sponsor rejection never falls back to charging the authority.
 
@@ -471,8 +480,25 @@ promotion record and runner-signed internal-validation receipt alongside the tru
 attestation, benchmark evidence, and cryptographic review. The receipt and review are each limited
 to 1 MiB; an authenticated-but-unpromoted release cannot be installed.
 
-`KagemushaRecursiveSpendProver.newToriiClient` requires a genesis-derived
-`LocalSigningContext` and exposes only readiness, top-up, redeem, and operation-status routes.
+Create `OfflineCashToriiClientV1` with a genesis-derived `LocalSigningContext`; the context remains
+mandatory so the SDK never infers network identity from Torii. The client exposes only the exact
+readiness, top-up, redeem, and operation-status routes. Submit
+`OfflineCashTopUpRequestV1` or `OfflineCashRedeemRequestV1` canonical signed bodies with a non-zero
+lowercase 32-byte-hex operation id. Native typed decoding validates each request's public
+authorization/payload binding, and the client rejects any operation-id or genesis-network mismatch
+before transport. The wrappers retain defensive canonical bytes, so an identical operation-id retry
+sends byte-identical content. Accepted `OfflineCashOperationReferenceV1` values remain canonical
+opaque audit evidence; the client requires the request id, kind, issuance time, pending state, fixed
+status URI, matching `Location`, and a positive `Retry-After`. Poll responses are bound back to the
+requested operation id; every transaction hash must be a canonical marked Iroha hash, and applied
+results require positive finality height and server time. Rejected results accept only code
+`offline_operation_rejected`, a canonical message of at most 1,024 Unicode scalars, and no details
+object. Call
+`OfflineCashOperationStatusV1.project()` for the native-decoded public state, kind, transaction
+hash, rejection, or opaque finalized top-up anchor and finality-proof bytes. Registered-device
+signature authenticity and authoritative time-window checks remain Torii admission duties. No
+public signature exposes a Kagemusha implementation type.
+
 Receiver-registration lineage is carried inside the portable receive offer and verified locally by
 the native Kagemusha V4 receive-offer verifier; it is not fetched from Torii.
 
@@ -498,9 +524,10 @@ Eq/Ep records, and that backend; `recursive_lineage_unavailable` is its exact in
 true only when the complete blocker set is empty, so unrelated blockers do not erase valid backend
 or lineage facts.
 `prepareTopUp` accepts only Torii's authoritative `next_zero_path` and retains the local note
-opening. Init results do not yet carry a proof-bound output membership witness, so the JVM surface
-intentionally does not project or restore a spendable init branch. Persisted openings and
-submission archives use typed decoders so idempotent retries reuse exact canonical bytes.
+opening. The resulting recursive init persists its own proof-bound native membership witness, and
+the JVM surface projects and restores the spendable init branch without reusing the earlier
+shield-tree witness. Persisted openings and submission archives use typed decoders so idempotent
+retries reuse exact canonical bytes.
 Secret-bearing append and redeem requests are single-use and zeroized after native consumption.
 Each projected branch carries its complete ordered exact-state claim set and authenticated V4
 artifact binding. Native `conflictsWith` compares every claim pair, rejecting equality and
@@ -519,7 +546,14 @@ exposed as `MAX_TORII_TOP_UP_REQUEST_BYTES_V4` and
 generic proof request/build/verify ABI and free-form algorithm selectors are
 absent; proofs must use protocol-specific typed APIs. The local catalog never
 establishes activation or readiness; proof submission requires a fresh
-committed `/v1/privacy/capabilities` snapshot from live Torii.
+committed `/v1/privacy/capabilities` Exact12 capability manifest from live Torii.
+
+`HttpClientTransport.getPrivacyCapabilities` decodes that live response only as
+`PrivacyExact12CapabilityManifestV1`, and
+`requirePrivacyExact12CapabilityAdmission` is the sole capability-admission
+entry point. The explicitly named legacy JSON inspection model and parser are
+retired compatibility diagnostics: they are not authoritative, are not used by
+the transport, and cannot authorize proof construction.
 
 Genesis `confidential_features` and `zk_policy_hash` values are opaque consensus
 fingerprints, never client-side proof or backend selectors.
@@ -558,15 +592,27 @@ whitespace normalization fail closed.
 
 ## Build Instructions
 
-Rust/Kotlin parity tests require a freshly built `kotlin-fixture-gen`
-executable supplied explicitly through `IROHA_KOTLIN_FIXTURE_GEN_BIN`. Relative
-paths are resolved from the repository root. The test runner rejects an unset,
-blank, missing, non-file, or non-executable value and never invokes Cargo:
+Rust/Kotlin parity tests require two freshly built executables from the same
+checked-out revision: `kotlin-fixture-gen` and the authoritative Offline Cash
+Torii example. Supply them explicitly through `IROHA_KOTLIN_FIXTURE_GEN_BIN`
+and `IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN`. Relative paths are resolved from
+the repository root. The test runner rejects an unset, blank, missing,
+non-file, or non-executable value and never invokes Cargo. From the repository
+root, build with the locked dependency graph and then run the suite:
 
 ```bash
-export IROHA_KOTLIN_FIXTURE_GEN_BIN=/absolute/path/to/kotlin-fixture-gen
-./gradlew :core-jvm:test --console=plain
+cargo build --locked -p kotlin-fixture-gen --features dev-tools --bin kotlin-fixture-gen
+cargo build --locked -p connect_norito_bridge --example kotlin_offline_cash_v1
+export IROHA_KOTLIN_FIXTURE_GEN_BIN="$(pwd)/target/debug/kotlin-fixture-gen"
+export IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN="$(pwd)/target/debug/examples/kotlin_offline_cash_v1"
+(cd kotlin && ./gradlew :core-jvm:test --console=plain)
 ```
+
+The Offline Cash generator emits a closed 40-row inventory. Both JVM fixture
+loaders reject missing, duplicate, additional, or malformed rows eagerly. The
+inventory includes valid pending, applied top-up, applied redeem, and rejected
+statuses plus independent invalid-marker, terminal-binding, coherent
+foreign-network, and rejection-envelope controls.
 
 ### Prerequisites
 

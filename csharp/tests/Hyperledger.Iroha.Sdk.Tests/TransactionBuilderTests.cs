@@ -17,6 +17,8 @@ public sealed class TransactionBuilderTests
 {
     private const string FixtureSeedHex = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
     private const string FixtureNetworkIdLiteral = "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
+    private const string FixtureNetworkIdJsonLiteral =
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
     private const string FixtureAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private static NetworkId FixtureNetworkId => NetworkId.Parse(FixtureNetworkIdLiteral);
     private static FeePaymentIntent EmptyAuthorityFeePayment =>
@@ -27,11 +29,11 @@ public sealed class TransactionBuilderTests
     {
         Assert.Throws<FormatException>(() => NetworkId.Parse($" {FixtureNetworkIdLiteral}"));
         Assert.Throws<ArgumentNullException>(() =>
-            new TransactionBuilder(null!, FixtureAccountId, EmptyAuthorityFeePayment));
+            new TransactionBuilder(null!, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant, FixtureAccountId, EmptyAuthorityFeePayment));
         Assert.Throws<ArgumentException>(() =>
-            new TransactionBuilder(FixtureNetworkId, $" {FixtureAccountId}", EmptyAuthorityFeePayment));
+            new TransactionBuilder(FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant, $" {FixtureAccountId}", EmptyAuthorityFeePayment));
 
-        var builder = new TransactionBuilder(FixtureNetworkId, FixtureAccountId, EmptyAuthorityFeePayment);
+        var builder = new TransactionBuilder(FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant, FixtureAccountId, EmptyAuthorityFeePayment);
         Assert.Throws<ArgumentException>(() => builder.SetMetadata(" trace ", JsonValue.Create("abc")));
         Assert.Throws<ArgumentException>(
             () => builder.ReplaceMetadata(
@@ -44,9 +46,9 @@ public sealed class TransactionBuilderTests
     [Fact]
     public void TransactionEncodingContextRejectsPaddedBoundaryFields()
     {
-        Assert.Throws<ArgumentException>(() => new TransactionEncodingContext($" {FixtureAccountId}"));
+        Assert.Throws<ArgumentException>(() => new TransactionEncodingContext($" {FixtureAccountId}", global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant));
 
-        var context = new TransactionEncodingContext(FixtureAccountId);
+        var context = new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
         Assert.Throws<ArgumentNullException>(() => context.EncodeNetworkDomain(null!));
         Assert.Throws<ArgumentException>(() => context.EncodeAccountId($" {FixtureAccountId}"));
         Assert.Throws<ArgumentException>(() => context.EncodeName(" display_name"));
@@ -61,7 +63,7 @@ public sealed class TransactionBuilderTests
     [Fact]
     public void ExecutableBatchEncodingPreservesInstructionCallInstructionOrder()
     {
-        var context = new TransactionEncodingContext(FixtureAccountId);
+        var context = new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
         var instruction = TransactionInstruction.TransferAsset(
             FixtureAssetDefinitionId,
             "1",
@@ -114,6 +116,7 @@ public sealed class TransactionBuilderTests
             "run");
         var missingGas = new TransactionBuilder(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             FixtureAccountId,
             EmptyAuthorityFeePayment)
             .AddContractCall(invocation);
@@ -125,6 +128,7 @@ public sealed class TransactionBuilderTests
             FixtureAccountId);
         var payload = new TransactionBuilder(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             FixtureAccountId,
             FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), gasLimit: 100_000))
             .WithExecutableBatch([
@@ -149,7 +153,8 @@ public sealed class TransactionBuilderTests
         using var document = JsonDocument.Parse(json);
         var domain = document.RootElement.GetProperty("domain");
         Assert.Equal("network", domain.GetProperty("kind").GetString());
-        Assert.Equal(FixtureNetworkIdLiteral, domain.GetProperty("value").GetString());
+        Assert.Equal(FixtureNetworkIdJsonLiteral, domain.GetProperty("value").GetString());
+        Assert.NotEqual(FixtureNetworkIdLiteral, domain.GetProperty("value").GetString());
         Assert.False(document.RootElement.TryGetProperty("chain", out _));
         Assert.False(document.RootElement.TryGetProperty("network_id", out _));
     }
@@ -230,6 +235,7 @@ public sealed class TransactionBuilderTests
 
         var builder = new TransactionBuilder(
             NetworkId.Parse(payload.GetProperty("network_id").GetString()!),
+            AccountAddress.TairaTestnetChainDiscriminant,
             payload.GetProperty("authority").GetString()!,
             EmptyAuthorityFeePayment)
             .SetCreationTimeMilliseconds((ulong)payload.GetProperty("creation_time_ms").GetInt64())
@@ -256,9 +262,20 @@ public sealed class TransactionBuilderTests
             manifest.GetProperty("payload_base64").GetString()!);
         var expectedSigned = Convert.FromBase64String(
             manifest.GetProperty("signed_base64").GetString()!);
+        var actualPayload = envelope.PayloadBytes;
+        var firstPayloadDifference = Enumerable.Range(
+                0,
+                Math.Min(actualPayload.Length, expectedPayload.Length))
+            .Cast<int?>()
+            .FirstOrDefault(index => actualPayload[index!.Value] != expectedPayload[index.Value]);
         Assert.True(
-            envelope.PayloadBytes.SequenceEqual(expectedPayload),
-            $"Rust-owned Swift fixture `{fixtureName}` must be regenerated; managed bytes were not blessed.");
+            actualPayload.SequenceEqual(expectedPayload),
+            $"Rust-owned Swift fixture `{fixtureName}` differs from the managed encoder "
+            + $"(expected hash {manifest.GetProperty("payload_hash").GetString()}, "
+            + $"actual hash {Convert.ToHexString(IrohaHash.Hash(actualPayload)).ToLowerInvariant()}, "
+            + $"expected length {expectedPayload.Length}, actual length {actualPayload.Length}, "
+            + $"first difference {firstPayloadDifference?.ToString() ?? "at end"}, "
+            + $"actual base64 {Convert.ToBase64String(actualPayload)}).");
         Assert.Equal(
             expectedPayload,
             File.ReadAllBytes(Path.Combine(fixturesRoot, $"{fixtureName}.norito")));
@@ -480,7 +497,7 @@ public sealed class TransactionBuilderTests
     public void ConstructorRejectsNonExactRequiredFields(string authorityAccountId)
     {
         Assert.Throws<ArgumentException>(() =>
-            new TransactionBuilder(FixtureNetworkId, authorityAccountId, EmptyAuthorityFeePayment));
+            new TransactionBuilder(FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant, authorityAccountId, EmptyAuthorityFeePayment));
     }
 
     [Fact]
@@ -751,7 +768,7 @@ public sealed class TransactionBuilderTests
     [Fact]
     public void TransactionEncodingContextEncodesExactNetworkDomain()
     {
-        var context = new TransactionEncodingContext(FixtureAccountId);
+        var context = new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
         var encoded = context.EncodeNetworkDomain(FixtureNetworkId);
         var expected = new byte[sizeof(uint) + 1 + NetworkId.ByteLength];
         expected[sizeof(uint)] = NetworkId.ByteLength;
@@ -764,24 +781,30 @@ public sealed class TransactionBuilderTests
     [Fact]
     public void TransactionBuilderAcceptsCanonicalEmbeddedI105DiscriminantAndVerifiesKeyBytes()
     {
-        const ushort embeddedDiscriminant = 369;
+        const ushort embeddedDiscriminant = AccountAddress.TairaTestnetChainDiscriminant;
         var privateKeySeed = Convert.FromHexString(FixtureSeedHex);
         var publicKey = Ed25519Signer.GetPublicKey(privateKeySeed);
         var authority = AccountAddress.FromPublicKey(publicKey, "ed25519")
             .ToI105(embeddedDiscriminant);
-        var context = new TransactionEncodingContext(authority);
+        var context = new TransactionEncodingContext(authority, embeddedDiscriminant);
 
         Assert.NotEqual(FixtureAccountId, authority);
         Assert.Equal(
             authority,
             AccountAddress.Parse(authority, embeddedDiscriminant).ToI105(embeddedDiscriminant));
         Assert.Equal(
-            new TransactionEncodingContext(FixtureAccountId).EncodeAccountController(FixtureAccountId),
+            new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).EncodeAccountController(FixtureAccountId),
             context.EncodeAccountController(authority));
         context.EnsureAuthorityMatchesPrivateKey(privateKeySeed);
 
-        var envelope = new TransactionBuilder(FixtureNetworkId, authority, EmptyAuthorityFeePayment)
-            .TransferAsset(FixtureAssetDefinitionId, "1", FixtureAccountId)
+        var builder = new TransactionBuilder(
+            FixtureNetworkId,
+            authority,
+            EmptyAuthorityFeePayment);
+        Assert.Equal(embeddedDiscriminant, builder.ChainDiscriminant);
+
+        var envelope = builder
+            .TransferAsset(FixtureAssetDefinitionId, "1", authority)
             .SetCreationTimeMilliseconds(1_736_000_000_000)
             .BuildSigned(privateKeySeed);
 
@@ -799,7 +822,7 @@ public sealed class TransactionBuilderTests
     [InlineData("ali\u0000ce")]
     public void TransactionEncodingContextRejectsNonExactNames(string name)
     {
-        var context = new TransactionEncodingContext(FixtureAccountId);
+        var context = new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
 
         Assert.Throws<ArgumentException>(() => context.EncodeName(name));
     }
@@ -833,7 +856,7 @@ public sealed class TransactionBuilderTests
     [InlineData("0.0000000000000000000000000001")]
     public void TransactionEncodingContextAcceptsCanonicalQuantities(string numeric)
     {
-        var context = new TransactionEncodingContext(FixtureAccountId);
+        var context = new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
 
         Assert.NotEmpty(context.EncodeQuantity(NumericV1.QuantityValue.ParseCanonical(numeric)));
     }
@@ -847,7 +870,7 @@ public sealed class TransactionBuilderTests
     [InlineData("dra\u0000gon$wonderland")]
     public void TransactionEncodingContextRejectsNonExactNftIds(string nftId)
     {
-        var context = new TransactionEncodingContext(FixtureAccountId);
+        var context = new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
 
         Assert.Throws<ArgumentException>(() => context.EncodeNftId(nftId));
     }
@@ -860,7 +883,7 @@ public sealed class TransactionBuilderTests
     [InlineData("62Fk4FPcMuLvW5QjDGNF2a4jAmjM\u0000")]
     public void TransactionEncodingContextRejectsNonExactAssetDefinitionIds(string assetDefinitionId)
     {
-        var context = new TransactionEncodingContext(FixtureAccountId);
+        var context = new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
 
         Assert.Throws<ArgumentException>(() => context.EncodeAssetDefinitionId(assetDefinitionId));
     }
@@ -868,7 +891,7 @@ public sealed class TransactionBuilderTests
     [Fact]
     public void TransactionEncodingContextRejectsNonExactHashAndFixedByteLiterals()
     {
-        var context = new TransactionEncodingContext(FixtureAccountId);
+        var context = new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
         var hash = new string('a', 64);
 
         foreach (var literal in new[] { "", " ", " " + hash, hash + " ", "\u00A0" + hash, hash[..32] + " " + hash[32..], hash + "\u0000" })
@@ -891,7 +914,7 @@ public sealed class TransactionBuilderTests
         string literal,
         int expectedLength)
     {
-        var context = new TransactionEncodingContext(FixtureAccountId);
+        var context = new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
 
         Assert.Throws<ArgumentException>(() => context.EncodeFixedBytesLiteral(literal, expectedLength));
     }
@@ -899,7 +922,7 @@ public sealed class TransactionBuilderTests
     [Fact]
     public void TransactionEncodingContextEncodesNullOptionalStringAsNone()
     {
-        var context = new TransactionEncodingContext(FixtureAccountId);
+        var context = new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
 
         Assert.Equal(new byte[] { 0 }, context.EncodeOptionalString(null));
     }
@@ -913,7 +936,7 @@ public sealed class TransactionBuilderTests
     [InlineData("sort\u0000key")]
     public void TransactionEncodingContextRejectsNonExactOptionalStrings(string value)
     {
-        var context = new TransactionEncodingContext(FixtureAccountId);
+        var context = new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
 
         Assert.Throws<ArgumentException>(() => context.EncodeOptionalString(value));
     }
@@ -928,9 +951,9 @@ public sealed class TransactionBuilderTests
     [InlineData("n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ")]
     public void TransactionEncodingContextRejectsNonExactAccountIds(string accountId)
     {
-        Assert.Throws<ArgumentException>(() => new TransactionEncodingContext(accountId));
+        Assert.Throws<ArgumentException>(() => new TransactionEncodingContext(accountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant));
 
-        var context = new TransactionEncodingContext(FixtureAccountId);
+        var context = new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
         Assert.Throws<ArgumentException>(() => context.EncodeAccountId(accountId));
     }
 
@@ -966,10 +989,18 @@ public sealed class TransactionBuilderTests
     {
         var instruction = TransactionInstruction.TransferDomain("wonderland", FixtureAccountId);
 
-        Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox(" " + FixtureAccountId));
-        Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox(FixtureAccountId + " "));
-        Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox(FixtureAccountId.Insert(8, " ")));
-        Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox("sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"));
+        Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox(
+            " " + FixtureAccountId,
+            AccountAddress.DefaultChainDiscriminant));
+        Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox(
+            FixtureAccountId + " ",
+            AccountAddress.DefaultChainDiscriminant));
+        Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox(
+            FixtureAccountId.Insert(8, " "),
+            AccountAddress.DefaultChainDiscriminant));
+        Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox(
+            "sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+            AccountAddress.DefaultChainDiscriminant));
     }
 
     [Fact]
@@ -977,6 +1008,7 @@ public sealed class TransactionBuilderTests
     {
         var transaction = new TransactionBuilder(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
             EmptyAuthorityFeePayment)
             .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.75", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
@@ -1040,7 +1072,7 @@ public sealed class TransactionBuilderTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(FixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     FixtureAccountId,
                     Convert.FromHexString(FixtureSeedHex)),
@@ -1063,6 +1095,7 @@ public sealed class TransactionBuilderTests
     {
         var envelope = new TransactionBuilder(
                 FixtureNetworkId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
                 EmptyAuthorityFeePayment)
             .SetAssetKeyValue(
@@ -1104,6 +1137,7 @@ public sealed class TransactionBuilderTests
     {
         var builder = new TransactionBuilder(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
             EmptyAuthorityFeePayment)
             .AddInstruction(TransactionInstruction.SetDomainKeyValue(
@@ -1143,6 +1177,7 @@ public sealed class TransactionBuilderTests
     {
         var envelope = new TransactionBuilder(
                 FixtureNetworkId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
                 EmptyAuthorityFeePayment)
             .SetDomainKeyValue(
@@ -1175,51 +1210,45 @@ public sealed class TransactionBuilderTests
         Assert.Equal(6, instructions.Count);
 
         Assert.Equal("iroha.set_key_value", instructions[0].WireId);
-        var setDomainPayload = SkipNoritoHeader(instructions[0].Payload);
-        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(setDomainPayload[..4]));
-        _ = ReadField(setDomainPayload[4..], out var setDomainOffsetAfterObject);
-        var setDomainKey = ReadNoritoString(ReadField(setDomainPayload[(4 + setDomainOffsetAfterObject)..], out var setDomainOffsetAfterKey));
-        var setDomainValue = ReadNoritoString(ReadField(setDomainPayload[(4 + setDomainOffsetAfterObject + setDomainOffsetAfterKey)..], out _));
+        var setDomainPayload = ReadBoxedVariantPayload(instructions[0].Payload, 0);
+        _ = ReadField(setDomainPayload, out var setDomainOffsetAfterObject);
+        var setDomainKey = ReadNoritoString(ReadField(setDomainPayload[setDomainOffsetAfterObject..], out var setDomainOffsetAfterKey));
+        var setDomainValue = ReadNoritoString(ReadField(setDomainPayload[(setDomainOffsetAfterObject + setDomainOffsetAfterKey)..], out _));
         Assert.Equal("display_name", setDomainKey);
         Assert.Equal("\"Treasury buffer\"", setDomainValue);
 
         Assert.Equal("iroha.remove_key_value", instructions[1].WireId);
-        var removeDomainPayload = SkipNoritoHeader(instructions[1].Payload);
-        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(removeDomainPayload[..4]));
-        _ = ReadField(removeDomainPayload[4..], out var removeDomainOffsetAfterObject);
-        var removeDomainKey = ReadNoritoString(ReadField(removeDomainPayload[(4 + removeDomainOffsetAfterObject)..], out _));
+        var removeDomainPayload = ReadBoxedVariantPayload(instructions[1].Payload, 0);
+        _ = ReadField(removeDomainPayload, out var removeDomainOffsetAfterObject);
+        var removeDomainKey = ReadNoritoString(ReadField(removeDomainPayload[removeDomainOffsetAfterObject..], out _));
         Assert.Equal("legacy_flag", removeDomainKey);
 
         Assert.Equal("iroha.set_key_value", instructions[2].WireId);
-        var setAccountPayload = SkipNoritoHeader(instructions[2].Payload);
-        Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(setAccountPayload[..4]));
-        _ = ReadField(setAccountPayload[4..], out var setAccountOffsetAfterObject);
-        var setAccountKey = ReadNoritoString(ReadField(setAccountPayload[(4 + setAccountOffsetAfterObject)..], out var setAccountOffsetAfterKey));
-        var setAccountValue = ReadNoritoString(ReadField(setAccountPayload[(4 + setAccountOffsetAfterObject + setAccountOffsetAfterKey)..], out _));
+        var setAccountPayload = ReadBoxedVariantPayload(instructions[2].Payload, 1);
+        _ = ReadField(setAccountPayload, out var setAccountOffsetAfterObject);
+        var setAccountKey = ReadNoritoString(ReadField(setAccountPayload[setAccountOffsetAfterObject..], out var setAccountOffsetAfterKey));
+        var setAccountValue = ReadNoritoString(ReadField(setAccountPayload[(setAccountOffsetAfterObject + setAccountOffsetAfterKey)..], out _));
         Assert.Equal("display_name", setAccountKey);
         Assert.Equal("\"Treasury buffer\"", setAccountValue);
 
         Assert.Equal("iroha.remove_key_value", instructions[3].WireId);
-        var removeAccountPayload = SkipNoritoHeader(instructions[3].Payload);
-        Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(removeAccountPayload[..4]));
-        _ = ReadField(removeAccountPayload[4..], out var removeAccountOffsetAfterObject);
-        var removeAccountKey = ReadNoritoString(ReadField(removeAccountPayload[(4 + removeAccountOffsetAfterObject)..], out _));
+        var removeAccountPayload = ReadBoxedVariantPayload(instructions[3].Payload, 1);
+        _ = ReadField(removeAccountPayload, out var removeAccountOffsetAfterObject);
+        var removeAccountKey = ReadNoritoString(ReadField(removeAccountPayload[removeAccountOffsetAfterObject..], out _));
         Assert.Equal("legacy_flag", removeAccountKey);
 
         Assert.Equal("iroha.set_key_value", instructions[4].WireId);
-        var setAssetDefinitionPayload = SkipNoritoHeader(instructions[4].Payload);
-        Assert.Equal(2u, BinaryPrimitives.ReadUInt32LittleEndian(setAssetDefinitionPayload[..4]));
-        _ = ReadField(setAssetDefinitionPayload[4..], out var setAssetDefinitionOffsetAfterObject);
-        var setAssetDefinitionKey = ReadNoritoString(ReadField(setAssetDefinitionPayload[(4 + setAssetDefinitionOffsetAfterObject)..], out var setAssetDefinitionOffsetAfterKey));
-        var setAssetDefinitionValue = ReadNoritoString(ReadField(setAssetDefinitionPayload[(4 + setAssetDefinitionOffsetAfterObject + setAssetDefinitionOffsetAfterKey)..], out _));
+        var setAssetDefinitionPayload = ReadBoxedVariantPayload(instructions[4].Payload, 2);
+        _ = ReadField(setAssetDefinitionPayload, out var setAssetDefinitionOffsetAfterObject);
+        var setAssetDefinitionKey = ReadNoritoString(ReadField(setAssetDefinitionPayload[setAssetDefinitionOffsetAfterObject..], out var setAssetDefinitionOffsetAfterKey));
+        var setAssetDefinitionValue = ReadNoritoString(ReadField(setAssetDefinitionPayload[(setAssetDefinitionOffsetAfterObject + setAssetDefinitionOffsetAfterKey)..], out _));
         Assert.Equal("ticker", setAssetDefinitionKey);
         Assert.Equal("\"XOR\"", setAssetDefinitionValue);
 
         Assert.Equal("iroha.remove_key_value", instructions[5].WireId);
-        var removeAssetDefinitionPayload = SkipNoritoHeader(instructions[5].Payload);
-        Assert.Equal(2u, BinaryPrimitives.ReadUInt32LittleEndian(removeAssetDefinitionPayload[..4]));
-        _ = ReadField(removeAssetDefinitionPayload[4..], out var removeAssetDefinitionOffsetAfterObject);
-        var removeAssetDefinitionKey = ReadNoritoString(ReadField(removeAssetDefinitionPayload[(4 + removeAssetDefinitionOffsetAfterObject)..], out _));
+        var removeAssetDefinitionPayload = ReadBoxedVariantPayload(instructions[5].Payload, 2);
+        _ = ReadField(removeAssetDefinitionPayload, out var removeAssetDefinitionOffsetAfterObject);
+        var removeAssetDefinitionKey = ReadNoritoString(ReadField(removeAssetDefinitionPayload[removeAssetDefinitionOffsetAfterObject..], out _));
         Assert.Equal("deprecated_label", removeAssetDefinitionKey);
 
         AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
@@ -1230,6 +1259,7 @@ public sealed class TransactionBuilderTests
     {
         var builder = new TransactionBuilder(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
             EmptyAuthorityFeePayment)
             .AddInstruction(TransactionInstruction.SetNftKeyValue(
@@ -1268,6 +1298,7 @@ public sealed class TransactionBuilderTests
     {
         var envelope = new TransactionBuilder(
                 FixtureNetworkId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
                 EmptyAuthorityFeePayment)
             .SetNftKeyValue(
@@ -1298,60 +1329,54 @@ public sealed class TransactionBuilderTests
         Assert.Equal(7, instructions.Count);
 
         Assert.Equal("iroha.set_key_value", instructions[0].WireId);
-        var setNftPayload = SkipNoritoHeader(instructions[0].Payload);
-        Assert.Equal(3u, BinaryPrimitives.ReadUInt32LittleEndian(setNftPayload[..4]));
-        var setNftObject = ReadField(setNftPayload[4..], out var setNftOffsetAfterObject);
+        var setNftPayload = ReadBoxedVariantPayload(instructions[0].Payload, 3);
+        var setNftObject = ReadField(setNftPayload, out var setNftOffsetAfterObject);
         var setNftDomain = ReadNoritoString(ReadField(setNftObject, out var setNftOffsetAfterDomain));
         var setNftName = ReadNoritoString(ReadField(setNftObject[setNftOffsetAfterDomain..], out _));
-        var setNftKey = ReadNoritoString(ReadField(setNftPayload[(4 + setNftOffsetAfterObject)..], out var setNftOffsetAfterKey));
-        var setNftValue = ReadNoritoString(ReadField(setNftPayload[(4 + setNftOffsetAfterObject + setNftOffsetAfterKey)..], out _));
+        var setNftKey = ReadNoritoString(ReadField(setNftPayload[setNftOffsetAfterObject..], out var setNftOffsetAfterKey));
+        var setNftValue = ReadNoritoString(ReadField(setNftPayload[(setNftOffsetAfterObject + setNftOffsetAfterKey)..], out _));
         Assert.Equal("wonderland", setNftDomain);
         Assert.Equal("dragon", setNftName);
         Assert.Equal("rarity", setNftKey);
         Assert.Equal("\"legendary\"", setNftValue);
 
         Assert.Equal("iroha.remove_key_value", instructions[1].WireId);
-        var removeNftPayload = SkipNoritoHeader(instructions[1].Payload);
-        Assert.Equal(3u, BinaryPrimitives.ReadUInt32LittleEndian(removeNftPayload[..4]));
-        var removeNftObject = ReadField(removeNftPayload[4..], out var removeNftOffsetAfterObject);
+        var removeNftPayload = ReadBoxedVariantPayload(instructions[1].Payload, 3);
+        var removeNftObject = ReadField(removeNftPayload, out var removeNftOffsetAfterObject);
         var removeNftDomain = ReadNoritoString(ReadField(removeNftObject, out var removeNftOffsetAfterDomain));
         var removeNftName = ReadNoritoString(ReadField(removeNftObject[removeNftOffsetAfterDomain..], out _));
-        var removeNftKey = ReadNoritoString(ReadField(removeNftPayload[(4 + removeNftOffsetAfterObject)..], out _));
+        var removeNftKey = ReadNoritoString(ReadField(removeNftPayload[removeNftOffsetAfterObject..], out _));
         Assert.Equal("wonderland", removeNftDomain);
         Assert.Equal("dragon", removeNftName);
         Assert.Equal("legacy_flag", removeNftKey);
 
         Assert.Equal("iroha.set_key_value", instructions[2].WireId);
-        var setTriggerPayload = SkipNoritoHeader(instructions[2].Payload);
-        Assert.Equal(4u, BinaryPrimitives.ReadUInt32LittleEndian(setTriggerPayload[..4]));
-        var setTriggerId = ReadNoritoString(ReadField(setTriggerPayload[4..], out var setTriggerOffsetAfterObject));
-        var setTriggerKey = ReadNoritoString(ReadField(setTriggerPayload[(4 + setTriggerOffsetAfterObject)..], out var setTriggerOffsetAfterKey));
-        var setTriggerValue = ReadNoritoString(ReadField(setTriggerPayload[(4 + setTriggerOffsetAfterObject + setTriggerOffsetAfterKey)..], out _));
+        var setTriggerPayload = ReadBoxedVariantPayload(instructions[2].Payload, 4);
+        var setTriggerId = ReadNoritoString(ReadField(setTriggerPayload, out var setTriggerOffsetAfterObject));
+        var setTriggerKey = ReadNoritoString(ReadField(setTriggerPayload[setTriggerOffsetAfterObject..], out var setTriggerOffsetAfterKey));
+        var setTriggerValue = ReadNoritoString(ReadField(setTriggerPayload[(setTriggerOffsetAfterObject + setTriggerOffsetAfterKey)..], out _));
         Assert.Equal("settlement_window", setTriggerId);
         Assert.Equal("mode", setTriggerKey);
         Assert.Equal("\"strict\"", setTriggerValue);
 
         Assert.Equal("iroha.remove_key_value", instructions[3].WireId);
-        var removeTriggerPayload = SkipNoritoHeader(instructions[3].Payload);
-        Assert.Equal(4u, BinaryPrimitives.ReadUInt32LittleEndian(removeTriggerPayload[..4]));
-        var removeTriggerId = ReadNoritoString(ReadField(removeTriggerPayload[4..], out var removeTriggerOffsetAfterObject));
-        var removeTriggerKey = ReadNoritoString(ReadField(removeTriggerPayload[(4 + removeTriggerOffsetAfterObject)..], out _));
+        var removeTriggerPayload = ReadBoxedVariantPayload(instructions[3].Payload, 4);
+        var removeTriggerId = ReadNoritoString(ReadField(removeTriggerPayload, out var removeTriggerOffsetAfterObject));
+        var removeTriggerKey = ReadNoritoString(ReadField(removeTriggerPayload[removeTriggerOffsetAfterObject..], out _));
         Assert.Equal("settlement_window", removeTriggerId);
         Assert.Equal("legacy_flag", removeTriggerKey);
 
         Assert.Equal("iroha.mint", instructions[4].WireId);
-        var mintTriggerPayload = SkipNoritoHeader(instructions[4].Payload);
-        Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(mintTriggerPayload[..4]));
-        var mintTriggerRepetitions = BinaryPrimitives.ReadUInt32LittleEndian(ReadField(mintTriggerPayload[4..], out var mintTriggerOffsetAfterRepetitions));
-        var mintTriggerId = ReadNoritoString(ReadField(mintTriggerPayload[(4 + mintTriggerOffsetAfterRepetitions)..], out _));
+        var mintTriggerPayload = ReadBoxedVariantPayload(instructions[4].Payload, 1);
+        var mintTriggerRepetitions = BinaryPrimitives.ReadUInt32LittleEndian(ReadField(mintTriggerPayload, out var mintTriggerOffsetAfterRepetitions));
+        var mintTriggerId = ReadNoritoString(ReadField(mintTriggerPayload[mintTriggerOffsetAfterRepetitions..], out _));
         Assert.Equal(3u, mintTriggerRepetitions);
         Assert.Equal("settlement_window", mintTriggerId);
 
         Assert.Equal("iroha.burn", instructions[5].WireId);
-        var burnTriggerPayload = SkipNoritoHeader(instructions[5].Payload);
-        Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(burnTriggerPayload[..4]));
-        var burnTriggerRepetitions = BinaryPrimitives.ReadUInt32LittleEndian(ReadField(burnTriggerPayload[4..], out var burnTriggerOffsetAfterRepetitions));
-        var burnTriggerId = ReadNoritoString(ReadField(burnTriggerPayload[(4 + burnTriggerOffsetAfterRepetitions)..], out _));
+        var burnTriggerPayload = ReadBoxedVariantPayload(instructions[5].Payload, 1);
+        var burnTriggerRepetitions = BinaryPrimitives.ReadUInt32LittleEndian(ReadField(burnTriggerPayload, out var burnTriggerOffsetAfterRepetitions));
+        var burnTriggerId = ReadNoritoString(ReadField(burnTriggerPayload[burnTriggerOffsetAfterRepetitions..], out _));
         Assert.Equal(1u, burnTriggerRepetitions);
         Assert.Equal("settlement_window", burnTriggerId);
 
@@ -1434,16 +1459,16 @@ public sealed class TransactionBuilderTests
 
         var instructions = ReadEncodedInstructions(envelope.PayloadBytes);
         Assert.Equal(7, instructions.Count);
-        Assert.Equal(ExpectedInstructionJsonPayload("asset"), ReadSetJsonPayload(instructions[0].Payload, prefixLength: 0));
-        Assert.Equal(ExpectedInstructionJsonPayload("domain"), ReadSetJsonPayload(instructions[1].Payload, prefixLength: 4));
-        Assert.Equal(ExpectedInstructionJsonPayload("account"), ReadSetJsonPayload(instructions[2].Payload, prefixLength: 4));
+        Assert.Equal(ExpectedInstructionJsonPayload("asset"), ReadSetJsonPayload(instructions[0].Payload, boxedVariant: null));
+        Assert.Equal(ExpectedInstructionJsonPayload("domain"), ReadSetJsonPayload(instructions[1].Payload, boxedVariant: 0));
+        Assert.Equal(ExpectedInstructionJsonPayload("account"), ReadSetJsonPayload(instructions[2].Payload, boxedVariant: 1));
         Assert.Equal(
             ExpectedInstructionJsonPayload("asset-definition"),
-            ReadSetJsonPayload(instructions[3].Payload, prefixLength: 4));
-        Assert.Equal(ExpectedInstructionJsonPayload("nft"), ReadSetJsonPayload(instructions[4].Payload, prefixLength: 4));
+            ReadSetJsonPayload(instructions[3].Payload, boxedVariant: 2));
+        Assert.Equal(ExpectedInstructionJsonPayload("nft"), ReadSetJsonPayload(instructions[4].Payload, boxedVariant: 3));
         Assert.Equal(
             ExpectedInstructionJsonPayload("trigger-init"),
-            ReadSetJsonPayload(instructions[5].Payload, prefixLength: 4));
+            ReadSetJsonPayload(instructions[5].Payload, boxedVariant: 4));
         Assert.Equal(ExpectedInstructionJsonPayload("execute-init"), ReadExecuteTriggerJsonPayload(instructions[6].Payload));
 
         AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
@@ -1474,12 +1499,14 @@ public sealed class TransactionBuilderTests
             payload["tags"]!.AsArray()[0] = "mutated";
         }
 
-        static string ReadSetJsonPayload(byte[] framedPayload, int prefixLength)
+        static string ReadSetJsonPayload(byte[] framedPayload, uint? boxedVariant)
         {
-            var payload = SkipNoritoHeader(framedPayload);
-            _ = ReadField(payload[prefixLength..], out var offsetAfterObject);
-            _ = ReadField(payload[(prefixLength + offsetAfterObject)..], out var offsetAfterKey);
-            return ReadNoritoString(ReadField(payload[(prefixLength + offsetAfterObject + offsetAfterKey)..], out _));
+            var payload = boxedVariant.HasValue
+                ? ReadBoxedVariantPayload(framedPayload, boxedVariant.Value)
+                : SkipNoritoHeader(framedPayload);
+            _ = ReadField(payload, out var offsetAfterObject);
+            _ = ReadField(payload[offsetAfterObject..], out var offsetAfterKey);
+            return ReadNoritoString(ReadField(payload[(offsetAfterObject + offsetAfterKey)..], out _));
         }
 
         static string ReadExecuteTriggerJsonPayload(byte[] framedPayload)
@@ -1636,7 +1663,7 @@ public sealed class TransactionBuilderTests
 
     private static TransactionBuilder NewTransactionBuilder()
     {
-        return new TransactionBuilder(FixtureNetworkId, FixtureAccountId, EmptyAuthorityFeePayment);
+        return new TransactionBuilder(FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant, FixtureAccountId, EmptyAuthorityFeePayment);
     }
 
     private static void AssertArgumentDiagnostic(
@@ -2021,6 +2048,7 @@ public sealed class TransactionBuilderTests
     {
         var builder = new TransactionBuilder(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
             EmptyAuthorityFeePayment)
             .AddInstruction(TransactionInstruction.TransferDomain(
@@ -2046,7 +2074,7 @@ public sealed class TransactionBuilderTests
         var authority = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
         var destination = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
 
-        var envelope = new TransactionBuilder(FixtureNetworkId, authority, EmptyAuthorityFeePayment)
+        var envelope = new TransactionBuilder(FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant, authority, EmptyAuthorityFeePayment)
             .TransferDomain("wonderland", destination)
             .TransferAssetDefinition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", destination)
             .TransferNft("dragon$wonderland", destination)
@@ -2059,31 +2087,28 @@ public sealed class TransactionBuilderTests
         Assert.Equal(3, instructions.Count);
 
         Assert.Equal("iroha.transfer", instructions[0].WireId);
-        var domainTransferPayload = SkipNoritoHeader(instructions[0].Payload);
-        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(domainTransferPayload[..4]));
-        _ = ReadField(domainTransferPayload[4..], out var domainTransferOffsetAfterSource);
-        var transferredDomain = ReadNoritoString(ReadField(domainTransferPayload[(4 + domainTransferOffsetAfterSource)..], out var domainTransferOffsetAfterObject));
-        var domainTransferDestination = ReadField(domainTransferPayload[(4 + domainTransferOffsetAfterSource + domainTransferOffsetAfterObject)..], out _);
+        var domainTransferPayload = ReadBoxedVariantPayload(instructions[0].Payload, 0);
+        _ = ReadField(domainTransferPayload, out var domainTransferOffsetAfterSource);
+        var transferredDomain = ReadNoritoString(ReadField(domainTransferPayload[domainTransferOffsetAfterSource..], out var domainTransferOffsetAfterObject));
+        var domainTransferDestination = ReadField(domainTransferPayload[(domainTransferOffsetAfterSource + domainTransferOffsetAfterObject)..], out _);
         Assert.Equal("wonderland", transferredDomain);
         Assert.NotEmpty(domainTransferDestination);
 
         Assert.Equal("iroha.transfer", instructions[1].WireId);
-        var assetDefinitionTransferPayload = SkipNoritoHeader(instructions[1].Payload);
-        Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(assetDefinitionTransferPayload[..4]));
-        _ = ReadField(assetDefinitionTransferPayload[4..], out var assetDefinitionTransferOffsetAfterSource);
-        var transferredAssetDefinition = ReadField(assetDefinitionTransferPayload[(4 + assetDefinitionTransferOffsetAfterSource)..], out var assetDefinitionTransferOffsetAfterObject);
-        var assetDefinitionTransferDestination = ReadField(assetDefinitionTransferPayload[(4 + assetDefinitionTransferOffsetAfterSource + assetDefinitionTransferOffsetAfterObject)..], out _);
+        var assetDefinitionTransferPayload = ReadBoxedVariantPayload(instructions[1].Payload, 1);
+        _ = ReadField(assetDefinitionTransferPayload, out var assetDefinitionTransferOffsetAfterSource);
+        var transferredAssetDefinition = ReadField(assetDefinitionTransferPayload[assetDefinitionTransferOffsetAfterSource..], out var assetDefinitionTransferOffsetAfterObject);
+        var assetDefinitionTransferDestination = ReadField(assetDefinitionTransferPayload[(assetDefinitionTransferOffsetAfterSource + assetDefinitionTransferOffsetAfterObject)..], out _);
         Assert.Equal(32, transferredAssetDefinition.Length);
         Assert.NotEmpty(assetDefinitionTransferDestination);
 
         Assert.Equal("iroha.transfer", instructions[2].WireId);
-        var nftTransferPayload = SkipNoritoHeader(instructions[2].Payload);
-        Assert.Equal(3u, BinaryPrimitives.ReadUInt32LittleEndian(nftTransferPayload[..4]));
-        _ = ReadField(nftTransferPayload[4..], out var nftTransferOffsetAfterSource);
-        var transferredNft = ReadField(nftTransferPayload[(4 + nftTransferOffsetAfterSource)..], out var nftTransferOffsetAfterObject);
+        var nftTransferPayload = ReadBoxedVariantPayload(instructions[2].Payload, 3);
+        _ = ReadField(nftTransferPayload, out var nftTransferOffsetAfterSource);
+        var transferredNft = ReadField(nftTransferPayload[nftTransferOffsetAfterSource..], out var nftTransferOffsetAfterObject);
         var transferredNftDomain = ReadNoritoString(ReadField(transferredNft, out var nftOffsetAfterDomain));
         var transferredNftName = ReadNoritoString(ReadField(transferredNft[nftOffsetAfterDomain..], out _));
-        var nftTransferDestination = ReadField(nftTransferPayload[(4 + nftTransferOffsetAfterSource + nftTransferOffsetAfterObject)..], out _);
+        var nftTransferDestination = ReadField(nftTransferPayload[(nftTransferOffsetAfterSource + nftTransferOffsetAfterObject)..], out _);
         Assert.Equal("wonderland", transferredNftDomain);
         Assert.Equal("dragon", transferredNftName);
         Assert.NotEmpty(nftTransferDestination);
@@ -2100,6 +2125,16 @@ public sealed class TransactionBuilderTests
         var field = reader.ReadField("field").ToArray();
         consumed = bytes.Length - reader.Remaining;
         return field;
+    }
+
+    private static byte[] ReadBoxedVariantPayload(byte[] framedPayload, uint expectedVariant)
+    {
+        var boxedPayload = SkipNoritoHeader(framedPayload);
+        Assert.True(boxedPayload.Length >= sizeof(uint));
+        Assert.Equal(expectedVariant, BinaryPrimitives.ReadUInt32LittleEndian(boxedPayload));
+        var variantPayload = ReadField(boxedPayload[sizeof(uint)..], out var consumed);
+        Assert.Equal(boxedPayload.Length - sizeof(uint), consumed);
+        return variantPayload;
     }
 
     private static void AssertNetworkDomain(ReadOnlySpan<byte> encoded)

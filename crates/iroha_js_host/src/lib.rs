@@ -72,12 +72,16 @@ use iroha_data_model::{
         address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
     },
     asset::{
-        AssetDefinitionAlias, AssetTransferAvailability,
+        AssetDefinitionAlias, AssetTransferAvailability, AssetTransferControlWindow,
+        AssetTransferLimit,
         definition::{AssetDefinition, NewAssetDefinition},
         id::{AssetDefinitionId, AssetId},
         validate_asset_transfer_availability_reason,
     },
-    block::{BlockHeader, consensus::LaneBlockCommitment},
+    block::{
+        BlockHeader,
+        consensus::{LaneBlockCommitment, LaneSettlementReceipt},
+    },
     da::manifest::DaManifestV1,
     domain::{Domain, DomainId, NewDomain},
     escrow::EscrowId,
@@ -92,7 +96,9 @@ use iroha_data_model::{
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
         SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferBox,
         Unregister, UnregisterBox,
-        asset_transfer_control::SetAssetTransferAvailability,
+        asset_transfer_control::{
+            SetAssetTransferAvailability, SetAssetTransferBlacklist, SetAssetTransferControl,
+        },
         escrow::CancelAssetLock,
         governance::{
             CastPlainBallot, CastZkBallot, EnactReferendum, FinalizeReferendum,
@@ -1733,7 +1739,10 @@ pub fn sm2_verify(
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for `#[napi]` bindings
 pub fn norito_encode_instruction(json_payload: String) -> napi::Result<Buffer> {
     ensure_packed_struct_disabled();
-    let instruction = instruction_from_json(&json_payload)?;
+    let instruction = instruction_from_json_with_discriminant_mode(
+        &json_payload,
+        InstructionDiscriminantMode::InferFromAssetOwner,
+    )?;
     let encoded = norito_core::to_bytes(&instruction).map_err(norito_to_napi)?;
     Ok(Buffer::from(encoded))
 }
@@ -2001,18 +2010,29 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
     ensure_packed_struct_disabled();
     let lane_id = LaneId::new(3);
     let dataspace_id = DataSpaceId::new(2);
+    let local_amount: Quantity = "0.00001".parse().expect("valid settlement quantity");
+    let xor_due: Quantity = "0.000005".parse().expect("valid settlement quantity");
+    let xor_after_haircut: Quantity = "0.000004".parse().expect("valid settlement quantity");
+    let xor_variance: Quantity = "0.000001".parse().expect("valid settlement quantity");
     let settlement = LaneBlockCommitment {
         block_height: 1,
         lane_id,
         lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
-        total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
-        total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
+        total_local_amount: local_amount.clone(),
+        total_xor_due: xor_due.clone(),
+        total_xor_after_haircut: xor_after_haircut.clone(),
+        total_xor_variance: xor_variance.clone(),
         swap_metadata: None,
-        receipts: Vec::new(),
+        receipts: vec![LaneSettlementReceipt {
+            source_id: [0xA5; 32],
+            local_amount,
+            xor_due,
+            xor_after_haircut,
+            xor_variance,
+            timestamp_ms: 1_700_000_000_000,
+        }],
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
@@ -6916,6 +6936,119 @@ fn parse_account_id_value(value: json::Value, context: &str) -> napi::Result<Acc
     let literal = parse_string_value(value, context)?;
     parse_account_id(&literal, context)
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InstructionDiscriminantMode {
+    /// Parse account-bearing values under the caller's active chain scope.
+    InheritCurrent,
+    /// Infer the chain scope from the canonical I105 owner embedded in an asset id.
+    InferFromAssetOwner,
+}
+
+#[derive(Debug)]
+struct InstructionDiscriminantContext {
+    mode: InstructionDiscriminantMode,
+    inferred: Option<u16>,
+}
+
+impl InstructionDiscriminantContext {
+    const fn new(mode: InstructionDiscriminantMode) -> Self {
+        Self {
+            mode,
+            inferred: None,
+        }
+    }
+
+    fn asset_owner_guard(
+        &mut self,
+        chain_discriminant: u16,
+        context: &str,
+    ) -> napi::Result<Option<ChainDiscriminantGuard>> {
+        match self.mode {
+            InstructionDiscriminantMode::InheritCurrent => Ok(None),
+            InstructionDiscriminantMode::InferFromAssetOwner => {
+                if let Some(expected) = self.inferred {
+                    if chain_discriminant != expected {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "{context} uses chain discriminant {chain_discriminant}, expected {expected} from the first asset owner"
+                            ),
+                        ));
+                    }
+                } else {
+                    self.inferred = Some(chain_discriminant);
+                }
+                Ok(Some(ChainDiscriminantGuard::enter(chain_discriminant)))
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ParsedAssetIdValue {
+    asset_id: AssetId,
+    chain_discriminant: u16,
+}
+
+fn parse_asset_id_value(
+    value: json::Value,
+    context: &str,
+    discriminant_context: &mut InstructionDiscriminantContext,
+) -> napi::Result<ParsedAssetIdValue> {
+    let literal = parse_string_value(value, context)?;
+    let account_literal = literal.split('#').nth(1).unwrap_or_default();
+    let chain_discriminant = AccountAddress::i105_discriminant(account_literal).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid {context} account: {err}"),
+        )
+    })?;
+    let _chain_guard = discriminant_context.asset_owner_guard(chain_discriminant, context)?;
+    let asset_id = AssetId::parse_literal(&literal).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid {context}: {err}"),
+        )
+    })?;
+    Ok(ParsedAssetIdValue {
+        asset_id,
+        chain_discriminant,
+    })
+}
+
+fn parse_account_id_value_for_discriminant(
+    value: json::Value,
+    context: &str,
+    expected_discriminant: u16,
+    discriminant_mode: InstructionDiscriminantMode,
+) -> napi::Result<AccountId> {
+    let literal = parse_string_value(value, context)?;
+    let actual_discriminant = AccountAddress::i105_discriminant(&literal).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid {context}: {err}"),
+        )
+    })?;
+    if actual_discriminant != expected_discriminant {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "{context} uses chain discriminant {actual_discriminant}, expected {expected_discriminant}"
+            ),
+        ));
+    }
+    // Context-free instruction encoding temporarily scopes every embedded
+    // account parse to the discriminator inferred from the AssetId owner. In
+    // authority-scoped builders the existing outer guard remains authoritative.
+    let _chain_guard = match discriminant_mode {
+        InstructionDiscriminantMode::InheritCurrent => None,
+        InstructionDiscriminantMode::InferFromAssetOwner => {
+            Some(ChainDiscriminantGuard::enter(expected_discriminant))
+        }
+    };
+    parse_account_id(&literal, context)
+}
 fn parse_rwa_id_value(value: json::Value, context: &str) -> napi::Result<RwaId> {
     let literal = parse_string_value(value, context)?;
     literal.parse().map_err(|err| {
@@ -7616,11 +7749,31 @@ fn validation_fee_policy_instruction_from_json(value: json::Value) -> napi::Resu
     }
     .into())
 }
-fn instruction_from_json(payload: &str) -> napi::Result<InstructionBox> {
-    let value: json::Value = json::from_json(payload).map_err(norito_to_napi)?;
-    value_to_instruction(value)
+fn instruction_from_json_with_discriminant_mode(
+    payload: &str,
+    mode: InstructionDiscriminantMode,
+) -> napi::Result<InstructionBox> {
+    let mut discriminant_context = InstructionDiscriminantContext::new(mode);
+    instruction_from_json_with_discriminant_context(payload, &mut discriminant_context)
 }
-fn parse_instruction_payloads(payloads: Vec<String>) -> napi::Result<Vec<InstructionBox>> {
+fn instruction_from_json_with_discriminant_context(
+    payload: &str,
+    discriminant_context: &mut InstructionDiscriminantContext,
+) -> napi::Result<InstructionBox> {
+    let value: json::Value = json::from_json(payload).map_err(norito_to_napi)?;
+    value_to_instruction_with_discriminant_context(value, discriminant_context)
+}
+#[cfg(test)]
+fn instruction_from_json(payload: &str) -> napi::Result<InstructionBox> {
+    instruction_from_json_with_discriminant_mode(
+        payload,
+        InstructionDiscriminantMode::InheritCurrent,
+    )
+}
+fn parse_instruction_payloads_with_discriminant_mode(
+    payloads: Vec<String>,
+    mode: InstructionDiscriminantMode,
+) -> napi::Result<Vec<InstructionBox>> {
     if payloads.is_empty() {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -7628,14 +7781,31 @@ fn parse_instruction_payloads(payloads: Vec<String>) -> napi::Result<Vec<Instruc
         ));
     }
     let mut instructions = Vec::with_capacity(payloads.len());
+    let mut discriminant_context = InstructionDiscriminantContext::new(mode);
     for payload in payloads {
-        let instruction = instruction_from_json(&payload)?;
+        let instruction =
+            instruction_from_json_with_discriminant_context(&payload, &mut discriminant_context)?;
         instructions.push(instruction);
     }
     Ok(instructions)
 }
+fn parse_instruction_payloads(payloads: Vec<String>) -> napi::Result<Vec<InstructionBox>> {
+    parse_instruction_payloads_with_discriminant_mode(
+        payloads,
+        InstructionDiscriminantMode::InheritCurrent,
+    )
+}
 fn parse_executable_batch_payloads(
     payloads: Vec<String>,
+) -> napi::Result<Vec<ExecutableBatchItem>> {
+    parse_executable_batch_payloads_with_discriminant_mode(
+        payloads,
+        InstructionDiscriminantMode::InheritCurrent,
+    )
+}
+fn parse_executable_batch_payloads_with_discriminant_mode(
+    payloads: Vec<String>,
+    mode: InstructionDiscriminantMode,
 ) -> napi::Result<Vec<ExecutableBatchItem>> {
     if payloads.is_empty() {
         return Err(napi::Error::new(
@@ -7644,6 +7814,7 @@ fn parse_executable_batch_payloads(
         ));
     }
     let mut entries = Vec::with_capacity(payloads.len());
+    let mut discriminant_context = InstructionDiscriminantContext::new(mode);
     for (index, payload) in payloads.into_iter().enumerate() {
         let value: json::Value = json::from_json(&payload).map_err(|err| {
             napi::Error::new(
@@ -7684,8 +7855,16 @@ fn parse_executable_batch_payloads(
                     ));
                 }
                 let instruction = match instruction {
-                    json::Value::String(payload) => instruction_from_json(&payload)?,
-                    value => value_to_instruction(value)?,
+                    json::Value::String(payload) => {
+                        instruction_from_json_with_discriminant_context(
+                            &payload,
+                            &mut discriminant_context,
+                        )?
+                    }
+                    value => value_to_instruction_with_discriminant_context(
+                        value,
+                        &mut discriminant_context,
+                    )?,
                 };
                 ExecutableBatchItem::Instruction(instruction)
             }
@@ -7941,9 +8120,67 @@ fn validate_governance_instruction_selectors(value: &json::Value) -> napi::Resul
     }
     Ok(())
 }
+fn parse_asset_transfer_target(
+    fields: &mut json::Map,
+    context: &str,
+) -> napi::Result<(AccountId, AssetDefinitionId)> {
+    let account_id = parse_account_id_value(
+        required_value(fields, "account_id", context)?,
+        &format!("{context}.account_id"),
+    )?;
+    let asset_definition_literal = parse_string_value(
+        required_value(fields, "asset_definition_id", context)?,
+        &format!("{context}.asset_definition_id"),
+    )?;
+    let asset_definition_id =
+        match AssetDefinitionId::parse_address_literal(&asset_definition_literal) {
+            Ok(asset_definition_id) => asset_definition_id,
+            Err(error) => {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    format!("invalid {context}.asset_definition_id: {error}"),
+                ));
+            }
+        };
+    Ok((account_id, asset_definition_id))
+}
 #[allow(clippy::too_many_lines)] // comprehensive translation keeps instruction handling centralized
+#[cfg(test)]
 fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
+    value_to_instruction_with_discriminant_mode(value, InstructionDiscriminantMode::InheritCurrent)
+}
+#[allow(clippy::too_many_lines)] // comprehensive translation keeps instruction handling centralized
+#[cfg(test)]
+fn value_to_instruction_with_discriminant_mode(
+    value: json::Value,
+    discriminant_mode: InstructionDiscriminantMode,
+) -> napi::Result<InstructionBox> {
+    let mut discriminant_context = InstructionDiscriminantContext::new(discriminant_mode);
+    value_to_instruction_with_discriminant_context(value, &mut discriminant_context)
+}
+#[allow(clippy::too_many_lines)] // comprehensive translation keeps instruction handling centralized
+fn value_to_instruction_with_discriminant_context(
+    value: json::Value,
+    discriminant_context: &mut InstructionDiscriminantContext,
+) -> napi::Result<InstructionBox> {
     validate_governance_instruction_selectors(&value)?;
+    if let json::Value::Object(map) = &value {
+        for variant in ["Mint", "Burn", "Transfer"] {
+            if map.contains_key(variant) && map.len() != 1 {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    format!(
+                        "{variant} instruction envelope contains unexpected field(s): {}",
+                        map.keys()
+                            .filter(|key| key.as_str() != variant)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ));
+            }
+        }
+    }
     // These instructions carry release-critical JSON contracts. The generic
     // `InstructionBox` decoder may accept data-model defaults and unknown
     // fields, so route these envelopes through explicit strict parsers.
@@ -7955,7 +8192,12 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 || map.contains_key("CancelSmartContractCodeUpload")
                 || map.contains_key("CancelAssetLock")
                 || map.contains_key("SetAssetTransferAvailability")
+                || map.contains_key("SetAssetTransferBlacklist")
+                || map.contains_key("SetAssetTransferControl")
                 || map.contains_key("ProposeValidationFeePolicy")
+                || map.contains_key("Mint")
+                || map.contains_key("Burn")
+                || map.contains_key("Transfer")
     );
     if !requires_explicit_parser {
         if let Ok(instruction) = json::from_value::<InstructionBox>(value.clone()) {
@@ -7980,29 +8222,8 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                         "SetAssetTransferAvailability must be an object",
                     ));
                 };
-                let account_id = parse_account_id_value(
-                    required_value(&mut fields, "account_id", "SetAssetTransferAvailability")?,
-                    "SetAssetTransferAvailability.account_id",
-                )?;
-                let asset_definition_literal = parse_string_value(
-                    required_value(
-                        &mut fields,
-                        "asset_definition_id",
-                        "SetAssetTransferAvailability",
-                    )?,
-                    "SetAssetTransferAvailability.asset_definition_id",
-                )?;
-                let asset_definition_id = AssetDefinitionId::parse_address_literal(
-                    &asset_definition_literal,
-                )
-                .map_err(|error| {
-                    napi::Error::new(
-                        napi::Status::InvalidArg,
-                        format!(
-                            "invalid SetAssetTransferAvailability.asset_definition_id: {error}"
-                        ),
-                    )
-                })?;
+                let (account_id, asset_definition_id) =
+                    parse_asset_transfer_target(&mut fields, "SetAssetTransferAvailability")?;
                 let expected_revision = parse_u64_value(
                     required_value(
                         &mut fields,
@@ -8075,6 +8296,116 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     reason,
                 )
                 .into());
+            }
+            if let Some(payload) = map.remove("SetAssetTransferBlacklist") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "SetAssetTransferBlacklist instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                exact_json_object_fields(
+                    &payload,
+                    &["account_id", "asset_definition_id", "blacklisted"],
+                    "SetAssetTransferBlacklist",
+                )?;
+                let json::Value::Object(mut fields) = payload else {
+                    unreachable!("exact_json_object_fields accepted an object");
+                };
+                let (account_id, asset_definition_id) =
+                    parse_asset_transfer_target(&mut fields, "SetAssetTransferBlacklist")?;
+                let blacklisted = match required_value(
+                    &mut fields,
+                    "blacklisted",
+                    "SetAssetTransferBlacklist",
+                )? {
+                    json::Value::Bool(value) => value,
+                    other => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "SetAssetTransferBlacklist.blacklisted must be a bool (found {other:?})"
+                            ),
+                        ));
+                    }
+                };
+                return Ok(SetAssetTransferBlacklist::new(
+                    account_id,
+                    asset_definition_id,
+                    blacklisted,
+                )
+                .into());
+            }
+            if let Some(payload) = map.remove("SetAssetTransferControl") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "SetAssetTransferControl instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                exact_json_object_fields(
+                    &payload,
+                    &["account_id", "asset_definition_id", "limits"],
+                    "SetAssetTransferControl",
+                )?;
+                let json::Value::Object(mut fields) = payload else {
+                    unreachable!("exact_json_object_fields accepted an object");
+                };
+                let (account_id, asset_definition_id) =
+                    parse_asset_transfer_target(&mut fields, "SetAssetTransferControl")?;
+                let json::Value::Array(limit_values) =
+                    required_value(&mut fields, "limits", "SetAssetTransferControl")?
+                else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "SetAssetTransferControl.limits must be an array",
+                    ));
+                };
+                let mut limits = Vec::with_capacity(limit_values.len());
+                for (index, limit) in limit_values.into_iter().enumerate() {
+                    let context = format!("SetAssetTransferControl.limits[{index}]");
+                    exact_json_object_fields(&limit, &["window", "cap_amount"], &context)?;
+                    let json::Value::Object(mut limit_fields) = limit else {
+                        unreachable!("exact_json_object_fields accepted an object");
+                    };
+                    let window = match required_value(&mut limit_fields, "window", &context)? {
+                        json::Value::String(value) if value == "Day" => {
+                            AssetTransferControlWindow::Day
+                        }
+                        json::Value::String(value) if value == "Week" => {
+                            AssetTransferControlWindow::Week
+                        }
+                        json::Value::String(value) if value == "Month" => {
+                            AssetTransferControlWindow::Month
+                        }
+                        other => {
+                            return Err(napi::Error::new(
+                                napi::Status::InvalidArg,
+                                format!(
+                                    "{context}.window must be exactly \"Day\", \"Week\", or \"Month\" (found {other:?})"
+                                ),
+                            ));
+                        }
+                    };
+                    let cap_amount =
+                        match required_value(&mut limit_fields, "cap_amount", &context)? {
+                            json::Value::Null => None,
+                            value => Some(parse_canonical_quantity_value(
+                                value,
+                                &format!("{context}.cap_amount"),
+                            )?),
+                        };
+                    limits.push(AssetTransferLimit { window, cap_amount });
+                }
+                return Ok(
+                    SetAssetTransferControl::new(account_id, asset_definition_id, limits).into(),
+                );
             }
             if let Some(payload) = map.remove("DeploySoracloudService") {
                 if !map.is_empty() {
@@ -8320,44 +8651,58 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     .map_err(norito_to_napi)?;
                 return Ok(InstructionBox::from(SetParameter::new(parameter)));
             }
-            if let Some(json::Value::Object(mut mint_map)) = map.remove("Mint") {
-                if let Some(json::Value::Object(mut asset_fields)) = mint_map.remove("Asset") {
-                    let quantity_value = asset_fields.remove("object").ok_or_else(|| {
-                        napi::Error::new(
-                            napi::Status::InvalidArg,
-                            "Mint.Asset.object field missing",
-                        )
-                    })?;
+            if let Some(mint_value) = map.remove("Mint") {
+                let json::Value::Object(mut mint_map) = mint_value else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "Mint instruction must be an object containing exactly one variant",
+                    ));
+                };
+                if mint_map.len() != 1 {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "Mint instruction must contain exactly one variant",
+                    ));
+                }
+                if let Some(asset_value) = mint_map.remove("Asset") {
+                    exact_json_object_fields(
+                        &asset_value,
+                        &["object", "destination"],
+                        "Mint.Asset",
+                    )?;
+                    let json::Value::Object(mut asset_fields) = asset_value else {
+                        unreachable!("exact_json_object_fields accepted an object");
+                    };
+                    let quantity_value = required_value(&mut asset_fields, "object", "Mint.Asset")?;
                     let destination_value =
-                        asset_fields.remove("destination").ok_or_else(|| {
-                            napi::Error::new(
-                                napi::Status::InvalidArg,
-                                "Mint.Asset.destination field missing",
-                            )
-                        })?;
+                        required_value(&mut asset_fields, "destination", "Mint.Asset")?;
                     let quantity: Quantity =
                         json::from_value(quantity_value).map_err(norito_to_napi)?;
-                    let destination: AssetId =
-                        json::from_value(destination_value).map_err(norito_to_napi)?;
+                    let destination = parse_asset_id_value(
+                        destination_value,
+                        "Mint.Asset.destination",
+                        discriminant_context,
+                    )?
+                    .asset_id;
                     let mint = Mint::asset_quantity(quantity, destination);
                     return Ok(InstructionBox::from(MintBox::Asset(mint)));
                 }
-                if let Some(json::Value::Object(mut trigger_fields)) =
-                    mint_map.remove("TriggerRepetitions")
-                {
-                    let repetitions_value = trigger_fields.remove("object").ok_or_else(|| {
-                        napi::Error::new(
-                            napi::Status::InvalidArg,
-                            "Mint.TriggerRepetitions.object field missing",
-                        )
-                    })?;
-                    let destination_value =
-                        trigger_fields.remove("destination").ok_or_else(|| {
-                            napi::Error::new(
-                                napi::Status::InvalidArg,
-                                "Mint.TriggerRepetitions.destination field missing",
-                            )
-                        })?;
+                if let Some(trigger_value) = mint_map.remove("TriggerRepetitions") {
+                    exact_json_object_fields(
+                        &trigger_value,
+                        &["object", "destination"],
+                        "Mint.TriggerRepetitions",
+                    )?;
+                    let json::Value::Object(mut trigger_fields) = trigger_value else {
+                        unreachable!("exact_json_object_fields accepted an object");
+                    };
+                    let repetitions_value =
+                        required_value(&mut trigger_fields, "object", "Mint.TriggerRepetitions")?;
+                    let destination_value = required_value(
+                        &mut trigger_fields,
+                        "destination",
+                        "Mint.TriggerRepetitions",
+                    )?;
                     let repetitions: u32 =
                         json::from_value(repetitions_value).map_err(norito_to_napi)?;
                     let trigger_id: TriggerId =
@@ -8420,44 +8765,58 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     "unsupported Unregister instruction variant; expected keys: Peer, Domain, Account, AssetDefinition, Nft, Role, Trigger",
                 ));
             }
-            if let Some(json::Value::Object(mut burn_map)) = map.remove("Burn") {
-                if let Some(json::Value::Object(mut asset_fields)) = burn_map.remove("Asset") {
-                    let quantity_value = asset_fields.remove("object").ok_or_else(|| {
-                        napi::Error::new(
-                            napi::Status::InvalidArg,
-                            "Burn.Asset.object field missing",
-                        )
-                    })?;
+            if let Some(burn_value) = map.remove("Burn") {
+                let json::Value::Object(mut burn_map) = burn_value else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "Burn instruction must be an object containing exactly one variant",
+                    ));
+                };
+                if burn_map.len() != 1 {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "Burn instruction must contain exactly one variant",
+                    ));
+                }
+                if let Some(asset_value) = burn_map.remove("Asset") {
+                    exact_json_object_fields(
+                        &asset_value,
+                        &["object", "destination"],
+                        "Burn.Asset",
+                    )?;
+                    let json::Value::Object(mut asset_fields) = asset_value else {
+                        unreachable!("exact_json_object_fields accepted an object");
+                    };
+                    let quantity_value = required_value(&mut asset_fields, "object", "Burn.Asset")?;
                     let destination_value =
-                        asset_fields.remove("destination").ok_or_else(|| {
-                            napi::Error::new(
-                                napi::Status::InvalidArg,
-                                "Burn.Asset.destination field missing",
-                            )
-                        })?;
+                        required_value(&mut asset_fields, "destination", "Burn.Asset")?;
                     let quantity: Quantity =
                         json::from_value(quantity_value).map_err(norito_to_napi)?;
-                    let asset_id: AssetId =
-                        json::from_value(destination_value).map_err(norito_to_napi)?;
+                    let asset_id = parse_asset_id_value(
+                        destination_value,
+                        "Burn.Asset.destination",
+                        discriminant_context,
+                    )?
+                    .asset_id;
                     let burn = Burn::asset_quantity(quantity, asset_id);
                     return Ok(InstructionBox::from(BurnBox::Asset(burn)));
                 }
-                if let Some(json::Value::Object(mut trigger_fields)) =
-                    burn_map.remove("TriggerRepetitions")
-                {
-                    let repetitions_value = trigger_fields.remove("object").ok_or_else(|| {
-                        napi::Error::new(
-                            napi::Status::InvalidArg,
-                            "Burn.TriggerRepetitions.object field missing",
-                        )
-                    })?;
-                    let destination_value =
-                        trigger_fields.remove("destination").ok_or_else(|| {
-                            napi::Error::new(
-                                napi::Status::InvalidArg,
-                                "Burn.TriggerRepetitions.destination field missing",
-                            )
-                        })?;
+                if let Some(trigger_value) = burn_map.remove("TriggerRepetitions") {
+                    exact_json_object_fields(
+                        &trigger_value,
+                        &["object", "destination"],
+                        "Burn.TriggerRepetitions",
+                    )?;
+                    let json::Value::Object(mut trigger_fields) = trigger_value else {
+                        unreachable!("exact_json_object_fields accepted an object");
+                    };
+                    let repetitions_value =
+                        required_value(&mut trigger_fields, "object", "Burn.TriggerRepetitions")?;
+                    let destination_value = required_value(
+                        &mut trigger_fields,
+                        "destination",
+                        "Burn.TriggerRepetitions",
+                    )?;
                     let repetitions: u32 =
                         json::from_value(repetitions_value).map_err(norito_to_napi)?;
                     let trigger_id: TriggerId =
@@ -8483,56 +8842,65 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     .unwrap_or_default();
                 return Ok(InstructionBox::from(ExecuteTrigger { trigger, args }));
             }
-            if let Some(json::Value::Object(mut transfer_map)) = map.remove("Transfer") {
-                if let Some(json::Value::Object(mut asset_fields)) = transfer_map.remove("Asset") {
-                    let source_value = asset_fields.remove("source").ok_or_else(|| {
-                        napi::Error::new(
-                            napi::Status::InvalidArg,
-                            "Transfer.Asset.source field missing",
-                        )
-                    })?;
-                    let quantity_value = asset_fields.remove("object").ok_or_else(|| {
-                        napi::Error::new(
-                            napi::Status::InvalidArg,
-                            "Transfer.Asset.object field missing",
-                        )
-                    })?;
+            if let Some(transfer_value) = map.remove("Transfer") {
+                let json::Value::Object(mut transfer_map) = transfer_value else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "Transfer instruction must be an object containing exactly one variant",
+                    ));
+                };
+                if transfer_map.len() != 1 {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "Transfer instruction must contain exactly one variant",
+                    ));
+                }
+                if let Some(asset_value) = transfer_map.remove("Asset") {
+                    exact_json_object_fields(
+                        &asset_value,
+                        &["source", "object", "destination"],
+                        "Transfer.Asset",
+                    )?;
+                    let json::Value::Object(mut asset_fields) = asset_value else {
+                        unreachable!("exact_json_object_fields accepted an object");
+                    };
+                    let source_value =
+                        required_value(&mut asset_fields, "source", "Transfer.Asset")?;
+                    let quantity_value =
+                        required_value(&mut asset_fields, "object", "Transfer.Asset")?;
                     let destination_value =
-                        asset_fields.remove("destination").ok_or_else(|| {
-                            napi::Error::new(
-                                napi::Status::InvalidArg,
-                                "Transfer.Asset.destination field missing",
-                            )
-                        })?;
-                    let source: AssetId = json::from_value(source_value).map_err(norito_to_napi)?;
+                        required_value(&mut asset_fields, "destination", "Transfer.Asset")?;
+                    let source = parse_asset_id_value(
+                        source_value,
+                        "Transfer.Asset.source",
+                        discriminant_context,
+                    )?;
                     let quantity: Quantity =
                         json::from_value(quantity_value).map_err(norito_to_napi)?;
-                    let destination =
-                        parse_account_id_value(destination_value, "Transfer.Asset.destination")?;
-                    let transfer = Transfer::asset_quantity(source, quantity, destination);
+                    let destination = parse_account_id_value_for_discriminant(
+                        destination_value,
+                        "Transfer.Asset.destination",
+                        source.chain_discriminant,
+                        discriminant_context.mode,
+                    )?;
+                    let transfer = Transfer::asset_quantity(source.asset_id, quantity, destination);
                     return Ok(InstructionBox::from(TransferBox::Asset(transfer)));
                 }
-                if let Some(json::Value::Object(mut domain_fields)) = transfer_map.remove("Domain")
-                {
-                    let source_value = domain_fields.remove("source").ok_or_else(|| {
-                        napi::Error::new(
-                            napi::Status::InvalidArg,
-                            "Transfer.Domain.source field missing",
-                        )
-                    })?;
-                    let object_value = domain_fields.remove("object").ok_or_else(|| {
-                        napi::Error::new(
-                            napi::Status::InvalidArg,
-                            "Transfer.Domain.object field missing",
-                        )
-                    })?;
+                if let Some(domain_value) = transfer_map.remove("Domain") {
+                    exact_json_object_fields(
+                        &domain_value,
+                        &["source", "object", "destination"],
+                        "Transfer.Domain",
+                    )?;
+                    let json::Value::Object(mut domain_fields) = domain_value else {
+                        unreachable!("exact_json_object_fields accepted an object");
+                    };
+                    let source_value =
+                        required_value(&mut domain_fields, "source", "Transfer.Domain")?;
+                    let object_value =
+                        required_value(&mut domain_fields, "object", "Transfer.Domain")?;
                     let destination_value =
-                        domain_fields.remove("destination").ok_or_else(|| {
-                            napi::Error::new(
-                                napi::Status::InvalidArg,
-                                "Transfer.Domain.destination field missing",
-                            )
-                        })?;
+                        required_value(&mut domain_fields, "destination", "Transfer.Domain")?;
                     let source = parse_account_id_value(source_value, "Transfer.Domain.source")?;
                     let domain_id: DomainId =
                         json::from_value(object_value).map_err(norito_to_napi)?;
@@ -8541,28 +8909,30 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     let transfer = Transfer::domain(source, domain_id, destination);
                     return Ok(InstructionBox::from(TransferBox::Domain(transfer)));
                 }
-                if let Some(json::Value::Object(mut definition_fields)) =
-                    transfer_map.remove("AssetDefinition")
-                {
-                    let source_value = definition_fields.remove("source").ok_or_else(|| {
-                        napi::Error::new(
-                            napi::Status::InvalidArg,
-                            "Transfer.AssetDefinition.source field missing",
-                        )
-                    })?;
-                    let object_value = definition_fields.remove("object").ok_or_else(|| {
-                        napi::Error::new(
-                            napi::Status::InvalidArg,
-                            "Transfer.AssetDefinition.object field missing",
-                        )
-                    })?;
-                    let destination_value =
-                        definition_fields.remove("destination").ok_or_else(|| {
-                            napi::Error::new(
-                                napi::Status::InvalidArg,
-                                "Transfer.AssetDefinition.destination field missing",
-                            )
-                        })?;
+                if let Some(definition_value) = transfer_map.remove("AssetDefinition") {
+                    exact_json_object_fields(
+                        &definition_value,
+                        &["source", "object", "destination"],
+                        "Transfer.AssetDefinition",
+                    )?;
+                    let json::Value::Object(mut definition_fields) = definition_value else {
+                        unreachable!("exact_json_object_fields accepted an object");
+                    };
+                    let source_value = required_value(
+                        &mut definition_fields,
+                        "source",
+                        "Transfer.AssetDefinition",
+                    )?;
+                    let object_value = required_value(
+                        &mut definition_fields,
+                        "object",
+                        "Transfer.AssetDefinition",
+                    )?;
+                    let destination_value = required_value(
+                        &mut definition_fields,
+                        "destination",
+                        "Transfer.AssetDefinition",
+                    )?;
                     let source =
                         parse_account_id_value(source_value, "Transfer.AssetDefinition.source")?;
                     let definition: AssetDefinitionId =
@@ -8574,25 +8944,19 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     let transfer = Transfer::asset_definition(source, definition, destination);
                     return Ok(InstructionBox::from(TransferBox::AssetDefinition(transfer)));
                 }
-                if let Some(json::Value::Object(mut nft_fields)) = transfer_map.remove("Nft") {
-                    let source_value = nft_fields.remove("source").ok_or_else(|| {
-                        napi::Error::new(
-                            napi::Status::InvalidArg,
-                            "Transfer.Nft.source field missing",
-                        )
-                    })?;
-                    let object_value = nft_fields.remove("object").ok_or_else(|| {
-                        napi::Error::new(
-                            napi::Status::InvalidArg,
-                            "Transfer.Nft.object field missing",
-                        )
-                    })?;
-                    let destination_value = nft_fields.remove("destination").ok_or_else(|| {
-                        napi::Error::new(
-                            napi::Status::InvalidArg,
-                            "Transfer.Nft.destination field missing",
-                        )
-                    })?;
+                if let Some(nft_value) = transfer_map.remove("Nft") {
+                    exact_json_object_fields(
+                        &nft_value,
+                        &["source", "object", "destination"],
+                        "Transfer.Nft",
+                    )?;
+                    let json::Value::Object(mut nft_fields) = nft_value else {
+                        unreachable!("exact_json_object_fields accepted an object");
+                    };
+                    let source_value = required_value(&mut nft_fields, "source", "Transfer.Nft")?;
+                    let object_value = required_value(&mut nft_fields, "object", "Transfer.Nft")?;
+                    let destination_value =
+                        required_value(&mut nft_fields, "destination", "Transfer.Nft")?;
                     let source = parse_account_id_value(source_value, "Transfer.Nft.source")?;
                     let nft_id: NftId = json::from_value(object_value).map_err(norito_to_napi)?;
                     let destination =
@@ -9895,6 +10259,78 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         let mut outer = json::Map::new();
         outer.insert(
             "SetAssetTransferAvailability".to_owned(),
+            json::Value::Object(inner),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+    if let Some(blacklist) = instruction_ref
+        .as_any()
+        .downcast_ref::<SetAssetTransferBlacklist>()
+    {
+        let mut inner = json::Map::new();
+        inner.insert(
+            "account_id".to_owned(),
+            json::to_value(&blacklist.account_id).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "asset_definition_id".to_owned(),
+            json::to_value(&blacklist.asset_definition_id).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "blacklisted".to_owned(),
+            json::Value::Bool(blacklist.blacklisted),
+        );
+        let mut outer = json::Map::new();
+        outer.insert(
+            "SetAssetTransferBlacklist".to_owned(),
+            json::Value::Object(inner),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+    if let Some(control) = instruction_ref
+        .as_any()
+        .downcast_ref::<SetAssetTransferControl>()
+    {
+        let mut inner = json::Map::new();
+        inner.insert(
+            "account_id".to_owned(),
+            json::to_value(&control.account_id).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "asset_definition_id".to_owned(),
+            json::to_value(&control.asset_definition_id).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "limits".to_owned(),
+            json::Value::Array(
+                control
+                    .limits
+                    .iter()
+                    .map(|limit| {
+                        let window = match limit.window {
+                            AssetTransferControlWindow::Day => "Day",
+                            AssetTransferControlWindow::Week => "Week",
+                            AssetTransferControlWindow::Month => "Month",
+                        };
+                        let mut fields = json::Map::new();
+                        fields.insert("window".to_owned(), json::Value::String(window.to_owned()));
+                        fields.insert(
+                            "cap_amount".to_owned(),
+                            limit
+                                .cap_amount
+                                .as_ref()
+                                .map_or(json::Value::Null, |amount| {
+                                    json::Value::String(amount.to_string())
+                                }),
+                        );
+                        json::Value::Object(fields)
+                    })
+                    .collect(),
+            ),
+        );
+        let mut outer = json::Map::new();
+        outer.insert(
+            "SetAssetTransferControl".to_owned(),
             json::Value::Object(inner),
         );
         return Ok(json::Value::Object(outer));
@@ -11354,7 +11790,10 @@ pub fn hash_signed_transaction_payload(bytes: Uint8Array) -> napi::Result<Buffer
 /// uses this hash as both the multisig `instructions_hash` and `proposal_id`.
 #[napi]
 pub fn hash_instruction_batch(instructions_json: Vec<String>) -> napi::Result<Buffer> {
-    let instructions = parse_instruction_payloads(instructions_json)?;
+    let instructions = parse_instruction_payloads_with_discriminant_mode(
+        instructions_json,
+        InstructionDiscriminantMode::InferFromAssetOwner,
+    )?;
     let hash = iroha_crypto::HashOf::new(&instructions);
     Ok(Buffer::from(hash.as_ref().to_vec()))
 }
@@ -11501,8 +11940,9 @@ fn encode_privacy_compiled_profile_catalog_archive(
 /// Return this binary's canonical typed Norito V1 privacy compiled-profile catalog.
 ///
 /// This local catalog contains no committed height, governance activation, or
-/// readiness state. Those fields are authoritative only in a fresh
-/// `PrivacyCapabilitySnapshotV1` fetched from live Torii.
+/// readiness state. Admission requires a fresh canonical
+/// `PrivacyExact12CapabilityManifestV1` from live Torii plus exact native tuple
+/// validation against this catalog.
 pub fn privacy_compiled_profile_catalog_v1() -> napi::Result<Buffer> {
     let catalog = privacy_compiled_profile_catalog()?;
     encode_privacy_compiled_profile_catalog_archive(
@@ -15122,6 +15562,441 @@ seiyaku Privacy {
             value_to_instruction(json_value.clone()).expect("deserialize instruction from json");
         assert_eq!(reconstructed, instruction);
     }
+
+    fn account_i105_for_discriminant(account: &AccountId, discriminant: u16) -> String {
+        AccountAddress::from_account_id(account)
+            .expect("account address")
+            .to_i105_for_discriminant(discriminant)
+            .expect("I105 literal")
+    }
+
+    fn sample_asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").expect("valid domain"),
+            "rose".parse().expect("valid asset name"),
+        )
+    }
+
+    fn instruction_json(value: &json::Value) -> String {
+        json::to_json(value).expect("instruction JSON")
+    }
+
+    #[test]
+    fn context_free_asset_instructions_use_one_embedded_taira_discriminant() {
+        let account_id = sample_account("wonderland");
+        let destination_id = sample_account("looking_glass");
+        let account_i105 = account_i105_for_discriminant(&account_id, 369);
+        let destination_i105 = account_i105_for_discriminant(&destination_id, 369);
+        let asset_definition = sample_asset_definition_id();
+        let literal = format!("{asset_definition}#{account_i105}");
+        let instructions = vec![
+            norito_json!({
+                "Mint": norito_json!({
+                    "Asset": norito_json!({"object": "10", "destination": literal.clone()})
+                })
+            }),
+            norito_json!({
+                "Burn": norito_json!({
+                    "Asset": norito_json!({"object": "1", "destination": literal.clone()})
+                })
+            }),
+            norito_json!({
+                "Transfer": norito_json!({
+                    "Asset": norito_json!({
+                        "source": literal,
+                        "object": "2",
+                        "destination": destination_i105
+                    })
+                })
+            }),
+        ];
+        let payloads = instructions
+            .iter()
+            .map(instruction_json)
+            .collect::<Vec<_>>();
+        for payload in &payloads {
+            assert!(
+                !norito_encode_instruction(payload.clone())
+                    .expect("context-free Taira asset instruction")
+                    .is_empty()
+            );
+        }
+        assert!(
+            !hash_instruction_batch(payloads)
+                .expect("context-free Taira instruction batch")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn inferred_asset_discriminant_guard_restores_outer_scope_on_success_and_error() {
+        let account_id = sample_account("wonderland");
+        let account_i105 = account_i105_for_discriminant(&account_id, 369);
+        let literal = format!("{}#{account_i105}", sample_asset_definition_id());
+        let previous = iroha_data_model::account::address::chain_discriminant();
+        {
+            let _outer_guard = ChainDiscriminantGuard::enter(42);
+            assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
+            let parsed = parse_asset_id_value(
+                json::Value::String(literal.clone()),
+                "Transfer.Asset.source",
+                &mut InstructionDiscriminantContext::new(
+                    InstructionDiscriminantMode::InferFromAssetOwner,
+                ),
+            )
+            .expect("embedded Taira discriminant must be authoritative");
+            assert_eq!(parsed.asset_id.account(), &account_id);
+            assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
+
+            let destination_i105 =
+                account_i105_for_discriminant(&sample_account("looking_glass"), 369);
+            let transfer = norito_json!({
+                "Transfer": norito_json!({
+                    "Asset": norito_json!({
+                        "source": literal,
+                        "object": "1",
+                        "destination": destination_i105
+                    })
+                })
+            });
+            norito_encode_instruction(instruction_json(&transfer))
+                .expect("context-free Transfer.Asset must scope its destination parse");
+            assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
+
+            let error = parse_asset_id_value(
+                json::Value::String(format!("invalid-definition#{account_i105}")),
+                "Mint.Asset.destination",
+                &mut InstructionDiscriminantContext::new(
+                    InstructionDiscriminantMode::InferFromAssetOwner,
+                ),
+            )
+            .expect_err("invalid definition must be rejected after entering the inferred guard");
+            assert!(error.reason.contains("invalid Mint.Asset.destination"));
+            assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
+        }
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            previous
+        );
+    }
+
+    #[test]
+    fn context_free_asset_ids_reject_malformed_literals_and_accept_dataspace_scope() {
+        let account_id = sample_account("wonderland");
+        let account_i105 = account_i105_for_discriminant(&account_id, 369);
+        let definition = sample_asset_definition_id();
+        let valid = format!("{definition}#{account_i105}");
+        let mut checksum_chars = account_i105.chars().collect::<Vec<_>>();
+        let last = checksum_chars.len() - 1;
+        checksum_chars[last] = if checksum_chars[last] == '1' {
+            '2'
+        } else {
+            '1'
+        };
+        let corrupt_checksum = checksum_chars.into_iter().collect::<String>();
+        for malformed in [
+            definition.to_string(),
+            format!("{definition}#{corrupt_checksum}"),
+            format!("{valid}#dataspace:1#extra"),
+            format!("{valid}#scope:1"),
+            format!("{valid}#dataspace:not-a-number"),
+        ] {
+            let value = norito_json!({
+                "Mint": norito_json!({
+                    "Asset": norito_json!({"object": "1", "destination": malformed})
+                })
+            });
+            assert!(
+                norito_encode_instruction(instruction_json(&value)).is_err(),
+                "malformed asset literal must be rejected"
+            );
+        }
+        let dataspace = norito_json!({
+            "Mint": norito_json!({
+                "Asset": norito_json!({
+                    "object": "1",
+                    "destination": format!("{valid}#dataspace:7")
+                })
+            })
+        });
+        norito_encode_instruction(instruction_json(&dataspace))
+            .expect("canonical dataspace-scoped asset id");
+    }
+
+    #[test]
+    fn context_free_asset_instructions_reject_mixed_discriminants() {
+        let source = sample_account("wonderland");
+        let destination = sample_account("looking_glass");
+        let definition = sample_asset_definition_id();
+        let taira_source = account_i105_for_discriminant(&source, 369);
+        let sora_destination = account_i105_for_discriminant(&destination, 753);
+        let transfer = norito_json!({
+            "Transfer": norito_json!({
+                "Asset": norito_json!({
+                    "source": format!("{definition}#{taira_source}"),
+                    "object": "1",
+                    "destination": sora_destination
+                })
+            })
+        });
+        let error = norito_encode_instruction(instruction_json(&transfer))
+            .err()
+            .expect("mixed Transfer.Asset discriminants must be rejected");
+        assert!(error.reason.contains("expected 369"));
+
+        let sora_owner = account_i105_for_discriminant(&source, 753);
+        let mint = norito_json!({
+            "Mint": norito_json!({
+                "Asset": norito_json!({
+                    "object": "1",
+                    "destination": format!("{definition}#{taira_source}")
+                })
+            })
+        });
+        let burn = norito_json!({
+            "Burn": norito_json!({
+                "Asset": norito_json!({
+                    "object": "1",
+                    "destination": format!("{definition}#{sora_owner}")
+                })
+            })
+        });
+        let error = hash_instruction_batch(vec![instruction_json(&mint), instruction_json(&burn)])
+            .err()
+            .expect("hashing a mixed-discriminant instruction batch must fail");
+        assert!(error.reason.contains("first asset owner"));
+    }
+
+    #[test]
+    fn authority_scoped_builders_reject_foreign_asset_owner_discriminants() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let authority_i105 = account_i105_for_discriminant(&authority, 369);
+        let foreign_owner_i105 = account_i105_for_discriminant(&authority, 753);
+        let definition = sample_asset_definition_id();
+        let instruction = norito_json!({
+            "Mint": norito_json!({
+                "Asset": norito_json!({
+                    "object": "1",
+                    "destination": format!("{definition}#{foreign_owner_i105}")
+                })
+            })
+        });
+        let instruction_payload = instruction_json(&instruction);
+        let batch_entry = instruction_json(&norito_json!({
+            "kind": "instruction",
+            "instruction": instruction
+        }));
+        let (_, secret) = keypair.private_key().to_bytes();
+
+        macro_rules! assert_foreign_owner_rejected {
+            ($result:expr, $label:literal) => {{
+                let error = $result.err().expect($label);
+                assert!(
+                    error.reason.contains("Asset ID account is invalid"),
+                    "{}: {}",
+                    $label,
+                    error.reason
+                );
+            }};
+        }
+
+        assert_foreign_owner_rejected!(
+            build_transaction_payload(
+                test_network_id_bytes(b"foreign-owner-payload"),
+                authority_i105.clone(),
+                vec![instruction_payload.clone()],
+                authority_fee_payment_json(),
+                None,
+                Some(1_700_000_000_000),
+                Some(5_000),
+                Some(7),
+            ),
+            "transaction payload builder must reject a foreign asset owner"
+        );
+        assert_foreign_owner_rejected!(
+            build_transaction(
+                test_network_id_bytes(b"foreign-owner-transaction"),
+                authority_i105.clone(),
+                vec![instruction_payload.clone()],
+                authority_fee_payment_json(),
+                None,
+                Some(1_700_000_000_000),
+                Some(5_000),
+                Some(7),
+                Uint8Array::from(secret.clone()),
+                Some("ed25519".to_owned()),
+            ),
+            "transaction builder must reject a foreign asset owner"
+        );
+        assert_foreign_owner_rejected!(
+            build_executable_batch_transaction_payload(
+                test_network_id_bytes(b"foreign-owner-batch-payload"),
+                authority_i105.clone(),
+                vec![batch_entry.clone()],
+                authority_fee_payment_json(),
+                None,
+                Some(1_700_000_000_000),
+                Some(5_000),
+                Some(7),
+            ),
+            "executable-batch payload builder must reject a foreign asset owner"
+        );
+        assert_foreign_owner_rejected!(
+            build_executable_batch_transaction(
+                test_network_id_bytes(b"foreign-owner-batch"),
+                authority_i105.clone(),
+                vec![batch_entry],
+                authority_fee_payment_json(),
+                None,
+                Some(1_700_000_000_000),
+                Some(5_000),
+                Some(7),
+                Uint8Array::from(secret),
+                Some("ed25519".to_owned()),
+            ),
+            "executable-batch transaction builder must reject a foreign asset owner"
+        );
+        assert_foreign_owner_rejected!(
+            build_time_trigger_action(
+                authority_i105.clone(),
+                vec![instruction_payload.clone()],
+                1_700_000_000_000,
+                None,
+                Some(1),
+                None,
+            ),
+            "time-trigger builder must reject a foreign asset owner"
+        );
+        assert_foreign_owner_rejected!(
+            build_precommit_trigger_action(
+                authority_i105,
+                vec![instruction_payload],
+                Some(1),
+                None,
+            ),
+            "pre-commit trigger builder must reject a foreign asset owner"
+        );
+    }
+
+    #[test]
+    fn mint_burn_and_transfer_json_require_exact_envelopes_variants_and_fields() {
+        for (instruction, variant, fields) in [
+            ("Mint", "Asset", &["object", "destination"][..]),
+            ("Mint", "TriggerRepetitions", &["object", "destination"][..]),
+            ("Burn", "Asset", &["object", "destination"][..]),
+            ("Burn", "TriggerRepetitions", &["object", "destination"][..]),
+            (
+                "Transfer",
+                "Asset",
+                &["source", "object", "destination"][..],
+            ),
+            (
+                "Transfer",
+                "Domain",
+                &["source", "object", "destination"][..],
+            ),
+            (
+                "Transfer",
+                "AssetDefinition",
+                &["source", "object", "destination"][..],
+            ),
+            ("Transfer", "Nft", &["source", "object", "destination"][..]),
+        ] {
+            let mut body = json::Map::new();
+            for field in fields {
+                body.insert((*field).to_owned(), json::Value::Null);
+            }
+            body.insert("unexpected".to_owned(), json::Value::Bool(true));
+            let mut variants = json::Map::new();
+            variants.insert(variant.to_owned(), json::Value::Object(body));
+            let mut envelope = json::Map::new();
+            envelope.insert(instruction.to_owned(), json::Value::Object(variants));
+            let error = value_to_instruction_with_discriminant_mode(
+                json::Value::Object(envelope),
+                InstructionDiscriminantMode::InferFromAssetOwner,
+            )
+            .expect_err("extra payload field must be rejected");
+            assert!(error.reason.contains("unexpected"), "{}", error.reason);
+        }
+
+        for (instruction, first_variant, second_variant) in [
+            ("Mint", "Asset", "TriggerRepetitions"),
+            ("Burn", "Asset", "TriggerRepetitions"),
+            ("Transfer", "Asset", "Domain"),
+        ] {
+            let mut variants = json::Map::new();
+            variants.insert(first_variant.to_owned(), json::Value::Null);
+            variants.insert(second_variant.to_owned(), json::Value::Null);
+            let mut envelope = json::Map::new();
+            envelope.insert(instruction.to_owned(), json::Value::Object(variants));
+            let error = value_to_instruction_with_discriminant_mode(
+                json::Value::Object(envelope),
+                InstructionDiscriminantMode::InferFromAssetOwner,
+            )
+            .expect_err("multiple variants must be rejected");
+            assert!(error.reason.contains("exactly one variant"));
+
+            let mut envelope = json::Map::new();
+            envelope.insert(instruction.to_owned(), json::Value::Null);
+            envelope.insert("unexpected".to_owned(), json::Value::Bool(true));
+            let error = value_to_instruction_with_discriminant_mode(
+                json::Value::Object(envelope),
+                InstructionDiscriminantMode::InferFromAssetOwner,
+            )
+            .expect_err("extra envelope field must be rejected");
+            assert!(error.reason.contains("unexpected"));
+        }
+    }
+
+    #[test]
+    fn strict_mint_burn_and_transfer_parsers_preserve_all_supported_variants() {
+        let source = sample_account("wonderland");
+        let destination = sample_account("looking_glass");
+        let definition = sample_asset_definition_id();
+        let asset_id = AssetId::new(definition.clone(), source.clone());
+        let trigger_id: TriggerId = "strict-parser-trigger".parse().expect("trigger id");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let nft_id: NftId = "strict-parser-nft$wonderland".parse().expect("NFT id");
+        let instructions = vec![
+            InstructionBox::from(MintBox::Asset(Mint::asset_quantity(
+                "10".parse::<Quantity>().unwrap(),
+                asset_id.clone(),
+            ))),
+            InstructionBox::from(MintBox::TriggerRepetitions(Mint::trigger_repetitions(
+                3,
+                trigger_id.clone(),
+            ))),
+            InstructionBox::from(BurnBox::Asset(Burn::asset_quantity(
+                "1".parse::<Quantity>().unwrap(),
+                asset_id.clone(),
+            ))),
+            InstructionBox::from(BurnBox::TriggerRepetitions(Burn::trigger_repetitions(
+                1, trigger_id,
+            ))),
+            InstructionBox::from(TransferBox::Asset(Transfer::asset_quantity(
+                asset_id,
+                "2".parse::<Quantity>().unwrap(),
+                destination.clone(),
+            ))),
+            InstructionBox::from(TransferBox::Domain(Transfer::domain(
+                source.clone(),
+                domain_id,
+                destination.clone(),
+            ))),
+            InstructionBox::from(TransferBox::AssetDefinition(Transfer::asset_definition(
+                source.clone(),
+                definition,
+                destination.clone(),
+            ))),
+            InstructionBox::from(TransferBox::Nft(Transfer::nft(source, nft_id, destination))),
+        ];
+        for instruction in instructions {
+            let value = instruction_to_json_value(&instruction).expect("instruction JSON");
+            let reconstructed = value_to_instruction(value).expect("strict instruction parser");
+            assert_eq!(reconstructed, instruction);
+        }
+    }
     #[test]
     fn transfer_asset_batch_instruction_json_roundtrip() {
         let source = sample_account("wonderland");
@@ -15156,6 +16031,146 @@ seiyaku Privacy {
             value_to_instruction(json_value).is_err(),
             "batch decoder must reject fields outside the native batch schema"
         );
+    }
+    #[test]
+    fn asset_transfer_blacklist_and_control_json_roundtrip() {
+        let account_id = sample_account("wonderland");
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").expect("valid domain"),
+            "rose".parse().expect("valid asset name"),
+        );
+        let blacklist_json = norito_json!({
+            "SetAssetTransferBlacklist": norito_json!({
+                "account_id": account_id,
+                "asset_definition_id": asset_definition_id,
+                "blacklisted": false,
+            })
+        });
+        let blacklist = value_to_instruction(blacklist_json.clone())
+            .expect("parse SetAssetTransferBlacklist builder JSON");
+        let blacklist = blacklist
+            .as_any()
+            .downcast_ref::<SetAssetTransferBlacklist>()
+            .expect("blacklist instruction type");
+        assert!(!blacklist.blacklisted);
+        assert_eq!(
+            instruction_to_json_value(
+                &SetAssetTransferBlacklist::new(
+                    blacklist.account_id.clone(),
+                    blacklist.asset_definition_id.clone(),
+                    blacklist.blacklisted,
+                )
+                .into()
+            )
+            .expect("render SetAssetTransferBlacklist JSON"),
+            blacklist_json
+        );
+
+        let control_json = norito_json!({
+            "SetAssetTransferControl": norito_json!({
+                "account_id": account_id,
+                "asset_definition_id": asset_definition_id,
+                "limits": vec![
+                    norito_json!({ "window": "Day", "cap_amount": "125.5" }),
+                    norito_json!({ "window": "Month", "cap_amount": json::Value::Null }),
+                ],
+            })
+        });
+        let control = value_to_instruction(control_json.clone())
+            .expect("parse SetAssetTransferControl builder JSON");
+        let control = control
+            .as_any()
+            .downcast_ref::<SetAssetTransferControl>()
+            .expect("transfer-control instruction type");
+        assert_eq!(control.limits.len(), 2);
+        assert_eq!(control.limits[0].window, AssetTransferControlWindow::Day);
+        assert_eq!(
+            control.limits[0].cap_amount.as_ref().unwrap().to_string(),
+            "125.5"
+        );
+        assert_eq!(control.limits[1].window, AssetTransferControlWindow::Month);
+        assert!(control.limits[1].cap_amount.is_none());
+        assert_eq!(
+            instruction_to_json_value(
+                &SetAssetTransferControl::new(
+                    control.account_id.clone(),
+                    control.asset_definition_id.clone(),
+                    control.limits.clone(),
+                )
+                .into()
+            )
+            .expect("render SetAssetTransferControl JSON"),
+            control_json
+        );
+    }
+    #[test]
+    fn asset_transfer_blacklist_and_control_json_reject_noncanonical_shapes() {
+        let account_id = sample_account("wonderland");
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").expect("valid domain"),
+            "rose".parse().expect("valid asset name"),
+        );
+        let mut blacklist = norito_json!({
+            "SetAssetTransferBlacklist": norito_json!({
+                "account_id": account_id,
+                "asset_definition_id": asset_definition_id,
+                "blacklisted": false,
+            })
+        });
+        blacklist
+            .get_mut("SetAssetTransferBlacklist")
+            .and_then(json::Value::as_object_mut)
+            .expect("blacklist payload")
+            .insert("legacy_state".to_owned(), json::Value::Bool(false));
+        let error = value_to_instruction(blacklist)
+            .expect_err("blacklist payload must reject unknown fields");
+        assert!(error.reason.contains("unexpected field"));
+
+        let control = norito_json!({
+            "SetAssetTransferControl": norito_json!({
+                "account_id": account_id,
+                "asset_definition_id": asset_definition_id,
+                "limits": vec![
+                    norito_json!({ "window": "Day", "cap_amount": "125.5" }),
+                ],
+            })
+        });
+        let mutate_first_limit = |value: &mut json::Value, field: &str, replacement| {
+            value
+                .get_mut("SetAssetTransferControl")
+                .and_then(json::Value::as_object_mut)
+                .and_then(|payload| payload.get_mut("limits"))
+                .and_then(json::Value::as_array_mut)
+                .and_then(|limits| limits.first_mut())
+                .and_then(json::Value::as_object_mut)
+                .expect("first transfer-control limit")
+                .insert(field.to_owned(), replacement);
+        };
+        let mut noncanonical_window = control.clone();
+        mutate_first_limit(
+            &mut noncanonical_window,
+            "window",
+            json::Value::String("DAY".to_owned()),
+        );
+        let error = value_to_instruction(noncanonical_window)
+            .expect_err("control window must use the native enum label");
+        assert!(error.reason.contains("must be exactly"));
+
+        let mut numeric_cap = control.clone();
+        mutate_first_limit(
+            &mut numeric_cap,
+            "cap_amount",
+            json::Value::Number(json::Number::from(125_u64)),
+        );
+        let error = value_to_instruction(numeric_cap)
+            .expect_err("control cap must use canonical Quantity text");
+        assert!(error.reason.contains("canonical Quantity string"));
+
+        let mut unknown_limit_field = control;
+        mutate_first_limit(&mut unknown_limit_field, "legacy_cap", json::Value::Null);
+        let error = value_to_instruction(unknown_limit_field)
+            .expect_err("control limit must reject unknown fields");
+        assert!(error.reason.contains("unexpected field"));
     }
     #[test]
     fn kaigi_commitment_option_roundtrip() {

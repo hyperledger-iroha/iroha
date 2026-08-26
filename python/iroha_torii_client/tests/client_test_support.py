@@ -72,6 +72,7 @@ def connect_session_fixture(
 
     network_id = canonical_hash(network_seed)
     network_bytes = bytes.fromhex(network_id[5:69])
+    public_network_id = network_bytes.hex()
     app_pk_bytes = bytes([app_seed]) * 32
     nonce_bytes = bytes([nonce_seed]) * 16
     sid_bytes = hashlib.blake2b(
@@ -90,7 +91,7 @@ def connect_session_fixture(
     def role_uri(role: str, token: str) -> str:
         return (
             "iroha://connect"
-            f"?sid={sid}&network_id={quote(network_id, safe='')}&app_pk={app_pk}"
+            f"?sid={sid}&network_id={public_network_id}&app_pk={app_pk}"
             f"&nonce={nonce}&node={quote(node, safe='')}&v=1&role={role}"
             f"&token={token}&relay={token_relay}"
         )

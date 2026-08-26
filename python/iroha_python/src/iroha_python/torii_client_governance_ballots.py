@@ -16,15 +16,19 @@ else:
 
 def bind_governance_ballot_network_id(
     normalize_network_id: Callable[[Any, str], Any],
+    encode_network_id: Callable[[Any, str], str],
 ) -> Callable[..., Any]:
-    """Bind the SDK's nominal ``NetworkId`` validator to ballot records."""
+    """Bind typed public ``NetworkId`` input to canonical Norito JSON records."""
 
     def normalize(record: Dict[str, Any], *, context: str) -> Any:
         network_id = normalize_network_id(
             record.get("network_id"),
             f"{context}.network_id",
         )
-        record["network_id"] = network_id.literal
+        record["network_id"] = encode_network_id(
+            network_id.to_bytes(),
+            f"{context}.network_id",
+        )
         return network_id
 
     return normalize
@@ -117,11 +121,15 @@ def create_torii_client_governance_ballot_mixin(
                 canonical_auth,
                 context=context,
             )
-            normalized = normalizer(payload, context=context)
+            normalized = normalizer(
+                payload,
+                context=context,
+                expected_discriminant=self._chain_discriminant,
+            )
             return self._post_network_governance_ballot_json(
                 path,
                 normalized,
-                network_id=network_id.literal,
+                network_id=normalized["network_id"],
                 authority=authority,
                 canonical_auth=canonical_auth,
                 context=context,

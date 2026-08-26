@@ -19,6 +19,8 @@ import java.util.concurrent.Future;
 /** Runs the explicitly configured Rust fixture generator for Java parity tests. */
 public final class FixtureGeneratorRunner {
   static final String BINARY_ENVIRONMENT_VARIABLE = "IROHA_KOTLIN_FIXTURE_GEN_BIN";
+  public static final String OFFLINE_CASH_BINARY_ENVIRONMENT_VARIABLE =
+      "IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN";
 
   private FixtureGeneratorRunner() {}
 
@@ -30,8 +32,15 @@ public final class FixtureGeneratorRunner {
    */
   public static List<String> run(final String subcommand)
       throws IOException, InterruptedException {
+    return run(subcommand, BINARY_ENVIRONMENT_VARIABLE);
+  }
+
+  /** Runs one fixture subcommand using an explicitly named binary environment variable. */
+  public static List<String> run(
+      final String subcommand, final String binaryEnvironmentVariable)
+      throws IOException, InterruptedException {
     final File repoRoot = locateRepoRoot();
-    final File binary = resolveBinary(repoRoot, System.getenv());
+    final File binary = resolveBinary(repoRoot, System.getenv(), binaryEnvironmentVariable);
     final Process process =
         new ProcessBuilder(commandFor(binary, subcommand))
             .directory(repoRoot)
@@ -54,13 +63,24 @@ public final class FixtureGeneratorRunner {
   }
 
   static File resolveBinary(final File repoRoot, final Map<String, String> environment) {
-    final String configuredPath = environment.get(BINARY_ENVIRONMENT_VARIABLE);
+    return resolveBinary(repoRoot, environment, BINARY_ENVIRONMENT_VARIABLE);
+  }
+
+  static File resolveBinary(
+      final File repoRoot,
+      final Map<String, String> environment,
+      final String binaryEnvironmentVariable) {
+    if (binaryEnvironmentVariable == null || binaryEnvironmentVariable.trim().isEmpty()) {
+      throw new IllegalArgumentException(
+          "fixture-generator environment variable must not be blank");
+    }
+    final String configuredPath = environment.get(binaryEnvironmentVariable);
     if (configuredPath == null) {
       throw new IllegalStateException(
-          BINARY_ENVIRONMENT_VARIABLE + " must be set to the kotlin-fixture-gen executable");
+          binaryEnvironmentVariable + " must be set to the fixture-generator executable");
     }
-    if (configuredPath.isBlank()) {
-      throw new IllegalStateException(BINARY_ENVIRONMENT_VARIABLE + " must not be blank");
+    if (configuredPath.trim().isEmpty()) {
+      throw new IllegalStateException(binaryEnvironmentVariable + " must not be blank");
     }
 
     final File configured = new File(configuredPath);
@@ -68,13 +88,13 @@ public final class FixtureGeneratorRunner {
         (configured.isAbsolute() ? configured : new File(repoRoot, configuredPath)).getAbsoluteFile();
     if (!binary.isFile()) {
       throw new IllegalStateException(
-          BINARY_ENVIRONMENT_VARIABLE
+          binaryEnvironmentVariable
               + " must name an existing regular file: "
               + binary.getAbsolutePath());
     }
     if (!binary.canExecute()) {
       throw new IllegalStateException(
-          BINARY_ENVIRONMENT_VARIABLE + " is not executable: " + binary.getAbsolutePath());
+          binaryEnvironmentVariable + " is not executable: " + binary.getAbsolutePath());
     }
     return binary;
   }

@@ -127,7 +127,7 @@ export function createConnectSessionPreview(options = {}) {
  * authorization value.
  * @param {Record<string, unknown>} session Parsed response (or a normalized
  * response carrying the original object as `raw`).
- * @param {{sid: string; networkId: string; appPk: string; nonce: string; node?: string | null}} expected
+ * @param {{sid: string; networkId: string; networkIdJson: string; appPk: string; nonce: string; node?: string | null}} expected
  */
 export function validateConnectSessionResponseIdentity(session, expected) {
   if (!session || typeof session !== "object" || !expected || typeof expected !== "object") {
@@ -141,13 +141,13 @@ export function validateConnectSessionResponseIdentity(session, expected) {
   }
   const identity = {
     sid: requireExactString(raw.sid, "session.sid"),
-    networkId: requireExactString(raw.network_id, "session.network_id"),
+    networkIdJson: requireExactString(raw.network_id, "session.network_id"),
     appPk: requireExactString(raw.app_pk, "session.app_pk"),
     nonce: requireExactString(raw.nonce, "session.nonce"),
   };
   if (
     identity.sid !== expected.sid
-    || identity.networkId !== expected.networkId
+    || identity.networkIdJson !== expected.networkIdJson
     || identity.appPk !== expected.appPk
     || identity.nonce !== expected.nonce
   ) {
@@ -159,8 +159,23 @@ export function validateConnectSessionResponseIdentity(session, expected) {
     management: requireConnectToken(raw.token_management, "session.token_management"),
     relay: requireConnectToken(raw.token_relay, "session.token_relay"),
   };
-  validateConnectLaunchUri(raw.wallet_uri, "wallet", identity, expected.node, tokens.wallet, tokens.relay);
-  validateConnectLaunchUri(raw.app_uri, "app", identity, expected.node, tokens.app, tokens.relay);
+  const deepLinkIdentity = { ...identity, networkId: expected.networkId };
+  validateConnectLaunchUri(
+    raw.wallet_uri,
+    "wallet",
+    deepLinkIdentity,
+    expected.node,
+    tokens.wallet,
+    tokens.relay,
+  );
+  validateConnectLaunchUri(
+    raw.app_uri,
+    "app",
+    deepLinkIdentity,
+    expected.node,
+    tokens.app,
+    tokens.relay,
+  );
 }
 
 function validateConnectLaunchUri(value, role, identity, node, token, relay) {

@@ -1,72 +1,26 @@
 import Foundation
 
-/// Bounded, presentation-safe terminal failure returned by a canonical
-/// Kagemusha operation status resource.
+/// Exact terminal failure returned by a canonical Kagemusha operation status
+/// resource. The coordinator preserves the authenticated wire values and
+/// fails closed instead of repairing hostile input for presentation.
 package struct KagemushaOperationTerminalFailure: Equatable, Sendable {
-    public static let maximumCodeUTF8Bytes = 64
-    public static let maximumMessageUTF8Bytes = 1_024
-
     public let code: String
     public let message: String
 
-    public init(code: String, message: String) {
-        let boundedCode = Self.boundedText(
-            code,
-            maximumUTF8Bytes: Self.maximumCodeUTF8Bytes,
-            allowNewline: false
-        )
-        let canonicalMessage = Self.boundedText(
-            message,
-            maximumUTF8Bytes: Self.maximumMessageUTF8Bytes,
-            allowNewline: true
-        )
-        self.code = Self.isStableCode(boundedCode)
-            ? boundedCode
-            : "offline_operation_rejected"
-        self.message = canonicalMessage.isEmpty
-            ? "Torii rejected the Kagemusha operation."
-            : canonicalMessage
-    }
-
-    private static func boundedText(
-        _ value: String,
-        maximumUTF8Bytes: Int,
-        allowNewline: Bool
-    ) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        var output = String.UnicodeScalarView()
-        var byteCount = 0
-        for scalar in trimmed.unicodeScalars {
-            if CharacterSet.controlCharacters.contains(scalar),
-               !(allowNewline && scalar.value == 0x0a) {
-                continue
-            }
-            let scalarByteCount = String(scalar).utf8.count
-            guard scalarByteCount <= maximumUTF8Bytes - byteCount else { break }
-            output.append(scalar)
-            byteCount += scalarByteCount
+    public init(code: String, message: String) throws {
+        let envelope: KagemushaOperationErrorEnvelope
+        do {
+            envelope = try KagemushaOperationErrorEnvelope(
+                code: code,
+                message: message
+            )
+        } catch {
+            throw KagemushaOperationFinalityError.continuityViolation(
+                "rejected error"
+            )
         }
-        return String(output).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func isStableCode(_ value: String) -> Bool {
-        let bytes = Array(value.utf8)
-        guard (1...maximumCodeUTF8Bytes).contains(bytes.count),
-              let first = bytes.first,
-              isLowercaseLetter(first) || isDigit(first) else {
-            return false
-        }
-        return bytes.allSatisfy {
-            isLowercaseLetter($0) || isDigit($0) || $0 == UInt8(ascii: "_")
-        }
-    }
-
-    private static func isDigit(_ byte: UInt8) -> Bool {
-        byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9")
-    }
-
-    private static func isLowercaseLetter(_ byte: UInt8) -> Bool {
-        byte >= UInt8(ascii: "a") && byte <= UInt8(ascii: "z")
+        self.code = envelope.code
+        self.message = envelope.message
     }
 }
 
@@ -1139,7 +1093,7 @@ package enum KagemushaOperationFinalityCoordinator {
                 nil,
                 state
             )
-            let failure = KagemushaOperationTerminalFailure(
+            let failure = try KagemushaOperationTerminalFailure(
                 code: rejected.error.code,
                 message: rejected.error.message
             )
@@ -1187,7 +1141,7 @@ package enum KagemushaOperationFinalityCoordinator {
         to boundTransactionHash: inout String?,
         and boundSubmittedAtMs: inout UInt64?
     ) throws {
-        guard isCanonicalHash(transactionHash) else {
+        guard CanonicalIrohaHashText.decode(transactionHash) != nil else {
             throw KagemushaOperationFinalityError.continuityViolation(
                 "transaction hash"
             )
@@ -1232,17 +1186,6 @@ package enum KagemushaOperationFinalityCoordinator {
             to: &boundTransactionHash,
             and: &boundSubmittedAtMs
         )
-    }
-
-    private static func isCanonicalHash(_ value: String) -> Bool {
-        let bytes = Array(value.utf8)
-        return bytes.count == 64
-            && bytes.contains(where: { $0 != UInt8(ascii: "0") })
-            && bytes.allSatisfy {
-                ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
-                    || ($0 >= UInt8(ascii: "a")
-                        && $0 <= UInt8(ascii: "f"))
-            }
     }
 
 }

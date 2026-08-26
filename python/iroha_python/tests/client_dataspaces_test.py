@@ -22,7 +22,7 @@ CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
 NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
 SETTLEMENT_ACCOUNT_ID = AccountAddress.from_account(
     domain="", public_key=bytes([0xA5]) * 32
-).to_i105()
+).to_i105(0x0171)
 SETTLEMENT_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc"
 
 
@@ -131,7 +131,7 @@ def test_plan_dataspace_escapes_toml_strings() -> None:
     spec = DataspaceSpec(
         dataspace_alias='boi"retail',
         dataspace_id=42,
-        lane_alias='lane\none',
+        lane_alias="lane\none",
         lane_id=7,
         governance_module="parliament",
         settlement_handle="xor_global",
@@ -399,9 +399,7 @@ def test_operator_signature_headers_sign_canonical_request() -> None:
         (
             b"iroha.operator.http-request.network.v1\0",
             CANONICAL_GENESIS_HASH,
-            canonical_request_message(
-                "POST", "/v1/configuration?b=2&a=1", b'{"retire":[]}'
-            ),
+            canonical_request_message("POST", "/v1/configuration?b=2&a=1", b'{"retire":[]}'),
             b"\n123456\nnonce-1",
         )
     )
@@ -574,7 +572,9 @@ def test_nexus_lane_lifecycle_status_rejects_removed_enablement_field() -> None:
         client.nexus_lane_lifecycle_status()
 
 
-def test_nexus_lane_lifecycle_submits_native_signed_set_parameter(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_nexus_lane_lifecycle_submits_native_signed_set_parameter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import iroha_python.client as client_module
 
     status = lifecycle_status()
@@ -1081,9 +1081,7 @@ def test_nexus_lane_lifecycle_rejects_malformed_status() -> None:
         client.nexus_lane_lifecycle_status()
 
     wrong_incarnation = lifecycle_status()
-    wrong_incarnation["incarnations"] = [
-        {"lane_id": 1, "incarnation": canonical_hash(0xB3)}
-    ]
+    wrong_incarnation["incarnations"] = [{"lane_id": 1, "incarnation": canonical_hash(0xB3)}]
     client = ToriiClient(
         "http://torii.example",
         session=FakeSession([response(200, wrong_incarnation)]),
@@ -1199,6 +1197,5 @@ def test_nexus_lane_lifecycle_surfaces_stale_transaction_without_refetch(
 
 def test_compose_asset_id_accepts_dataspace_scope_shortcut() -> None:
     assert (
-        ToriiClient.compose_asset_id("abc", "alice@boi", scope="42")
-        == "abc#alice@boi#dataspace:42"
+        ToriiClient.compose_asset_id("abc", "alice@boi", scope="42") == "abc#alice@boi#dataspace:42"
     )

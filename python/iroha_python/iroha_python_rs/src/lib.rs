@@ -133,7 +133,8 @@ use iroha_data_model::{
     },
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, SignedTransaction,
-        TransactionBuilder as ModelTransactionBuilder, TransactionEntrypoint, TransactionPayload,
+        TransactionAdmissionIntent, TransactionBuilder as ModelTransactionBuilder,
+        TransactionEntrypoint, TransactionPayload,
         error::TransactionRejectionReason,
         executable::{
             ContractArgumentRecord, ContractInvocation, MAX_CONTRACT_ARGUMENT_RECORD_BYTES,
@@ -5727,25 +5728,34 @@ mod tests {
         PyNetworkId::from_exact_bytes(&[0xA5; Hash::LENGTH]).expect("marked test NetworkId")
     }
     #[test]
-    fn python_network_id_rejects_bare_labels_unmarked_hashes_and_noncanonical_literals() {
+    fn python_network_id_accepts_public_text_and_rejects_noncanonical_or_typed_marked_literals() {
         ensure_python();
         assert!(PyNetworkId::parse("test-chain").is_err());
         assert!(PyNetworkId::from_exact_bytes(&[0xA4; Hash::LENGTH]).is_err());
         assert!(PyNetworkId::from_exact_bytes(&[0xA5; Hash::LENGTH - 1]).is_err());
         let network_id = python_test_network_id();
         let literal = network_id.literal().expect("canonical NetworkId literal");
-        assert_eq!(
-            literal,
-            "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
-        );
+        assert_eq!(literal, "a5".repeat(Hash::LENGTH));
         assert_eq!(
             PyNetworkId::parse(&literal)
                 .expect("canonical literal")
                 .inner,
             network_id.inner
         );
-        assert!(PyNetworkId::parse(&literal.to_ascii_lowercase()).is_err());
-        assert!(PyNetworkId::parse(&network_id.inner.to_string()).is_err());
+        assert!(PyNetworkId::parse(&literal.to_ascii_uppercase()).is_err());
+
+        let typed_json = norito::json::to_json(&network_id.inner)
+            .expect("serialize typed NetworkId as canonical Norito JSON");
+        assert_eq!(
+            typed_json,
+            format!("\"hash:{}#95D7\"", "A5".repeat(Hash::LENGTH))
+        );
+        assert_eq!(
+            norito::json::from_str::<NetworkId>(&typed_json)
+                .expect("decode canonical typed NetworkId JSON"),
+            network_id.inner
+        );
+        assert!(PyNetworkId::parse(typed_json.trim_matches('"')).is_err());
     }
     #[test]
     fn sorafs_orderbook_owner_account_validation_enforces_v1_byte_ceiling() {
@@ -8081,6 +8091,54 @@ mod tests {
             error
                 .to_string()
                 .contains("invalid fee payment intent JSON")
+        );
+    }
+    #[test]
+    fn transaction_builder_admission_intent_is_closed_and_signature_bound() {
+        ensure_python();
+        let authority = canonical_i105_from_seed(0x40);
+        let mut builder = TransactionBuilder::new(
+            &python_test_network_id(),
+            &authority,
+            authority_fee_payment_json(),
+        )
+        .expect("builder constructs");
+        assert_eq!(
+            builder.to_model_builder().payload().admission_intent(),
+            TransactionAdmissionIntent::Ordinary,
+            "ordinary transactions retain the model default"
+        );
+
+        builder
+            .set_admission_intent("queue_plan_synced")
+            .expect("canonical queue-plan label");
+        assert_eq!(
+            builder.to_model_builder().payload().admission_intent(),
+            TransactionAdmissionIntent::QueuePlanSynced,
+            "the bridge must propagate the selected signed admission intent"
+        );
+        for rejected in ["", "QueuePlanSynced", "queue-plan-synced", " ordinary"] {
+            let error = builder
+                .set_admission_intent(rejected)
+                .expect_err("non-canonical admission label must reject");
+            assert!(
+                error
+                    .to_string()
+                    .contains("admission_intent must be exactly `ordinary` or `queue_plan_synced`"),
+                "unexpected rejection for {rejected:?}: {error}"
+            );
+            assert_eq!(
+                builder.to_model_builder().payload().admission_intent(),
+                TransactionAdmissionIntent::QueuePlanSynced,
+                "rejected setters must not mutate the selected intent"
+            );
+        }
+        builder
+            .set_admission_intent("ordinary")
+            .expect("canonical ordinary label");
+        assert_eq!(
+            builder.to_model_builder().payload().admission_intent(),
+            TransactionAdmissionIntent::Ordinary
         );
     }
     fn batch_test_instruction(message: &str) -> Instruction {
@@ -10737,6 +10795,7 @@ struct TransactionBuilder {
     network_id: NetworkId,
     authority: AccountId,
     fee_payment: FeePaymentIntent,
+    admission_intent: TransactionAdmissionIntent,
     creation_time: Option<Duration>,
     ttl: Option<Duration>,
     nonce: Option<NonZeroU32>,
@@ -10881,7 +10940,8 @@ impl TransactionBuilder {
             self.network_id,
             self.authority.clone(),
             self.fee_payment.clone(),
-        );
+        )
+        .with_admission_intent(self.admission_intent);
         if let Some(creation_time) = self.creation_time {
             builder.set_creation_time(creation_time);
         }
@@ -10956,6 +11016,7 @@ impl TransactionBuilder {
             network_id: network_id.inner,
             authority,
             fee_payment,
+            admission_intent: TransactionAdmissionIntent::Ordinary,
             creation_time: Some(creation_time),
             ttl: None,
             nonce: None,
@@ -10987,6 +11048,19 @@ impl TransactionBuilder {
     /// Replace the exact signature-bound fee payment intent.
     fn set_fee_payment_json(&mut self, fee_payment_json: &str) -> PyResult<()> {
         self.fee_payment = parse_fee_payment_intent_json(fee_payment_json)?;
+        Ok(())
+    }
+    /// Select the exact signature-bound transaction admission protocol.
+    fn set_admission_intent(&mut self, admission_intent: &str) -> PyResult<()> {
+        self.admission_intent = match admission_intent {
+            "ordinary" => TransactionAdmissionIntent::Ordinary,
+            "queue_plan_synced" => TransactionAdmissionIntent::QueuePlanSynced,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "admission_intent must be exactly `ordinary` or `queue_plan_synced`",
+                ));
+            }
+        };
         Ok(())
     }
     /// Set a deterministic creation timestamp (milliseconds since UNIX epoch).

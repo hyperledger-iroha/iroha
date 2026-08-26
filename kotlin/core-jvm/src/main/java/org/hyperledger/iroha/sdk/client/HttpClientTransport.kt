@@ -245,7 +245,10 @@ class HttpClientTransport(
     fun getLedgerExecutedBlockWire(height: Long): CompletableFuture<ByteArray> =
         getLedgerExecutedBlockWire(BigInteger.valueOf(height))
 
-    /** Fetch the exact committed Exact12 manifest with one-shot canonical account authentication. */
+    /**
+     * Fetch the exact committed Exact12 manifest with one-shot canonical account authentication.
+     * Legacy JSON snapshots are not accepted by this transport path.
+     */
     fun getPrivacyCapabilities(
         canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<PrivacyExact12CapabilityManifestV1> =
@@ -829,7 +832,7 @@ class HttpClientTransport(
         unsignedPayload: Map<String, Any?>,
         canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<FeeQuoteResponse> {
-        requireNetworkTransactionDomain(unsignedPayload)
+        requireExactTransactionPayload(unsignedPayload)
         val authority = unsignedPayload["authority"] as? String
             ?: throw IllegalArgumentException("unsignedPayload.authority must be a string")
         require(authority == canonicalAuth.accountId) {
@@ -853,13 +856,19 @@ class HttpClientTransport(
         }
     }
 
-    private fun requireNetworkTransactionDomain(
+    private fun requireExactTransactionPayload(
         unsignedPayload: Map<String, Any?>,
     ): NetworkId {
         for (field in listOf("chain", "chainId", "chain_id")) {
             require(field !in unsignedPayload) {
                 "unsignedPayload contains retired transaction identity field `$field`"
             }
+        }
+        require(
+            unsignedPayload.keys.all { it in TRANSACTION_PAYLOAD_ALLOWED_FIELDS } &&
+                unsignedPayload.keys.containsAll(TRANSACTION_PAYLOAD_REQUIRED_FIELDS),
+        ) {
+            "unsignedPayload must use the exact TransactionPayload field set"
         }
         val domain = unsignedPayload["domain"] as? Map<*, *>
             ?: throw IllegalArgumentException(
@@ -872,7 +881,98 @@ class HttpClientTransport(
         ) {
             "unsignedPayload.domain must contain exactly kind=network and a NetworkId value"
         }
-        return NetworkId.parse(domain["value"] as String)
+        val networkId = NetworkId.parseNoritoJsonLiteral(domain["value"] as String)
+        config.localSigningContext().ifPresent { signingContext ->
+            require(networkId == signingContext.networkId()) {
+                "unsignedPayload.domain NetworkId must equal localSigningContext.networkId"
+            }
+        }
+        require(unsignedPayload["authority"] is String) {
+            "unsignedPayload.authority must be a string"
+        }
+        requireTransactionUnsignedInteger(
+            unsignedPayload["creation_time_ms"],
+            "unsignedPayload.creation_time_ms",
+            nonZero = false,
+            maximum = TRANSACTION_U64_MAX,
+        )
+        require(unsignedPayload["instructions"] is Map<*, *>) {
+            "unsignedPayload.instructions must be an object"
+        }
+        requireTransactionUnsignedInteger(
+            unsignedPayload["time_to_live_ms"],
+            "unsignedPayload.time_to_live_ms",
+            nonZero = true,
+            maximum = TRANSACTION_U64_MAX,
+        )
+        if ("nonce" in unsignedPayload && unsignedPayload["nonce"] != null) {
+            requireTransactionUnsignedInteger(
+                unsignedPayload["nonce"],
+                "unsignedPayload.nonce",
+                nonZero = true,
+                maximum = TRANSACTION_U32_MAX,
+            )
+        }
+        val admissionIntent = unsignedPayload["admission_intent"] as? Map<*, *>
+            ?: throw IllegalArgumentException(
+                "unsignedPayload.admission_intent must be an exact TransactionAdmissionIntent object",
+            )
+        require(
+            admissionIntent.keys == setOf("intent", "value") &&
+                admissionIntent["intent"] in setOf("ordinary", "queue_plan_synced") &&
+                admissionIntent["value"] == null,
+        ) {
+            "unsignedPayload.admission_intent must be an exact TransactionAdmissionIntent object"
+        }
+        val metadata = unsignedPayload["metadata"] as? Map<*, *>
+            ?: throw IllegalArgumentException("unsignedPayload.metadata must be an object")
+        for (retiredFeeField in listOf("fee_sponsor", "gas_limit", "gas_asset_id")) {
+            require(retiredFeeField !in metadata) {
+                "unsignedPayload.metadata contains retired fee field `$retiredFeeField`"
+            }
+        }
+        requireCanonicalTransactionAttachments(unsignedPayload["attachments"])
+        return networkId
+    }
+
+    private fun requireTransactionUnsignedInteger(
+        rawValue: Any?,
+        field: String,
+        nonZero: Boolean,
+        maximum: BigInteger,
+    ): BigInteger {
+        val value = when (rawValue) {
+            is BigInteger -> rawValue
+            is Byte, is Short, is Int, is Long -> BigInteger.valueOf((rawValue as Number).toLong())
+            else -> throw IllegalArgumentException("$field must be a canonical JSON integer")
+        }
+        require(value.signum() >= 0 && (!nonZero || value.signum() > 0) && value <= maximum) {
+            if (nonZero) {
+                "$field must be a positive integer in range"
+            } else {
+                "$field must be an unsigned integer in range"
+            }
+        }
+        return value
+    }
+
+    private fun requireCanonicalTransactionAttachments(rawAttachments: Any?) {
+        if (rawAttachments == null) return
+        val encoded = rawAttachments as? String
+            ?: throw IllegalArgumentException(
+                "unsignedPayload.attachments must be null or canonical padded base64",
+            )
+        val decoded = try {
+            Base64.getDecoder().decode(encoded)
+        } catch (error: IllegalArgumentException) {
+            throw IllegalArgumentException(
+                "unsignedPayload.attachments must be null or canonical padded base64",
+                error,
+            )
+        }
+        require(decoded.isNotEmpty() && Base64.getEncoder().encodeToString(decoded) == encoded) {
+            "unsignedPayload.attachments must be null or canonical padded base64"
+        }
     }
 
     /** Fetch one exact on-chain fee sponsor program under canonical request authentication. */
@@ -1605,6 +1705,31 @@ class HttpClientTransport(
         private const val PIPELINE_STATUS_SIGNAL = "android.torii.pipeline.status"
         private const val REDACTION_FAILURE_SIGNAL = "android.telemetry.redaction.failure"
         private const val U32_MAX = 4_294_967_295L
+        private val TRANSACTION_U32_MAX = BigInteger("4294967295")
+        private val TRANSACTION_U64_MAX = BigInteger("18446744073709551615")
+        private val TRANSACTION_PAYLOAD_ALLOWED_FIELDS = setOf(
+            "domain",
+            "authority",
+            "creation_time_ms",
+            "instructions",
+            "time_to_live_ms",
+            "nonce",
+            "fee_payment",
+            "admission_intent",
+            "metadata",
+            "attachments",
+        )
+        private val TRANSACTION_PAYLOAD_REQUIRED_FIELDS = setOf(
+            "domain",
+            "authority",
+            "creation_time_ms",
+            "instructions",
+            "time_to_live_ms",
+            "fee_payment",
+            "admission_intent",
+            "metadata",
+            "attachments",
+        )
         private const val SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L
         private const val NODE_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L
         private const val SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L

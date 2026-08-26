@@ -19,6 +19,9 @@ import {
   getCurveEntryByAlgorithm,
   getCurveEntryById,
 } from "./curveRegistry.js";
+// Keep the generic renderer compatibility-stable on Sora (753). Deployment
+// clients must supply their exact discriminant; BPNG/Taira uses 369 through
+// LocalSigningContext and the application configuration layer.
 const DEFAULT_I105_DISCRIMINANT = 0x02f1;
 const I105_DISCRIMINANT_MAX = 0xffff;
 const HEADER_VERSION_V1 = 0;

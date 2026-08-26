@@ -24,7 +24,9 @@ class ToriiClientExpensiveQueryAuthMixin:
             canonical_auth.account_id,
             f"{context}.canonical_auth.account_id",
         )
-        auth_network = NetworkId.parse(canonical_auth.network_id)
+        auth_network = NetworkId.from_bytes(
+            bytes.fromhex(canonical_auth.network_id[5:69])
+        )
         if not hmac.compare_digest(
             bytes(auth_network.to_bytes()),
             bytes(signing_context.network_id.to_bytes()),

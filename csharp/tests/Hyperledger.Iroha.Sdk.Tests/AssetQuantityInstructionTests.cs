@@ -54,7 +54,7 @@ public sealed class AssetQuantityInstructionTests
     [MemberData(nameof(InvalidQuantitySpellings))]
     public void EveryAssetInstructionBoundaryRejectsInvalidQuantityText(string quantity)
     {
-        var builder = new TransactionBuilder(FixtureNetworkId, AccountId, EmptyAuthorityFeePayment);
+        var builder = new TransactionBuilder(FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant, AccountId, EmptyAuthorityFeePayment);
 
         foreach (var construct in StringConstructionAttempts(builder, quantity))
         {
@@ -79,7 +79,7 @@ public sealed class AssetQuantityInstructionTests
     public void AssetInstructionBoundariesAcceptCanonicalNonNegativeQuantities(string text)
     {
         var quantity = NumericV1.QuantityValue.ParseCanonical(text);
-        var builder = new TransactionBuilder(FixtureNetworkId, AccountId, EmptyAuthorityFeePayment)
+        var builder = new TransactionBuilder(FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant, AccountId, EmptyAuthorityFeePayment)
             .TransferAsset(AssetDefinitionId, quantity, AccountId)
             .MintAsset(AssetDefinitionId, quantity, AccountId)
             .BurnAsset(AssetDefinitionId, quantity, AccountId);
@@ -109,7 +109,7 @@ public sealed class AssetQuantityInstructionTests
     [Fact]
     public void QuantityWireEncodingUsesCanonicalMinimalMantissa()
     {
-        var context = new TransactionEncodingContext(AccountId);
+        var context = new TransactionEncodingContext(AccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
 
         AssertQuantityPayload(context.EncodeQuantity(NumericV1.QuantityValue.ParseCanonical("0")), 0, 0);
         AssertQuantityPayload(context.EncodeQuantity(NumericV1.QuantityValue.ParseCanonical("128")), 2, 0);

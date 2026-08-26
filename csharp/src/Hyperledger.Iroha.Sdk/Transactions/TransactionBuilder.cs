@@ -19,20 +19,39 @@ public sealed class TransactionBuilder
     private FeePaymentIntent feePayment;
     private bool forceExecutableBatch;
 
+    /// <summary>Creates a transaction builder for the public Taira testnet.</summary>
     public TransactionBuilder(
         NetworkId networkId,
+        string authorityAccountId,
+        FeePaymentIntent feePayment)
+        : this(
+            networkId,
+            Address.AccountAddress.TairaTestnetChainDiscriminant,
+            authorityAccountId,
+            feePayment)
+    {
+    }
+
+    public TransactionBuilder(
+        NetworkId networkId,
+        ushort chainDiscriminant,
         string authorityAccountId,
         FeePaymentIntent feePayment)
     {
         NetworkId = networkId ?? throw new ArgumentNullException(nameof(networkId));
         AuthorityAccountId = TransactionEncodingContext.CanonicalizeAccountId(
             authorityAccountId,
-            nameof(authorityAccountId));
+            nameof(authorityAccountId),
+            chainDiscriminant);
+        ChainDiscriminant = chainDiscriminant;
         this.feePayment = feePayment ?? throw new ArgumentNullException(nameof(feePayment));
     }
 
     /// <summary>Exact genesis-header-derived network identity.</summary>
     public NetworkId NetworkId { get; }
+
+    /// <summary>Exact I105 chain discriminant required by all transaction account identities.</summary>
+    public ushort ChainDiscriminant { get; }
 
     public string AuthorityAccountId { get; }
 
@@ -393,7 +412,7 @@ public sealed class TransactionBuilder
         }
         ValidateExecutableFeeIntent();
 
-        var context = new TransactionEncodingContext(AuthorityAccountId);
+        var context = new TransactionEncodingContext(AuthorityAccountId, ChainDiscriminant);
         context.EnsureAuthorityMatchesPrivateKey(privateKeySeed);
 
         EnsureCreationTimeMilliseconds();
@@ -465,7 +484,7 @@ public sealed class TransactionBuilder
                 ["Instructions"] = new JsonArray(
                     Instructions
                         .Select(instruction => JsonValue.Create(
-                            instruction.EncodeInstructionBoxBase64(AuthorityAccountId)))
+                            instruction.EncodeInstructionBoxBase64(AuthorityAccountId, ChainDiscriminant)))
                         .Cast<JsonNode?>()
                         .ToArray()),
             };
@@ -509,7 +528,9 @@ public sealed class TransactionBuilder
         {
             TransactionBatchEntry.InstructionEntry instruction => new JsonObject
             {
-                ["Instruction"] = instruction.Value.EncodeInstructionBoxBase64(AuthorityAccountId),
+                ["Instruction"] = instruction.Value.EncodeInstructionBoxBase64(
+                    AuthorityAccountId,
+                    ChainDiscriminant),
             },
             TransactionBatchEntry.ContractCallEntry call => new JsonObject
             {

@@ -9699,20 +9699,6 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
             "fence-completion candidate statement handoff must pass the statement into successor effect binding",
         ),
         (
-            "step_recovery",
-            _RUNTIME_SERIALIZED_IMPL,
-            "let parent_statement = command.candidate_semantic_statement;",
-            "let parent_statement = None;",
-            "recovery FIFO candidate statement handoff must recover the statement from the selected command",
-        ),
-        (
-            "step_recovery",
-            _RUNTIME_SERIALIZED_IMPL,
-            "parent_statement.as_ref(),",
-            "None,",
-            "recovery FIFO candidate statement handoff must pass the statement into successor effect binding",
-        ),
-        (
             "step",
             _RUNTIME_SERIALIZED_IMPL,
             "let parent_statement = command.candidate_semantic_statement;",

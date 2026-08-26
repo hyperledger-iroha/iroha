@@ -13910,7 +13910,7 @@
           "submitted_at_ms": {
             "description": "Signed request issuance time in Unix epoch milliseconds, emitted as a lossless unquoted JSON integer.",
             "format": "uint64",
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "transaction_hash": {
@@ -13944,7 +13944,7 @@
           "submitted_at_ms": {
             "description": "Signed request issuance time in Unix epoch milliseconds, emitted as a lossless unquoted JSON integer.",
             "format": "uint64",
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "transaction_hash": {
@@ -13979,10 +13979,31 @@
         ],
         "type": "object"
       },
+      "OfflineOperationRejectionError": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "offline_operation_rejected",
+            "type": "string"
+          },
+          "message": {
+            "description": "Non-empty terminal rejection message without surrounding whitespace or control characters.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
       "OfflineOperationRejectedValue": {
         "properties": {
           "error": {
-            "$ref": "#/components/schemas/ErrorEnvelope"
+            "$ref": "#/components/schemas/OfflineOperationRejectionError"
           },
           "kind": {
             "$ref": "#/components/schemas/OfflineOperationKind"
@@ -15405,8 +15426,8 @@
         "type": "object"
       },
       "OfflineTransactionHash": {
-        "description": "Canonical lowercase hexadecimal Blake2b-256 signed transaction hash.",
-        "pattern": "^[0-9a-f]{64}$",
+        "description": "Canonical lowercase hexadecimal marked Iroha Blake2b-256 signed transaction hash; the final byte has least-significant bit 1.",
+        "pattern": "^[0-9a-f]{63}[13579bdf]$",
         "type": "string"
       },
       "OfflineTransitionProofBundle": {

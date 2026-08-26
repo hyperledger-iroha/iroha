@@ -99,6 +99,19 @@ class RecordingSession(requests.Session):
         )
         return self._response
 
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        **kwargs: Any,
+    ) -> requests.Response:
+        return self.request(
+            request.method or "",
+            request.url or "",
+            headers=dict(request.headers),
+            data=request.body,
+            **kwargs,
+        )
+
 
 def _client_with_session() -> tuple[ToriiClient, RecordingSession]:
     session = RecordingSession()

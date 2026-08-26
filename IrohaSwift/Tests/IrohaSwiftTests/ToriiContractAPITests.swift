@@ -143,8 +143,6 @@ final class ToriiContractAPITests: XCTestCase {
             value["pipeline_status"] = [
                 "hash": txHash,
                 "status": ["kind": "Queued"],
-                "summary": "Queued",
-                "diagnostics": [],
                 "scope": "local",
                 "resolved_from": "queue",
             ]
@@ -306,6 +304,7 @@ final class ToriiContractAPITests: XCTestCase {
     }
 
     func testPrepareAndSubmitDetachedContractCallPreservesEveryBinding() async throws {
+        let signatureB64 = try detachedSignatureB64()
         var requestIndex = 0
         StubURLProtocol.handler = { request in
             requestIndex += 1
@@ -326,7 +325,7 @@ final class ToriiContractAPITests: XCTestCase {
                 self.detachedCreationTimeMs as NSNumber
             )
             XCTAssertEqual(body["public_key_hex"] as? String, self.signingPublicKeyHex)
-            XCTAssertEqual(body["signature_b64"] as? String, try self.detachedSignatureB64())
+            XCTAssertEqual(body["signature_b64"] as? String, signatureB64)
             return try self.response(
                 for: request,
                 json: self.contractCallResponse(submitted: true)
@@ -342,7 +341,7 @@ final class ToriiContractAPITests: XCTestCase {
         let submitted = try await client.submitDetachedContractCall(
             draft,
             publicKeyHex: signingPublicKeyHex,
-            signatureB64: try detachedSignatureB64()
+            signatureB64: signatureB64
         )
         XCTAssertEqual(submitted.transactionHashHex, txHash)
         XCTAssertEqual(requestIndex, 2)
@@ -406,8 +405,6 @@ final class ToriiContractAPITests: XCTestCase {
                 return try self.response(for: request, json: [
                     "hash": self.txHash,
                     "status": ["kind": "Applied", "block_height": 44],
-                    "summary": "Applied at block 44",
-                    "diagnostics": [],
                     "scope": "global",
                     "resolved_from": "state",
                 ])

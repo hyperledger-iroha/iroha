@@ -1,12 +1,12 @@
-"""Strict first-release privacy capability snapshot types and validation."""
+"""Retired JSON capability-payload inspection; never live Exact12 admission."""
 
 from __future__ import annotations
 
 import json
 from typing import Any, Literal, TypedDict, cast
 
-PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1 = 1
-PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1 = 256 * 1024
+LEGACY_PRIVACY_CAPABILITY_INSPECTION_VERSION_V1 = 1
+LEGACY_PRIVACY_CAPABILITY_INSPECTION_MAX_JSON_BYTES_V1 = 256 * 1024
 
 PrivacyProtocolIdV1 = Literal[
     "zk-ace-pq-authorization-v0",
@@ -141,20 +141,18 @@ class PrivacyCompiledProfileUnavailableV1(TypedDict):
     value: PrivacyCompiledProfileUnavailableReasonV1
 
 
-PrivacyCompiledProfileV1 = (
-    PrivacyCompiledProfileAvailableV1 | PrivacyCompiledProfileUnavailableV1
-)
+PrivacyCompiledProfileV1 = PrivacyCompiledProfileAvailableV1 | PrivacyCompiledProfileUnavailableV1
 
 
 class PrivacyLifecycleProposedRecordV1(TypedDict):
-    """Committed schedule for a proposed protocol activation."""
+    """Historical JSON representation of a proposed activation schedule."""
 
     proposed_at_height: int
     activate_at_height: int
 
 
 class PrivacyLifecycleEstablishedRecordV1(TypedDict):
-    """Committed heights for an active, suspended, or retired protocol."""
+    """Historical JSON representation of established lifecycle heights."""
 
     proposed_at_height: int
     activated_at_height: int | None
@@ -162,14 +160,14 @@ class PrivacyLifecycleEstablishedRecordV1(TypedDict):
 
 
 class PrivacyLifecycleV1(TypedDict):
-    """Validated on-chain lifecycle state and its height record."""
+    """Inspection-only lifecycle state from a retired JSON payload."""
 
     state: Literal["proposed", "active", "suspended", "retired"]
     record: PrivacyLifecycleProposedRecordV1 | PrivacyLifecycleEstablishedRecordV1
 
 
 class PrivacyProtocolLimitsTighteningV1(TypedDict):
-    """Committed future tightening for one protocol-specific limit set."""
+    """Inspection-only JSON representation of protocol-limit tightening."""
 
     scheduled_at_height: int
     effective_at_height: int
@@ -184,7 +182,7 @@ class PrivacyAssuranceTagV1(TypedDict):
 
 
 class PrivacyActivationV1(PrivacyCompiledProfileValueV1):
-    """Authoritative governed activation bound to its compiled profile."""
+    """Inspection-only historical activation bound to its compiled profile."""
 
     lifecycle: PrivacyLifecycleV1
     pending_protocol_limits_tightening: PrivacyProtocolLimitsTighteningV1 | None
@@ -192,7 +190,7 @@ class PrivacyActivationV1(PrivacyCompiledProfileValueV1):
 
 
 class PrivacyConsensusLimitsV1(TypedDict):
-    """Closed consensus-wide first-release privacy resource limits."""
+    """Historical JSON representation of first-release resource limits."""
 
     max_actions_per_transaction: int
     max_actions_per_block: int
@@ -207,7 +205,7 @@ class PrivacyConsensusLimitsV1(TypedDict):
 
 
 class PrivacyConsensusLimitsTighteningV1(TypedDict):
-    """Committed future tightening of consensus-wide privacy limits."""
+    """Inspection-only JSON representation of consensus-limit tightening."""
 
     scheduled_at_height: int
     effective_at_height: int
@@ -215,33 +213,37 @@ class PrivacyConsensusLimitsTighteningV1(TypedDict):
 
 
 class PrivacyConsensusPolicyV1(TypedDict):
-    """Current and scheduled consensus-wide privacy limits."""
+    """Historical JSON policy fields with no live admission authority."""
 
     current_limits: PrivacyConsensusLimitsV1
     pending_tightening: PrivacyConsensusLimitsTighteningV1 | None
 
 
-class PrivacyCapabilityRowV1(TypedDict):
-    """One protocol row in canonical discriminant order."""
+class LegacyPrivacyCapabilityInspectionRowV1(TypedDict):
+    """One historical JSON row retained only for explicit inspection."""
 
     protocol_id: PrivacyProtocolTagV1
     compiled_profile: PrivacyCompiledProfileV1
     activation: PrivacyActivationV1 | None
 
 
-class PrivacyCapabilitySnapshotV1(TypedDict):
-    """Validated authoritative privacy capability response."""
+class LegacyPrivacyCapabilityInspectionSnapshotV1(TypedDict):
+    """Validated historical JSON payload with no admission authority."""
 
     version: Literal[1]
     committed_height: int
     consensus_policy: PrivacyConsensusPolicyV1
-    protocols: list[PrivacyCapabilityRowV1]
+    protocols: list[LegacyPrivacyCapabilityInspectionRowV1]
 
 
-class PrivacyCapabilitySnapshotError(ValueError):
-    """Raised when a capability payload violates the closed V1 contract."""
+class LegacyPrivacyCapabilityInspectionError(ValueError):
+    """Raised when a retired JSON inspection payload violates its contract."""
 
-    def __init__(self, message: str, path: str = "privacy capability snapshot") -> None:
+    def __init__(
+        self,
+        message: str,
+        path: str = "legacy privacy capability inspection",
+    ) -> None:
         super().__init__(f"{path}: {message}")
         self.path = path
 
@@ -324,9 +326,7 @@ _PROTOCOL_LIMIT_FIELDS: dict[
         ("max_batch_size", 8, None),
         ("max_ring_size", 64, frozenset((16, 32, 64))),
     ),
-    "iroha-jindo-polynomial-commitment-v0": (
-        ("max_polynomial_count", 4, None),
-    ),
+    "iroha-jindo-polynomial-commitment-v0": (("max_polynomial_count", 4, None),),
     "orchard-halo2-actions-v1": (("max_action_count", 2, None),),
     "monero-fcmp-plus-plus-v1": (
         ("max_input_count", 2, None),
@@ -343,43 +343,43 @@ _PROTOCOL_LIMIT_FIELDS: dict[
 }
 
 
-def parse_privacy_capability_snapshot_v1(
+def parse_legacy_privacy_capability_inspection_v1(
     payload: object,
-) -> PrivacyCapabilitySnapshotV1:
-    """Validate and defensively copy one exact V1 capability snapshot."""
+) -> LegacyPrivacyCapabilityInspectionSnapshotV1:
+    """Inspect and defensively copy one retired V1 JSON payload.
+
+    This function is deliberately disconnected from ``Client.privacy_capabilities_v1``
+    and cannot produce an Exact12 admission token.
+    """
 
     snapshot = _exact_object(
         payload,
         ("version", "committed_height", "consensus_policy", "protocols"),
-        "privacy capability snapshot",
+        "legacy privacy capability inspection",
     )
-    if _u32(snapshot["version"], "privacy capability snapshot.version") != 1:
-        _fail("version must be exactly 1", "privacy capability snapshot.version")
+    if _u32(snapshot["version"], "legacy privacy capability inspection.version") != 1:
+        _fail("version must be exactly 1", "legacy privacy capability inspection.version")
     committed_height = _u64(
-        snapshot["committed_height"], "privacy capability snapshot.committed_height"
+        snapshot["committed_height"], "legacy privacy capability inspection.committed_height"
     )
-    consensus_policy = _parse_consensus_policy(
-        snapshot["consensus_policy"], committed_height
-    )
+    consensus_policy = _parse_consensus_policy(snapshot["consensus_policy"], committed_height)
     rows = snapshot["protocols"]
     if type(rows) is not list or len(rows) != len(PRIVACY_PROTOCOL_IDS_V1):
         _fail(
             "protocols must contain exactly the 12 canonical protocol rows",
-            "privacy capability snapshot.protocols",
+            "legacy privacy capability inspection.protocols",
         )
     protocols = [
         _parse_capability_row(
             row,
             expected,
             committed_height,
-            f"privacy capability snapshot.protocols[{index}]",
+            f"legacy privacy capability inspection.protocols[{index}]",
         )
-        for index, (row, expected) in enumerate(
-            zip(rows, PRIVACY_PROTOCOL_IDS_V1, strict=True)
-        )
+        for index, (row, expected) in enumerate(zip(rows, PRIVACY_PROTOCOL_IDS_V1, strict=True))
     ]
     return cast(
-        PrivacyCapabilitySnapshotV1,
+        LegacyPrivacyCapabilityInspectionSnapshotV1,
         {
             "version": 1,
             "committed_height": committed_height,
@@ -389,10 +389,10 @@ def parse_privacy_capability_snapshot_v1(
     )
 
 
-def parse_privacy_capability_snapshot_json_v1(
+def parse_legacy_privacy_capability_inspection_json_v1(
     payload: bytes | bytearray | memoryview | str,
-) -> PrivacyCapabilitySnapshotV1:
-    """Decode strict UTF-8 JSON with duplicate-key rejection, then validate it."""
+) -> LegacyPrivacyCapabilityInspectionSnapshotV1:
+    """Decode retired JSON strictly for diagnostics, never live admission."""
 
     if isinstance(payload, str):
         encoded = payload.encode("utf-8")
@@ -400,23 +400,23 @@ def parse_privacy_capability_snapshot_json_v1(
         encoded = bytes(payload)
     else:
         raise TypeError("privacy capability JSON must be bytes or str")
-    if len(encoded) > PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1:
-        raise PrivacyCapabilitySnapshotError(
+    if len(encoded) > LEGACY_PRIVACY_CAPABILITY_INSPECTION_MAX_JSON_BYTES_V1:
+        raise LegacyPrivacyCapabilityInspectionError(
             "JSON exceeds the 262144-byte first-release limit"
         )
     try:
         text = encoded.decode("utf-8", "strict")
     except UnicodeDecodeError as exc:
-        raise PrivacyCapabilitySnapshotError("JSON must be strict UTF-8") from exc
+        raise LegacyPrivacyCapabilityInspectionError("JSON must be strict UTF-8") from exc
 
     def reject_constant(value: str) -> None:
-        raise PrivacyCapabilitySnapshotError(f"JSON number {value} is not permitted")
+        raise LegacyPrivacyCapabilityInspectionError(f"JSON number {value} is not permitted")
 
     def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, value in pairs:
             if key in result:
-                raise PrivacyCapabilitySnapshotError(f"duplicate JSON key {key!r}")
+                raise LegacyPrivacyCapabilityInspectionError(f"duplicate JSON key {key!r}")
             result[key] = value
         return result
 
@@ -426,15 +426,15 @@ def parse_privacy_capability_snapshot_json_v1(
             object_pairs_hook=reject_duplicate_pairs,
             parse_constant=reject_constant,
         )
-    except PrivacyCapabilitySnapshotError:
+    except LegacyPrivacyCapabilityInspectionError:
         raise
     except (UnicodeError, json.JSONDecodeError) as exc:
-        raise PrivacyCapabilitySnapshotError("malformed JSON") from exc
-    return parse_privacy_capability_snapshot_v1(decoded)
+        raise LegacyPrivacyCapabilityInspectionError("malformed JSON") from exc
+    return parse_legacy_privacy_capability_inspection_v1(decoded)
 
 
 def _parse_consensus_policy(value: object, committed_height: int) -> dict[str, Any]:
-    path = "privacy capability snapshot.consensus_policy"
+    path = "legacy privacy capability inspection.consensus_policy"
     policy = _exact_object(value, ("current_limits", "pending_tightening"), path)
     current = _parse_consensus_limits(policy["current_limits"], f"{path}.current_limits")
     pending_value = policy["pending_tightening"]
@@ -484,8 +484,7 @@ def _parse_consensus_limits(value: object, path: str) -> dict[str, int]:
         result["max_actions_per_transaction"] > result["max_actions_per_block"]
         or result["max_proof_bytes_per_action"] > result["max_action_bytes"]
         or result["max_action_bytes"] > result["max_privacy_bytes_per_transaction"]
-        or result["max_privacy_bytes_per_transaction"]
-        > result["max_privacy_bytes_per_block"]
+        or result["max_privacy_bytes_per_transaction"] > result["max_privacy_bytes_per_block"]
         or result["max_statement_and_encrypted_output_bytes_per_transaction"]
         > result["max_action_bytes"]
     ):
@@ -498,13 +497,11 @@ def _parse_capability_row(
     expected_protocol: PrivacyProtocolIdV1,
     committed_height: int,
     path: str,
-) -> PrivacyCapabilityRowV1:
+) -> LegacyPrivacyCapabilityInspectionRowV1:
     row = _exact_object(value, ("protocol_id", "compiled_profile", "activation"), path)
     protocol = _protocol_tag(row["protocol_id"], f"{path}.protocol_id")
     if protocol != expected_protocol:
-        _fail(
-            f"must be canonical protocol {expected_protocol}", f"{path}.protocol_id"
-        )
+        _fail(f"must be canonical protocol {expected_protocol}", f"{path}.protocol_id")
     compiled = _parse_compiled_profile(
         row["compiled_profile"], protocol, f"{path}.compiled_profile"
     )
@@ -522,7 +519,7 @@ def _parse_capability_row(
     if activation is not None and compiled["status"] != "available":
         _fail("cannot activate an unavailable compiled profile", f"{path}.activation")
     return cast(
-        PrivacyCapabilityRowV1,
+        LegacyPrivacyCapabilityInspectionRowV1,
         {
             "protocol_id": _tagged("protocol", protocol),
             "compiled_profile": compiled,
@@ -568,9 +565,7 @@ def _parse_compiled_profile(
     return {"status": "unavailable", "value": normalized_reason}
 
 
-def _parse_profile(
-    value: object, protocol: PrivacyProtocolIdV1, path: str
-) -> dict[str, Any]:
+def _parse_profile(value: object, protocol: PrivacyProtocolIdV1, path: str) -> dict[str, Any]:
     profile = _exact_object(
         value,
         (
@@ -621,9 +616,7 @@ def _parse_activation(
     result = _parse_bindings(record, protocol, path)
     if compiled["status"] == "available":
         _assert_bindings_equal(result, compiled["value"], path)
-    limits = _parse_protocol_limits(
-        record["protocol_limits"], protocol, f"{path}.protocol_limits"
-    )
+    limits = _parse_protocol_limits(record["protocol_limits"], protocol, f"{path}.protocol_limits")
     if compiled["status"] == "available":
         _assert_limits_at_most(
             limits, compiled["value"]["protocol_limits"], f"{path}.protocol_limits"
@@ -681,12 +674,8 @@ def _parse_bindings(
         "proof_system_id": _tagged("proof_system", parsed_proof),
         "engine_id": _tagged("engine", parsed_engine),
         "parameter_id": _fixed_bytes(value["parameter_id"], f"{path}.parameter_id"),
-        "parameter_digest": _fixed_bytes(
-            value["parameter_digest"], f"{path}.parameter_digest"
-        ),
-        "verifier_digest": _fixed_bytes(
-            value["verifier_digest"], f"{path}.verifier_digest"
-        ),
+        "parameter_digest": _fixed_bytes(value["parameter_digest"], f"{path}.parameter_digest"),
+        "verifier_digest": _fixed_bytes(value["verifier_digest"], f"{path}.verifier_digest"),
         "statement_schema_digest": _fixed_bytes(
             value["statement_schema_digest"], f"{path}.statement_schema_digest"
         ),
@@ -710,9 +699,7 @@ def _parse_protocol_limits(
         if tagged["limits"] is not None:
             _fail("fixed protocol limits must be null", f"{path}.limits")
         return {"protocol": protocol, "limits": None}
-    limits = _exact_object(
-        tagged["limits"], tuple(field[0] for field in fields), f"{path}.limits"
-    )
+    limits = _exact_object(tagged["limits"], tuple(field[0] for field in fields), f"{path}.limits")
     normalized: dict[str, int] = {}
     for key, maximum, permitted in fields:
         number = _positive_u32(limits[key], f"{path}.limits.{key}")
@@ -722,9 +709,7 @@ def _parse_protocol_limits(
     return {"protocol": protocol, "limits": normalized}
 
 
-def _parse_lifecycle(
-    value: object, committed_height: int, path: str
-) -> dict[str, Any]:
+def _parse_lifecycle(value: object, committed_height: int, path: str) -> dict[str, Any]:
     lifecycle = _exact_object(value, ("state", "record"), path)
     state = lifecycle["state"]
     if state not in ("proposed", "active", "suspended", "retired"):
@@ -735,19 +720,11 @@ def _parse_lifecycle(
         else ("proposed_at_height", "activated_at_height", "state_since_height")
     )
     record = _exact_object(lifecycle["record"], keys, f"{path}.record")
-    proposed = _positive_u64(
-        record["proposed_at_height"], f"{path}.record.proposed_at_height"
-    )
+    proposed = _positive_u64(record["proposed_at_height"], f"{path}.record.proposed_at_height")
     normalized: dict[str, Any]
     if state == "proposed":
-        activate = _positive_u64(
-            record["activate_at_height"], f"{path}.record.activate_at_height"
-        )
-        if (
-            activate <= proposed
-            or proposed > committed_height
-            or activate <= committed_height
-        ):
+        activate = _positive_u64(record["activate_at_height"], f"{path}.record.activate_at_height")
+        if activate <= proposed or proposed > committed_height or activate <= committed_height:
             _fail("has invalid proposed lifecycle heights", path)
         normalized = {
             "proposed_at_height": proposed,
@@ -758,13 +735,9 @@ def _parse_lifecycle(
         activated = (
             None
             if state == "retired" and activated_value is None
-            else _positive_u64(
-                activated_value, f"{path}.record.activated_at_height"
-            )
+            else _positive_u64(activated_value, f"{path}.record.activated_at_height")
         )
-        since = _positive_u64(
-            record["state_since_height"], f"{path}.record.state_since_height"
-        )
+        since = _positive_u64(record["state_since_height"], f"{path}.record.state_since_height")
         if (
             proposed > committed_height
             or since > committed_height
@@ -800,12 +773,8 @@ def _parse_protocol_tightening(
     tightening = _exact_object(
         value, ("scheduled_at_height", "effective_at_height", "next_limits"), path
     )
-    scheduled = _positive_u64(
-        tightening["scheduled_at_height"], f"{path}.scheduled_at_height"
-    )
-    effective = _positive_u64(
-        tightening["effective_at_height"], f"{path}.effective_at_height"
-    )
+    scheduled = _positive_u64(tightening["scheduled_at_height"], f"{path}.scheduled_at_height")
+    effective = _positive_u64(tightening["effective_at_height"], f"{path}.effective_at_height")
     if (
         scheduled > _MAX_U64 - _POLICY_DELAY_BLOCKS_V1
         or effective <= scheduled
@@ -850,9 +819,7 @@ def _tagged_unit(
     return tag
 
 
-def _tagged(
-    tag_key: str, value: str, *, content_key: str = "value"
-) -> dict[str, Any]:
+def _tagged(tag_key: str, value: str, *, content_key: str = "value") -> dict[str, Any]:
     return {tag_key: value, content_key: None}
 
 
@@ -869,9 +836,7 @@ def _fixed_bytes(value: object, path: str) -> list[int]:
     return result
 
 
-def _exact_object(
-    value: object, expected_keys: tuple[str, ...], path: str
-) -> dict[str, Any]:
+def _exact_object(value: object, expected_keys: tuple[str, ...], path: str) -> dict[str, Any]:
     if type(value) is not dict:
         _fail("must be a plain JSON object", path)
     result = cast(dict[str, Any], value)
@@ -906,9 +871,7 @@ def _positive_u64(value: object, path: str) -> int:
     return result
 
 
-def _assert_bindings_equal(
-    actual: dict[str, Any], expected: dict[str, Any], path: str
-) -> None:
+def _assert_bindings_equal(actual: dict[str, Any], expected: dict[str, Any], path: str) -> None:
     for key in (
         "protocol_id",
         "proof_system_id",
@@ -923,9 +886,7 @@ def _assert_bindings_equal(
             _fail(f"does not match compiled profile {key}", f"{path}.{key}")
 
 
-def _assert_limits_at_most(
-    actual: dict[str, Any], ceiling: dict[str, Any], path: str
-) -> None:
+def _assert_limits_at_most(actual: dict[str, Any], ceiling: dict[str, Any], path: str) -> None:
     if actual["protocol"] != ceiling["protocol"] or (
         (actual["limits"] is None) != (ceiling["limits"] is None)
     ):
@@ -949,18 +910,18 @@ def _assert_strict_consensus_tightening(
 
 
 def _fail(message: str, path: str) -> None:
-    raise PrivacyCapabilitySnapshotError(message, path)
+    raise LegacyPrivacyCapabilityInspectionError(message, path)
 
 
 __all__ = [
-    "PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1",
-    "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
+    "LEGACY_PRIVACY_CAPABILITY_INSPECTION_MAX_JSON_BYTES_V1",
+    "LEGACY_PRIVACY_CAPABILITY_INSPECTION_VERSION_V1",
     "PRIVACY_PROTOCOL_IDS_V1",
     "PrivacyActivationV1",
     "PrivacyAssuranceTagV1",
-    "PrivacyCapabilityRowV1",
-    "PrivacyCapabilitySnapshotError",
-    "PrivacyCapabilitySnapshotV1",
+    "LegacyPrivacyCapabilityInspectionRowV1",
+    "LegacyPrivacyCapabilityInspectionError",
+    "LegacyPrivacyCapabilityInspectionSnapshotV1",
     "PrivacyCompiledProfileAvailableV1",
     "PrivacyCompiledProfileUnavailableReasonV1",
     "PrivacyCompiledProfileUnavailableV1",
@@ -981,6 +942,6 @@ __all__ = [
     "PrivacyProtocolLimitsV1",
     "PrivacyProtocolTagV1",
     "PrivacyStatementSchemaErrorV1",
-    "parse_privacy_capability_snapshot_json_v1",
-    "parse_privacy_capability_snapshot_v1",
+    "parse_legacy_privacy_capability_inspection_json_v1",
+    "parse_legacy_privacy_capability_inspection_v1",
 ]

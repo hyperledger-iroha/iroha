@@ -11,7 +11,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),

@@ -44,7 +44,7 @@ public sealed class ReplicationOrderInstructionTests
         Assert.Equal(OrderId, instruction.OrderId);
         Assert.Equal(Convert.ToBase64String(fixture), instruction.OrderPayloadBase64);
 
-        var context = new TransactionEncodingContext(FixtureAccountId);
+        var context = new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
         var encoded = instruction.EncodePayload(context);
         var fields = new FixedFieldReader(encoded);
         Assert.Equal(
@@ -63,7 +63,9 @@ public sealed class ReplicationOrderInstructionTests
         var copy = instruction.OrderPayload;
         copy[0] ^= 0xff;
         Assert.Equal(fixture, instruction.OrderPayload);
-        Assert.NotEmpty(instruction.EncodeInstructionBox(FixtureAccountId));
+        Assert.NotEmpty(instruction.EncodeInstructionBox(
+            FixtureAccountId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant));
     }
 
     [Fact]
@@ -78,7 +80,7 @@ public sealed class ReplicationOrderInstructionTests
 
         Assert.Equal(ArchiveId, instruction.MusubiArchiveId);
         var fields = new FixedFieldReader(
-            instruction.EncodePayload(new TransactionEncodingContext(FixtureAccountId)));
+            instruction.EncodePayload(new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)));
         _ = fields.ReadField();
         _ = fields.ReadField();
         _ = fields.ReadField();
@@ -99,7 +101,7 @@ public sealed class ReplicationOrderInstructionTests
             expectedAuthority: ExpectedAuthority(),
             expectedAssignmentRevision: 3,
             finalizedAnchor: FinalizedAnchor());
-        var context = new TransactionEncodingContext(FixtureAccountId);
+        var context = new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
         var fields = new FixedFieldReader(instruction.EncodePayload(context));
 
         Assert.Equal(
@@ -171,7 +173,7 @@ public sealed class ReplicationOrderInstructionTests
         var instruction = TransactionInstruction.ExpireReplicationOrder(
             OrderId,
             expirationEpoch: 29);
-        var context = new TransactionEncodingContext(FixtureAccountId);
+        var context = new TransactionEncodingContext(FixtureAccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
         var fields = new FixedFieldReader(instruction.EncodePayload(context));
 
         Assert.Equal(
@@ -279,6 +281,7 @@ public sealed class ReplicationOrderInstructionTests
     {
         var builder = new TransactionBuilder(
                 NetworkId.Parse(FixtureNetworkId),
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 FixtureAccountId,
                 FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>()))
             .IssueReplicationOrder(OrderId, Fixture(), 20, 28, ArchiveId)

@@ -74,6 +74,11 @@ The authoritative inputs and outputs live under `fixtures/norito_rpc/`.
 regenerates `transaction_fixtures.manifest.json`, `schema_hashes.json`, the
 compact-hash vector, and every owned `.norito` payload.
 
+This shared corpus deliberately pins `TransactionAdmissionIntent::Ordinary` to
+exercise the general codec and internal-transaction wire form. It is not a
+public Torii-submission golden: externally signed public SDK transactions and
+their SDK-owned fixtures must instead bind `QueuePlanSynced` before signing.
+
 1. Regenerate two complete publications:
    ```bash
    cargo run --locked -p xtask --features dev-tools --bin xtask -- \

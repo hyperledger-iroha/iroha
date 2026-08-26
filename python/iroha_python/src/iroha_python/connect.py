@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -80,6 +81,44 @@ _CONNECT_SESSION_RESPONSE_FIELDS = frozenset(
 _CONNECT_SESSION_URI_FIELDS = frozenset(
     {"sid", "network_id", "app_pk", "nonce", "node", "v", "role", "token", "relay"}
 )
+_TORII_NETWORK_ID_RE = re.compile(r"hash:([0-9A-F]{64})#([0-9A-F]{4})\Z")
+
+
+def _network_id_crc16(value: bytes) -> int:
+    crc = 0xFFFF
+    for byte in value:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = (
+                ((crc << 1) ^ 0x1021) & 0xFFFF
+                if crc & 0x8000
+                else (crc << 1) & 0xFFFF
+            )
+    return crc
+
+
+def _network_id_to_torii_json(value: NetworkId) -> str:
+    network_id = _require_network_id(value, "network_id")
+    body = network_id.literal.upper()
+    checksum = _network_id_crc16(f"hash:{body}".encode("ascii"))
+    return f"hash:{body}#{checksum:04X}"
+
+
+def _network_id_from_torii_json(value: Any, field: str) -> NetworkId:
+    literal = _require_exact_non_empty_string(value, field)
+    matched = _TORII_NETWORK_ID_RE.fullmatch(literal)
+    if matched is None:
+        raise ValueError(
+            f"{field} must use canonical hash:<uppercase hex>#<CRC16> syntax"
+        )
+    body, checksum = matched.groups()
+    expected = _network_id_crc16(f"hash:{body}".encode("ascii"))
+    if int(checksum, 16) != expected:
+        raise ValueError(f"{field} hash checksum does not match its body")
+    try:
+        return NetworkId.parse(body.lower())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} does not contain a canonical NetworkId") from exc
 
 
 def _normalize_connect_wallet_signature_algorithm(algorithm: str) -> str:
@@ -430,7 +469,10 @@ class ConnectSessionInfo:
                 expires_at = datetime.utcnow() + timedelta(milliseconds=session_ttl_ms)
             return cls(
                 sid=required_string("sid"),
-                network_id=NetworkId.parse(required_string("network_id")),
+                network_id=_network_id_from_torii_json(
+                    required_string("network_id"),
+                    "network_id",
+                ),
                 app_public_key=_decode_canonical_base64url(
                     required_string("app_pk"), 32, "app_pk"
                 ),
@@ -451,7 +493,7 @@ class ConnectSessionInfo:
 
         return {
             "sid": self.sid,
-            "network_id": self.network_id.literal,
+            "network_id": _network_id_to_torii_json(self.network_id),
             "app_pk": _to_base64url(self.app_public_key),
             "nonce": _to_base64url(self.nonce),
             "wallet_uri": self.wallet_uri,
@@ -498,7 +540,7 @@ def _normalize_connect_session_request(payload: Mapping[str, Any]) -> Dict[str, 
     )
     normalized: Dict[str, Any] = {
         "sid": sid,
-        "network_id": network_literal,
+        "network_id": _network_id_to_torii_json(network_id),
         "app_pk": _to_base64url(app_public_key),
         "nonce": _to_base64url(nonce),
     }
@@ -516,7 +558,11 @@ def _ensure_connect_session_matches_request(
     body = _normalize_connect_session_request(request)
     if (
         session.sid != body["sid"]
-        or session.network_id.literal != body["network_id"]
+        or session.network_id
+        != _network_id_from_torii_json(
+            body["network_id"],
+            "Connect session request.network_id",
+        )
         or _to_base64url(session.app_public_key) != body["app_pk"]
         or _to_base64url(session.nonce) != body["nonce"]
     ):

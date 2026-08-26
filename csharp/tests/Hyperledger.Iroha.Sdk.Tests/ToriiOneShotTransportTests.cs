@@ -54,7 +54,8 @@ public sealed class ToriiOneShotTransportTests
             client.GetPipelineTransactionDetailsAsync(
                 new SignedIterableQueryBuilder(
                     CanonicalAccountId,
-                    NetworkId.Parse(CanonicalNetworkId))
+                    NetworkId.Parse(CanonicalNetworkId),
+                    global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
                     .FindTransactionDetails(transactionHash)
                     .BuildSigned(CanonicalPrivateKeySeed),
                 transactionHash,
@@ -160,7 +161,8 @@ public sealed class ToriiOneShotTransportTests
             new ToriiClientOptions
             {
                 LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(CanonicalNetworkId)),
+                    NetworkId.Parse(CanonicalNetworkId),
+                    global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -216,7 +218,8 @@ public sealed class ToriiOneShotTransportTests
     {
         return new SignedQueryBuilder(
             CanonicalAccountId,
-            NetworkId.Parse(CanonicalNetworkId))
+            NetworkId.Parse(CanonicalNetworkId),
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindParameters()
             .BuildSigned(CanonicalPrivateKeySeed);
     }
@@ -225,6 +228,7 @@ public sealed class ToriiOneShotTransportTests
     {
         return new TransactionBuilder(
             NetworkId.Parse(CanonicalNetworkId),
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             CanonicalAccountId,
             FeePaymentIntent.Authority([]))
             .TransferAsset(

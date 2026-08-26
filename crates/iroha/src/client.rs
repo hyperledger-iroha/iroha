@@ -7220,6 +7220,21 @@ impl Client {
             "{field} must be exactly 64 lowercase hexadecimal characters"
         ))
     }
+    fn require_transaction_hash(value: &str, field: &str) -> Result<()> {
+        Self::require_lower_hex_32(value, field)?;
+        value.parse::<Hash>().map(|_| ()).map_err(|_| {
+            eyre!(
+                "{field} must be a canonical marked Iroha transaction hash (least-significant bit 1)"
+            )
+        })
+    }
+    fn require_offline_operation_id(value: &str, field: &str) -> Result<()> {
+        Self::require_lower_hex_32(value, field)?;
+        if value.bytes().all(|byte| byte == b'0') {
+            return Err(eyre!("{field} must be non-zero"));
+        }
+        Ok(())
+    }
     fn require_governance_selector_v1(value: &str, field: &str) -> Result<()> {
         if iroha_data_model::governance::is_valid_governance_selector_v1(value) {
             return Ok(());
@@ -7297,7 +7312,7 @@ impl Client {
         expected_kind: OfflineOperationKind,
         submitted_at_ms: u64,
     ) -> Result<()> {
-        Self::require_lower_hex_32(&reference.operation_id, "operation_id")?;
+        Self::require_offline_operation_id(&reference.operation_id, "operation_id")?;
         if reference.operation_id != operation_id {
             return Err(eyre!(
                 "offline operation response id does not match the signed request"
@@ -7308,7 +7323,12 @@ impl Client {
                 "offline operation response kind or initial state does not match the request"
             ));
         }
-        Self::require_lower_hex_32(&reference.transaction_hash, "transaction_hash")?;
+        Self::require_transaction_hash(&reference.transaction_hash, "transaction_hash")?;
+        if reference.submitted_at_ms == 0 {
+            return Err(eyre!(
+                "offline operation response submitted_at_ms must be at least 1"
+            ));
+        }
         if reference.submitted_at_ms != submitted_at_ms {
             return Err(eyre!(
                 "offline operation response submission time does not match the signed request"
@@ -7320,83 +7340,139 @@ impl Client {
                 "offline operation response contains a non-canonical status URI"
             ));
         }
-        let location = response
-            .headers()
-            .get(http::header::LOCATION)
+        let mut locations = response.headers().get_all(http::header::LOCATION).iter();
+        let location = locations
+            .next()
             .and_then(|value| value.to_str().ok())
             .ok_or_else(|| eyre!("offline operation response is missing Location"))?;
+        if locations.next().is_some() {
+            return Err(eyre!(
+                "offline operation response must contain exactly one Location"
+            ));
+        }
         if location != expected_status_uri {
             return Err(eyre!(
                 "offline operation Location does not match the typed status URI"
             ));
         }
-        let retry_after = response
-            .headers()
-            .get(http::header::RETRY_AFTER)
+        let mut retry_after_values = response.headers().get_all(http::header::RETRY_AFTER).iter();
+        let retry_after = retry_after_values
+            .next()
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok())
-            .filter(|seconds| *seconds > 0)
             .ok_or_else(|| eyre!("offline operation response has no valid Retry-After"))?;
-        let _ = retry_after;
+        if retry_after_values.next().is_some()
+            || retry_after.is_empty()
+            || !retry_after.bytes().all(|byte| byte.is_ascii_digit())
+            || retry_after.starts_with('0')
+            || retry_after.parse::<u64>().is_err()
+        {
+            return Err(eyre!(
+                "offline operation response must contain exactly one positive decimal Retry-After"
+            ));
+        }
         Ok(())
     }
     fn validate_offline_operation_status(
+        &self,
         status: &OfflineOperationStatus,
         expected_operation_id: &str,
     ) -> Result<()> {
-        let (operation_id, transaction_hash, applied_finality) = match status {
+        let operation_id = match status {
             OfflineOperationStatus::Pending {
                 operation_id,
                 transaction_hash,
+                submitted_at_ms,
                 ..
+            } => {
+                if *submitted_at_ms == 0 {
+                    return Err(eyre!("offline pending submitted_at_ms must be at least 1"));
+                }
+                Self::require_transaction_hash(transaction_hash, "transaction_hash")?;
+                operation_id
             }
-            | OfflineOperationStatus::Rejected {
+            OfflineOperationStatus::Rejected {
                 operation_id,
                 transaction_hash,
                 ..
-            } => (operation_id, transaction_hash, None),
+            } => {
+                Self::require_transaction_hash(transaction_hash, "transaction_hash")?;
+                operation_id
+            }
             OfflineOperationStatus::Applied {
                 operation_id,
                 result,
             } => {
-                let (transaction_hash, finalized_block_height, server_time_ms) = match result {
-                    OfflineOperationResult::TopUp(result) => (
-                        &result.transaction_hash,
-                        result.finalized_block_height,
-                        result.server_time_ms,
-                    ),
-                    OfflineOperationResult::Redeem(result) => (
-                        &result.transaction_hash,
-                        result.finalized_block_height,
-                        result.server_time_ms,
-                    ),
-                };
-                (
-                    operation_id,
-                    transaction_hash,
-                    Some((finalized_block_height, server_time_ms)),
-                )
+                match result {
+                    OfflineOperationResult::TopUp(result) => {
+                        if result.finalized_block_height == 0 {
+                            return Err(eyre!(
+                                "offline applied result finalized_block_height must be at least 1"
+                            ));
+                        }
+                        if result.server_time_ms == 0 {
+                            return Err(eyre!(
+                                "offline applied result server_time_ms must be at least 1"
+                            ));
+                        }
+                        Self::require_transaction_hash(
+                            &result.transaction_hash,
+                            "transaction_hash",
+                        )?;
+                        result
+                            .anchor
+                            .validate_public_binding()
+                            .wrap_err("offline applied top-up anchor is invalid")?;
+                        result
+                            .finality_proof
+                            .validate_structure()
+                            .wrap_err("offline applied top-up finality proof is invalid")?;
+                        let anchor_ref = result
+                            .anchor
+                            .compact_ref()
+                            .wrap_err("offline applied top-up anchor is invalid")?;
+                        if bytes_to_hex(&result.anchor.topup_operation_id) != *operation_id
+                            || bytes_to_hex(&result.anchor.finalized_tx_hash)
+                                != result.transaction_hash
+                            || result.anchor.finalized_height != result.finalized_block_height
+                            || result.anchor.network_id != self.network_id
+                            || result.finality_proof.anchor != anchor_ref
+                            || result.finality_proof.commit_qc.height_context.height
+                                != result.finalized_block_height
+                            || result.finality_proof.commit_qc.height_context.network_id
+                                != result.anchor.network_id
+                        {
+                            return Err(eyre!(
+                                "offline applied top-up operation, transaction, height, network, or proof binding is invalid"
+                            ));
+                        }
+                    }
+                    OfflineOperationResult::Redeem(result) => {
+                        if result.finalized_block_height == 0 {
+                            return Err(eyre!(
+                                "offline applied result finalized_block_height must be at least 1"
+                            ));
+                        }
+                        if result.server_time_ms == 0 {
+                            return Err(eyre!(
+                                "offline applied result server_time_ms must be at least 1"
+                            ));
+                        }
+                        Self::require_transaction_hash(
+                            &result.transaction_hash,
+                            "transaction_hash",
+                        )?;
+                    }
+                }
+                operation_id
             }
         };
-        Self::require_lower_hex_32(operation_id, "operation_id")?;
+        Self::require_offline_operation_id(operation_id, "operation_id")?;
         if operation_id != expected_operation_id {
             return Err(eyre!(
                 "offline operation status id does not match the requested resource"
             ));
         }
-        if let Some((finalized_block_height, server_time_ms)) = applied_finality {
-            if finalized_block_height == 0 {
-                return Err(eyre!(
-                    "offline applied result finalized_block_height must be at least 1"
-                ));
-            }
-            if server_time_ms == 0 {
-                return Err(eyre!(
-                    "offline applied result server_time_ms must be at least 1"
-                ));
-            }
-        }
-        Self::require_lower_hex_32(transaction_hash, "transaction_hash")
+        Ok(())
     }
     fn validate_offline_capability(status: &OfflineStatus) -> Result<()> {
         if status.mandatory {
@@ -7575,7 +7651,7 @@ impl Client {
         &self,
         operation_id: &str,
     ) -> Result<OfflineOperationStatus> {
-        Self::require_lower_hex_32(operation_id, "operation_id")?;
+        Self::require_offline_operation_id(operation_id, "operation_id")?;
         let path = torii_uri::OFFLINE_OPERATION.replace("{operation_id}", operation_id);
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
@@ -7587,7 +7663,7 @@ impl Client {
             StatusCode::OK,
             "Failed to fetch offline operation",
         )?;
-        Self::validate_offline_operation_status(&status, operation_id)?;
+        self.validate_offline_operation_status(&status, operation_id)?;
         Ok(status)
     }
     /// GET `/v1/sumeragi/status` — consensus status snapshot.
@@ -7988,6 +8064,7 @@ fn mk_response(status: StatusCode, body: Vec<u8>, content_type: Option<&str>) ->
 mod offline_client_tests {
     use super::{evidence_http_tests::*, *};
     use crate::{http::Response as HttpResponse, http_default::RequestSnapshot};
+    use iroha_torii_shared::offline_api::OfflineOperationRejectionError;
     use norito::derive::NoritoSerialize;
     use std::sync::{Arc, Mutex};
     #[derive(NoritoSerialize)]
@@ -8009,7 +8086,7 @@ mod offline_client_tests {
             operation_id: operation_id.to_owned(),
             kind,
             state: OfflineOperationState::Pending,
-            transaction_hash: "22".repeat(32),
+            transaction_hash: "23".repeat(32),
             status_uri: format!("/v1/offline/operations/{operation_id}"),
             submitted_at_ms: 42,
         }
@@ -8199,7 +8276,7 @@ mod offline_client_tests {
         let status = OfflineOperationStatus::Pending {
             operation_id: operation_id.clone(),
             kind: OfflineOperationKind::TopUp,
-            transaction_hash: "22".repeat(32),
+            transaction_hash: "23".repeat(32),
             submitted_at_ms: 42,
         };
         let response = HttpResponse::builder()
@@ -8222,6 +8299,10 @@ mod offline_client_tests {
             .get_offline_operation_status("../redeem")
             .expect_err("path injection must fail locally");
         assert!(malformed.to_string().contains("64 lowercase hexadecimal"));
+        let zero = client_with_base_url(base_url())
+            .get_offline_operation_status(&"0".repeat(64))
+            .expect_err("zero operation id must fail locally");
+        assert!(zero.to_string().contains("must be non-zero"));
     }
     #[test]
     fn applied_operation_status_rejects_zero_finality_fields() {
@@ -8233,19 +8314,165 @@ mod offline_client_tests {
                 operation_id: operation_id.clone(),
                 result: OfflineOperationResult::Redeem(
                     iroha_torii_shared::offline_api::OfflineRedeemResult {
-                        transaction_hash: "22".repeat(32),
+                        transaction_hash: "23".repeat(32),
                         finalized_block_height,
                         server_time_ms,
                     },
                 ),
             };
-            let error = Client::validate_offline_operation_status(&status, &operation_id)
+            let error = client_with_base_url(base_url())
+                .validate_offline_operation_status(&status, &operation_id)
                 .expect_err("zero applied finality field must fail closed");
             assert!(
                 error.to_string().contains(field),
                 "unexpected error: {error}"
             );
         }
+    }
+    #[test]
+    fn operation_responses_require_marked_transaction_hashes() {
+        let client = client_with_base_url(base_url());
+        let operation_id = "11".repeat(32);
+        for status in [
+            OfflineOperationStatus::Pending {
+                operation_id: operation_id.clone(),
+                kind: OfflineOperationKind::TopUp,
+                transaction_hash: "22".repeat(32),
+                submitted_at_ms: 42,
+            },
+            OfflineOperationStatus::Rejected {
+                operation_id: operation_id.clone(),
+                kind: OfflineOperationKind::Redeem,
+                transaction_hash: "22".repeat(32),
+                error: OfflineOperationRejectionError::try_new("rejected")
+                    .expect("canonical rejection"),
+            },
+            OfflineOperationStatus::Applied {
+                operation_id: operation_id.clone(),
+                result: OfflineOperationResult::Redeem(
+                    iroha_torii_shared::offline_api::OfflineRedeemResult {
+                        transaction_hash: "22".repeat(32),
+                        finalized_block_height: 1,
+                        server_time_ms: 1,
+                    },
+                ),
+            },
+        ] {
+            let error = client
+                .validate_offline_operation_status(&status, &operation_id)
+                .expect_err("an unmarked transaction hash must fail closed");
+            assert!(
+                error.to_string().contains("marked Iroha transaction hash"),
+                "unexpected error: {error:#}"
+            );
+        }
+        let mut reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
+        reference.transaction_hash = "22".repeat(32);
+        let response = accepted_response(&reference);
+        let error = Client::validate_offline_operation_reference(
+            &response,
+            &reference,
+            &operation_id,
+            OfflineOperationKind::TopUp,
+            42,
+        )
+        .expect_err("an unmarked accepted transaction hash must fail closed");
+        assert!(error.to_string().contains("marked Iroha transaction hash"));
+    }
+    #[test]
+    fn operation_status_rejects_noncanonical_pending_time_and_rejection_message() {
+        let client = client_with_base_url(base_url());
+        let operation_id = "11".repeat(32);
+        let pending = OfflineOperationStatus::Pending {
+            operation_id: operation_id.clone(),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: "23".repeat(32),
+            submitted_at_ms: 0,
+        };
+        let error = client
+            .validate_offline_operation_status(&pending, &operation_id)
+            .expect_err("zero pending time must fail closed");
+        assert!(error.to_string().contains("submitted_at_ms"));
+        let mut reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
+        reference.submitted_at_ms = 0;
+        let response = accepted_response(&reference);
+        let error = Client::validate_offline_operation_reference(
+            &response,
+            &reference,
+            &operation_id,
+            OfflineOperationKind::TopUp,
+            0,
+        )
+        .expect_err("zero accepted submission time must fail closed");
+        assert!(error.to_string().contains("submitted_at_ms"));
+
+        for invalid_message in [
+            String::new(),
+            " rejected".to_owned(),
+            "rejected\n".to_owned(),
+            "界".repeat(1_025),
+        ] {
+            let error = OfflineOperationRejectionError::try_new(invalid_message)
+                .expect_err("a noncanonical rejection message must fail closed");
+            assert!(error.contains("Offline rejection message"));
+        }
+        let valid = OfflineOperationStatus::Rejected {
+            operation_id: operation_id.clone(),
+            kind: OfflineOperationKind::Redeem,
+            transaction_hash: "23".repeat(32),
+            error: OfflineOperationRejectionError::try_new("界".repeat(1_024))
+                .expect("1024 Unicode scalars are canonical"),
+        };
+        client
+            .validate_offline_operation_status(&valid, &operation_id)
+            .expect("a 1024-scalar rejection message is valid");
+    }
+    #[test]
+    fn accepted_operation_requires_single_canonical_location_and_retry_after() {
+        let operation_id = "11".repeat(32);
+        let reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
+        let response_with_headers = |locations: &[&str], retry_after: &[&str]| {
+            let mut builder = HttpResponse::builder().status(StatusCode::ACCEPTED);
+            for value in locations {
+                builder = builder.header(http::header::LOCATION, *value);
+            }
+            for value in retry_after {
+                builder = builder.header(http::header::RETRY_AFTER, *value);
+            }
+            builder.body(Vec::new()).expect("accepted response")
+        };
+        let status_uri = reference.status_uri.as_str();
+
+        for response in [
+            response_with_headers(&[], &["1"]),
+            response_with_headers(&[status_uri, status_uri], &["1"]),
+            response_with_headers(&[status_uri], &[]),
+            response_with_headers(&[status_uri], &["1", "1"]),
+            response_with_headers(&[status_uri], &["0"]),
+            response_with_headers(&[status_uri], &["01"]),
+            response_with_headers(&[status_uri], &["+1"]),
+            response_with_headers(&[status_uri], &["1, 1"]),
+            response_with_headers(&[status_uri], &["18446744073709551616"]),
+        ] {
+            let _error = Client::validate_offline_operation_reference(
+                &response,
+                &reference,
+                &operation_id,
+                OfflineOperationKind::TopUp,
+                42,
+            )
+            .expect_err("ambiguous or noncanonical acceptance headers must fail closed");
+        }
+
+        let maximum = response_with_headers(&[status_uri], &["18446744073709551615"]);
+        Client::validate_offline_operation_reference(
+            &maximum,
+            &reference,
+            &operation_id,
+            OfflineOperationKind::TopUp,
+            42,
+        )
+        .expect("the maximum positive decimal Retry-After is canonical");
     }
     #[test]
     fn negotiated_decoder_rejects_retired_and_missing_media_types() {

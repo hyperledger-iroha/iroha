@@ -6,7 +6,11 @@ import { AccountAddress } from "./address.js";
 import { canonicalizeMultihashHex } from "./normalizers.js";
 import { publicKeyFromPrivate, signEd25519 } from "./crypto.js";
 import { getNativeBinding } from "./native.js";
-import { NetworkId, networkIdBytes } from "./networkId.js";
+import { networkIdBytes } from "./networkId.js";
+import {
+  networkIdFromNoritoJson,
+  networkIdToNoritoJson,
+} from "./networkIdNoritoJson.js";
 
 const DEFAULT_CHUNK_SIZE = 262_144;
 const DEFAULT_ERASURE_PROFILE = {
@@ -37,7 +41,7 @@ const DA_INGEST_REQUEST_CONTENT_DOMAIN_V1 = Buffer.from(
 
 export function buildDaIngestRequest(options = {}) {
   networkIdBytes(options.networkId, "networkId");
-  const networkId = options.networkId.toString();
+  const networkId = networkIdToNoritoJson(options.networkId, "networkId");
   const owner = requireNonEmptyString(options.owner, "owner");
   if (owner !== options.owner) {
     throw new TypeError("owner must be an exact canonical I105 account id");
@@ -248,9 +252,7 @@ export function computeDaIngestSigningDigest(requestInput) {
   });
 
   const contentHash = Buffer.from(blake3(Buffer.concat(contentParts)));
-  const networkId = NetworkId.parse(
-    requireNonEmptyString(request.network_id, "network_id"),
-  );
+  const networkId = networkIdFromNoritoJson(request.network_id, "network_id");
   const owner = requireNonEmptyString(request.owner, "owner");
   const ownerAddress = AccountAddress.fromI105(owner);
   const payloadHash = fixedDigestFromTuple(request.payload_hash, "payload_hash");

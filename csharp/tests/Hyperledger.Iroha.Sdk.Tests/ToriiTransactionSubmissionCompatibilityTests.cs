@@ -174,6 +174,7 @@ public sealed class ToriiTransactionSubmissionCompatibilityTests
     {
         return new TransactionBuilder(
             NetworkId.Parse(CanonicalNetworkId),
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             CanonicalAccountId,
             FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>()))
             .TransferAsset(
@@ -193,7 +194,8 @@ public sealed class ToriiTransactionSubmissionCompatibilityTests
             new ToriiClientOptions
             {
                 LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(CanonicalNetworkId)),
+                    NetworkId.Parse(CanonicalNetworkId),
+                    global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),

@@ -666,13 +666,16 @@ KAGEMUSHA_JNI_METHODS=(
   nativeProjectActiveVerifierV2
   nativeProjectAuthenticatedArtifactSetV4
   nativeProjectInitResultV4
+  nativeProjectOperationReferenceV4
   nativeProjectOperationStatusV4
   nativeProjectPeerPaymentV4
   nativeProjectReadinessV4
   nativeProjectRecipientRequestV2
   nativeProjectRecipientReceiveOfferV2
   nativeProjectRedeemBuildResultV4
+  nativeProjectRedeemSubmissionRequestV4
   nativeProjectSplitResultV4
+  nativeProjectTopUpSubmissionRequestV4
   nativeProjectVerifyResultV4
   nativeValidateSpendableBranchV4
   nativeValidateTopUpProvenanceV4
@@ -2033,46 +2036,104 @@ PY
 
 check_android_kagemusha_source_contract() {
   local rust_source="$ROOT_DIR/crates/connect_norito_bridge/src/lib.rs"
+  local rust_platform_source="$ROOT_DIR/crates/connect_norito_bridge/src/platform_jni.rs"
+  local rust_exports_source="$ROOT_DIR/crates/connect_norito_bridge/src/platform_jni/part_3.rs"
   local kotlin_source="$ROOT_DIR/kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
   local java_source="$ROOT_DIR/java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
   local android_keymint_source="$ROOT_DIR/java/iroha_android/android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaAndroidKeyMint.java"
-  local namespace
-  local expected_jni=()
 
   if [[ -f "$rust_source" ]]; then
-    for namespace in org_hyperledger_iroha_sdk_offline org_hyperledger_iroha_android_offline; do
-      local method
-      for method in "${KAGEMUSHA_JNI_METHODS[@]}"; do
-        expected_jni+=("Java_${namespace}_KagemushaRecursiveSpendProver_${method}")
-      done
-    done
-    if ! run_isolated_checker_python - "$rust_source" "${expected_jni[@]}" <<'PY'
+    if [[ ! -f "$rust_platform_source" || ! -f "$rust_exports_source" ]]; then
+      fail "Rust bridge Kagemusha JNI source closure is incomplete"
+    elif ! run_isolated_checker_python - \
+      "$rust_source" "$rust_platform_source" "$rust_exports_source" -- \
+      "${KAGEMUSHA_JNI_METHODS[@]}" <<'PY'
+from pathlib import Path
 import re
 import sys
 
-path = sys.argv[1]
-expected = set(sys.argv[2:])
-text = open(path, "r", encoding="utf-8").read()
-actual = set(re.findall(
-    r'fn\s+(Java_org_hyperledger_iroha_(?:sdk|android)_offline_'
-    r'KagemushaRecursiveSpendProver_[A-Za-z0-9_]+)\s*\(',
-    text,
-))
+separator = sys.argv.index("--")
+lib_path, platform_path, exports_path = map(Path, sys.argv[1:separator])
+expected = set(sys.argv[separator + 1:])
+lib_text = lib_path.read_text(encoding="utf-8")
+platform_text = platform_path.read_text(encoding="utf-8")
+text = exports_path.read_text(encoding="utf-8")
+errors = []
+
+if not re.search(r"\bmod\s+platform_jni\s*;", lib_text):
+    errors.append("Rust bridge does not compile the platform_jni module")
+for part in ("part_1.rs", "part_2.rs", "part_3.rs"):
+    if f'include!("platform_jni/{part}");' not in platform_text:
+        errors.append(f"Rust platform_jni source closure omits {part}")
+
+invocation_marker = "kagemusha_sdk_android_forwarders! {"
+end_marker = "\npub(super) fn ensure_min_array_length"
+if invocation_marker not in text or end_marker not in text:
+    errors.append("Rust bridge Kagemusha paired-forwarder inventory is unavailable")
+    actual = set()
+else:
+    body = text.split(invocation_marker, 1)[1].split(end_marker, 1)[0]
+    actual = set(re.findall(r"^\s*(native[A-Za-z0-9_]+)\s*\{", body, re.MULTILINE))
+
+explicit = {"nativeBridgeAbiVersion", "nativePastaCycleV4BackendAvailable"}
+actual.update(explicit)
 missing = sorted(expected - actual)
 retired_or_extra = sorted(actual - expected)
 if missing:
-    print(
-        "[mobile-sdk-artifacts] ERROR: Rust bridge is missing Kagemusha JNI exports: "
-        + ", ".join(missing),
-        file=sys.stderr,
+    errors.append(
+        "Rust bridge is missing Kagemusha JNI exports: " + ", ".join(missing)
     )
 if retired_or_extra:
-    print(
-        "[mobile-sdk-artifacts] ERROR: Rust bridge exposes retired or unexpected "
-        "Kagemusha JNI exports: " + ", ".join(retired_or_extra),
-        file=sys.stderr,
+    errors.append(
+        "Rust bridge exposes retired or unexpected Kagemusha JNI exports: "
+        + ", ".join(retired_or_extra)
     )
-raise SystemExit(1 if missing or retired_or_extra else 0)
+
+for namespace in ("sdk", "android"):
+    prefix = (
+        f'"Java_org_hyperledger_iroha_{namespace}_offline_'
+        'KagemushaRecursiveSpendProver_"'
+    )
+    if prefix not in text:
+        errors.append(f"Rust paired-forwarder macro omits the {namespace} JNI namespace")
+for method in explicit:
+    for namespace in ("sdk", "android"):
+        symbol = (
+            f"Java_org_hyperledger_iroha_{namespace}_offline_"
+            f"KagemushaRecursiveSpendProver_{method}"
+        )
+        if symbol not in text:
+            errors.append(f"Rust bridge is missing explicit JNI export {symbol}")
+
+direct_symbols = set(re.findall(
+    r"\bfn\s+(Java_org_hyperledger_iroha_(?:sdk|android)_offline_"
+    r"KagemushaRecursiveSpendProver_[A-Za-z0-9_]+)\s*\(",
+    "\n".join((lib_text, platform_text, text)),
+))
+expected_direct_symbols = {
+    (
+        f"Java_org_hyperledger_iroha_{namespace}_offline_"
+        f"KagemushaRecursiveSpendProver_{method}"
+    )
+    for namespace in ("sdk", "android")
+    for method in explicit
+}
+unexpected_direct_symbols = sorted(direct_symbols - expected_direct_symbols)
+missing_direct_symbols = sorted(expected_direct_symbols - direct_symbols)
+if unexpected_direct_symbols:
+    errors.append(
+        "Rust bridge exposes retired or unexpected Kagemusha JNI exports: "
+        + ", ".join(unexpected_direct_symbols)
+    )
+if missing_direct_symbols:
+    errors.append(
+        "Rust bridge is missing explicit Kagemusha JNI exports: "
+        + ", ".join(missing_direct_symbols)
+    )
+
+for error in errors:
+    print(f"[mobile-sdk-artifacts] ERROR: {error}", file=sys.stderr)
+raise SystemExit(1 if errors else 0)
 PY
     then
       FAILURES=1

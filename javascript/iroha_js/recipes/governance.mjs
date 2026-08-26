@@ -15,7 +15,12 @@
  * to submit them to a Torii node (requires the account to hold the relevant permissions).
  */
 import { Buffer } from "node:buffer";
-import { NetworkId, ToriiClient } from "../src/index.js";
+import {
+  AccountAddress,
+  NetworkId,
+  ToriiClient,
+  publicKeyFromPrivate,
+} from "../src/index.js";
 import {
   buildProposeDeployContractInstruction,
   buildCastPlainBallotInstruction,
@@ -33,9 +38,6 @@ const NETWORK_ID = NetworkId.parse(
   process.env.NETWORK_ID ??
     "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
 );
-const AUTHORITY =
-  process.env.AUTHORITY ??
-  "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const PRIVATE_KEY =
   process.env.PRIVATE_KEY_HEX != null
     ? Buffer.from(process.env.PRIVATE_KEY_HEX, "hex")
@@ -43,6 +45,11 @@ const PRIVATE_KEY =
         "CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53",
         "hex",
       );
+const AUTHORITY =
+  process.env.AUTHORITY ??
+  AccountAddress.fromAccount({
+    publicKey: publicKeyFromPrivate(PRIVATE_KEY),
+  }).toI105(369);
 const REQUESTED_FEE_PAYMENT = process.env.FEE_SPONSOR_PROGRAM
   ? {
       payer: "sponsor",

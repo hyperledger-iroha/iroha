@@ -26,6 +26,10 @@ function source(path) {
   return readFileSync(`${REPO_ROOT}/${path}`, "utf8");
 }
 
+function productionRustSource(path) {
+  return source(path).split("\n#[cfg(test)]\nmod tests {")[0];
+}
+
 test("JavaScript, Python, and the Rust data model pin one canonical protocol order", () => {
   assert.deepEqual(SOURCE_IDS, EXPECTED_IDS);
   assert.deepEqual(DIST_IDS, EXPECTED_IDS);
@@ -39,14 +43,17 @@ test("JavaScript, Python, and the Rust data model pin one canonical protocol ord
 });
 
 test("native SDK archives expose local compiled profiles without synthesizing readiness", () => {
+  assert.match(
+    source("crates/iroha_core/src/privacy_profiles.rs"),
+    /PrivacyProtocolIdV1::ALL/,
+  );
   for (const path of [
     "crates/connect_norito_bridge/src/lib.rs",
     "crates/iroha_js_host/src/lib.rs",
     "python/iroha_python/iroha_python_rs/src/lib.rs",
   ]) {
-    const rust = source(path);
+    const rust = productionRustSource(path);
     assert.match(rust, /PrivacyCompiledProfileCatalogV1/);
-    assert.match(rust, /PrivacyProtocolIdV1::ALL/);
     assert.match(rust, /compiled_privacy_profile_catalog_v1/);
     assert.match(
       rust,
@@ -63,12 +70,12 @@ test("native SDK archives expose local compiled profiles without synthesizing re
   }
 });
 
-test("only a fresh committed Torii view supplies authoritative privacy readiness", () => {
+test("Torii supplies committed state while SDK admission requires the Exact12 manifest", () => {
   const runtime = source("crates/iroha_torii/src/runtime.rs");
   const state = source("crates/iroha_core/src/state.rs");
   assert.match(
     runtime,
-    /handle_privacy_capabilities[\s\S]*PrivacyCapabilitySnapshotV1[\s\S]*state\s*\.view\(\)\s*\.privacy_capability_snapshot_v1\(\)/,
+    /handle_privacy_capabilities[\s\S]*PrivacyExact12CapabilityManifestV1[\s\S]*state\s*\.view\(\)[\s\S]*privacy_capability_snapshot_v1\(\)[\s\S]*exact12_capability_manifest_v1\(\)/,
   );
   assert.match(
     state,
@@ -78,8 +85,10 @@ test("only a fresh committed Torii view supplies authoritative privacy readiness
   const javascriptParser = source(
     "javascript/iroha_js/src/privacyCapabilities.js",
   );
-  assert.match(javascriptParser, /PrivacyCapabilitySnapshotV1/);
-  assert.match(javascriptParser, /privacyCapabilityTransportV1/);
+  assert.match(javascriptParser, /LegacyPrivacyCapabilityInspectionSnapshotV1/);
+  assert.match(javascriptParser, /legacyPrivacyCapabilityInspectionTransportV1/);
+  assert.match(javascriptParser, /diagnostic only/);
+  assert.match(javascriptParser, /getPrivacyExact12CapabilityManifestV1/);
   for (const client of [
     source("javascript/iroha_js/src/toriiClient.js"),
     source("javascript/iroha_js/src/toriiBrowserClient.js"),

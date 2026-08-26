@@ -26,7 +26,9 @@ public sealed class SoraFsReputationClientTests
         Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
     private static readonly NetworkId ExactNetworkId = NetworkId.Parse(
         "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149");
-    private static readonly ToriiLocalSigningContext LocalSigningContext = new(ExactNetworkId);
+    private static readonly ToriiLocalSigningContext LocalSigningContext = new(
+        ExactNetworkId,
+        AccountAddress.DefaultChainDiscriminant);
 
     [Fact]
     public async Task AuthenticatedReadsUseExactOneShotEmptyGetsAndFreshCanonicalSignatures()

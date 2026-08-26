@@ -549,11 +549,94 @@ internal class KagemushaRecursiveSpendProver private constructor() {
         fun decodeRedeemSubmissionRequest(archive: ByteArray): RedeemSubmissionRequest =
             RedeemSubmissionRequest(archive)
 
+        internal class SubmissionRequestProjection(
+            networkId: ByteArray,
+            operationId: ByteArray,
+            val submittedAtMilliseconds: String,
+        ) {
+            private val networkIdValue = requireNetworkIdBytes(networkId)
+            private val operationIdValue = requireDigest(operationId, "operationId")
+
+            fun networkId(): ByteArray = networkIdValue.copyOf()
+
+            fun operationId(): ByteArray = operationIdValue.copyOf()
+        }
+
+        internal class OperationReferenceProjection(
+            operationId: ByteArray,
+            val kind: OperationKind,
+            transactionHash: ByteArray,
+            val statusUri: String,
+            val submittedAtMilliseconds: String,
+        ) {
+            private val operationIdValue = requireDigest(operationId, "operationId")
+            private val transactionHashValue = requireDigest(transactionHash, "transactionHash")
+
+            fun operationId(): ByteArray = operationIdValue.copyOf()
+
+            fun transactionHash(): ByteArray = transactionHashValue.copyOf()
+        }
+
+        @JvmSynthetic
+        @JvmStatic
+        internal fun projectTopUpSubmissionRequest(request: TopUpRequest): SubmissionRequestProjection {
+            requireArtifactBridge()
+            val fields = nativeProjectTopUpSubmissionRequestV4(request.noritoEncoded())
+            return submissionRequestProjection(fields, "top-up")
+        }
+
+        @JvmSynthetic
+        @JvmStatic
+        internal fun projectRedeemSubmissionRequest(
+            request: RedeemSubmissionRequest,
+        ): SubmissionRequestProjection {
+            requireArtifactBridge()
+            val fields = nativeProjectRedeemSubmissionRequestV4(request.noritoEncoded())
+            return submissionRequestProjection(fields, "redeem")
+        }
+
+        @JvmSynthetic
+        @JvmStatic
+        internal fun projectOperationReference(
+            reference: OperationReference,
+        ): OperationReferenceProjection {
+            requireArtifactBridge()
+            val fields = nativeProjectOperationReferenceV4(reference.noritoEncoded())
+            requireFieldCount(fields, 6, "operation reference projection")
+            check(canonicalText(fields[2], "operationState") == "pending") {
+                "native Kagemusha operation reference state is invalid"
+            }
+            val kind = when (canonicalText(fields[1], "operationKind")) {
+                "top_up" -> OperationKind.TOP_UP
+                "redeem" -> OperationKind.REDEEM
+                else -> error("native Kagemusha operation reference kind is invalid")
+            }
+            return OperationReferenceProjection(
+                fields[0],
+                kind,
+                fields[3],
+                canonicalText(fields[4], "statusUri"),
+                unsignedIntegerText(fields[5], "submittedAtMilliseconds"),
+            )
+        }
+
+        private fun submissionRequestProjection(
+            fields: Array<ByteArray>?,
+            label: String,
+        ): SubmissionRequestProjection {
+            requireFieldCount(fields, 3, "$label submission request projection")
+            return SubmissionRequestProjection(
+                checkNotNull(fields)[0],
+                fields[1],
+                unsignedIntegerText(fields[2], "submittedAtMilliseconds"),
+            )
+        }
+
         @JvmStatic
         fun projectOperationStatus(status: OperationStatus): OperationStatusProjection {
             requireArtifactBridge()
             val fields = nativeProjectOperationStatusV4(status.noritoEncoded())
-            requireFieldCount(fields, 10, "operation status projection")
+            requireFieldCount(fields, 11, "operation status projection")
             val state = when (canonicalText(fields[0], "operationState")) {
                 "pending" -> OperationState.PENDING
                 "applied" -> OperationState.APPLIED
@@ -569,6 +652,18 @@ internal class KagemushaRecursiveSpendProver private constructor() {
                 ?.let { longInteger(it, "operationHeightOrSubmittedAt") }
             val serverTime = fields[5].takeIf { it.isNotEmpty() }
                 ?.let { longInteger(it, "serverTimeMilliseconds") }
+            if (state == OperationState.APPLIED) {
+                check(heightOrSubmittedAt != null && heightOrSubmittedAt > 0) {
+                    "native Kagemusha applied operation height must be positive"
+                }
+                check(serverTime != null && serverTime > 0) {
+                    "native Kagemusha applied operation server time must be positive"
+                }
+            } else if (state == OperationState.PENDING) {
+                check(heightOrSubmittedAt != null && heightOrSubmittedAt > 0) {
+                    "native Kagemusha pending operation submission time must be positive"
+                }
+            }
             val finalizedTopUp = if (fields[6].isNotEmpty() || fields[7].isNotEmpty()) {
                 check(state == OperationState.APPLIED && kind == OperationKind.TOP_UP &&
                     fields[6].isNotEmpty() && fields[7].isNotEmpty() &&
@@ -580,6 +675,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
                     TopUpFinalityProof(fields[7]),
                     heightOrSubmittedAt,
                     serverTime,
+                    fields[10],
                 )
             } else {
                 null
@@ -1979,6 +2075,15 @@ internal class KagemushaRecursiveSpendProver private constructor() {
             value.toString(Charsets.US_ASCII).toLongOrNull()
                 ?: error("native Kagemusha $field is invalid")
 
+        private fun unsignedIntegerText(value: ByteArray, field: String): String {
+            val text = value.toString(Charsets.US_ASCII)
+            check(text.isNotEmpty() && text.all(Char::isDigit) &&
+                (text == "0" || text.first() != '0')) {
+                "native Kagemusha $field is invalid"
+            }
+            return text
+        }
+
         private fun outputMembershipSiblings(
             flattened: ByteArray,
             field: String,
@@ -2194,6 +2299,14 @@ internal class KagemushaRecursiveSpendProver private constructor() {
             return value.copyOf()
         }
 
+        private fun requireNetworkIdBytes(value: ByteArray?): ByteArray {
+            require(value != null && value.size == 32) {
+                "networkId must contain exactly 32 bytes"
+            }
+            require(value.any { it.toInt() != 0 }) { "networkId must be non-zero" }
+            return value.copyOf()
+        }
+
         private fun requireFinalityCheckpointContext(value: ByteArray?, name: String): ByteArray =
             requireDigest(value, name).also { context ->
                 if (context.last().toInt() and 1 != 1) {
@@ -2242,7 +2355,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
                         header.flags == NoritoHeader.COMPACT_LEN &&
                         decoded.payload.isNotEmpty() &&
                         archive.size == NoritoHeader.HEADER_LENGTH +
-                            peerArchivePadding(schema) + decoded.payload.size &&
+                            canonicalArchivePadding(schema) + decoded.payload.size &&
                         header.encode().contentEquals(
                             archive.copyOfRange(0, NoritoHeader.HEADER_LENGTH),
                         ),
@@ -2255,10 +2368,26 @@ internal class KagemushaRecursiveSpendProver private constructor() {
             }
         }
 
-        private fun peerArchivePadding(schema: String): Int = when (schema) {
+        private fun canonicalArchivePadding(schema: String): Int = when (schema) {
             "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
+            "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestSigningPayloadV2",
             "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2",
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4" -> 8
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpUnsignedV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpAnchorV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpFinalityEvidenceV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemUnsignedV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendInitResultV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitResultV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemBuildResultV4",
+            "connect_norito_bridge::KagemushaRecursiveSpendInitLocalRequestV4",
+            "connect_norito_bridge::KagemushaRecursiveSpendVerifyLocalRequestV4",
+            "connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV4",
+            "iroha.torii.v1.offline.top_up.request",
+            "iroha.torii.v1.offline.redeem.request",
+            "iroha_torii_shared::offline_api::OfflineOperationStatus" -> 8
             "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2" -> 0
             else -> 0
         }
@@ -2386,6 +2515,9 @@ internal class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic private external fun nativeFinalizeTopUpV4(unsigned: ByteArray, authorization: ByteArray): ByteArray
         @JvmStatic private external fun nativeFinalizeRedeemV4(buildResult: ByteArray, authorization: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativePrepareTopUpV4(networkId: ByteArray, chainDiscriminant: Int, assetDefinition: ByteArray, payer: ByteArray, atomicUnits: ByteArray, scale: Int, operationId: ByteArray, spendKey: ByteArray, rho: ByteArray, diversifier: ByteArray, leafIndex: Int, flattenedSiblings: ByteArray, directions: ByteArray, root: ByteArray, shieldVerifierCommitment: ByteArray, artifactBinding: ByteArray): Array<ByteArray>
+        @JvmStatic private external fun nativeProjectTopUpSubmissionRequestV4(request: ByteArray): Array<ByteArray>
+        @JvmStatic private external fun nativeProjectRedeemSubmissionRequestV4(request: ByteArray): Array<ByteArray>
+        @JvmStatic private external fun nativeProjectOperationReferenceV4(reference: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeProjectOperationStatusV4(status: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeBranchClaimsConflictV2(left: ByteArray, right: ByteArray): Boolean
         @JvmStatic private external fun nativePrepareRedemptionChangeV4(bundle: ByteArray, inputOpening: ByteArray, atomicUnits: ByteArray, scale: Int, operationId: ByteArray, entropy: ByteArray): Array<ByteArray>
@@ -2555,7 +2687,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
     /** Proof-bound output membership state carried atomically with an accepted branch. */
     class NoteMembershipWitness internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaNoteMembershipWitnessV2",
+        "iroha_data_model::offline::model::KagemushaNoteMembershipWitnessV2",
         "noteMembershipWitness",
         MAX_PEER_ARCHIVE_BYTES_V2,
     )
@@ -2568,7 +2700,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
      */
     class NoteOpening internal constructor(archive: ByteArray) : CanonicalArchive(
             archive,
-            "KagemushaNoteOpeningV2",
+            "connect_norito_bridge::KagemushaNoteOpeningV2",
             "noteOpening",
             MAX_LOCAL_REQUEST_ARCHIVE_BYTES,
         ), AutoCloseable {
@@ -2790,7 +2922,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
 
     class RecipientRequestPayload internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecipientPaymentRequestSigningPayloadV2",
+        "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestSigningPayloadV2",
         "recipientRequestPayload",
         MAX_PEER_ARCHIVE_BYTES_V2,
     )
@@ -2798,7 +2930,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
     /** Opaque ABI-22 recursive state. */
     class BundleV4 internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendBundleV4",
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV4",
         "bundleV4",
         MAX_LOCAL_REQUEST_ARCHIVE_BYTES,
     )
@@ -2806,7 +2938,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
     /** Opaque current lineage claim; native comparison implements all overlap rules. */
     class BranchClaim internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendBranchClaimV2",
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendBranchClaimV2",
         "branchClaim",
         MAX_PEER_ARCHIVE_BYTES_V2,
     ) {
@@ -2818,14 +2950,14 @@ internal class KagemushaRecursiveSpendProver private constructor() {
 
     class ArtifactBindingV4 internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendArtifactBindingV4",
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendArtifactBindingV4",
         "artifactBinding",
         MAX_MANIFEST_BYTES,
     )
 
     class TopUpUnsigned internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendTopUpUnsignedV4",
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpUnsignedV4",
         "topUpUnsigned",
         MAX_TORII_TOP_UP_REQUEST_BYTES_V4,
     )
@@ -2840,21 +2972,21 @@ internal class KagemushaRecursiveSpendProver private constructor() {
     /** Finalized ABI-22 top-up receipt with a V4 artifact binding. */
     class TopUpAnchorV4 internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendTopUpAnchorV4",
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpAnchorV4",
         "topUpAnchorV4",
         MAX_TORII_RESPONSE_BYTES,
     )
 
     class TopUpFinalityProof internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaTopUpFinalityProofV2",
+        "iroha_data_model::offline::model::KagemushaTopUpFinalityProofV2",
         "topUpFinalityProof",
         MAX_TORII_RESPONSE_BYTES,
     )
 
     class TopUpFinalityRosterArtifact internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaTopUpFinalityRosterArtifactV2",
+        "iroha_data_model::offline::model::KagemushaTopUpFinalityRosterArtifactV2",
         "topUpFinalityRosterArtifact",
         MAX_TORII_RESPONSE_BYTES,
     )
@@ -2862,7 +2994,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
     /** Complete V4 origin plus its stable compact-finality proof. */
     class TopUpFinalityEvidenceV4 internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendTopUpFinalityEvidenceV4",
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpFinalityEvidenceV4",
         "topUpFinalityEvidenceV4",
         MAX_TORII_RESPONSE_BYTES,
     )
@@ -2870,7 +3002,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
     /** Complete bounded origin-finality inventory required to spend or verify one V4 bundle. */
     class TopUpProvenanceV4 internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendTopUpProvenanceV4",
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpProvenanceV4",
         "topUpProvenanceV4",
         MAX_TOP_UP_PROVENANCE_ARCHIVE_BYTES_V4,
     )
@@ -2884,21 +3016,21 @@ internal class KagemushaRecursiveSpendProver private constructor() {
 
     class RedeemUnsignedV4 internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendRedeemUnsignedV4",
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemUnsignedV4",
         "redeemUnsignedV4",
         MAX_TORII_REDEEM_REQUEST_BYTES_V4,
     )
 
     class RequestAuthorizationPreparationArchive internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRequestAuthorizationPreparationV2",
+        "connect_norito_bridge::KagemushaRequestAuthorizationPreparationV2",
         "requestAuthorizationPreparation",
         MAX_REQUEST_AUTHORIZATION_BYTES,
     )
 
     class RequestAuthorization internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRequestAuthorizationV2",
+        "iroha_data_model::offline::model::KagemushaRequestAuthorizationV2",
         "requestAuthorization",
         MAX_REQUEST_AUTHORIZATION_BYTES,
     )
@@ -3156,7 +3288,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
     /** Local secret-bearing initialization input. Close it if it is not submitted. */
     class InitRequestV4 internal constructor(archive: ByteArray) : CanonicalArchive(
             archive,
-            "KagemushaRecursiveSpendInitLocalRequestV4",
+            "connect_norito_bridge::KagemushaRecursiveSpendInitLocalRequestV4",
             "initRequest",
             MAX_LOCAL_REQUEST_ARCHIVE_BYTES,
         ), AutoCloseable {
@@ -3172,7 +3304,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
         changeOpening: NoteOpening? = null,
     ) : CanonicalArchive(
             archive,
-            "KagemushaRecursiveSpendAppendLocalRequestV4",
+            "connect_norito_bridge::KagemushaRecursiveSpendAppendLocalRequestV4",
             "appendRequest",
             MAX_LOCAL_REQUEST_ARCHIVE_BYTES,
         ), AutoCloseable {
@@ -3193,7 +3325,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
 
     class VerifyRequestV4 internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendVerifyLocalRequestV4",
+        "connect_norito_bridge::KagemushaRecursiveSpendVerifyLocalRequestV4",
         "verifyRequest",
         MAX_LOCAL_REQUEST_ARCHIVE_BYTES,
     )
@@ -3204,7 +3336,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
         changeOpening: NoteOpening? = null,
     ) : CanonicalArchive(
             archive,
-            "KagemushaRecursiveSpendRedeemLocalRequestV4",
+            "connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV4",
             "redeemRequest",
             MAX_LOCAL_REQUEST_ARCHIVE_BYTES,
         ), AutoCloseable {
@@ -3225,7 +3357,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
 
     class InitResultV4 internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendInitResultV4",
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendInitResultV4",
         "initResult",
         MAX_LOCAL_RESULT_ARCHIVE_BYTES,
     )
@@ -3235,7 +3367,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
         changeOpening: NoteOpening? = null,
     ) : CanonicalArchive(
             archive,
-        "KagemushaRecursiveSpendSplitResultV4",
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitResultV4",
             "splitResult",
             MAX_LOCAL_RESULT_ARCHIVE_BYTES,
         ), AutoCloseable {
@@ -3256,7 +3388,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
 
     class VerifyResultV4 internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendVerifyResultV4",
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV4",
         "verifyResult",
         MAX_LOCAL_RESULT_ARCHIVE_BYTES,
     )
@@ -3266,7 +3398,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
         changeOpening: NoteOpening? = null,
     ) : CanonicalArchive(
             archive,
-        "KagemushaRecursiveSpendRedeemBuildResultV4",
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemBuildResultV4",
             "redeemBuildResult",
             MAX_LOCAL_RESULT_ARCHIVE_BYTES,
         ), AutoCloseable {
@@ -3717,7 +3849,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
 
     class AcknowledgementPayload internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaReceiverAcknowledgementPayloadV2",
+        "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementPayloadV2",
         "acknowledgementPayload",
         MAX_PEER_ARCHIVE_BYTES,
     )
@@ -3891,7 +4023,7 @@ internal class KagemushaRecursiveSpendProver private constructor() {
     /** Legacy command-specific artifact diagnostics; not a discovery response. */
     class Readiness internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "OfflineReadiness",
+        "iroha_data_model::offline::status::OfflineReadiness",
         "readiness",
         MAX_TORII_RESPONSE_BYTES,
     )
@@ -4053,14 +4185,14 @@ internal class KagemushaRecursiveSpendProver private constructor() {
 
     class OperationReference internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "OfflineOperationReference",
+        "iroha_torii_shared::offline_api::OfflineOperationReference",
         "operationReference",
         MAX_TORII_RESPONSE_BYTES,
     )
 
     class OperationStatus internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "OfflineOperationStatus",
+        "iroha_torii_shared::offline_api::OfflineOperationStatus",
         "operationStatus",
         MAX_TORII_RESPONSE_BYTES,
     )
@@ -4076,7 +4208,12 @@ internal class KagemushaRecursiveSpendProver private constructor() {
         val finalityProof: TopUpFinalityProof,
         val finalizedBlockHeight: Long,
         val serverTimeMilliseconds: Long,
-    )
+        networkId: ByteArray,
+    ) {
+        private val networkIdValue = requireNetworkIdBytes(networkId)
+
+        internal fun networkId(): ByteArray = networkIdValue.copyOf()
+    }
 
     class OperationStatusProjection internal constructor(
         val state: OperationState,
@@ -4157,20 +4294,30 @@ internal class KagemushaRecursiveSpendProver private constructor() {
         fun submitTopUp(
             request: TopUpRequest,
             operationId: String,
-        ): CompletableFuture<OperationReference> = submitCommand(
-            TOP_UP_PATH,
-            request.noritoEncoded(),
-            operationId,
-        )
+        ): CompletableFuture<OperationReference> {
+            val projection = projectTopUpSubmissionRequest(request)
+            return submitCommand(
+                TOP_UP_PATH,
+                request.noritoEncoded(),
+                operationId,
+                OperationKind.TOP_UP,
+                projection,
+            )
+        }
 
         fun submitRedeem(
             request: RedeemSubmissionRequest,
             operationId: String,
-        ): CompletableFuture<OperationReference> = submitCommand(
-            REDEEM_PATH,
-            request.noritoEncoded(),
-            operationId,
-        )
+        ): CompletableFuture<OperationReference> {
+            val projection = projectRedeemSubmissionRequest(request)
+            return submitCommand(
+                REDEEM_PATH,
+                request.noritoEncoded(),
+                operationId,
+                OperationKind.REDEEM,
+                projection,
+            )
+        }
 
         fun getOperation(operationId: String): CompletableFuture<OperationStatus> {
             val id = requireOperationId(operationId)
@@ -4182,15 +4329,38 @@ internal class KagemushaRecursiveSpendProver private constructor() {
                     .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
                     .build(),
                 200,
-            ).thenApply { OperationStatus(it.body) }
+            ).thenApply { response ->
+                val status = OperationStatus(response.body)
+                val projected = projectOperationStatus(status)
+                check(hex(projected.operationId()) == id) {
+                    "Kagemusha operation status id does not match the requested resource"
+                }
+                projected.finalizedTopUp?.let { finalizedTopUp ->
+                    check(
+                        finalizedTopUp.networkId()
+                            .contentEquals(localSigningContext.networkId().bytes()),
+                    ) {
+                        "Kagemusha finalized top-up network does not match the local signing context"
+                    }
+                }
+                status
+            }
         }
 
         private fun submitCommand(
             path: String,
             request: ByteArray,
             operationId: String,
+            expectedKind: OperationKind,
+            requestProjection: SubmissionRequestProjection,
         ): CompletableFuture<OperationReference> {
             val id = requireOperationId(operationId)
+            require(hex(requestProjection.operationId()) == id) {
+                "operationId does not match the signed request"
+            }
+            require(
+                requestProjection.networkId().contentEquals(localSigningContext.networkId().bytes()),
+            ) { "signed request network does not match the local signing context" }
             return execute(
                 TransportRequest.builder()
                     .setMethod("POST")
@@ -4202,8 +4372,38 @@ internal class KagemushaRecursiveSpendProver private constructor() {
                     .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
                     .build(),
                 202,
-            ).thenApply { OperationReference(it.body) }
+            ).thenApply { response ->
+                val reference = OperationReference(response.body)
+                val projected = projectOperationReference(reference)
+                check(hex(projected.operationId()) == id) {
+                    "Kagemusha operation response id does not match the signed request"
+                }
+                check(projected.kind == expectedKind) {
+                    "Kagemusha operation response kind does not match the signed request"
+                }
+                check(projected.submittedAtMilliseconds == requestProjection.submittedAtMilliseconds) {
+                    "Kagemusha operation response submission time does not match the signed request"
+                }
+                val expectedStatusUri = "$OPERATIONS_PATH/$id"
+                check(projected.statusUri == expectedStatusUri) {
+                    "Kagemusha operation response contains a non-canonical status URI"
+                }
+                val locations = response.headers["Location"].orEmpty()
+                check(locations.size == 1 && locations.single() == expectedStatusUri) {
+                    "Kagemusha operation response Location does not match the typed status URI"
+                }
+                val retryAfter = response.headers["Retry-After"].orEmpty()
+                check(retryAfter.size == 1 && isPositiveUnsignedLong(retryAfter.single())) {
+                    "Kagemusha operation response has no valid Retry-After"
+                }
+                reference
+            }
         }
+
+        private fun isPositiveUnsignedLong(value: String): Boolean =
+            value.isNotEmpty() && value.first() in '1'..'9' &&
+                value.drop(1).all { it in '0'..'9' } &&
+                runCatching { java.lang.Long.parseUnsignedLong(value) }.isSuccess
 
         private fun execute(
             request: TransportRequest,

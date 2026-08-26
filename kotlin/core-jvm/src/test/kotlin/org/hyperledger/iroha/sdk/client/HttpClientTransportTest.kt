@@ -61,6 +61,27 @@ class HttpClientTransportTest {
     private fun testFeePayment(gasLimit: Long? = null): FeePaymentIntent =
         FeePaymentIntent.authority(emptyList(), gasLimit)
 
+    private fun feeQuotePayload(
+        feePayment: FeePaymentIntent,
+        networkId: NetworkId = verifyingKeyNetworkId,
+    ): MutableMap<String, Any?> = linkedMapOf(
+        "domain" to linkedMapOf(
+            "kind" to "network",
+            "value" to networkId.noritoJsonLiteral,
+        ),
+        "authority" to "alice@universal",
+        "creation_time_ms" to 1L,
+        "instructions" to linkedMapOf("Instructions" to emptyList<Any>()),
+        "time_to_live_ms" to 60_000L,
+        "fee_payment" to feePayment.toJsonMap(),
+        "admission_intent" to linkedMapOf<String, Any?>(
+            "intent" to "ordinary",
+            "value" to null,
+        ),
+        "metadata" to emptyMap<String, Any?>(),
+        "attachments" to null,
+    )
+
     private fun testMultisigAccountId(): String =
         AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x37), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
@@ -1860,14 +1881,7 @@ class HttpClientTransportTest {
             executor = executor,
             config = signedClientConfig("https://torii.example/api"),
         )
-        val unsignedPayload = linkedMapOf<String, Any?>(
-            "domain" to linkedMapOf(
-                "kind" to "network",
-                "value" to verifyingKeyNetworkId.literal,
-            ),
-            "authority" to "alice@universal",
-            "fee_payment" to testFeePayment(9_000L).toJsonMap(),
-        )
+        val unsignedPayload = feeQuotePayload(testFeePayment(9_000L))
 
         val quote = transport.quoteFees(unsignedPayload, auth).join()
 
@@ -1914,14 +1928,7 @@ class HttpClientTransportTest {
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private)
-        fun validPayload(): MutableMap<String, Any?> = linkedMapOf(
-            "domain" to linkedMapOf(
-                "kind" to "network",
-                "value" to verifyingKeyNetworkId.literal,
-            ),
-            "authority" to "alice@universal",
-            "fee_payment" to testFeePayment(9_000L).toJsonMap(),
-        )
+        fun validPayload(): MutableMap<String, Any?> = feeQuotePayload(testFeePayment(9_000L))
 
         val invalid = buildList {
             for (field in listOf("chain", "chainId", "chain_id")) {
@@ -1933,7 +1940,20 @@ class HttpClientTransportTest {
             add(validPayload().apply {
                 this["domain"] = mapOf(
                     "kind" to "network",
-                    "value" to verifyingKeyNetworkId.literal.uppercase(),
+                    "value" to verifyingKeyNetworkId.literal,
+                )
+            })
+            add(validPayload().apply {
+                this["domain"] = mapOf(
+                    "kind" to "network",
+                    "value" to verifyingKeyNetworkId.noritoJsonLiteral.lowercase(),
+                )
+            })
+            add(validPayload().apply {
+                val canonical = verifyingKeyNetworkId.noritoJsonLiteral
+                this["domain"] = mapOf(
+                    "kind" to "network",
+                    "value" to canonical.dropLast(1) + if (canonical.last() == '0') '1' else '0',
                 )
             })
             add(validPayload().apply {
@@ -1943,12 +1963,42 @@ class HttpClientTransportTest {
                     "chain" to "legacy",
                 )
             })
+            for (field in listOf(
+                "domain",
+                "authority",
+                "creation_time_ms",
+                "instructions",
+                "time_to_live_ms",
+                "fee_payment",
+                "admission_intent",
+                "metadata",
+                "attachments",
+            )) {
+                add(validPayload().apply { remove(field) })
+            }
+            add(validPayload().apply { this["unknown"] = true })
+            add(validPayload().apply { this["time_to_live_ms"] = 0L })
+            add(validPayload().apply { this["creation_time_ms"] = -1L })
+            add(validPayload().apply { this["creation_time_ms"] = 1.0 })
+            add(validPayload().apply { this["instructions"] = emptyList<Any>() })
+            add(validPayload().apply { this["nonce"] = 0L })
+            add(validPayload().apply {
+                this["admission_intent"] = mapOf("intent" to "ordinary")
+            })
+            add(validPayload().apply { this["metadata"] = "not-an-object" })
+            add(validPayload().apply { this["metadata"] = mapOf("gas_limit" to 9_000L) })
+            add(validPayload().apply { this["attachments"] = "" })
         }
 
         invalid.forEach { payload ->
             assertFailsWith<IllegalArgumentException> {
                 transport.quoteFees(payload, auth)
             }
+        }
+        assertEquals(0, executor.requestCount)
+
+        assertFailsWith<IllegalArgumentException> {
+            transport.quoteFees(feeQuotePayload(testFeePayment(9_000L), otherNetworkId), auth)
         }
         assertEquals(0, executor.requestCount)
     }
@@ -1984,14 +2034,7 @@ class HttpClientTransportTest {
             )
             val error = assertFailsWith<java.util.concurrent.CompletionException> {
                 transport.quoteFees(
-                    linkedMapOf(
-                        "domain" to linkedMapOf(
-                            "kind" to "network",
-                            "value" to verifyingKeyNetworkId.literal,
-                        ),
-                        "authority" to "alice@universal",
-                        "fee_payment" to requested.toJsonMap(),
-                    ),
+                    feeQuotePayload(requested),
                     auth,
                 ).join()
             }

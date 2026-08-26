@@ -122,6 +122,8 @@ from .client import (
     KaigiRelayDomainMetrics,
     KaigiRelayDetail,
     KaigiRelayHealthSnapshot,
+    KagemushaRedeemRequestV4,
+    KagemushaTopUpRequestV4,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
     NetworkTimeSample,
@@ -131,6 +133,8 @@ from .client import (
     OfflineActiveUnshieldVerifier,
     OfflineActiveRecursiveStepEqVerifier,
     OfflineActiveRecursiveStepEpVerifier,
+    OfflineOperationReference,
+    OfflineOperationStatus,
     OfflineStatus,
     NodeCapabilities,
     MultisigResponse,
@@ -398,15 +402,15 @@ from .privacy import (
     stream_privacy_events,
 )
 from .privacy_catalog import (
-    PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1,
-    PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
+    LEGACY_PRIVACY_CAPABILITY_INSPECTION_MAX_JSON_BYTES_V1,
+    LEGACY_PRIVACY_CAPABILITY_INSPECTION_VERSION_V1,
     PRIVACY_PROTOCOL_IDS_V1,
-    PrivacyCapabilityRowV1,
-    PrivacyCapabilitySnapshotError,
-    PrivacyCapabilitySnapshotV1,
+    LegacyPrivacyCapabilityInspectionRowV1,
+    LegacyPrivacyCapabilityInspectionError,
+    LegacyPrivacyCapabilityInspectionSnapshotV1,
     PrivacyProtocolIdV1,
-    parse_privacy_capability_snapshot_json_v1,
-    parse_privacy_capability_snapshot_v1,
+    parse_legacy_privacy_capability_inspection_json_v1,
+    parse_legacy_privacy_capability_inspection_v1,
 )
 from .privacy_exact12 import (
     PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
@@ -477,6 +481,10 @@ _BASE_EXPORTS = [
     "SseEvent",
     "SseStreamError",
     "EventCursor",
+    "KagemushaTopUpRequestV4",
+    "KagemushaRedeemRequestV4",
+    "OfflineOperationReference",
+    "OfflineOperationStatus",
     "OfflineActiveTransferVerifier",
     "OfflineActiveTopUpShieldVerifier",
     "OfflineActiveUnshieldVerifier",
@@ -755,19 +763,19 @@ _BASE_EXPORTS = [
     "load_privacy_events_from_ndjson",
     "fetch_privacy_events",
     "stream_privacy_events",
-    "PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1",
-    "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
+    "LEGACY_PRIVACY_CAPABILITY_INSPECTION_MAX_JSON_BYTES_V1",
+    "LEGACY_PRIVACY_CAPABILITY_INSPECTION_VERSION_V1",
     "PRIVACY_PROTOCOL_IDS_V1",
-    "PrivacyCapabilityRowV1",
-    "PrivacyCapabilitySnapshotError",
-    "PrivacyCapabilitySnapshotV1",
+    "LegacyPrivacyCapabilityInspectionRowV1",
+    "LegacyPrivacyCapabilityInspectionError",
+    "LegacyPrivacyCapabilityInspectionSnapshotV1",
     "PrivacyProtocolIdV1",
     "PRIVACY_EXACT12_ACTION_OPERATIONS_V1",
     "PrivacyActionOperationViewV1",
     "PrivacyExact12ActionOperationV1",
     "PrivacyExact12ActionRequestV1",
-    "parse_privacy_capability_snapshot_json_v1",
-    "parse_privacy_capability_snapshot_v1",
+    "parse_legacy_privacy_capability_inspection_json_v1",
+    "parse_legacy_privacy_capability_inspection_v1",
     "PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1",
     "PRIVACY_WALLET_WORKER_MAX_EXECUTION_PLAN_BYTES_V1",
     "PRIVACY_WALLET_WORKER_MAX_FRAME_BYTES_V1",
@@ -1249,7 +1257,8 @@ except RuntimeError as _CRYPTO_IMPORT_ERROR:  # pragma: no cover - optional depe
         if name in _CRYPTO_EXPORTS:
             raise RuntimeError(
                 f"{name} requires the compiled iroha_python._crypto extension module. "
-                "Run `maturin develop --release` inside `python/iroha_python` (or install the wheel) "
+                "Run `maturin develop --release --locked` inside `python/iroha_python` "
+                "(or install the wheel) "
                 "to make these bindings available."
             ) from _CRYPTO_IMPORT_ERROR_CAUSE
         raise AttributeError(name) from None

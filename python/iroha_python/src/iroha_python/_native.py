@@ -17,7 +17,8 @@ _EXTENSION_PACKAGE = "iroha_python_rs"
 _EXTENSION_BASENAME = "iroha_python_rs"
 _BUILD_ERROR_MESSAGE = (
     "iroha_python._crypto extension module is not built. "
-    "Run `maturin develop` or install the wheel before importing `iroha_python`."
+    "Run `maturin develop --release --locked` or install the wheel before "
+    "importing `iroha_python`."
 )
 _PYTHON_FRAMEWORK_DEPENDENCY_RE = re.compile(
     r"(?:^|/)Python3?\.framework/Versions/(?P<version>[0-9]+\.[0-9]+)/Python3?$"
@@ -105,20 +106,20 @@ def _assert_extension_compatible(candidate: Path) -> None:
         raise RuntimeError(
             "iroha_python._crypto extension module at "
             f"{candidate} links multiple Python runtimes ({linked}); rebuild it "
-            "with `maturin develop --release`."
+            "with `maturin develop --release --locked`."
         )
     dependency = dependencies[0]
     if dependency.kind == "malformed":
         raise RuntimeError(
             "iroha_python._crypto extension module at "
             f"{candidate} has an unrecognized Python runtime dependency "
-            f"({dependency.path}); rebuild it with `maturin develop --release`."
+            f"({dependency.path}); rebuild it with `maturin develop --release --locked`."
         )
     if dependency.kind == "libpython":
         raise RuntimeError(
             "iroha_python._crypto extension module at "
             f"{candidate} links directly to an alternate Python runtime "
-            f"({dependency.path}); rebuild it with `maturin develop --release` "
+            f"({dependency.path}); rebuild it with `maturin develop --release --locked` "
             "using extension-module dynamic lookup."
         )
     current_version = f"{sys.version_info.major}.{sys.version_info.minor}"
@@ -127,7 +128,7 @@ def _assert_extension_compatible(candidate: Path) -> None:
     raise RuntimeError(
         "iroha_python._crypto extension module at "
         f"{candidate} links Python {dependency.version}, but the current interpreter is "
-        f"Python {current_version}. Rebuild it with `maturin develop --release` "
+        f"Python {current_version}. Rebuild it with `maturin develop --release --locked` "
         f"using Python {current_version}."
     )
 

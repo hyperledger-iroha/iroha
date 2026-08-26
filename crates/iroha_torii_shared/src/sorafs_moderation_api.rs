@@ -466,27 +466,30 @@ mod tests {
     fn every_dto_rejects_unknown_json_fields() {
         let identity = "11".repeat(32);
         let signature = "33".repeat(64);
-        for rejected in [
-            norito::json::from_str::<SorafsModerationDeadLetterPrepareRequestV1>(&format!(
+        for (rejected, unknown_field) in [
+            (norito::json::from_str::<SorafsModerationDeadLetterPrepareRequestV1>(&format!(
                 r#"{{"identity_hex":"{identity}","kind":"native_submission","action":"redrive","authorized_at_unix_ms":1,"identity":"alias"}}"#
             ))
-            .map(|_| ()),
-            norito::json::from_str::<SorafsModerationDeadLetterPrepareResponseV1>(&format!(
+            .map(|_| ()), "identity"),
+            (norito::json::from_str::<SorafsModerationDeadLetterPrepareResponseV1>(&format!(
                 r#"{{"schema":"{SORAFS_MODERATION_DEAD_LETTER_PREPARE_RESPONSE_SCHEMA_V1}","status":"prepared","resolution_norito_b64":"AQIDBA==","signing_message_hex":"{}","payload_hex":"alias"}}"#,
                 "22".repeat(32)
             ))
-            .map(|_| ()),
-            norito::json::from_str::<SorafsModerationDeadLetterApplyRequestV1>(&format!(
+            .map(|_| ()), "payload_hex"),
+            (norito::json::from_str::<SorafsModerationDeadLetterApplyRequestV1>(&format!(
                 r#"{{"resolution_norito_b64":"AQIDBA==","signature_hex":"{signature}","resolution_hex":"alias"}}"#
             ))
-            .map(|_| ()),
-            norito::json::from_str::<SorafsModerationDeadLetterApplyResponseV1>(&format!(
+            .map(|_| ()), "resolution_hex"),
+            (norito::json::from_str::<SorafsModerationDeadLetterApplyResponseV1>(&format!(
                 r#"{{"schema":"{SORAFS_MODERATION_DEAD_LETTER_APPLY_RESPONSE_SCHEMA_V1}","status":"applied","identity_hex":"{identity}","kind":"panel_notification","action":"acknowledge","result":"alias"}}"#
             ))
-            .map(|_| ()),
+            .map(|_| ()), "result"),
         ] {
             let error = rejected.expect_err("unknown DTO field must fail closed");
-            assert_eq!(error.to_string(), "unknown JSON field");
+            assert_eq!(
+                error.to_string(),
+                format!("JSON error: unknown field `{unknown_field}`")
+            );
         }
     }
     #[test]

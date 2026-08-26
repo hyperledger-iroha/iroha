@@ -1117,6 +1117,7 @@ class _MockState:
         response_body = {
             "payload": {
                 "entrypoint_hash": hash_value,
+                "signed_transaction_hash": None,
                 "submitted_at_ms": 0,
                 "submitted_at_height": 0,
                 "signer": "mock-signer",
@@ -1346,36 +1347,6 @@ class _MockState:
         if not isinstance(block_height, int):
             block_height = None
 
-        rejection_reason = entry.get("rejection_reason")
-        if not isinstance(rejection_reason, dict):
-            rejection_reason = None
-        diagnostics = entry.get("diagnostics")
-        if not isinstance(diagnostics, list):
-            diagnostics = []
-        content = entry.get("content")
-        if kind == "Rejected" and not diagnostics:
-            message = content if isinstance(content, str) and content else "transaction rejected"
-            diagnostics = [
-                {
-                    "category": "rejected",
-                    "code": "rejected",
-                    "message": message,
-                    "decoded_reason": message,
-                    "raw_reason": message,
-                }
-            ]
-        summary = entry.get("summary")
-        if not isinstance(summary, str) or not summary.strip():
-            first_message = None
-            if diagnostics and isinstance(diagnostics[0], Mapping):
-                message_value = diagnostics[0].get("message")
-                if isinstance(message_value, str) and message_value:
-                    first_message = message_value
-            summary = (
-                f"{kind}: {first_message}"
-                if first_message
-                else kind
-            )
         scope = entry.get("scope")
         if scope is None:
             scope = "global"
@@ -1388,15 +1359,12 @@ class _MockState:
                 if kind in {"Approved", "Committed"}
                 else "state"
             )
+        status = {"kind": kind}
+        if block_height is not None:
+            status["block_height"] = block_height
         return {
             "hash": hash_value,
-            "status": {
-                "kind": kind,
-                "block_height": block_height,
-                "rejection_reason": rejection_reason,
-            },
-            "summary": summary,
-            "diagnostics": diagnostics,
+            "status": status,
             "scope": str(scope),
             "resolved_from": str(resolved_from),
         }

@@ -190,7 +190,7 @@ public final class HttpClientTransportExactReadTests {
   }
 
   private static void privacyCapabilitiesAreTypedAndExact() {
-    final byte[] body = privacyCapabilitySnapshotJson().getBytes(StandardCharsets.UTF_8);
+    final byte[] body = legacyPrivacyCapabilityInspectionJson().getBytes(StandardCharsets.UTF_8);
     final OneResponseExecutor executor =
         new OneResponseExecutor(
             new TransportResponse(
@@ -285,7 +285,7 @@ public final class HttpClientTransportExactReadTests {
     }
 
     final String retired =
-        privacyCapabilitySnapshotJson()
+        legacyPrivacyCapabilityInspectionJson()
             .replace("zk-ace-pq-authorization-v0", "sis-with-hints");
     boolean retiredRejected = false;
     try {
@@ -469,7 +469,7 @@ public final class HttpClientTransportExactReadTests {
     assert rejected : "hostile privacy capability response must fail closed";
   }
 
-  private static String privacyCapabilitySnapshotJson() {
+  private static String legacyPrivacyCapabilityInspectionJson() {
     final StringBuilder rows = new StringBuilder();
     for (final org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1 protocol :
         org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1.values()) {

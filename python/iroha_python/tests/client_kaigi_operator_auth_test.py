@@ -15,11 +15,11 @@ from iroha_python import NetworkId, OperatorSigningContext, ToriiClient
 from iroha_python.crypto import Ed25519KeyPair
 
 
-NETWORK_BYTES = bytes([0xB6]) * 32
+NETWORK_BYTES = bytes([0xB5]) * 32
 NETWORK_ID = NetworkId.from_bytes(NETWORK_BYTES)
 FOREIGN_NETWORK_BYTES = bytes([0xB7]) * 32
 KEY_PAIR = Ed25519KeyPair.from_private_key(bytes([0x2D]) * 32)
-RELAY_ID = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
+RELAY_ID = KEY_PAIR.default_account_id("kaigi", 0x0171)
 
 
 class RecordingSession(requests.Session):

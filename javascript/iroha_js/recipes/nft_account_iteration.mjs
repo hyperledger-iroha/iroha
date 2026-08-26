@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import {
+  AccountAddress,
   ToriiClient,
   normalizeAccountId,
 } from "../src/index.js";
@@ -8,7 +9,9 @@ import {
 const BASE_URL = process.env.TORII_URL ?? "http://127.0.0.1:8080";
 const ACCOUNT_LITERAL =
   process.env.ACCOUNT_ID ??
-  "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
+  AccountAddress.parseEncoded(
+    "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
+  ).address.toI105(369);
 const AUTH_TOKEN = process.env.TORII_AUTH_TOKEN ?? null;
 const API_TOKEN = process.env.TORII_API_TOKEN ?? null;
 const ALLOW_INSECURE = process.env.TORII_ALLOW_INSECURE === "1";

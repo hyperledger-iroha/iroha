@@ -104,7 +104,7 @@ final class ConnectFixtureLoader {
         let metrics = try loadMetrics(from: metricsURL)
 
         let scenarios = try loadScenarios()
-        let notes = try? String(contentsOf: notesURL)
+        let notes = try? String(contentsOf: notesURL, encoding: .utf8)
 
         return ConnectFixtureBundle(manifest: manifest,
                                     metrics: metrics,

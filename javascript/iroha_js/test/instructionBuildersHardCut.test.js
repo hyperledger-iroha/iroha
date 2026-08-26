@@ -266,6 +266,6 @@ test("native codec rejects every retired confidential instruction", () => {
       nativeBinding.noritoDecodeInstruction(
         Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"),
       ),
-    /decode|canonical|trailing|field|not registered|unknown instruction/u,
+    /decode|canonical|trailing|field|length mismatch|not registered|unknown instruction/u,
   );
 });

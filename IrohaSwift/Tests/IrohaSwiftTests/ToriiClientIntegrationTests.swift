@@ -7,6 +7,18 @@ import XCTest
 final class ToriiClientIntegrationTests: XCTestCase {
     private var mock: ToriiMockProcess?
 
+    private var canonicalRequestAuth: ToriiCanonicalRequestAuth {
+        let seed = Data(repeating: 0x41, count: 32)
+        return ToriiCanonicalRequestAuth(
+            accountId: try! Keypair(privateKeyBytes: seed).accountId(
+                networkPrefix: AccountId.defaultNetworkPrefix
+            ),
+            privateKey: seed,
+            timestampMs: 4_102_444_801_000,
+            nonce: "torii-integration-pipeline-test"
+        )
+    }
+
     override func setUpWithError() throws {
         try super.setUpWithError()
         guard let server = ToriiMockProcess() else {
@@ -25,11 +37,11 @@ final class ToriiClientIntegrationTests: XCTestCase {
 
     func testAttachmentLifecycleAgainstMock() throws {
         guard let mock else { return }
-        let session = URLSession(configuration: .ephemeral)
+        let session = mock.makeSecureSession()
         let seed = Data(repeating: 0x41, count: 32)
         let accountId = try Keypair(privateKeyBytes: seed).accountId(networkPrefix: AccountId.defaultNetworkPrefix)
         let canonicalAuth = ToriiCanonicalRequestAuth(accountId: accountId, privateKey: seed)
-        let client = ToriiClient(baseURL: mock.baseURL, session: session,
+        let client = ToriiClient(baseURL: mock.secureBaseURL, session: session,
                                  localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical))
         let payload = Data("{\"hello\":\"swift\"}".utf8)
 
@@ -100,7 +112,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
 
     func testProverReportsFlowAgainstMock() throws {
         guard let mock else { return }
-        let client = ToriiClient(baseURL: mock.baseURL, session: URLSession(configuration: .ephemeral))
+        let client = ToriiClient(baseURL: mock.secureBaseURL, session: mock.makeSecureSession())
 
         var initialReports: [ToriiProverReport] = []
         let listExpectation = expectation(description: "prover list")
@@ -162,12 +174,16 @@ final class ToriiClientIntegrationTests: XCTestCase {
                                           hashHex: scenarioHash,
                                           statusKinds: ["Queued", "Approved", "Committed", "Applied"])
         let mock = try XCTUnwrap(self.mock)
-        let session = URLSession(configuration: .ephemeral)
-        let client = ToriiClient(baseURL: mock.baseURL, session: session)
+        let session = mock.makeSecureSession()
+        let client = ToriiClient(
+            baseURL: mock.secureBaseURL,
+            session: session,
+            localSigningContext: ToriiLocalSigningContext(
+                networkId: TestNetworkIds.canonical
+            ),
+            canonicalRequestAuth: canonicalRequestAuth
+        )
         let sdk = IrohaSDK(toriiClient: client)
-        sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 0,
-                                                          initialBackoffSeconds: 0,
-                                                          backoffMultiplier: 1)
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01, timeout: 1)
         let envelope = try tcMakePipelineEnvelope(hashHex: scenarioHash, marker: 0x11)
         let status = try await sdk.submitAndWait(envelope: envelope)
@@ -180,12 +196,16 @@ final class ToriiClientIntegrationTests: XCTestCase {
         let scenarioHash = "feedfacecafebeefcafedeadbeef000200000000000000000000000000000000"
         try await preparePipelineScenario(.failure, hashHex: scenarioHash)
         let mock = try XCTUnwrap(self.mock)
-        let session = URLSession(configuration: .ephemeral)
-        let client = ToriiClient(baseURL: mock.baseURL, session: session)
+        let session = mock.makeSecureSession()
+        let client = ToriiClient(
+            baseURL: mock.secureBaseURL,
+            session: session,
+            localSigningContext: ToriiLocalSigningContext(
+                networkId: TestNetworkIds.canonical
+            ),
+            canonicalRequestAuth: canonicalRequestAuth
+        )
         let sdk = IrohaSDK(toriiClient: client)
-        sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 0,
-                                                          initialBackoffSeconds: 0,
-                                                          backoffMultiplier: 1)
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01, timeout: 1)
         let envelope = try tcMakePipelineEnvelope(hashHex: scenarioHash, marker: 0x22)
         do {
@@ -212,12 +232,16 @@ final class ToriiClientIntegrationTests: XCTestCase {
                                           statusKinds: ["Queued"],
                                           repeatLast: true)
         let mock = try XCTUnwrap(self.mock)
-        let session = URLSession(configuration: .ephemeral)
-        let client = ToriiClient(baseURL: mock.baseURL, session: session)
+        let session = mock.makeSecureSession()
+        let client = ToriiClient(
+            baseURL: mock.secureBaseURL,
+            session: session,
+            localSigningContext: ToriiLocalSigningContext(
+                networkId: TestNetworkIds.canonical
+            ),
+            canonicalRequestAuth: canonicalRequestAuth
+        )
         let sdk = IrohaSDK(toriiClient: client)
-        sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 0,
-                                                          initialBackoffSeconds: 0,
-                                                          backoffMultiplier: 1)
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01,
                                                             timeout: 0.3,
                                                             maxAttempts: 3)

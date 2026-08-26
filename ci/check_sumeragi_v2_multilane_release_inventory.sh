@@ -1013,8 +1013,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "a7364ee89cfab31a3a48d13e7f74b6e3"
-    "53bc34871619da907200b84cdf482a07"
+    "331123d12b08027a9ac0ed0157ed8400"
+    "7eac5a8659b1995bf4c77c3eedb231c2"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "

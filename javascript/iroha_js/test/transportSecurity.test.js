@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ToriiClient } from "../src/toriiClient.js";
+import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
+import { NetworkId } from "../src/networkId.js";
 import { NoritoRpcClient } from "../src/noritoRpcClient.js";
+
+const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
+  NetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
+);
 
 test("ToriiClient rejects cross-host absolute URLs when credentials are attached", async () => {
   const client = new ToriiClient("https://torii.primary.example", {
@@ -28,6 +33,7 @@ test("ToriiClient rejects scheme overrides when credentials are attached", async
 test("ToriiClient rejects insecure transport when body contains private_key material", async () => {
   const client = new ToriiClient("http://torii.primary.example", {
     fetchImpl: async () => ({ status: 200 }),
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
   });
   await assert.rejects(
     () =>
@@ -57,6 +63,7 @@ test("ToriiClient rejects cross-host absolute URLs when body contains private_ke
 test("ToriiClient rejects insecure transport when canonicalAuth is present", async () => {
   const client = new ToriiClient("http://torii.primary.example", {
     fetchImpl: async () => ({ status: 200 }),
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
   });
   await assert.rejects(
     () =>
@@ -137,6 +144,7 @@ test("ToriiClient never retries a nonce-bearing canonical request status", async
     backoffInitialMs: 0,
     retryMethods: ["POST"],
     retryStatuses: [503],
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
     fetchImpl: async (_url, init) => {
       attempts += 1;
       assert.equal(init.redirect, "error");
@@ -162,6 +170,7 @@ test("ToriiClient never retries a nonce-bearing canonical request network failur
     maxRetries: 9,
     backoffInitialMs: 0,
     retryMethods: ["POST"],
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
     fetchImpl: async (_url, init) => {
       attempts += 1;
       assert.equal(init.redirect, "error");

@@ -1600,7 +1600,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
 
     for marker in (
         "objectWithExactKeys",
-        "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
+        "LEGACY_PRIVACY_CAPABILITY_INSPECTION_VERSION_V1",
         "PRIVACY_PROTOCOL_IDS_V1.length",
         "Object.freeze",
     ):
@@ -1608,7 +1608,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
     for marker in (
         "_exact_object",
         "reject_duplicate_pairs",
-        "PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1",
+        "LEGACY_PRIVACY_CAPABILITY_INSPECTION_MAX_JSON_BYTES_V1",
         "type(value) is not int",
     ):
         require(marker in py_catalog, f"Python strict parser lost {marker}", errors)

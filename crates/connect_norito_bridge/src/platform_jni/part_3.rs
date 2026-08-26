@@ -875,6 +875,9 @@ kagemusha_sdk_android_forwarders! {
         rho bytes, diversifier bytes, leaf_index int, flattened_siblings bytes,
         directions bytes, root bytes, shield_verifier_commitment bytes, artifact_binding bytes
     } -> JniObjectArray = java_native_kagemusha_prepare_top_up_v4;
+    nativeProjectTopUpSubmissionRequestV4 { request bytes } -> JniObjectArray = java_native_kagemusha_project_top_up_submission_request_v4;
+    nativeProjectRedeemSubmissionRequestV4 { request bytes } -> JniObjectArray = java_native_kagemusha_project_redeem_submission_request_v4;
+    nativeProjectOperationReferenceV4 { reference bytes } -> JniObjectArray = java_native_kagemusha_project_operation_reference_v4;
     nativeProjectOperationStatusV4 { status bytes } -> JniObjectArray = java_native_kagemusha_project_operation_status_v4;
     nativeBranchClaimsConflictV2 { left bytes, right bytes } -> JniBoolean = java_native_kagemusha_branch_claims_conflict_v2;
     #[allow(clippy::too_many_arguments)]

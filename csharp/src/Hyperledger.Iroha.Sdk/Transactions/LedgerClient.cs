@@ -11,12 +11,30 @@ public sealed class LedgerClient
         this.torii = torii;
     }
 
+    /// <summary>Creates a transaction builder for the public Taira testnet.</summary>
     public TransactionBuilder BuildTransaction(
         NetworkId networkId,
         string authorityAccountId,
         FeePaymentIntent feePayment)
     {
-        return new TransactionBuilder(networkId, authorityAccountId, feePayment);
+        return BuildTransaction(
+            networkId,
+            Address.AccountAddress.TairaTestnetChainDiscriminant,
+            authorityAccountId,
+            feePayment);
+    }
+
+    public TransactionBuilder BuildTransaction(
+        NetworkId networkId,
+        ushort chainDiscriminant,
+        string authorityAccountId,
+        FeePaymentIntent feePayment)
+    {
+        return new TransactionBuilder(
+            networkId,
+            chainDiscriminant,
+            authorityAccountId,
+            feePayment);
     }
 
     /// <summary>

@@ -56,9 +56,11 @@ workspace.
 
 ## Packaging and Tooling
 
-- `maturin develop` builds the PyO3 extension against the local Rust workspace.
+- `maturin develop --release --locked` builds the PyO3 extension against the
+  locked local Rust workspace.
 - `pytest` runs the Python parity suite; tests expect the extension to be
-  available (either via `maturin develop` or an installed wheel).
+  available (either via `maturin develop --release --locked` or an installed
+  wheel).
 - `cargo test --workspace` continues to validate the Rust crates, including
   `iroha_python_rs`.
 

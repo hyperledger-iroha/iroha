@@ -3,6 +3,7 @@ import XCTest
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+@testable import IrohaSwift
 
 func toriiClientTestBodyData(from request: URLRequest) -> Data? {
     if let data = request.httpBody {
@@ -45,21 +46,21 @@ struct ToriiClientTestConnectResponse {
 }
 
 func toriiClientTestConnectSessionResponse(sid: String,
-                                           networkID: String,
+                                           networkID: NetworkId,
                                            appPublicKey: String,
                                            nonce: String,
                                            node: String) -> ToriiClientTestConnectResponse {
-    let tokenApp = String(repeating: "A", count: 43)
-    let tokenWallet = String(repeating: "B", count: 43)
-    let tokenManagement = String(repeating: "C", count: 43)
-    let tokenRelay = String(repeating: "D", count: 43)
+    let tokenApp = toriiClientTestBase64URL(Data(repeating: 0xA1, count: 32))
+    let tokenWallet = toriiClientTestBase64URL(Data(repeating: 0xB2, count: 32))
+    let tokenManagement = toriiClientTestBase64URL(Data(repeating: 0xC3, count: 32))
+    let tokenRelay = toriiClientTestBase64URL(Data(repeating: 0xD4, count: 32))
     func uri(role: String, token: String) -> String {
         var components = URLComponents()
         components.scheme = "iroha"
         components.host = "connect"
         components.queryItems = [
             URLQueryItem(name: "sid", value: sid),
-            URLQueryItem(name: "network_id", value: networkID),
+            URLQueryItem(name: "network_id", value: networkID.description),
             URLQueryItem(name: "app_pk", value: appPublicKey),
             URLQueryItem(name: "nonce", value: nonce),
             URLQueryItem(name: "node", value: node),
@@ -73,7 +74,7 @@ func toriiClientTestConnectSessionResponse(sid: String,
     return ToriiClientTestConnectResponse(
         payload: [
             "sid": sid,
-            "network_id": networkID,
+            "network_id": networkID.noritoJSONLiteral,
             "app_pk": appPublicKey,
             "nonce": nonce,
             "wallet_uri": uri(role: "wallet", token: tokenWallet),

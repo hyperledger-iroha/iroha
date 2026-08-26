@@ -697,7 +697,11 @@ function appendSourceEntry(hash, repoRoot, entry, kind) {
   }
   if (metadata === null) {
     if (kind !== "tracked-source-v1") {
-      throw new Error("Native build untracked source disappeared while sealing");
+      // Git paths are arbitrary bytes. Hex keeps this fail-closed diagnostic
+      // exact and single-line even for hostile filenames.
+      throw new Error(
+        `Native build untracked source disappeared while sealing (path_hex=${entry.path.toString("hex")})`,
+      );
     }
     appendField(hash, "absent");
     appendField(hash, entry.indexMode);

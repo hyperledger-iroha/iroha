@@ -114,7 +114,6 @@ def test_iso_operator_auth_is_mandatory_one_shot_and_rejects_retired_shapes() ->
     retired_options = (
         {"auth_token": "retired-bearer"},
         {"api_token": "retired-api-token"},
-        {"default_headers": {"X-Iroha-Account": "retired-app-auth"}},
         {"default_headers": {"X-Iroha-Iso-Profile": "legacy-profile"}},
         {"default_headers": {"X-Iroha-Operator-Nonce": "precomputed"}},
     )
@@ -129,6 +128,14 @@ def test_iso_operator_auth_is_mandatory_one_shot_and_rejects_retired_shapes() ->
         with pytest.raises(ValueError, match="generated operator signing"):
             client.get_iso_message_status("signed-1")
         assert session.calls == []
+
+    with pytest.raises(ValueError, match="canonical authentication headers"):
+        ToriiClient(
+            "https://torii.example",
+            session=RecordingSession([]),
+            operator_signing_context=context(),
+            default_headers={"X-Iroha-Account": "retired-app-auth"},
+        )
 
 
 def test_iso_rejects_retrying_adapter_before_signing_or_dispatch() -> None:

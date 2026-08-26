@@ -720,6 +720,7 @@ class DefaultNexusTransactionCodec:
             str(payload_input.get("destination_account_id", payload_input.get("destinationAccountId"))),
         )
         builder = draft.to_builder()
+        builder.set_admission_intent("queue_plan_synced")
         return {
             "payload_bytes": bytes(builder.encode_payload()),
             "payload_hash_hex": builder.payload_hash_hex(),

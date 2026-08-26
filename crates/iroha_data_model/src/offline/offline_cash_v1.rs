@@ -1554,7 +1554,9 @@ impl OfflineCashPaymentV1 {
     ///
     /// The outer byte cap is enforced before Norito reads a header or declared
     /// sequence length. Decoding then runs under payload-derived sequence and
-    /// cumulative allocation limits and verifies the exact receiver-request binding.
+    /// cumulative allocation limits and reconstructs the exact request-owned
+    /// proof statement. Semantic binding is completed when Core verifies the
+    /// paired proofs against that reconstructed statement.
     ///
     /// # Errors
     ///
@@ -1568,11 +1570,11 @@ impl OfflineCashPaymentV1 {
         Ok(payment)
     }
 
-    /// Validate this response against the exact signed receiver request.
+    /// Structurally validate this response in one signed receiver-request context.
     ///
     /// # Errors
     ///
-    /// Returns an error when context, proof, statement, request, or size binding fails.
+    /// Returns an error when the request, compact carrier, proof shape, or size is invalid.
     pub fn validate_against(
         &self,
         request: &OfflineCashPaymentRequestV1,

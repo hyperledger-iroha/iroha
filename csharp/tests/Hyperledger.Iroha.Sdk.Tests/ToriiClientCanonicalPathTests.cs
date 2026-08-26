@@ -16,6 +16,7 @@ public sealed partial class ToriiClientTests
 
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildHeaders(
             OnboardingFixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             CanonicalAccountId,
             CanonicalPrivateKeySeed,
             "GET",
@@ -41,6 +42,7 @@ public sealed partial class ToriiClientTests
 
         var callerHeaders = CanonicalRequest.BuildHeaders(
             OnboardingFixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             CanonicalAccountId,
             CanonicalPrivateKeySeed,
             "GET",
@@ -49,6 +51,7 @@ public sealed partial class ToriiClientTests
             nonce: "caller-path");
         var wireHeaders = CanonicalRequest.BuildHeaders(
             OnboardingFixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             CanonicalAccountId,
             CanonicalPrivateKeySeed,
             "GET",
@@ -98,7 +101,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -129,7 +132,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),

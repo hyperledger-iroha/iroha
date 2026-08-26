@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import IrohaSwift
+import IrohaSwift
 
 final class NetworkIdTests: XCTestCase {
     private let literal =
@@ -22,6 +22,7 @@ final class NetworkIdTests: XCTestCase {
 
     func testNoritoJSONKeepsTaggedChecksummedHashContract() throws {
         let networkId = try NetworkId(literal: literal)
+        XCTAssertEqual(networkId.noritoJSONLiteral, noritoJSONLiteral)
         let encoded = try JSONEncoder().encode(networkId)
         XCTAssertEqual(String(decoding: encoded, as: UTF8.self), "\"\(noritoJSONLiteral)\"")
         XCTAssertEqual(try JSONDecoder().decode(NetworkId.self, from: encoded), networkId)

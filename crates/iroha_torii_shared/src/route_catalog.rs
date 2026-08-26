@@ -2671,7 +2671,7 @@ pub mod runtime_governance {
     /// Read node capability metadata.
     pub const NODE_CAPABILITIES: RouteDescriptor =
         signed_get("node.capabilities", "/v1/node/capabilities");
-    /// Read the authoritative committed privacy capability snapshot.
+    /// Read the canonical committed Exact12 privacy capability manifest.
     pub const PRIVACY_CAPABILITIES: RouteDescriptor =
         signed_get("privacy.capabilities", "/v1/privacy/capabilities");
     /// Mint one canonical Bootle/Lantern blind-issuance authorization.

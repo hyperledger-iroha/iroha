@@ -12,6 +12,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(18, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(19, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(nil, for: "macos-arm64_x86_64"))
+        // ABI 21 is an explicitly retired compatibility value, never an active fallback.
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(21, for: "macos-arm64_x86_64"))
         XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(22, for: "macos-arm64_x86_64"))
         XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
@@ -55,7 +56,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
     }
 
     func testTamperedBridgeFailsHashCheck() throws {
-        let original = try bundledBridgeBinary()
+        let original = try bridgeBinaryFixture()
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let tampered = stagedBridgeURL(root: tempDir, identifier: original.identifier)
@@ -71,7 +72,11 @@ final class NativeBridgeLoaderTests: XCTestCase {
         }
         try data.write(to: tampered, options: .atomic)
 
-        let status = NoritoBridgeLoader.validateForTests(at: tampered.path, allowUntrustedLocation: true)
+        let status = NoritoBridgeLoader.validateForTests(
+            at: tampered.path,
+            allowUntrustedLocation: true,
+            pinnedHashesForTests: [original.identifier: original.sha256]
+        )
         switch status {
         case .hashMismatch(let path, _, _):
             XCTAssertEqual(path, tampered.path)
@@ -135,7 +140,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
     }
 
     func testUntrustedPathIsDeniedWhenOverridesDisabled() throws {
-        let original = try bundledBridgeBinary()
+        let original = try bridgeBinaryFixture()
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -147,7 +152,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
     }
 
     func testArtifactManifestHashOverridesPinnedHashForLocalBridge() throws {
-        let original = try bundledBridgeBinary()
+        let original = try bridgeBinaryFixture()
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let bridgeURL = stagedBridgeURL(root: tempDir, identifier: original.identifier)
@@ -215,7 +220,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
     }
 
     func testArtifactManifestAtDistRootOverridesPinnedHashForXcframeworkLayout() throws {
-        let original = try bundledBridgeBinary()
+        let original = try bridgeBinaryFixture()
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let target = tempDir
@@ -272,28 +277,21 @@ final class NativeBridgeLoaderTests: XCTestCase {
         XCTAssertTrue(full.contains(siblingManifest))
     }
 
-    private func bundledBridgeBinary() throws -> (url: URL, identifier: String) {
-        #if os(macOS)
-        let identifier = "macos-arm64_x86_64"
-        #else
-        #if targetEnvironment(simulator)
-        let identifier = "ios-arm64_x86_64-simulator"
-        #else
-        let identifier = "ios-arm64"
-        #endif
-        #endif
-
-        var root = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { root.deleteLastPathComponent() }
-        let url = stagedBridgeURL(
-            root: root.appendingPathComponent("dist/NoritoBridge.xcframework"),
-            identifier: identifier
+    private func bridgeBinaryFixture() throws -> (url: URL, identifier: String, sha256: String) {
+        let identifier = NoritoBridgeLoader.currentIdentifier()
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let url = stagedBridgeURL(root: root, identifier: identifier)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
         )
-        try requireNativeTestCapability(
-            FileManager.default.fileExists(atPath: url.path),
-            "NoritoBridge.xcframework missing at \(url.path)"
-        )
-        return (url, identifier)
+        let bytes = Data("native-bridge-loader-policy-fixture-v1".utf8)
+        try bytes.write(to: url, options: .atomic)
+        let sha256 = SHA256.hash(data: bytes)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return (url, identifier, sha256)
     }
 
     private func stagedBridgeURL(root: URL, identifier: String) -> URL {

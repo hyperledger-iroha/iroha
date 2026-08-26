@@ -1482,9 +1482,6 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     "dispatch_one_pacemaker_progress": (
         "fc7d5f12b41f703242826e8926dd91f4267b78d775b1d8c2453d85006a3ac965"
     ),
-    "step_recovery": (
-        "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
-    ),
     "dispatch_one_fence_dependency": (
         "539239fa96fca8ea08dc56ac89041b7be0bb6f5f3d33f65259ad8e7833173b69"
     ),

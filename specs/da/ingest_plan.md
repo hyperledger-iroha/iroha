@@ -203,7 +203,7 @@ pub struct DaManifestV1 {
     pub erasure_profile: ErasureProfile,
     pub retention_policy: RetentionPolicy,
     pub rent_quote: DaRentQuote,
-    pub chunks: Vec<ChunkCommitment>,
+    pub chunks: Vec<ChunkCommitment>,     // contiguous data commitments only
     pub ipa_commitment: BlobDigest,
     pub metadata: ExtraMetadata,
     pub issued_at_unix: u64,
@@ -470,23 +470,29 @@ one-shot nonce and existing pin indexes reject reuse.
      `artifacts/da/prove_availability_<ts>/` and persists per-chunk files inside the `chunks/` directory).
   3. `cargo run -p sorafs_car --features da_harness,dev-tools --bin da_reconstruct --manifest manifest_<manifest_hash>.norito --chunks-dir ./artifacts/da/prove_availability_<ts>/chunks --output reconstructed.bin --json-out summary.json`.
 
-  A regression fixture lives under `fixtures/da/reconstruct/rs_parity_v1/` and captures the full manifest
-  and chunk matrix (data + parity) used by `tests::reconstructs_fixture_with_parity_chunks`. Regenerate it with
+  A regression fixture lives under `fixtures/da/reconstruct/rs_parity_v1/` and captures a canonical
+  data-only manifest plus the external RS recovery matrix used by
+  `tests::reconstructs_canonical_fixture_with_external_parity_vectors`. Regenerate it with
 
   ```sh
-  cargo test -p sorafs_car --features da_harness regenerate_da_reconstruct_fixture_assets -- --ignored --nocapture
+  cargo test --locked -p sorafs_car --features da_harness,dev-tools \
+    --bin da_reconstruct regenerate_da_reconstruct_fixture_assets -- --ignored --nocapture
   ```
 
   The fixture emits:
 
-  - `manifest.{norito.hex,json}` — canonical `DaManifestV1` encodings.
-  - `chunk_matrix.json` — ordered index/offset/length/digest/parity rows for doc/testing references.
-  - `chunks/` — `chunk_{index:05}.bin` payload slices for both data and parity shards.
-  - `payload.bin` — deterministic payload used by the parity-aware harness test.
+  - `manifest.{norito.hex,json}` — canonical `DaManifestV1` encodings with contiguous data
+    commitments only. The erasure profile records the governed recovery layout, and exact public
+    Taikai event/stream/rendition/sequence metadata keeps the fixture valid for native proof APIs.
+  - `chunk_matrix.json` — ordered index/offset/length/digest/parity rows for both manifest data and
+    external recovery artifacts.
+  - `chunks/` — `chunk_{index:05}.bin` payload slices plus parity recovery vectors. Recovery offsets
+    are outside the payload address range and are deliberately absent from manifest commitments.
+  - `payload.bin` — deterministic payload used by the reconstruction and native proof tests.
   - `commitment_bundle.{json,norito.hex}` — sample Merkle-only
     `DaCommitmentBundle` using the V1 wire layout.
 
-  The harness refuses missing or truncated chunks, checks the final payload Blake3 hash against `blob_hash`,
+  The harness refuses missing or truncated data chunks, checks the final payload Blake3 hash against `blob_hash`,
   and emits a summary JSON blob (payload bytes, chunk count, storage ticket) so CI can assert reconstruction
   evidence. This closes the DA-6 requirement for a deterministic reconstruction tool that operators and QA
   jobs can invoke without wiring bespoke scripts.

@@ -1,9 +1,28 @@
 # Roadmap
 
-Last updated: 2026-08-23
+Last updated: 2026-08-26
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## Offline Cash V1 mobile rollout
+
+- Keep the Kotlin/JVM and Java Android Torii facade source-complete but
+  non-authoritative until the same immutable candidate passes the remaining
+  release evidence gates below. The local facade validates public
+  request/network/operation bindings; registered-device signature authenticity
+  and authorization time remain Torii responsibilities.
+- Keep the Rust-owned Offline Cash mobile parity corpus closed at exactly 40
+  named rows. Kotlin and Java loaders must reject missing, duplicate,
+  additional, or malformed rows eagerly, including unmarked Iroha transaction
+  hashes and non-canonical rejection envelopes.
+- Activate and restart the exact four-validator Taira candidate, confirm all
+  four Offline Cash V1 routes and media types end to end, and archive a signed
+  top-up/redeem/status canary with the validator, artifact, and source
+  identities. Do not infer network readiness from SDK unit tests.
+- Complete authenticated Kagemusha artifact publication and qualify real secure
+  devices and cross-device offline-payment recovery under the existing resource,
+  replay, and audit gates before enabling Offline Cash for users.
 
 ## Merged-candidate compile recovery
 

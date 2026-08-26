@@ -50,7 +50,7 @@ private func validateConnectLaunchURI(_ literal: String,
     }
     let expected: [String: String] = [
         "sid": response.sid,
-        "network_id": response.networkID.noritoJSONLiteral,
+        "network_id": response.networkID.description,
         "app_pk": connectBase64URL(response.appPublicKey),
         "nonce": connectBase64URL(response.nonce),
         "node": expectedNode ?? "",

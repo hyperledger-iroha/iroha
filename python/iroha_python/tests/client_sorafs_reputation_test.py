@@ -570,7 +570,7 @@ def test_sorafs_reputation_witness_auth_is_exact_and_stream_is_single_attempt() 
     account = AccountAddress.from_account(
         domain="reputation", public_key=bytes([0x36]) * 32
     )
-    account_i105 = account.to_i105(0x02F1)
+    account_i105 = account.to_i105(0x0171)
     headers = {
         "X-Iroha-Witness": witness,
         "X-Iroha-Account": account_i105,

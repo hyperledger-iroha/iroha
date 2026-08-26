@@ -529,6 +529,10 @@ mod tests {
     use sorafs_chunker::ChunkProfile;
     use std::path::PathBuf;
     use tempfile::{TempDir, tempdir};
+    const FIXTURE_STRIPES: usize = 3;
+    const FIXTURE_DATA_SHARDS: u16 = 2;
+    const FIXTURE_PARITY_SHARDS: u16 = 2;
+    const FIXTURE_CHUNK_SIZE: u32 = 32;
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");
@@ -621,7 +625,7 @@ mod tests {
         assert_eq!(summary.payload_bytes, payload.len() as u64);
     }
     #[test]
-    fn reconstructs_fixture_with_parity_chunks() {
+    fn reconstructs_canonical_fixture_with_external_parity_vectors() {
         let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(2)
@@ -629,7 +633,40 @@ mod tests {
             .join("fixtures/da/reconstruct/rs_parity_v1");
         let manifest_path = fixture_root.join("manifest.norito.hex");
         let manifest = load_manifest(&manifest_path).expect("fixture manifest");
+        let plan = build_plan_from_da_manifest(&manifest).expect("canonical data-only plan");
+        assert_eq!(plan.content_length, manifest.total_size);
+        assert_eq!(plan.chunks.len(), manifest.chunks.len());
+        assert!(manifest.chunks.iter().all(|chunk| {
+            !chunk.parity
+                && matches!(chunk.role, ChunkRole::Data)
+                && chunk.offset + u64::from(chunk.length) <= manifest.total_size
+        }));
+        for (expected_index, chunk) in manifest.chunks.iter().enumerate() {
+            assert_eq!(chunk.index as usize, expected_index);
+        }
+        let taikai_hint = plan.chunks[0]
+            .taikai_segment_hint
+            .as_ref()
+            .expect("fixture carries exact Taikai metadata");
+        assert_eq!(taikai_hint.event, "fixture-event");
+        assert_eq!(taikai_hint.stream, "fixture-stream");
+        assert_eq!(taikai_hint.rendition, "fixture-rendition");
+        assert_eq!(taikai_hint.sequence, 1);
         let chunks_src = fixture_root.join("chunks");
+        let chunk_file_count = fs::read_dir(&chunks_src)
+            .expect("chunks dir")
+            .map(|entry| entry.expect("chunk entry"))
+            .filter(|entry| entry.file_type().expect("chunk file type").is_file())
+            .count();
+        let expected_recovery_count = usize::try_from(manifest.total_stripes)
+            .expect("fixture stripe count fits usize")
+            .checked_mul(usize::from(manifest.erasure_profile.parity_shards))
+            .expect("fixture recovery count fits usize");
+        assert_eq!(
+            chunk_file_count,
+            manifest.chunks.len() + expected_recovery_count,
+            "parity byte vectors remain available outside the canonical manifest"
+        );
         let (_temp_dir, temp_path) = canonical_tempdir();
         for entry in fs::read_dir(&chunks_src).expect("chunks dir") {
             let entry = entry.expect("chunk entry");
@@ -639,17 +676,20 @@ mod tests {
         let out_path = temp_path.join("reconstructed.bin");
         let summary = reconstruct_payload(&manifest, &temp_path, &out_path, DEFAULT_CHUNK_TEMPLATE)
             .expect("reconstruct fixture");
-        assert_eq!(
-            summary.parity_chunks,
-            manifest.chunks.iter().filter(|chunk| chunk.parity).count()
-        );
-        assert_eq!(
-            summary.data_chunks,
-            manifest.chunks.iter().filter(|chunk| !chunk.parity).count()
-        );
+        assert_eq!(summary.parity_chunks, 0);
+        assert_eq!(summary.data_chunks, manifest.chunks.len());
         let reconstructed = fs::read(&out_path).expect("read reconstructed");
         let expected = fs::read(fixture_root.join("payload.bin")).expect("read fixture payload");
         assert_eq!(reconstructed, expected);
+        let mut proof_store = ChunkStore::with_profile(plan.chunk_profile);
+        proof_store
+            .ingest_bytes(&expected)
+            .expect("ingest fixture payload through canonical plan profile");
+        assert_eq!(
+            proof_store.payload_digest().as_bytes(),
+            manifest.blob_hash.as_ref()
+        );
+        assert_eq!(proof_store.por_tree().root(), manifest.chunk_root.as_ref());
     }
     #[test]
     fn open_output_file_creates_parent_and_writes_all_bytes() {
@@ -708,32 +748,30 @@ mod tests {
     #[test]
     #[ignore = "regenerates DA reconstruction fixtures on disk"]
     fn regenerate_da_reconstruct_fixture_assets() {
-        const STRIPES: usize = 3;
-        const DATA_SHARDS: u16 = 2;
-        const PARITY_SHARDS: u16 = 2;
-        const CHUNK_SIZE: u32 = 32;
-        let payload =
-            build_fixture_payload(STRIPES * usize::from(DATA_SHARDS) * CHUNK_SIZE as usize);
+        let payload = build_fixture_payload(
+            FIXTURE_STRIPES * usize::from(FIXTURE_DATA_SHARDS) * FIXTURE_CHUNK_SIZE as usize,
+        );
         let chunk_profile = ChunkProfile {
-            min_size: CHUNK_SIZE as usize,
-            target_size: CHUNK_SIZE as usize,
-            max_size: CHUNK_SIZE as usize,
+            min_size: FIXTURE_CHUNK_SIZE as usize,
+            target_size: FIXTURE_CHUNK_SIZE as usize,
+            max_size: FIXTURE_CHUNK_SIZE as usize,
             break_mask: 1,
         };
         let plan = CarBuildPlan::single_file_with_profile(&payload, chunk_profile)
             .expect("plan derivation succeeds");
         let mut chunk_store = ChunkStore::with_profile(chunk_profile);
-        let chunk_dir = tempdir().expect("chunk dir");
+        let (_chunk_dir, chunk_temp_root) = canonical_tempdir();
+        let chunk_dir_path = chunk_temp_root.join("generated-chunks");
         let mut reader: &[u8] = payload.as_slice();
         let chunk_output = chunk_store
-            .ingest_plan_stream_to_directory(&plan, &mut reader, chunk_dir.path())
+            .ingest_plan_stream_to_directory(&plan, &mut reader, &chunk_dir_path)
             .expect("persist chunk files");
         let (manifest, parity_payloads) = build_fixture_manifest(
             &payload,
             &chunk_store,
-            CHUNK_SIZE,
-            DATA_SHARDS,
-            PARITY_SHARDS,
+            FIXTURE_CHUNK_SIZE,
+            FIXTURE_DATA_SHARDS,
+            FIXTURE_PARITY_SHARDS,
         );
         let fixture_root = fixture_root_path();
         if fixture_root.exists() {
@@ -742,12 +780,12 @@ mod tests {
         let chunks_dir = fixture_root.join("chunks");
         fs::create_dir_all(&chunks_dir).expect("create chunks directory");
         for record in &chunk_output.records {
-            let src = chunk_dir.path().join(&record.file_name);
+            let src = chunk_dir_path.join(&record.file_name);
             let dst = chunks_dir.join(&record.file_name);
             fs::copy(&src, &dst).expect("copy chunk file");
         }
-        for (index, payload_bytes) in parity_payloads {
-            let dst = chunks_dir.join(format!("chunk_{index:05}.bin"));
+        for (commitment, payload_bytes) in &parity_payloads {
+            let dst = chunks_dir.join(format!("chunk_{:05}.bin", commitment.index));
             fs::write(&dst, &payload_bytes).expect("write parity chunk");
         }
         let manifest_bytes = to_bytes(&manifest).expect("encode manifest");
@@ -759,7 +797,13 @@ mod tests {
         let manifest_json = norito_json::to_json_pretty(&manifest).expect("manifest json");
         fs::write(fixture_root.join("manifest.json"), manifest_json.as_bytes())
             .expect("write manifest json");
-        write_chunk_matrix_json(&manifest, &fixture_root.join("chunk_matrix.json"));
+        let mut chunk_matrix = manifest.chunks.clone();
+        chunk_matrix.extend(
+            parity_payloads
+                .iter()
+                .map(|(commitment, _payload)| *commitment),
+        );
+        write_chunk_matrix_json(&chunk_matrix, &fixture_root.join("chunk_matrix.json"));
         fs::write(fixture_root.join("payload.bin"), &payload).expect("write payload copy");
         let manifest_digest = ManifestDigest::new(*blake3::hash(&manifest_bytes).as_bytes());
         let chunk_root_hash = Hash::prehashed(*manifest.chunk_root.as_ref());
@@ -811,9 +855,9 @@ mod tests {
         chunk_size: u32,
         data_shards: u16,
         parity_shards: u16,
-    ) -> (DaManifestV1, Vec<(u32, Vec<u8>)>) {
+    ) -> (DaManifestV1, Vec<(ChunkCommitment, Vec<u8>)>) {
         let stored = chunk_store.chunks();
-        let mut chunk_commitments = Vec::with_capacity(stored.len());
+        let mut data_commitments = Vec::with_capacity(stored.len());
         let mut stripe_symbols = Vec::new();
         let symbol_count = (chunk_size as usize / 2).max(1);
         for (index, chunk) in stored.iter().enumerate() {
@@ -823,7 +867,7 @@ mod tests {
             let symbols = rs16::symbols_from_chunk(symbol_count, slice);
             stripe_symbols.push(symbols);
             let stripe_id = u32::try_from(index / usize::from(data_shards)).unwrap_or(u32::MAX);
-            chunk_commitments.push(ChunkCommitment::new_with_role(
+            data_commitments.push(ChunkCommitment::new_with_role(
                 index as u32,
                 chunk.offset,
                 chunk.length,
@@ -843,7 +887,7 @@ mod tests {
         let total_stripes = u32::try_from(stripes.len()).unwrap_or(u32::MAX);
         let shards_per_stripe = u32::from(data_shards.saturating_add(parity_shards));
         let mut parity_payloads = Vec::new();
-        let mut next_index = chunk_commitments.len() as u32;
+        let mut next_index = data_commitments.len() as u32;
         for (stripe_idx, stripe) in stripes.into_iter().enumerate() {
             let parity_vectors = rs16::encode_parity(&stripe, parity_shards as usize)
                 .expect("encode parity vectors");
@@ -862,18 +906,42 @@ mod tests {
                 )
                 .expect("parity offset");
                 let stripe_id = u32::try_from(stripe_idx).unwrap_or(u32::MAX);
-                chunk_commitments.push(ChunkCommitment::new_with_role(
+                let recovery_commitment = ChunkCommitment::new_with_role(
                     next_index,
                     offset,
                     chunk_size,
                     ChunkDigest::new(*digest.as_bytes()),
                     ChunkRole::GlobalParity,
                     stripe_id,
-                ));
-                parity_payloads.push((next_index, bytes));
+                );
+                parity_payloads.push((recovery_commitment, bytes));
                 next_index = next_index.checked_add(1).expect("chunk index overflow");
             }
         }
+        let metadata = ExtraMetadata {
+            items: vec![
+                MetadataEntry::new(
+                    "taikai.event_id",
+                    b"fixture-event".to_vec(),
+                    MetadataVisibility::Public,
+                ),
+                MetadataEntry::new(
+                    "taikai.stream_id",
+                    b"fixture-stream".to_vec(),
+                    MetadataVisibility::Public,
+                ),
+                MetadataEntry::new(
+                    "taikai.rendition_id",
+                    b"fixture-rendition".to_vec(),
+                    MetadataVisibility::Public,
+                ),
+                MetadataEntry::new(
+                    "taikai.segment.sequence",
+                    b"1".to_vec(),
+                    MetadataVisibility::Public,
+                ),
+            ],
+        };
         let manifest = DaManifestV1 {
             version: DaManifestV1::VERSION,
             client_blob_id: BlobDigest::from_hash(blake3::hash(b"fixture-client")),
@@ -897,9 +965,9 @@ mod tests {
             },
             retention_policy: RetentionPolicy::default(),
             rent_quote: DaRentQuote::default(),
-            chunks: chunk_commitments,
+            chunks: data_commitments,
             ipa_commitment: BlobDigest::new(*chunk_store.por_tree().root()),
-            metadata: ExtraMetadata::default(),
+            metadata,
             issued_at_unix: 1_701_111_111,
         };
         (manifest, parity_payloads)
@@ -911,9 +979,9 @@ mod tests {
             .expect("workspace root")
             .join("fixtures/da/reconstruct/rs_parity_v1")
     }
-    fn write_chunk_matrix_json(manifest: &DaManifestV1, output: &Path) {
-        let mut rows = Vec::with_capacity(manifest.chunks.len());
-        for chunk in &manifest.chunks {
+    fn write_chunk_matrix_json(chunks: &[ChunkCommitment], output: &Path) {
+        let mut rows = Vec::with_capacity(chunks.len());
+        for chunk in chunks {
             let mut obj = JsonMap::new();
             obj.insert("index".into(), JsonValue::from(u64::from(chunk.index)));
             obj.insert("offset".into(), JsonValue::from(chunk.offset));

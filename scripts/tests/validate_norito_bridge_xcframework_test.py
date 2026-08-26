@@ -79,7 +79,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         rust_commit = "b" * 40
         self.payload = {
             "version": "1.0.0",
-            "native_bridge_abi_version": 22,
+            "native_bridge_abi_version": validator.REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             "privacy_production_enabled": False,
             "cargo_features": [],
             "build_environment": {
@@ -175,6 +175,21 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
 
     def test_accepts_only_the_canonical_inventory(self) -> None:
         self.validate()
+
+    def test_kagemusha_role_registry_requires_abi_22_for_every_role(self) -> None:
+        roles = validator.expected_kagemusha_roles(False)
+        self.assertEqual(len(roles), 14)
+        self.assertEqual(validator.REQUIRED_NATIVE_BRIDGE_ABI_VERSION, 22)
+        self.assertEqual(
+            {role["abi"] for role in roles},
+            {validator.REQUIRED_NATIVE_BRIDGE_ABI_VERSION},
+        )
+
+        roles[0]["abi"] = 21
+        self.payload["kagemusha_mobile_artifact_roles"] = roles
+        self.write_manifest()
+        with self.assertRaisesRegex(validator.ValidationError, "role registry"):
+            self.validate()
 
     def test_accepts_and_authenticates_an_explicit_external_lock(self) -> None:
         lock_directory = Path(self.temporary.name).resolve() / "privacy-release"

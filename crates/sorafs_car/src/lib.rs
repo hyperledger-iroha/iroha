@@ -11,7 +11,7 @@ use blake3::{Hash, Hasher};
 #[cfg(feature = "manifest")]
 use iroha_data_model::{
     da::{
-        manifest::DaManifestV1,
+        manifest::{ChunkRole, DaManifestV1},
         types::{BlobClass, ExtraMetadata, MetadataEncryption, MetadataVisibility},
     },
     name::Name,
@@ -1222,6 +1222,18 @@ pub enum PlanFromManifestError {
     /// Manifest chunk size exceeded host bounds when converting to usize.
     #[error("manifest chunk_size {0} exceeds host limits")]
     ChunkSizeTooLarge(u32),
+    /// Manifest chunk index did not match its canonical data-plan position.
+    #[error("manifest chunk at position {position} has index {actual}; expected {expected}")]
+    NonCanonicalChunkIndex {
+        position: usize,
+        expected: u32,
+        actual: u32,
+    },
+    /// Manifest attempted to project a recovery shard into the payload plan.
+    #[error(
+        "manifest chunk at position {position} is a parity/recovery artifact; canonical payload plans contain only data commitments"
+    )]
+    RecoveryChunkInPayloadPlan { position: usize },
     /// Manifest omitted a required Taikai metadata field.
     #[error("manifest missing required Taikai metadata `{0}`")]
     MissingTaikaiMetadata(&'static str),
@@ -1422,6 +1434,23 @@ fn preflight_da_manifest_chunks(
         .map_err(|_| PlanFromManifestError::ChunkSizeTooLarge(manifest.chunk_size))?;
     let mut expected_offset = 0u64;
     for (chunk_index, chunk) in manifest.chunks.iter().enumerate() {
+        let expected_index = u32::try_from(chunk_index).map_err(|_| {
+            PlanFromManifestError::InvalidPlan(CarPlanValidationError::EstimateOverflow {
+                context: "manifest canonical chunk index",
+            })
+        })?;
+        if chunk.index != expected_index {
+            return Err(PlanFromManifestError::NonCanonicalChunkIndex {
+                position: chunk_index,
+                expected: expected_index,
+                actual: chunk.index,
+            });
+        }
+        if chunk.parity || !matches!(chunk.role, ChunkRole::Data) {
+            return Err(PlanFromManifestError::RecoveryChunkInPayloadPlan {
+                position: chunk_index,
+            });
+        }
         if chunk.length == 0 {
             return Err(PlanFromManifestError::InvalidPlan(
                 CarPlanValidationError::ZeroLengthChunk { chunk_index },
@@ -7081,6 +7110,61 @@ mod tests {
                 CarPlanValidationError::ChunkProfileTooLarge { .. }
             ))
         ));
+    }
+    #[cfg(feature = "manifest")]
+    #[test]
+    fn build_plan_from_da_manifest_rejects_out_of_range_parity_commitments() {
+        use iroha_data_model::da::{
+            manifest::{ChunkCommitment, ChunkRole},
+            types::ChunkDigest,
+        };
+        let mut manifest = sample_manifest();
+        manifest.chunks.push(ChunkCommitment::new_with_role(
+            1,
+            manifest.total_size,
+            manifest.chunk_size,
+            ChunkDigest::new([0xBB; 32]),
+            ChunkRole::GlobalParity,
+            0,
+        ));
+        assert_eq!(
+            build_plan_from_da_manifest(&manifest),
+            Err(PlanFromManifestError::RecoveryChunkInPayloadPlan { position: 1 })
+        );
+    }
+    #[cfg(feature = "manifest")]
+    #[test]
+    fn build_plan_from_da_manifest_rejects_parity_flag_on_data_commitment() {
+        let mut manifest = sample_manifest();
+        manifest.chunks[0].parity = true;
+        assert_eq!(
+            build_plan_from_da_manifest(&manifest),
+            Err(PlanFromManifestError::RecoveryChunkInPayloadPlan { position: 0 })
+        );
+    }
+    #[cfg(feature = "manifest")]
+    #[test]
+    fn build_plan_from_da_manifest_rejects_recovery_role_on_data_commitment() {
+        let mut manifest = sample_manifest();
+        manifest.chunks[0].role = ChunkRole::GlobalParity;
+        assert_eq!(
+            build_plan_from_da_manifest(&manifest),
+            Err(PlanFromManifestError::RecoveryChunkInPayloadPlan { position: 0 })
+        );
+    }
+    #[cfg(feature = "manifest")]
+    #[test]
+    fn build_plan_from_da_manifest_rejects_noncanonical_data_index() {
+        let mut manifest = sample_manifest();
+        manifest.chunks[0].index = 1;
+        assert_eq!(
+            build_plan_from_da_manifest(&manifest),
+            Err(PlanFromManifestError::NonCanonicalChunkIndex {
+                position: 0,
+                expected: 0,
+                actual: 1,
+            })
+        );
     }
     #[cfg(feature = "manifest")]
     #[test]

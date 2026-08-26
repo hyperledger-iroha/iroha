@@ -1,4 +1,3 @@
-import Compression
 import Foundation
 import zlib
 
@@ -621,32 +620,28 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
 
     private static func encodeZlibIfSmaller(_ input: Data) -> Data? {
         guard !input.isEmpty else { return nil }
-        // A QR-eligible candidate must be smaller than its input, so the input
-        // size itself is a sufficient bounded destination capacity.
-        var output = [UInt8](repeating: 0, count: input.count)
-        let outputCapacity = output.count
-        let encodedCount = input.withUnsafeBytes { inputBytes in
+        // IPM1 fixes zlib's interoperable default level (6). Apple's
+        // Compression.framework emits a different raw-DEFLATE stream, and
+        // wrapping that stream in a 0x789c header is not byte-exact with the
+        // Kotlin/Java reference encoder.
+        let outputCapacity = Int(compressBound(uLong(input.count)))
+        var output = [UInt8](repeating: 0, count: outputCapacity)
+        var encodedCount = uLongf(outputCapacity)
+        let status = input.withUnsafeBytes { inputBytes in
             output.withUnsafeMutableBytes { outputBytes in
-                compression_encode_buffer(
+                compress2(
                     outputBytes.bindMemory(to: UInt8.self).baseAddress!,
-                    outputCapacity,
+                    &encodedCount,
                     inputBytes.bindMemory(to: UInt8.self).baseAddress!,
-                    input.count,
-                    nil,
-                    COMPRESSION_ZLIB
+                    uLong(input.count),
+                    Z_DEFAULT_COMPRESSION
                 )
             }
         }
-        guard encodedCount > 0, encodedCount < input.count else { return nil }
-        // Compression.framework emits an RFC 1951 stream for
-        // COMPRESSION_ZLIB. Encoding id 1 is instead the interoperable RFC
-        // 1950 form: canonical 32 KiB/no-dictionary header, DEFLATE body, and
-        // the canonical-payload Adler-32 in network order.
-        var wrapped = Data([0x78, 0x9C])
-        wrapped.append(contentsOf: output.prefix(encodedCount))
-        wrapped.ipmAppendUInt32BE(adler32(input))
-        guard wrapped.count < input.count else { return nil }
-        return wrapped
+        guard status == Z_OK,
+              encodedCount > 0,
+              encodedCount < uLongf(input.count) else { return nil }
+        return Data(output.prefix(Int(encodedCount)))
     }
 
     private static func decodeZlib(

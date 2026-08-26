@@ -163,6 +163,7 @@ public sealed class CanonicalRequestTests
 
         var headers = CanonicalRequest.BuildHeadersForExactPath(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             FixtureAccountId,
             FixturePrivateKeySeed,
             "GET",
@@ -172,6 +173,7 @@ public sealed class CanonicalRequestTests
         Assert.Equal(FixtureAccountId, headers.AccountId);
         var escapedHeaders = CanonicalRequest.BuildHeadersForExactPath(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             FixtureAccountId,
             FixturePrivateKeySeed,
             "GET",
@@ -183,6 +185,7 @@ public sealed class CanonicalRequestTests
         {
             var preservedHeaders = CanonicalRequest.BuildHeadersForExactPath(
                 FixtureNetworkId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 FixtureAccountId,
                 FixturePrivateKeySeed,
                 "GET",
@@ -195,6 +198,7 @@ public sealed class CanonicalRequestTests
             "path",
             () => CanonicalRequest.BuildHeadersForExactPath(
                 FixtureNetworkId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 FixtureAccountId,
                 FixturePrivateKeySeed,
                 "GET",
@@ -205,6 +209,7 @@ public sealed class CanonicalRequestTests
             "path",
             () => CanonicalRequest.BuildHeadersForExactPath(
                 FixtureNetworkId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 FixtureAccountId,
                 FixturePrivateKeySeed,
                 "GET",
@@ -217,6 +222,7 @@ public sealed class CanonicalRequestTests
                 "path",
                 () => CanonicalRequest.BuildHeadersForExactPath(
                     FixtureNetworkId,
+                    global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                     FixtureAccountId,
                     FixturePrivateKeySeed,
                     "GET",
@@ -232,6 +238,7 @@ public sealed class CanonicalRequestTests
         var body = Encoding.UTF8.GetBytes("{\"selector\":\"assets\"}");
         var headers = CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             accountId: FixtureAccountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: "post",
@@ -250,6 +257,44 @@ public sealed class CanonicalRequestTests
         Assert.All(accountHeader, static character => Assert.True(character <= '\u007f'));
         Assert.Equal(1735000000123, headers.TimestampMs);
         Assert.Equal("abcdef0123456789abcdef0123456789", headers.Nonce);
+    }
+
+    [Fact]
+    public void BuildHeadersDefaultsToTairaAndPreservesExplicitNetworkContexts()
+    {
+        var publicKey = Ed25519Signer.GetPublicKey(FixturePrivateKeySeed);
+        var address = AccountAddress.FromPublicKey(publicKey, "ed25519");
+        var tairaAccountId = address.ToI105(AccountAddress.TairaTestnetChainDiscriminant);
+
+        var tairaHeaders = CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
+            tairaAccountId,
+            FixturePrivateKeySeed,
+            "GET",
+            "/v1/status",
+            timestampMs: 1_735_000_000_123,
+            nonce: "taira-default-context");
+
+        Assert.Equal(tairaAccountId, tairaHeaders.AccountId);
+        Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
+            FixtureAccountId,
+            FixturePrivateKeySeed,
+            "GET",
+            "/v1/status",
+            timestampMs: 1_735_000_000_123,
+            nonce: "legacy-not-default"));
+
+        var explicitHeaders = CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
+            AccountAddress.DefaultChainDiscriminant,
+            FixtureAccountId,
+            FixturePrivateKeySeed,
+            "GET",
+            "/v1/status",
+            timestampMs: 1_735_000_000_123,
+            nonce: "explicit-network-context");
+        Assert.Equal(FixtureAccountId, explicitHeaders.AccountId);
     }
 
     [Theory]
@@ -282,6 +327,7 @@ public sealed class CanonicalRequestTests
         var credentials = new CanonicalRequestCredentials(alias, FixturePrivateKeySeed);
         var headers = CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             accountId: credentials.AccountId,
             privateKeySeed: credentials.PrivateKeySeed,
             method: "post",
@@ -321,6 +367,7 @@ public sealed class CanonicalRequestTests
     {
         var headers = CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             accountId: FixtureAccountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: "post",
@@ -340,6 +387,7 @@ public sealed class CanonicalRequestTests
         var expectedSeed = credentials.PrivateKeySeed;
         var expectedSignature = CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             credentials.AccountId,
             credentials.PrivateKeySeed,
             "post",
@@ -356,6 +404,7 @@ public sealed class CanonicalRequestTests
 
         var headers = CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             credentials.AccountId,
             credentials.PrivateKeySeed,
             "post",
@@ -405,6 +454,7 @@ public sealed class CanonicalRequestTests
             "privateKeySeed",
             () => CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 accountId: FixtureAccountId,
                 privateKeySeed: seed,
                 method: "post",
@@ -469,6 +519,7 @@ public sealed class CanonicalRequestTests
             "accountId",
             () => CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 accountId: FixtureAccountId,
                 privateKeySeed: mismatchedSeed,
                 method: "post",
@@ -482,6 +533,7 @@ public sealed class CanonicalRequestTests
     {
         var headers = CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             accountId: FixtureAccountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: "post",
@@ -539,6 +591,7 @@ public sealed class CanonicalRequestTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             accountId: FixtureAccountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: "post",
@@ -566,6 +619,7 @@ public sealed class CanonicalRequestTests
         Assert.Throws<ArgumentException>(
             () => CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 accountId: $"{FixtureAccountId} ",
                 privateKeySeed: FixturePrivateKeySeed,
                 method: "post",
@@ -574,6 +628,7 @@ public sealed class CanonicalRequestTests
         Assert.Throws<ArgumentException>(
             () => CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 accountId: FixtureAccountId,
                 privateKeySeed: FixturePrivateKeySeed,
                 method: "post",
@@ -582,6 +637,7 @@ public sealed class CanonicalRequestTests
         Assert.Throws<ArgumentException>(
             () => CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 accountId: FixtureAccountId,
                 privateKeySeed: FixturePrivateKeySeed,
                 method: "post",
@@ -624,6 +680,7 @@ public sealed class CanonicalRequestTests
             "accountId",
             () => CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 accountId: FixtureAccountId.Insert(8, "\u00A0"),
                 privateKeySeed: FixturePrivateKeySeed,
                 method: "post",
@@ -633,6 +690,7 @@ public sealed class CanonicalRequestTests
             "method",
             () => CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 accountId: FixtureAccountId,
                 privateKeySeed: FixturePrivateKeySeed,
                 method: "po st",
@@ -642,6 +700,7 @@ public sealed class CanonicalRequestTests
             "path",
             () => CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 accountId: FixtureAccountId,
                 privateKeySeed: FixturePrivateKeySeed,
                 method: "post",
@@ -651,6 +710,7 @@ public sealed class CanonicalRequestTests
             "nonce",
             () => CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 accountId: FixtureAccountId,
                 privateKeySeed: FixturePrivateKeySeed,
                 method: "post",
@@ -717,6 +777,7 @@ public sealed class CanonicalRequestTests
     {
         var headers = CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             FixtureAccountId,
             FixturePrivateKeySeed,
             "GET",
@@ -748,6 +809,7 @@ public sealed class CanonicalRequestTests
 
         var headers = CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             FixtureAccountId,
             FixturePrivateKeySeed,
             "GET",
@@ -800,6 +862,7 @@ public sealed class CanonicalRequestTests
     {
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             accountId: accountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: "post",
@@ -842,6 +905,7 @@ public sealed class CanonicalRequestTests
     {
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             accountId: FixtureAccountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: method,
@@ -883,6 +947,7 @@ public sealed class CanonicalRequestTests
     {
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             accountId: FixtureAccountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: "post",
@@ -966,6 +1031,7 @@ public sealed class CanonicalRequestTests
     {
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildHeaders(
             FixtureNetworkId,
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             accountId: FixtureAccountId,
             privateKeySeed: FixturePrivateKeySeed,
             method: "post",

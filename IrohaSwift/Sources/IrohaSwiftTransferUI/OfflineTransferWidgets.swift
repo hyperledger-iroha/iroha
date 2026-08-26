@@ -267,7 +267,7 @@ public struct IrohaOfflineTransferTransportChoice: View {
 }
 
 /// Generates either one canonical direct envelope or the Kagemusha V4 QR stream.
-public enum IrohaOfflineFountainPayloadFrames {
+package enum IrohaOfflineFountainPayloadFrames {
     public static let defaultSingleFrameLimitBytes = 320
 
     public static func frames(
@@ -283,7 +283,7 @@ public enum IrohaOfflineFountainPayloadFrames {
     }
 }
 
-public struct IrohaOfflineFountainPayloadView<Content: View>: View {
+package struct IrohaOfflineFountainPayloadView<Content: View>: View {
     private let payload: KagemushaPeerPayload
     private let interval: TimeInterval
     private let singleFrameLimitBytes: Int
@@ -328,7 +328,7 @@ public struct IrohaOfflineFountainPayloadView<Content: View>: View {
     }
 }
 
-public struct IrohaOfflineNearbyPairingImageTile: View {
+package struct IrohaOfflineNearbyPairingImageTile: View {
     private let challenge: KagemushaNearbyPairingChallenge
     private let size: CGFloat
     private let theme: IrohaOfflineTransferTheme
@@ -357,7 +357,7 @@ public struct IrohaOfflineNearbyPairingImageTile: View {
     }
 }
 
-public struct IrohaOfflineNearbyPairingChallengeDisplay: View {
+package struct IrohaOfflineNearbyPairingChallengeDisplay: View {
     private let challenge: KagemushaNearbyPairingChallenge
     private let title: String
     private let tileSize: CGFloat
@@ -387,7 +387,7 @@ public struct IrohaOfflineNearbyPairingChallengeDisplay: View {
     }
 }
 
-public struct IrohaOfflineNearbyPairingChallengeChooser: View {
+package struct IrohaOfflineNearbyPairingChallengeChooser: View {
     private let title: String
     private let theme: IrohaOfflineTransferTheme
     private let onSelect: (KagemushaNearbyPairingChallenge) -> Void

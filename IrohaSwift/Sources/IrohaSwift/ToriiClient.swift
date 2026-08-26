@@ -10629,6 +10629,11 @@ fileprivate struct ToriiVerifyingKeyTransactionDraftEnvelope: Decodable {
                 signingMessageB64: signingMessageB64,
                 context: "verifying-key transaction draft"
             )
+        } catch let error as ToriiClientError {
+            // Preserve semantic fail-closed validation errors so callers can
+            // distinguish a hostile canonical-transaction substitution from
+            // ordinary JSON shape/typing failures.
+            throw error
         } catch {
             throw DecodingError.dataCorruptedError(
                 forKey: .signingMessageB64,
@@ -19421,6 +19426,8 @@ enum ToriiNativeAmxWire {
         "iroha_data_model::block::consensus::LaneBlockProposalPreimage"
     private static let settlementType =
         "iroha_data_model::block::consensus::LaneBlockCommitment"
+    private static let settlementHashDomain =
+        Data("iroha.nexus.lane-relay.settlement.v1".utf8)
     private static let blsKeyAdmissionMessage =
         Data("native-amx:bls-normal-key-admission:v1".utf8)
     /// A valid compressed BLS-Normal signature used only to make the native
@@ -19963,7 +19970,12 @@ enum ToriiNativeAmxWire {
             emptyNexusReceipts,
             emptyNativeReceipts,
         ])
-        return hashLiteral(noritoFrame(typeName: settlementType, payload: payload))
+        let framedSettlement = noritoFrame(typeName: settlementType, payload: payload)
+        return hashLiteral(
+            littleEndian(UInt64(settlementHashDomain.count))
+                + settlementHashDomain
+                + framedSettlement
+        )
     }
 }
 
@@ -25759,11 +25771,18 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 "unsignedPayload.domain must be the exact TransactionDomain::Network object."
             )
         }
+        let payloadNetworkId: NetworkId
         do {
-            _ = try NetworkId(noritoJSONLiteral: networkIdLiteral)
+            payloadNetworkId = try NetworkId(noritoJSONLiteral: networkIdLiteral)
         } catch {
             throw ToriiClientError.invalidPayload(
                 "unsignedPayload.domain.value must be an exact canonical NetworkId literal."
+            )
+        }
+        if let localSigningContext,
+           payloadNetworkId != localSigningContext.networkId {
+            throw ToriiClientError.invalidPayload(
+                "unsignedPayload.domain NetworkId must equal ToriiLocalSigningContext.networkId."
             )
         }
         guard case let .number(creationTime)? = unsignedPayload["creation_time_ms"],
@@ -25913,7 +25932,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                       headers: ["Accept": "application/json"])
         let (data, response) = try await send(request)
         try ensureStatus(response, equals: 200, responseBody: data)
-        try ensureResponseMediaType(response, equals: "application/json")
+        try ensureExactOfflineCashResponseMediaType(response, equals: "application/json")
         guard !data.isEmpty else {
             throw ToriiClientError.emptyBody
         }
@@ -25928,23 +25947,27 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     package func submitKagemushaTopUp(
-        _ requestBody: KagemushaTopUpRequest
+        _ requestBody: KagemushaTopUpRequest,
+        expectedSubmittedAtMilliseconds: UInt64? = nil
     ) async throws -> KagemushaOperationReference {
         try await submitKagemushaOperation(
             path: KagemushaToriiAPI.Endpoint.topUp.path,
             operationId: requestBody.operationId,
             expectedKind: .topUp,
+            expectedSubmittedAtMilliseconds: expectedSubmittedAtMilliseconds,
             archive: requestBody.noritoArchive()
         )
     }
 
     package func submitKagemushaRedeem(
-        _ requestBody: KagemushaRedeemRequest
+        _ requestBody: KagemushaRedeemRequest,
+        expectedSubmittedAtMilliseconds: UInt64? = nil
     ) async throws -> KagemushaOperationReference {
         try await submitKagemushaOperation(
             path: KagemushaToriiAPI.Endpoint.redeem.path,
             operationId: requestBody.operationId,
             expectedKind: .redeem,
+            expectedSubmittedAtMilliseconds: expectedSubmittedAtMilliseconds,
             archive: requestBody.noritoArchive()
         )
     }
@@ -25953,6 +25976,18 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         operationId: String,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
+        try await getKagemushaOperationStatusArchive(
+            operationId: operationId,
+            chainDiscriminant: chainDiscriminant,
+            expectedNetworkId: localSigningContext?.networkId
+        ).status
+    }
+
+    package func getKagemushaOperationStatusArchive(
+        operationId: String,
+        chainDiscriminant: UInt16,
+        expectedNetworkId: NetworkId?
+    ) async throws -> (archive: Data, status: KagemushaOperationStatus) {
         let path = try KagemushaToriiAPI.operationPath(operationId)
         let request = try makeRequest(
             path: path,
@@ -25964,7 +25999,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             maximumBytes: KagemushaOperationCodec.statusMaximumArchiveBytes
         )
         try ensureStatus(response, equals: 200, responseBody: responseData)
-        try ensureResponseMediaType(response, equals: "application/x-norito")
+        try ensureExactOfflineCashResponseMediaType(
+            response,
+            equals: "application/x-norito"
+        )
         guard !responseData.isEmpty else {
             throw ToriiClientError.emptyBody
         }
@@ -25977,13 +26015,22 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 "Kagemusha operation status operation_id does not match the requested resource"
             )
         }
-        return status
+        if case let .applied(applied) = status,
+           case let .topUp(topUp) = applied.result,
+           let expectedNetworkId,
+           topUp.anchor.networkId != expectedNetworkId {
+            throw ToriiClientError.invalidPayload(
+                "Kagemusha finalized top-up network does not match the local signing context"
+            )
+        }
+        return (Data(responseData), status)
     }
 
     private func submitKagemushaOperation(
         path: String,
         operationId: String,
         expectedKind: KagemushaOperationKind,
+        expectedSubmittedAtMilliseconds: UInt64?,
         archive: Data
     ) async throws -> KagemushaOperationReference {
         let request = try makeRequest(
@@ -26002,7 +26049,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             maximumBytes: KagemushaOperationCodec.referenceMaximumArchiveBytes
         )
         try ensureStatus(response, equals: 202, responseBody: data)
-        try ensureResponseMediaType(response, equals: "application/x-norito")
+        try ensureExactOfflineCashResponseMediaType(
+            response,
+            equals: "application/x-norito"
+        )
         guard !data.isEmpty else {
             throw ToriiClientError.emptyBody
         }
@@ -26011,7 +26061,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard reference.operationId == operationId,
               reference.kind == expectedKind,
               reference.state == .pending,
-              reference.statusUri == expectedStatusUri else {
+              reference.statusUri == expectedStatusUri,
+              expectedSubmittedAtMilliseconds.map({ reference.submittedAtMs == $0 }) != false else {
             throw ToriiClientError.invalidPayload(
                 "Kagemusha operation reference does not match the submitted command"
             )
@@ -26021,7 +26072,38 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 "Kagemusha operation Location must match the canonical status resource"
             )
         }
+        guard let retryAfter = response.value(forHTTPHeaderField: "Retry-After"),
+              Self.isCanonicalPositiveUInt64(retryAfter) else {
+            throw ToriiClientError.invalidPayload(
+                "Kagemusha operation Retry-After must be one canonical positive integer"
+            )
+        }
         return reference
+    }
+
+    private func ensureExactOfflineCashResponseMediaType(
+        _ response: HTTPURLResponse,
+        equals expected: String
+    ) throws {
+        guard let rawValue = response.value(forHTTPHeaderField: "Content-Type"),
+              rawValue.caseInsensitiveCompare(expected) == .orderedSame else {
+            throw ToriiClientError.invalidPayload(
+                "response Content-Type must be \(expected)"
+            )
+        }
+    }
+
+    private static func isCanonicalPositiveUInt64(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        guard let first = bytes.first,
+              first >= UInt8(ascii: "1"),
+              first <= UInt8(ascii: "9"),
+              bytes.dropFirst().allSatisfy({
+                  $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9")
+              }) else {
+            return false
+        }
+        return UInt64(value) != nil
     }
 
     public func getMetrics(asText: Bool = false) async throws -> ToriiMetricsResponse {
@@ -26220,10 +26302,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         try ensureStatus(response, equals: 200, responseBody: data)
         try ensureResponseMediaType(response, equals: "application/json")
         try rejectDuplicateJSONKeys(data, context: "verifying-key register response")
-        let envelope = try decodeJSON(
-            ToriiVerifyingKeyTransactionDraftEnvelope.self,
-            from: data
-        )
+        let envelope = try decodeVerifyingKeyTransactionDraftEnvelope(from: data)
         return try ToriiVerifyingKeyDraftValidation.validate(
             envelope,
             requestJSON: body,
@@ -26250,10 +26329,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         try ensureStatus(response, equals: 200, responseBody: data)
         try ensureResponseMediaType(response, equals: "application/json")
         try rejectDuplicateJSONKeys(data, context: "verifying-key update response")
-        let envelope = try decodeJSON(
-            ToriiVerifyingKeyTransactionDraftEnvelope.self,
-            from: data
-        )
+        let envelope = try decodeVerifyingKeyTransactionDraftEnvelope(from: data)
         return try ToriiVerifyingKeyDraftValidation.validate(
             envelope,
             requestJSON: body,
@@ -28126,6 +28202,21 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     private func decodeJSON<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         do {
             return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            throw ToriiClientError.decoding(error)
+        }
+    }
+
+    private func decodeVerifyingKeyTransactionDraftEnvelope(
+        from data: Data
+    ) throws -> ToriiVerifyingKeyTransactionDraftEnvelope {
+        do {
+            return try JSONDecoder().decode(
+                ToriiVerifyingKeyTransactionDraftEnvelope.self,
+                from: data
+            )
+        } catch let error as ToriiClientError {
+            throw error
         } catch {
             throw ToriiClientError.decoding(error)
         }

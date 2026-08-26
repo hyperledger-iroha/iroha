@@ -320,6 +320,7 @@ lifecycle_symbols = {
     "connect_norito_kagemusha_recursive_spend_redeem_v4",
 }
 rust_lines = [
+    "mod platform_jni;",
     "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;",
     *(
         f'pub unsafe extern "C" fn {symbol}() {{}}'
@@ -358,15 +359,65 @@ kagemusha_recursive_spend_lifecycle_exports! {
     redeem => connect_norito_kagemusha_recursive_spend_redeem_v4, "krv4-redeem";
 }''',
 ]
-for namespace in (
-    "org_hyperledger_iroha_sdk_offline",
-    "org_hyperledger_iroha_android_offline",
-):
-    rust_lines.extend(
-        f"fn Java_{namespace}_KagemushaRecursiveSpendProver_{method}() {{}}"
-        for method in jni_methods
-    )
 (bridge_dir / "src/lib.rs").write_text("\n".join(rust_lines) + "\n", encoding="utf-8")
+(bridge_dir / "src/platform_jni").mkdir(parents=True, exist_ok=True)
+(bridge_dir / "src/platform_jni.rs").write_text(
+    '\n'.join(
+        f'include!("platform_jni/part_{index}.rs");' for index in (1, 2, 3)
+    )
+    + "\n",
+    encoding="utf-8",
+)
+for part in (1, 2):
+    (bridge_dir / f"src/platform_jni/part_{part}.rs").write_text("\n", encoding="utf-8")
+explicit_jni_methods = {"nativeBridgeAbiVersion", "nativePastaCycleV4BackendAvailable"}
+forwarded_jni_methods = [
+    method for method in jni_methods if method not in explicit_jni_methods
+]
+part_3_lines = [
+    "macro_rules! kagemusha_sdk_android_forwarders {",
+    "    () => {",
+    "        #[unsafe(export_name = concat!(",
+    '            "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_",',
+    "            stringify!(method)",
+    "        ))]",
+    "        fn sdk() {}",
+    "        #[unsafe(export_name = concat!(",
+    '            "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_",',
+    "            stringify!(method)",
+    "        ))]",
+    "        fn android() {}",
+    "    };",
+    "}",
+    "jni_sdk_android_pairs! {",
+]
+for method in sorted(explicit_jni_methods):
+    part_3_lines.extend(
+        [
+            "android: fn "
+            f"Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_{method}();",
+            "sdk:",
+            "pub unsafe extern \"system\" fn "
+            f"Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_{method}() {{}}",
+        ]
+    )
+part_3_lines.extend(["}", "", "kagemusha_sdk_android_forwarders! {"])
+part_3_lines.extend(
+    f"    {method} {{ }} -> JniByteArray = fixture_delegate;"
+    for method in forwarded_jni_methods
+)
+part_3_lines.extend(
+    [
+        "}",
+        "",
+        "pub(super) fn ensure_min_array_length() {}",
+        "",
+    ]
+)
+(bridge_dir / "src/platform_jni/part_3.rs").write_text(
+    "\n".join(part_3_lines),
+    encoding="utf-8",
+)
 protocol = root / "crates/iroha_data_model/src/privacy/protocol.rs"
 protocol.parent.mkdir(parents=True, exist_ok=True)
 protocol.write_text(

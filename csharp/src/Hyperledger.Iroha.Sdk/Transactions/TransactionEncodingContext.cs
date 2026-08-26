@@ -11,23 +11,34 @@ internal sealed class TransactionEncodingContext
 {
     private const byte AssetDefinitionVersion = 1;
 
-    private static readonly Dictionary<CurveId, ulong> PublicKeyMultihashCodes = new()
+    private static readonly Dictionary<CurveId, byte> PublicKeyAlgorithmTags = new()
     {
-        [CurveId.Ed25519] = 0xED,
-        [CurveId.MlDsa] = 0xEE,
-        [CurveId.Sm2] = 0x1306,
+        [CurveId.Ed25519] = 0,
+        [CurveId.MlDsa] = 4,
+        [CurveId.Gost256A] = 5,
+        [CurveId.Gost256B] = 6,
+        [CurveId.Gost256C] = 7,
+        [CurveId.Gost512A] = 8,
+        [CurveId.Gost512B] = 9,
+        [CurveId.Sm2] = 10,
     };
 
     private static readonly Dictionary<char, int> Base58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
         .Select(static (character, index) => new KeyValuePair<char, int>(character, index))
         .ToDictionary();
 
-    public TransactionEncodingContext(string authorityAccountId)
+    public TransactionEncodingContext(string authorityAccountId, ushort chainDiscriminant)
     {
-        AuthorityAccountId = CanonicalizeAccountId(authorityAccountId);
+        AuthorityAccountId = CanonicalizeAccountId(
+            authorityAccountId,
+            nameof(authorityAccountId),
+            chainDiscriminant);
+        ChainDiscriminant = chainDiscriminant;
     }
 
     public string AuthorityAccountId { get; }
+
+    public ushort ChainDiscriminant { get; }
 
     public byte[] EncodeNetworkDomain(NetworkId networkId)
     {
@@ -40,30 +51,32 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeAccountId(string accountId)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteField(EncodeAccountController(accountId));
-        return writer.ToArray();
+        // AccountId is transparent over AccountController in the Rust data model.
+        return EncodeAccountController(accountId);
     }
 
     public byte[] EncodeAccountController(string accountId)
     {
-        var parsed = AccountAddress.Parse(CanonicalizeAccountId(accountId));
+        var parsed = AccountAddress.Parse(
+            CanonicalizeAccountId(accountId, nameof(accountId), ChainDiscriminant),
+            ChainDiscriminant);
         if (parsed.CurveIdentifier is null || parsed.PublicKey.Length == 0)
         {
             throw new ArgumentException("Multisig account controllers are not yet supported by the managed transaction encoder.", nameof(accountId));
         }
 
-        if (!PublicKeyMultihashCodes.TryGetValue(parsed.CurveIdentifier.Value, out var multihashCode))
+        if (!PublicKeyAlgorithmTags.TryGetValue(parsed.CurveIdentifier.Value, out var algorithmTag))
         {
             throw new ArgumentException($"Unsupported account curve `{parsed.CurveIdentifier}` for managed Norito encoding.", nameof(accountId));
         }
 
-        var multihash = FormatPublicKeyMultihash(multihashCode, parsed.PublicKey);
-        var keyPayload = EncodeString(multihash);
+        var compactPublicKey = new byte[checked(parsed.PublicKey.Length + 1)];
+        compactPublicKey[0] = algorithmTag;
+        parsed.PublicKey.CopyTo(compactPublicKey.AsSpan(1));
 
         var writer = new CanonicalNoritoWriter();
         writer.WriteUInt32LittleEndian(0);
-        writer.WriteField(keyPayload);
+        writer.WriteField(EncodeConstVec(compactPublicKey));
         return writer.ToArray();
     }
 
@@ -112,6 +125,21 @@ internal sealed class TransactionEncodingContext
     {
         var writer = new CanonicalNoritoWriter();
         writer.WriteUInt64LittleEndian(value);
+        return writer.ToArray();
+    }
+
+    public byte[] EncodeEnumVariant(uint variant, params byte[][] fields)
+    {
+        var payload = new CanonicalNoritoWriter();
+        foreach (var field in fields)
+        {
+            ArgumentNullException.ThrowIfNull(field);
+            payload.WriteField(field);
+        }
+
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteUInt32LittleEndian(variant);
+        writer.WriteField(payload.ToArray());
         return writer.ToArray();
     }
 
@@ -490,43 +518,32 @@ internal sealed class TransactionEncodingContext
 
     internal static string CanonicalizeAccountId(string accountId, string paramName = "accountId")
     {
+        return CanonicalizeAccountId(accountId, paramName, expectedChainDiscriminant: null);
+    }
+
+    internal static string CanonicalizeAccountId(
+        string accountId,
+        string paramName,
+        ushort expectedChainDiscriminant)
+    {
+        return CanonicalizeAccountId(accountId, paramName, (ushort?)expectedChainDiscriminant);
+    }
+
+    private static string CanonicalizeAccountId(
+        string accountId,
+        string paramName,
+        ushort? expectedChainDiscriminant)
+    {
         var exact = RequireExactNonBlank(accountId, paramName);
         try
         {
-            _ = AccountAddress.Parse(exact);
+            _ = AccountAddress.Parse(exact, expectedChainDiscriminant);
             return exact;
         }
         catch (AccountAddressException exception)
         {
             throw new ArgumentException("Account id must be a canonical I105 account id.", paramName, exception);
         }
-    }
-
-    private static string FormatPublicKeyMultihash(ulong functionCode, ReadOnlySpan<byte> payload)
-    {
-        var functionHex = Convert.ToHexString(EncodeVarint(functionCode)).ToLowerInvariant();
-        var lengthHex = Convert.ToHexString(EncodeVarint((ulong)payload.Length)).ToLowerInvariant();
-        var payloadHex = Convert.ToHexString(payload).ToUpperInvariant();
-        return functionHex + lengthHex + payloadHex;
-    }
-
-    private static byte[] EncodeVarint(ulong value)
-    {
-        var bytes = new List<byte>();
-        do
-        {
-            var current = (byte)(value & 0x7F);
-            value >>= 7;
-            if (value != 0)
-            {
-                current |= 0x80;
-            }
-
-            bytes.Add(current);
-        }
-        while (value != 0);
-
-        return [.. bytes];
     }
 
     private static byte[] DecodeBase58(string literal, string paramName)

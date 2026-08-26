@@ -1155,7 +1155,7 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "b78fe6b65194ff48919c35f8423f31714fb6da4a172d8a004720e5b23f0b0d50"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "7fef4e6d2624a76f96c3132faa646f82597d1b60ab12d6d7a332eb34a2dc413d"
+        "4d16915a3dcd6817be753c7e50e3924bd5afa7c072d2d561e55bf22d9bc81793"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
         "093f112f182ade0fecfe6ed51342f4d4ad2558977ac78fafae550b45e06e5ced"

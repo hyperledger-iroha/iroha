@@ -11,8 +11,10 @@ import {
   generateKeyPair,
   verifyEd25519,
 } from "../src/index.js";
+import { networkIdToNoritoJson } from "../src/networkIdNoritoJson.js";
 
 const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
+const NETWORK_ID_JSON = networkIdToNoritoJson(NETWORK_ID);
 const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID);
 
 class ToriiClient extends BaseToriiClient {
@@ -35,6 +37,25 @@ function demoAccountId() {
 
 const VALID_ACCOUNT_ID = demoAccountId();
 const ALT_ACCOUNT_ID = demoAccountId();
+
+function feeQuotePayload(overrides = {}) {
+  return {
+    domain: { kind: "network", value: NETWORK_ID_JSON },
+    authority: VALID_ACCOUNT_ID,
+    creation_time_ms: 1,
+    instructions: { Instructions: [] },
+    time_to_live_ms: null,
+    nonce: null,
+    fee_payment: {
+      payer: "authority",
+      value: { charge_limits: [], gas_limit: null },
+    },
+    admission_intent: { intent: "queue_plan_synced", value: null },
+    metadata: {},
+    attachments: null,
+    ...overrides,
+  };
+}
 
 function jsonResponse(status, body) {
   return new Response(body == null ? null : JSON.stringify(body), {
@@ -515,14 +536,10 @@ test("quoteFees account-signs an exact non-default-network draft and returns typ
   );
   const authority = parsedAuthority.address.toI105(369);
   const assetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa";
-  const payload = {
-    chain: "test-chain",
+  const payload = feeQuotePayload({
     authority,
-    fee_payment: {
-      payer: "authority",
-      value: { charge_limits: [], gas_limit: null },
-    },
-  };
+  });
+  const payloadJson = JSON.stringify(payload);
   const quote = {
     intent: {
       payer: "authority",
@@ -565,10 +582,11 @@ test("quoteFees account-signs an exact non-default-network draft and returns typ
       return jsonResponse(200, quote);
     },
   });
-  const result = await client.quoteFees({ payload }, {
+  const result = await client.quoteFees({ payload, payloadJson }, {
     canonicalAuth: { accountId: authority, privateKey: Buffer.alloc(32, 14) },
   });
   assert.deepEqual(result, quote);
+  assert.equal(lastRequest.init.body, `{"payload":${payloadJson}}`);
   assert.deepEqual(JSON.parse(lastRequest.init.body), { payload });
   assert.equal(new URL(lastRequest.input).pathname, "/v1/fees/quote");
 });
@@ -586,13 +604,7 @@ test("quoteFees requires canonical account authentication before sending", async
 
   await assert.rejects(
     () => client.quoteFees(
-      {
-        authority: VALID_ACCOUNT_ID,
-        fee_payment: {
-          payer: "authority",
-          value: { charge_limits: [], gas_limit: null },
-        },
-      },
+      feeQuotePayload(),
       {
         canonicalAuth: {
           accountId: ALT_ACCOUNT_ID,
@@ -601,6 +613,78 @@ test("quoteFees requires canonical account authentication before sending", async
       },
     ),
     /must equal the exact payload authority/i,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("quoteFees requires the closed exact-network TransactionPayload before fetch", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("invalid fee quote reached fetch");
+    },
+  });
+  const canonicalAuth = {
+    accountId: VALID_ACCOUNT_ID,
+    privateKey: Buffer.alloc(32, 16),
+  };
+  const badChecksum = `${NETWORK_ID_JSON.slice(0, -1)}${
+    NETWORK_ID_JSON.endsWith("0") ? "1" : "0"
+  }`;
+  const foreignNetworkId = NetworkId.fromBytes(Buffer.alloc(32, 0xa7));
+  const invalidPayloads = [
+    { payload: { ...feeQuotePayload(), chain: "test-chain" }, error: /contain exactly/u },
+    { payload: { ...feeQuotePayload(), chainId: "test-chain" }, error: /contain exactly/u },
+    { payload: { ...feeQuotePayload(), chain_id: "test-chain" }, error: /contain exactly/u },
+    {
+      payload: Object.fromEntries(
+        Object.entries(feeQuotePayload()).filter(([field]) => field !== "domain"),
+      ),
+      error: /contain exactly/u,
+    },
+    {
+      payload: feeQuotePayload({ domain: { kind: "genesis", value: null } }),
+      error: /exact network transaction domain/u,
+    },
+    {
+      payload: feeQuotePayload({
+        domain: { kind: "network", value: NETWORK_ID.toString() },
+      }),
+      error: /domain\.value.*canonical marked Iroha hash literal/u,
+    },
+    {
+      payload: feeQuotePayload({
+        domain: { kind: "network", value: NETWORK_ID_JSON.toLowerCase() },
+      }),
+      error: /domain\.value.*canonical marked Iroha hash literal/u,
+    },
+    {
+      payload: feeQuotePayload({ domain: { kind: "network", value: badChecksum } }),
+      error: /invalid checksum/u,
+    },
+    {
+      payload: feeQuotePayload({
+        domain: { kind: "network", value: networkIdToNoritoJson(foreignNetworkId) },
+      }),
+      error: /must equal the client's exact LocalSigningContext/u,
+    },
+  ];
+  for (const { payload, error } of invalidPayloads) {
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(() => client.quoteFees(payload, { canonicalAuth }), error);
+  }
+  assert.equal(fetchCalls, 0);
+
+  const unboundClient = new BaseToriiClient("https://example.test", {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("unbound fee quote reached fetch");
+    },
+  });
+  await assert.rejects(
+    () => unboundClient.quoteFees(feeQuotePayload(), { canonicalAuth }),
+    /requires ToriiClient options\.localSigningContext/u,
   );
   assert.equal(fetchCalls, 0);
 });

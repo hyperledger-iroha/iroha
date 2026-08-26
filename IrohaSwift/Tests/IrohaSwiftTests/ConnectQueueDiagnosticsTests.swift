@@ -50,7 +50,7 @@ final class ConnectQueueDiagnosticsTests: XCTestCase {
                                           fileManager: .default)
         let metricsURL = storage.metricsURL
         XCTAssertTrue(FileManager.default.fileExists(atPath: metricsURL.path))
-        let metricsContents = try String(contentsOf: metricsURL)
+        let metricsContents = try String(contentsOf: metricsURL, encoding: .utf8)
         XCTAssertTrue(metricsContents.contains("\"state\":\"throttled\""))
     }
 

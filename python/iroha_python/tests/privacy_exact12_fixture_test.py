@@ -47,6 +47,7 @@ TRANSACTION_SCHEMA = "iroha_data_model::transaction::signed::model::TransactionP
 CRC64_POLYNOMIAL = 0xC96C_5795_D787_0F42
 CRC64_MASK = 0xFFFF_FFFF_FFFF_FFFF
 PROOF_ENGINE_TAGS = (0, 2, 3, 1, 4, 0, 5, 8, 6, 7, 0, 0)
+STATEMENT_FIELD_COUNTS = (11, 10, 6, 9, 15, 20, 4, 8, 9, 8, 13, 13)
 
 
 def _compact(value: int) -> bytes:
@@ -76,6 +77,24 @@ def test_exact12_transaction_domain_requires_one_marked_network_id() -> None:
             exact12_module._decode_network_transaction_domain_v1(
                 retired_or_malformed, "transaction.domain"
             )
+
+
+def test_exact12_transaction_domain_matches_the_privacy_statement_network() -> None:
+    bundle = _bundle()
+    for row_index, row in enumerate(bundle.rows):
+        transaction_fields = _fields(row.unsigned_transaction_payload_norito, 10)
+        transaction_domain = transaction_fields[0]
+        assert struct.unpack_from("<I", transaction_domain)[0] == 0
+        transaction_network, _, end = _read_field(transaction_domain, 4)
+        assert end == len(transaction_domain)
+
+        statement_payload = _frame_payload(row.statement_norito, 8)
+        statement_variant, _, end = _read_field(statement_payload, 4)
+        assert end == len(statement_payload)
+        statement_fields = _fields(statement_variant, STATEMENT_FIELD_COUNTS[row_index])
+        statement_context = _fields(statement_fields[0], 8)
+
+        assert transaction_network == statement_context[0]
 
 
 def _read_compact(payload: bytes | bytearray, offset: int) -> tuple[int, int]:
@@ -214,7 +233,9 @@ def _projection_with_envelope(
     row: PrivacyExact12TypedFixtureRowV1,
     mutate: Callable[[list[bytes]], None],
 ) -> bytes:
-    transaction_fields = _fields(_frame_payload(row.transaction_intent_projection_norito, 0), 9)
+    transaction_fields = _fields(
+        _frame_payload(row.transaction_intent_projection_norito, 0), 10
+    )
     _, _, instruction = _extract_instruction_archive(transaction_fields[3])
     instruction_fields = _fields(_frame_payload(instruction, 8), 1)
     envelope_fields = _fields(instruction_fields[0], 11)
@@ -238,7 +259,7 @@ def _replace_projected_statement(
         assert end == len(tagged)
         statement_fields = _fields(
             statement_variant,
-            (11, 10, 6, 9, 15, 20, 4, 8, 9, 8, 13, 13)[struct.unpack("<I", statement_tag)[0]],
+            STATEMENT_FIELD_COUNTS[struct.unpack("<I", statement_tag)[0]],
         )
         mutate(statement_fields)
         variant = _encode_fields(statement_fields)
@@ -713,11 +734,11 @@ def test_closed_statement_schema_rejects_an_extra_compact_field() -> None:
     )
 
 
-@pytest.mark.parametrize("field_index", (0, 1, 2, 4, 5, 6, 7, 8))
+@pytest.mark.parametrize("field_index", (0, 1, 2, 4, 5, 6, 7, 8, 9))
 def test_unsigned_transaction_rejects_all_independent_field_mutations(field_index: int) -> None:
     bundle = _bundle()
     row = bundle.rows[0]
-    fields = _fields(row.unsigned_transaction_payload_norito, 9)
+    fields = _fields(row.unsigned_transaction_payload_norito, 10)
     replacement = bytearray(fields[field_index])
     replacement[-1] ^= 1
     fields[field_index] = bytes(replacement)
@@ -728,10 +749,11 @@ def test_unsigned_transaction_rejects_all_independent_field_mutations(field_inde
     )
 
 
-def test_transaction_rejects_executable_count_wire_id_ttl_nonce_and_attachments() -> None:
+def test_transaction_rejects_executable_count_wire_id_ttl_nonce_admission_and_auxiliary_data(
+) -> None:
     bundle = _bundle()
     row = bundle.rows[0]
-    fields = _fields(row.unsigned_transaction_payload_norito, 9)
+    fields = _fields(row.unsigned_transaction_payload_norito, 10)
 
     executable = bytearray(fields[3])
     sequence, sequence_start, _ = _read_field(executable, 4)
@@ -761,7 +783,9 @@ def test_transaction_rejects_executable_count_wire_id_ttl_nonce_and_attachments(
     for index, replacement, match in (
         (4, b"\x00", "TTL"),
         (5, b"\x00", "nonce"),
-        (8, b"\x01\x00", "attachments"),
+        (7, struct.pack("<I", 1), "ordinary transaction admission"),
+        (8, b"\x01" + bytes(7), "empty metadata"),
+        (9, b"\x01\x00", "attachments"),
     ):
         changed = list(fields)
         changed[index] = replacement

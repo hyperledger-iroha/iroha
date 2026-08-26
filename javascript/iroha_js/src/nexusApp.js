@@ -1440,33 +1440,19 @@ function normalizePublicPipelineStatus(payload, context) {
 }
 
 function classifyPipelineStatus(payload, expectedHash, context) {
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  if (payload.hash !== expectedHash) {
+  const normalized = normalizePublicPipelineStatus(payload, context);
+  if (normalized.hash !== expectedHash) {
     throw new TypeError(`${context}.hash must match the requested transaction`);
   }
-  if (payload.scope !== "global") {
+  if (normalized.scope !== "global") {
     throw new TypeError(`${context}.scope must be global`);
   }
-  if (
-    payload.status === null ||
-    typeof payload.status !== "object" ||
-    Array.isArray(payload.status) ||
-    typeof payload.status.kind !== "string" ||
-    !PIPELINE_STATUS_KINDS.has(payload.status.kind)
-  ) {
-    throw new TypeError(`${context}.status.kind is missing or unsupported`);
-  }
-  const kind = payload.status.kind;
-  const resolvedFrom = payload.resolved_from;
-  if (!PIPELINE_STATUS_SOURCES.has(resolvedFrom)) {
-    throw new TypeError(`${context}.resolved_from is unsupported`);
-  }
+  const kind = normalized.status.kind;
+  const resolvedFrom = normalized.resolved_from;
   if (kind === "Applied") {
     if (
-      !Number.isSafeInteger(payload.status.block_height) ||
-      payload.status.block_height <= 0
+      !Number.isSafeInteger(normalized.status.block_height) ||
+      normalized.status.block_height <= 0
     ) {
       throw new TypeError(
         `${context} Applied status must have a positive block height`,

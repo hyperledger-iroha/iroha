@@ -292,8 +292,12 @@ public sealed partial class SccpExactTests
             .ToHashSet(StringComparer.Ordinal);
         Assert.True(fields.SetEquals(
             [
-                "authority", "signature_b64", "transaction_payload_b64",
-                "fee_payment", "destination_proof_b64", "creation_time_ms",
+                "authority",
+                "signature_b64",
+                "transaction_payload_b64",
+                "fee_payment",
+                "destination_proof_b64",
+                "creation_time_ms",
             ]));
         var prepared = BridgeProofRequest(
             authority,
@@ -1436,7 +1440,7 @@ public sealed partial class SccpExactTests
                 FeePayment: FeePaymentIntent.Authority([], gasLimit: 701))));
 
         var sponsorId = new FeeSponsorProgramId(
-            pair.ToAccountAddress().ToI105(AccountAddress.DefaultChainDiscriminant),
+            pair.ToAccountAddress().ToI105(AccountAddress.TairaTestnetChainDiscriminant),
             "wallet_fx");
         var sponsorIntent = FeePaymentIntent.Sponsor(
             sponsorId,
@@ -1933,36 +1937,45 @@ public sealed partial class SccpExactTests
         ulong height,
         string id,
         uint commitmentIndex = 0) => new()
-    {
-        ["height"] = height,
-        ["commitment_index"] = commitmentIndex,
-        ["message_id_hex"] = id,
-        ["kind"] = "transfer",
-        ["source_profile"] = "sora-taira",
-        ["target_profile"] = "bsc-mainnet",
-        ["destination_binding_hash"] = PrefixHash(0x71),
-        ["route_configuration_hash"] = PrefixHash(0x72),
-        ["target_domain"] = 2,
-        ["asset_id"] = "xor",
-        ["route_id"] = "taira_bsc_xor",
-        ["recipient"] = null,
-        ["amount"] = "1000",
-        ["payload_projection"] = TransferProjection(2),
-        ["links"] = new Dictionary<string, object?>
         {
-            ["bundle_path"] = $"/v1/sccp/proofs/message/{id}",
-            ["proof_request_path"] = $"/v1/sccp/proof-requests/{id}",
-        },
-    };
+            ["height"] = height,
+            ["commitment_index"] = commitmentIndex,
+            ["message_id_hex"] = id,
+            ["kind"] = "transfer",
+            ["source_profile"] = "sora-taira",
+            ["target_profile"] = "bsc-mainnet",
+            ["destination_binding_hash"] = PrefixHash(0x71),
+            ["route_configuration_hash"] = PrefixHash(0x72),
+            ["target_domain"] = 2,
+            ["asset_id"] = "xor",
+            ["route_id"] = "taira_bsc_xor",
+            ["recipient"] = null,
+            ["amount"] = "1000",
+            ["payload_projection"] = TransferProjection(2),
+            ["links"] = new Dictionary<string, object?>
+            {
+                ["bundle_path"] = $"/v1/sccp/proofs/message/{id}",
+                ["proof_request_path"] = $"/v1/sccp/proof-requests/{id}",
+            },
+        };
 
     private static Dictionary<string, object?> TransferPayload() => new()
     {
-        ["version"] = 1, ["source_domain"] = 0, ["dest_domain"] = 2, ["nonce"] = "7",
-        ["route_revision"] = 1, ["asset_home_domain"] = 0,
-        ["asset_id_codec"] = 1, ["asset_id"] = "0x786f72", ["amount"] = "1000",
-        ["sender_codec"] = 1, ["sender"] = "0x616c696365407461697261",
-        ["recipient_codec"] = 2, ["recipient"] = "0x" + new string('1', 40),
-        ["route_id_codec"] = 1, ["route_id"] = "0x74616972615f6273635f786f72",
+        ["version"] = 1,
+        ["source_domain"] = 0,
+        ["dest_domain"] = 2,
+        ["nonce"] = "7",
+        ["route_revision"] = 1,
+        ["asset_home_domain"] = 0,
+        ["asset_id_codec"] = 1,
+        ["asset_id"] = "0x786f72",
+        ["amount"] = "1000",
+        ["sender_codec"] = 1,
+        ["sender"] = "0x616c696365407461697261",
+        ["recipient_codec"] = 2,
+        ["recipient"] = "0x" + new string('1', 40),
+        ["route_id_codec"] = 1,
+        ["route_id"] = "0x74616972615f6273635f786f72",
     };
 
     private static Dictionary<string, object?> TransferProjection(uint destinationDomain)
@@ -2091,7 +2104,7 @@ public sealed partial class SccpExactTests
             anchorHash);
         var custody = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x29, 32).ToArray())
             .ToAccountAddress()
-            .ToI105();
+            .ToI105(AccountAddress.TairaTestnetChainDiscriminant);
         var lane = Lane("bsc-mainnet", "sora-taira");
         var route = new Dictionary<string, object?>
         {
@@ -2440,16 +2453,22 @@ public sealed partial class SccpExactTests
 
         return new Dictionary<string, object?>
         {
-            ["version"] = 1, ["alpha1"] = G1(), ["beta2"] = G2(),
-            ["gamma2"] = G2(), ["delta2"] = G2(), ["ic"] = ic,
+            ["version"] = 1,
+            ["alpha1"] = G1(),
+            ["beta2"] = G2(),
+            ["gamma2"] = G2(),
+            ["delta2"] = G2(),
+            ["ic"] = ic,
         };
     }
 
     private static Dictionary<string, object?> G1() => new() { ["x"] = Upper(1, 32), ["y"] = Upper(2, 32) };
     private static Dictionary<string, object?> G2() => new()
     {
-        ["x_c0"] = Upper(3, 32), ["x_c1"] = Upper(4, 32),
-        ["y_c0"] = Upper(5, 32), ["y_c1"] = Upper(6, 32),
+        ["x_c0"] = Upper(3, 32),
+        ["x_c1"] = Upper(4, 32),
+        ["y_c0"] = Upper(5, 32),
+        ["y_c1"] = Upper(6, 32),
     };
 
     private static byte[] VerifyingKeyBytes(Dictionary<string, object?> key)
@@ -2485,11 +2504,16 @@ public sealed partial class SccpExactTests
     {
         string[] labels =
         [
-            "sccp:groth16-bn254:signal:message-id:v1", "sccp:groth16-bn254:signal:payload-hash:v1",
-            "sccp:groth16-bn254:signal:target-domain:v1", "sccp:groth16-bn254:signal:commitment-root:v1",
-            "sccp:groth16-bn254:signal:finality-height:v1", "sccp:groth16-bn254:signal:finality-block-hash:v1",
-            "sccp:groth16-bn254:signal:source-domain:v1", "sccp:groth16-bn254:signal:statement-hash:v1",
-            "sccp:groth16-bn254:signal:destination-binding-hash:v1", "sccp:groth16-bn254:signal:route-configuration-hash:v1",
+            "sccp:groth16-bn254:signal:message-id:v1",
+            "sccp:groth16-bn254:signal:payload-hash:v1",
+            "sccp:groth16-bn254:signal:target-domain:v1",
+            "sccp:groth16-bn254:signal:commitment-root:v1",
+            "sccp:groth16-bn254:signal:finality-height:v1",
+            "sccp:groth16-bn254:signal:finality-block-hash:v1",
+            "sccp:groth16-bn254:signal:source-domain:v1",
+            "sccp:groth16-bn254:signal:statement-hash:v1",
+            "sccp:groth16-bn254:signal:destination-binding-hash:v1",
+            "sccp:groth16-bn254:signal:route-configuration-hash:v1",
             "sccp:groth16-bn254:signal:sora-finality-anchor-hash:v1",
         ];
         using var canonical = new MemoryStream();
@@ -2544,7 +2568,8 @@ public sealed partial class SccpExactTests
 
     private static Dictionary<string, object?> Lane(string source, string target) => new()
     {
-        ["source"] = Network(source), ["target"] = Network(target),
+        ["source"] = Network(source),
+        ["target"] = Network(target),
     };
 
     private static string PrefixHash(byte value) => "0x" + Lower(value, 32);
@@ -2557,13 +2582,21 @@ public sealed partial class SccpExactTests
         string? payload,
         string? signing,
         string backend = "bridge/sccp/native/bsc-parlia-v1") => Json(new Dictionary<string, object?>
-    {
-        ["submitted"] = submitted, ["payload_kind"] = "transfer", ["message_id_hex"] = new string('1', 64),
-        ["backend"] = backend, ["counterparty_domain"] = 2,
-        ["counterparty_chain"] = "bsc-mainnet", ["route_configuration_hash_hex"] = new string('2', 64),
-        ["range_start_height"] = 4, ["range_end_height"] = 9, ["creation_time_ms"] = 7,
-        ["tx_hash_hex"] = txHash, ["transaction_payload_b64"] = payload, ["signing_message_b64"] = signing,
-    });
+        {
+            ["submitted"] = submitted,
+            ["payload_kind"] = "transfer",
+            ["message_id_hex"] = new string('1', 64),
+            ["backend"] = backend,
+            ["counterparty_domain"] = 2,
+            ["counterparty_chain"] = "bsc-mainnet",
+            ["route_configuration_hash_hex"] = new string('2', 64),
+            ["range_start_height"] = 4,
+            ["range_end_height"] = 9,
+            ["creation_time_ms"] = 7,
+            ["tx_hash_hex"] = txHash,
+            ["transaction_payload_b64"] = payload,
+            ["signing_message_b64"] = signing,
+        });
 
     private static byte[] CanonicalTransactionPayload(
         ulong creationTimeMs,

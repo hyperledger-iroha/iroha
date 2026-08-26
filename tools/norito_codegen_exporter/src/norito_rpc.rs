@@ -340,11 +340,10 @@ fn validate_alias_setup_fixture_bytes(bytes: &[u8]) -> Result<()> {
         .and_then(|receipt| receipt.get("body"))
         .and_then(Value::as_object)
         .ok_or_else(|| eyre!("alias-setup fixture is missing the typed onboarding receipt body"))?;
-    let network_literal = onboarding
+    let network_value = onboarding
         .get("network_id")
-        .and_then(Value::as_str)
         .ok_or_else(|| eyre!("alias-setup fixture onboarding body requires network_id"))?;
-    parse_network_id(network_literal)
+    parse_typed_json_network_id(network_value)
         .context("alias-setup fixture onboarding network_id is not canonical")?;
     Ok(())
 }
@@ -1464,6 +1463,16 @@ fn parse_network_id(value: &str) -> Result<NetworkId> {
         .with_context(|| format!("invalid canonical network id '{value}'"))?;
     if network_id.to_string() != value {
         bail!("network id '{value}' must use exact raw lowercase marked hex");
+    }
+    Ok(network_id)
+}
+fn parse_typed_json_network_id(value: &Value) -> Result<NetworkId> {
+    let network_id =
+        json::from_value::<NetworkId>(value.clone()).context("invalid typed JSON network id")?;
+    let canonical =
+        json::to_value(&network_id).context("failed to encode typed JSON network id")?;
+    if canonical != *value {
+        bail!("network id must use its exact canonical typed JSON encoding");
     }
     Ok(network_id)
 }
@@ -4209,6 +4218,19 @@ mod tests {
                 "non-canonical network id '{rejected}' must fail closed"
             );
         }
+    }
+    #[test]
+    fn typed_json_network_id_parser_requires_exact_canonical_encoding() {
+        let network_id = parse_network_id(TEST_NETWORK_ID).expect("canonical network id");
+        let canonical = json::to_value(&network_id).expect("canonical typed JSON network id");
+        let parsed =
+            parse_typed_json_network_id(&canonical).expect("canonical typed JSON must parse");
+        assert_eq!(parsed, network_id);
+        assert_ne!(canonical, Value::String(TEST_NETWORK_ID.to_owned()));
+        assert!(
+            parse_typed_json_network_id(&Value::String(TEST_NETWORK_ID.to_owned())).is_err(),
+            "the public lowercase text form is not the canonical typed JSON form"
+        );
     }
     #[test]
     fn payload_ttl_is_required_and_nonzero() {

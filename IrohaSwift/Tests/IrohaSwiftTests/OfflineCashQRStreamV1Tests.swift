@@ -130,10 +130,12 @@ final class OfflineCashQRStreamV1Tests: XCTestCase {
         switch kind {
         case .receiveRequest:
             schema = "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentRequestV1"
-            alignment = 8
+            // Rust's aligned offline-cash archives retain eight bytes after the
+            // 40-byte header even when the payload type itself is eight-aligned.
+            alignment = 16
         case .payment:
             schema = "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentV1"
-            alignment = 8
+            alignment = 16
         case .acknowledgement:
             schema =
                 "iroha_data_model::offline::offline_cash_v1::OfflineCashAcknowledgementV1"

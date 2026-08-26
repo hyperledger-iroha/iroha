@@ -176,7 +176,18 @@ submission and operation polling. Top-up archives are limited to 512 KiB and
 redeem archives to 48 MiB; the exported
 `KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES` and
 `KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES` constants expose those exact Torii
-boundaries.
+boundaries. JavaScript validates the exact top-up/redemption schema hash,
+compact `NRT0` framing, padding, payload length, and CRC64, but it does not
+schema-decode the opaque payload or rederive its operation id. The producing
+wallet/prover and Torii remain responsible for those semantic checks.
+
+Accepted references and every pending, applied, or rejected status require a
+lowercase 32-byte transaction hash with the Iroha marker bit set in its final
+byte. Rejected statuses accept exactly `offline_operation_rejected` plus a
+trimmed, nonempty, control-free, well-formed Unicode message of at most 1,024
+scalars. A `details` field, including an advertised null value, is rejected.
+When a client has an exact `NetworkId`, applied top-up anchors and proofs must
+also bind that configured network.
 
 ## Native Privacy Bridge
 
@@ -193,7 +204,7 @@ the bounded canonical decoder; transaction construction must then call
 `requirePrivacyExact12CapabilityAdmissionV1`, which requires committed Active
 state and byte-exact equality with the selected local compiled-profile row.
 There is no browser, JSON, or mock authorization fallback. The legacy
-`parsePrivacyCapabilitySnapshotV1` helper remains read-only and its result is
+`parseLegacyPrivacyCapabilityInspectionSnapshotV1` helper remains read-only and its result is
 not an admission object. The generic
 request/build/verify dispatcher and its free-form algorithm aliases do not
 exist; proving is exposed only by protocol-specific typed APIs.
@@ -2304,7 +2315,7 @@ for await (const event of torii.streamSorafsOrderbookEventsWebSocket({
   break;
 }
 // LocalSigningContext must carry the deployment's exact NetworkId and I105
-// chain discriminant (369 for Taira; the constructor default is 753/Sora).
+// chain discriminant. The current constructor default is 369/Taira.
 const orderResult =
   await torii.submitSorafsOrderbookOrder(signedSubmitOrderTransaction, {
     expectedReceiptSigner: toriiReceiptPublicKey,

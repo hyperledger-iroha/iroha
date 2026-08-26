@@ -6,6 +6,7 @@ import copy
 from typing import Any, Dict, List, Mapping, Optional
 
 from iroha_torii_client import KagemushaRedeemRequestV4, KagemushaTopUpRequestV4
+from iroha_torii_client.norito_frame import _crc64_xz, schema_hash_for_type_name
 
 CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
@@ -61,15 +62,115 @@ def offline_capability_payload(**overrides: Any) -> Dict[str, Any]:
 
 OFFLINE_OPERATION_BYTES = [0x11] * 32
 OFFLINE_OPERATION_ID = "11" * 32
-OFFLINE_TRANSACTION_HASH = "22" * 32
+OFFLINE_TRANSACTION_HASH = "23" * 32
 OFFLINE_STATUS_URI = f"/v1/offline/operations/{OFFLINE_OPERATION_ID}"
 OFFLINE_NETWORK_ID = _canonical_hash(0x91)
 OFFLINE_OTHER_NETWORK_ID = _canonical_hash(0x93)
+OFFLINE_SUBMITTED_AT_MS = 1_725_000_000_123
+
+
+def _compact_length(value: int) -> bytes:
+    encoded = bytearray()
+    while value >= 0x80:
+        encoded.append((value & 0x7F) | 0x80)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
+
+
+def _field(value: bytes) -> bytes:
+    return _compact_length(len(value)) + value
+
+
+def _struct(*fields: bytes) -> bytes:
+    return b"".join(_field(field) for field in fields)
+
+
+def _network_id_bytes(network_id: str) -> bytes:
+    prefix, body_and_checksum = network_id.split(":", 1)
+    body, _checksum = body_and_checksum.split("#", 1)
+    if prefix != "hash":
+        raise ValueError("network_id must be a canonical Norito hash literal")
+    return bytes.fromhex(body)
+
+
+def offline_norito_frame(kind: str, payload: bytes) -> bytes:
+    """Frame an explicitly supplied compact payload for adversarial tests."""
+
+    schema = {
+        "top_up": "iroha.torii.v1.offline.top_up.request",
+        "redeem": "iroha.torii.v1.offline.redeem.request",
+    }[kind]
+    header = bytearray(40)
+    header[:4] = b"NRT0"
+    header[6:22] = schema_hash_for_type_name(schema)
+    header[23:31] = len(payload).to_bytes(8, "little")
+    header[31:39] = _crc64_xz(payload).to_bytes(8, "little")
+    header[39] = 0x02
+    return bytes(header) + bytes(8) + payload
+
+
+def offline_norito_request_frame(
+    kind: str,
+    *,
+    operation_id: str = OFFLINE_OPERATION_ID,
+    authorization_operation_id: Optional[str] = None,
+    issued_at_ms: int = OFFLINE_SUBMITTED_AT_MS,
+    network_id: str = OFFLINE_NETWORK_ID,
+    version: int = 4,
+) -> bytes:
+    """Build one structurally canonical compact signed-request test frame."""
+
+    operation_id_bytes = bytes.fromhex(operation_id)
+    authorization_id_bytes = bytes.fromhex(
+        authorization_operation_id or operation_id
+    )
+    authorization = _struct(
+        *(
+            authorization_id_bytes
+            if index == 3
+            else issued_at_ms.to_bytes(8, "little")
+            if index == 4
+            else b"\x00"
+            for index in range(10)
+        )
+    )
+    network_id_bytes = _network_id_bytes(network_id)
+    current_note = _struct(
+        *(network_id_bytes if index == 0 else b"\x00" for index in range(5))
+    )
+    statement = _struct(
+        *(network_id_bytes if index == 0 else b"\x00" for index in range(13))
+    )
+    bundle = _struct(statement, b"\x00", b"\x00")
+    field_count = 8 if kind == "top_up" else 10
+    operation_id_field_index = 6 if kind == "top_up" else 8
+    payload = _struct(
+        *(
+            version.to_bytes(2, "little")
+            if index == 0
+            else operation_id_bytes
+            if index == operation_id_field_index
+            else current_note
+            if kind == "top_up" and index == 3
+            else bundle
+            if kind == "redeem" and index == 1
+            else authorization
+            if index == field_count - 1
+            else b"\x00"
+            for index in range(field_count)
+        )
+    )
+    return offline_norito_frame(kind, payload)
+
+
+OFFLINE_TOP_UP_REQUEST_FRAME = offline_norito_request_frame("top_up")
+OFFLINE_REDEEM_REQUEST_FRAME = offline_norito_request_frame("redeem")
 
 
 def offline_top_up_request(
     *,
-    norito: bytes = b"kagemusha-top-up-v4\x00\x01\x02",
+    norito: bytes = OFFLINE_TOP_UP_REQUEST_FRAME,
     operation_id: str = OFFLINE_OPERATION_ID,
 ) -> KagemushaTopUpRequestV4:
     """Build one canonical Kagemusha top-up request fixture."""
@@ -79,7 +180,7 @@ def offline_top_up_request(
 
 def offline_redeem_request(
     *,
-    norito: bytes = b"kagemusha-redeem-v4\x03\x04\x05",
+    norito: bytes = OFFLINE_REDEEM_REQUEST_FRAME,
     operation_id: str = OFFLINE_OPERATION_ID,
 ) -> KagemushaRedeemRequestV4:
     """Build one canonical Kagemusha redemption request fixture."""
@@ -96,7 +197,7 @@ def offline_operation_reference(**overrides: Any) -> Dict[str, Any]:
         "state": {"state": "pending", "value": None},
         "transaction_hash": OFFLINE_TRANSACTION_HASH,
         "status_uri": OFFLINE_STATUS_URI,
-        "submitted_at_ms": 1_725_000_000_123,
+        "submitted_at_ms": OFFLINE_SUBMITTED_AT_MS,
     }
     reference.update(overrides)
     return reference
@@ -145,7 +246,7 @@ def offline_top_up_anchor(**overrides: Any) -> Dict[str, Any]:
             "manifest_sha256": offline_fixed_bytes(0x81),
         },
         "finalized_height": 12,
-        "finalized_tx_hash": offline_fixed_bytes(0x22),
+        "finalized_tx_hash": offline_fixed_bytes(0x23),
         "anchor_digest": offline_fixed_bytes(0x71),
     }
     anchor.update(overrides)

@@ -148,7 +148,15 @@ def test_python_ordinary_transaction_signatures_are_network_id_only() -> None:
     assert draft_sign.args.kwarg is None
 
     local_context = _class(client, "LocalSigningContext")
-    assert _annotated_fields(local_context) == ["network_id"]
+    assert _annotated_fields(local_context) == ["network_id", "chain_discriminant"]
+    chain_discriminant = next(
+        statement
+        for statement in local_context.body
+        if isinstance(statement, ast.AnnAssign)
+        and isinstance(statement.target, ast.Name)
+        and statement.target.id == "chain_discriminant"
+    )
+    assert ast.unparse(chain_discriminant.value) == "TAIRA_I105_DISCRIMINANT"
 
     torii = _class(client, "ToriiClient")
     methods = {

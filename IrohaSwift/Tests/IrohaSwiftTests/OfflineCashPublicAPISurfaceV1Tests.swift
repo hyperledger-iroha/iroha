@@ -62,6 +62,36 @@ final class OfflineCashPublicAPISurfaceV1Tests: XCTestCase {
         XCTAssertFalse(source.contains("PKKQ1"))
     }
 
+    func testOfflineCashV1ExposesTheExactPublicToriiFacade() throws {
+        let source = try String(
+            contentsOf: Self.packageRoot
+                .appendingPathComponent("Sources/IrohaSwift/OfflineCashToriiV1.swift"),
+            encoding: .utf8
+        )
+        for declaration in [
+            "public struct OfflineCashTopUpRequestV1",
+            "public struct OfflineCashRedeemRequestV1",
+            "public struct OfflineCashOperationReferenceV1",
+            "public struct OfflineCashOperationStatusV1",
+            "public struct OfflineCashReadinessV1",
+            "public final class OfflineCashToriiClientV1",
+        ] {
+            XCTAssertTrue(source.contains(declaration), "missing \(declaration)")
+        }
+        XCTAssertEqual(OfflineCashToriiClientV1.readinessPath, "/v1/offline/readiness")
+        XCTAssertEqual(OfflineCashToriiClientV1.topUpPath, "/v1/offline/top-up")
+        XCTAssertEqual(OfflineCashToriiClientV1.redeemPath, "/v1/offline/redeem")
+        XCTAssertEqual(OfflineCashToriiClientV1.operationsPath, "/v1/offline/operations")
+        XCTAssertEqual(OfflineCashToriiClientV1.jsonMediaType, "application/json")
+        XCTAssertEqual(OfflineCashToriiClientV1.noritoMediaType, "application/x-norito")
+
+        let forbiddenPublicSubstrate = try NSRegularExpression(
+            pattern: #"(?m)^public\s+(?:final\s+class|class|struct|enum|protocol|typealias)\s+Kagemusha"#
+        )
+        let range = NSRange(source.startIndex..<source.endIndex, in: source)
+        XCTAssertNil(forbiddenPublicSubstrate.firstMatch(in: source, range: range))
+    }
+
     private static var packageRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

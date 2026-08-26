@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Queries;
@@ -25,7 +26,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesFindParametersQuery()
     {
-        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindParameters()
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -41,7 +42,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesFindAbiVersionQuery()
     {
-        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindAbiVersion()
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -55,7 +56,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesFindExecutorDataModelQuery()
     {
-        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindExecutorDataModel()
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -69,7 +70,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void SignedQueryEnvelopeDefensivelyCopiesBytes()
     {
-        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindParameters()
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -200,7 +201,7 @@ public sealed class SignedQueryBuilderTests
     [InlineData("n753uﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
     public void ConstructorRejectsNonExactAuthority(string authorityAccountId)
     {
-        Assert.Throws<ArgumentException>(() => new SignedQueryBuilder(authorityAccountId, FixtureNetworkId));
+        Assert.Throws<ArgumentException>(() => new SignedQueryBuilder(authorityAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant));
     }
 
     [Fact]
@@ -208,21 +209,21 @@ public sealed class SignedQueryBuilderTests
     {
         AssertArgumentException(
             "authorityAccountId",
-            () => new SignedQueryBuilder(FixtureAccountId.Insert(8, " "), FixtureNetworkId));
+            () => new SignedQueryBuilder(FixtureAccountId.Insert(8, " "), FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant));
     }
 
     [Fact]
     public void ConstructorRequiresNominalNetworkId()
     {
         Assert.Throws<ArgumentNullException>(
-            () => new SignedQueryBuilder(FixtureAccountId, null!));
+            () => new SignedQueryBuilder(FixtureAccountId, null!, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant));
         Assert.Throws<FormatException>(() => NetworkId.Parse("chain/dev"));
         Assert.Throws<FormatException>(() => NetworkId.Parse("genesis"));
         Assert.Throws<FormatException>(() => NetworkId.Parse(""));
     }
 
     [Fact]
-    public void SignedQueryBuildersExposeNoRawStringNetworkIdentityOverload()
+    public void SignedQueryBuildersExposeNominalNetworkAndExplicitChainContexts()
     {
         foreach (var builderType in new[]
                  {
@@ -230,19 +231,52 @@ public sealed class SignedQueryBuilderTests
                      typeof(SignedIterableQueryBuilder),
                  })
         {
-            var constructor = Assert.Single(builderType.GetConstructors());
-            var parameters = constructor.GetParameters();
-            Assert.Equal(2, parameters.Length);
-            Assert.Equal(typeof(NetworkId), parameters[1].ParameterType);
+            var constructors = builderType.GetConstructors()
+                .OrderBy(static constructor => constructor.GetParameters().Length)
+                .ToArray();
+            Assert.Collection(
+                constructors,
+                defaultConstructor =>
+                {
+                    var parameters = defaultConstructor.GetParameters();
+                    Assert.Equal(2, parameters.Length);
+                    Assert.Equal(typeof(NetworkId), parameters[1].ParameterType);
+                },
+                explicitConstructor =>
+                {
+                    var parameters = explicitConstructor.GetParameters();
+                    Assert.Equal(3, parameters.Length);
+                    Assert.Equal(typeof(NetworkId), parameters[1].ParameterType);
+                    Assert.Equal(typeof(ushort), parameters[2].ParameterType);
+                });
             Assert.Equal(typeof(NetworkId), builderType.GetProperty("NetworkId")!.PropertyType);
+            Assert.Equal(typeof(ushort), builderType.GetProperty("ChainDiscriminant")!.PropertyType);
         }
+
+        var tairaAccountId = AccountAddress
+            .Parse(FixtureAccountId, AccountAddress.DefaultChainDiscriminant)
+            .ToI105(AccountAddress.TairaTestnetChainDiscriminant);
+        Assert.Equal(
+            AccountAddress.TairaTestnetChainDiscriminant,
+            new SignedQueryBuilder(tairaAccountId, FixtureNetworkId).ChainDiscriminant);
+        Assert.Equal(
+            AccountAddress.TairaTestnetChainDiscriminant,
+            new SignedIterableQueryBuilder(tairaAccountId, FixtureNetworkId).ChainDiscriminant);
+        Assert.Throws<ArgumentException>(() => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId));
+        Assert.Throws<ArgumentException>(() => new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId));
+        Assert.Equal(
+            AccountAddress.DefaultChainDiscriminant,
+            new SignedQueryBuilder(
+                FixtureAccountId,
+                FixtureNetworkId,
+                AccountAddress.DefaultChainDiscriminant).ChainDiscriminant);
     }
 
     [Fact]
     public void BuildSignedRejectsInvalidReplayContext()
     {
         var seed = Convert.FromHexString(FixtureSeedHex);
-        var builder = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindParameters();
+        var builder = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindParameters();
 
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             builder.BuildSigned(seed, 1_000, 0, Enumerable.Repeat((byte)0x5A, 32).ToArray()));
@@ -259,10 +293,10 @@ public sealed class SignedQueryBuilderTests
     {
         var seed = Convert.FromHexString(FixtureSeedHex);
         var nonce = Enumerable.Repeat((byte)0x5A, 32).ToArray();
-        var first = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var first = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindParameters()
             .BuildSigned(seed, 1_000, 10_000, nonce);
-        var second = new SignedQueryBuilder(FixtureAccountId, AlternateNetworkId)
+        var second = new SignedQueryBuilder(FixtureAccountId, AlternateNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindParameters()
             .BuildSigned(seed, 1_000, 10_000, nonce);
 
@@ -277,43 +311,43 @@ public sealed class SignedQueryBuilderTests
     {
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAliasesByAccountId(" " + FixtureAccountId);
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindAliasesByAccountId(" " + FixtureAccountId);
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAliasesByAccountId("merchant@sora");
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindAliasesByAccountId("merchant@sora");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAssetById(" " + FixtureAssetDefinitionId, FixtureAccountId);
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindAssetById(" " + FixtureAssetDefinitionId, FixtureAccountId);
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAssetById(
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindAssetById(
                 FixtureAssetDefinitionId,
                 "n753uﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAssetById(
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindAssetById(
                 FixtureAssetDefinitionId,
                 "0x0a00012022d3c25e96fa1178ae08b3d30081a31a0d09e8f7321b1e015140cd37b332109ca");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainEndorsements("banka ");
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindDomainEndorsements("banka ");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainCommittee("committee-7\u0000");
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindDomainCommittee("committee-7\u0000");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDaPinIntentByAlias(" manifest-root");
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindDaPinIntentByAlias(" manifest-root");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDaPinIntentByTicket(FixtureStorageTicket + " ");
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindDaPinIntentByTicket(FixtureStorageTicket + " ");
         });
     }
 
@@ -322,49 +356,49 @@ public sealed class SignedQueryBuilderTests
     {
         AssertArgumentException(
             "accountId",
-            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAliasesByAccountId(FixtureAccountId.Insert(8, " ")));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindAliasesByAccountId(FixtureAccountId.Insert(8, " ")));
         AssertArgumentException(
             "assetDefinitionId",
-            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAssetById("asset def", FixtureAccountId));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindAssetById("asset def", FixtureAccountId));
         AssertArgumentException(
             "accountId",
-            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAssetById(
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindAssetById(
                 FixtureAssetDefinitionId,
                 FixtureAccountId.Insert(8, "\t")));
         AssertArgumentException(
             "codeHash",
-            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindContractManifestByCodeHash(
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindContractManifestByCodeHash(
                 FixtureContractCodeHash.Insert(10, " ")));
         AssertArgumentException(
             "pepperId",
-            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindTwitterBindingByHash("pepper v1", FixtureTwitterDigest));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindTwitterBindingByHash("pepper v1", FixtureTwitterDigest));
         AssertArgumentException(
             "digestHex",
-            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindTwitterBindingByHash(
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindTwitterBindingByHash(
                 "pepper-v1",
                 FixtureTwitterDigest.Insert(10, " ")));
         AssertArgumentException(
             "domainId",
-            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainEndorsements("ban ka"));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindDomainEndorsements("ban ka"));
         AssertArgumentException(
             "domainId",
-            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainEndorsementPolicy("ban ka"));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindDomainEndorsementPolicy("ban ka"));
         AssertArgumentException(
             "committeeId",
-            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainCommittee("committee 7"));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindDomainCommittee("committee 7"));
         AssertArgumentException(
             "storageTicket",
-            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDaPinIntentByTicket(FixtureStorageTicket.Insert(12, " ")));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindDaPinIntentByTicket(FixtureStorageTicket.Insert(12, " ")));
         AssertArgumentException(
             "manifestDigest",
-            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDaPinIntentByManifest(
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindDaPinIntentByManifest(
                 FixtureManifestDigest.Insert(12, "\u00A0")));
         AssertArgumentException(
             "alias",
-            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDaPinIntentByAlias("manifest root"));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindDaPinIntentByAlias("manifest root"));
         AssertArgumentException(
             "providerId",
-            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindSorafsProviderOwner(FixtureProviderId.Insert(12, " ")));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindSorafsProviderOwner(FixtureProviderId.Insert(12, " ")));
     }
 
     [Theory]
@@ -379,13 +413,13 @@ public sealed class SignedQueryBuilderTests
     {
         AssertArgumentException("dataspace", () =>
         {
-            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAliasesByAccountId(
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindAliasesByAccountId(
                 FixtureAccountId,
                 dataspace: filter);
         });
         AssertArgumentException("domain", () =>
         {
-            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAliasesByAccountId(
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindAliasesByAccountId(
                 FixtureAccountId,
                 domain: filter);
         });
@@ -394,7 +428,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesFindAliasesByAccountIdWithFilters()
     {
-        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindAliasesByAccountId(FixtureAccountId, dataspace: "paynet", domain: "banka")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -415,7 +449,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesAssetLookupQueries()
     {
-        var assetEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var assetEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindAssetById(FixtureAssetDefinitionId, FixtureAccountId, dataspaceId: 9)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -431,7 +465,7 @@ public sealed class SignedQueryBuilderTests
         var dataspacePayload = ReadField(scopeBytes[4..], out _);
         Assert.Equal(9ul, BinaryPrimitives.ReadUInt64LittleEndian(dataspacePayload));
 
-        var definitionEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var definitionEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindAssetDefinitionById(FixtureAssetDefinitionId)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -448,7 +482,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesContractManifestAndDataspaceOwnerQueries()
     {
-        var manifestEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var manifestEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindContractManifestByCodeHash(FixtureContractCodeHash)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -460,7 +494,7 @@ public sealed class SignedQueryBuilderTests
         expectedHashBytes[^1] |= 0x01;
         Assert.Equal(expectedHashBytes, manifestHashBytes);
 
-        var dataspaceEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var dataspaceEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindDataspaceNameOwnerById(42)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -477,7 +511,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesDomainEndorsementQueries()
     {
-        var endorsementsEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var endorsementsEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindDomainEndorsements("banka")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (endorsementsDiscriminant, endorsementsPayload) = ReadSingularQuery(endorsementsEnvelope);
@@ -486,7 +520,7 @@ public sealed class SignedQueryBuilderTests
         var endorsementsDomain = ReadNoritoString(ReadField(endorsementsStruct, out _));
         Assert.Equal("banka", endorsementsDomain);
 
-        var policyEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var policyEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindDomainEndorsementPolicy("banka")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (policyDiscriminant, policyPayload) = ReadSingularQuery(policyEnvelope);
@@ -495,7 +529,7 @@ public sealed class SignedQueryBuilderTests
         var policyDomain = ReadNoritoString(ReadField(policyStruct, out _));
         Assert.Equal("banka", policyDomain);
 
-        var committeeEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var committeeEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindDomainCommittee("committee-7")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (committeeDiscriminant, committeePayload) = ReadSingularQuery(committeeEnvelope);
@@ -512,7 +546,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesProofAndTwitterBindingQueries()
     {
-        var proofEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var proofEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindProofRecordById("halo2/ipa", FixtureProofHash)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (proofDiscriminant, proofPayload) = ReadSingularQuery(proofEnvelope);
@@ -523,7 +557,7 @@ public sealed class SignedQueryBuilderTests
         Assert.Equal("halo2/ipa", proofBackend);
         Assert.Equal(Convert.FromHexString(FixtureProofHash[2..]), proofHash);
 
-        var twitterEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var twitterEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindTwitterBindingByHash("pepper-v1", FixtureTwitterDigest)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (twitterDiscriminant, twitterPayload) = ReadSingularQuery(twitterEnvelope);
@@ -557,7 +591,7 @@ public sealed class SignedQueryBuilderTests
         })
         {
             Assert.Throws<ArgumentException>(
-                () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindProofRecordById(backend, validHash));
+                () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindProofRecordById(backend, validHash));
         }
 
         foreach (var proofHash in new[]
@@ -574,14 +608,14 @@ public sealed class SignedQueryBuilderTests
         })
         {
             Assert.Throws<ArgumentException>(
-                () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindProofRecordById("halo2/ipa", proofHash));
+                () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant).FindProofRecordById("halo2/ipa", proofHash));
         }
     }
 
     [Fact]
     public void BuildSignedEncodesDaPinAndSorafsQueries()
     {
-        var ticketEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var ticketEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindDaPinIntentByTicket(FixtureStorageTicket)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (ticketDiscriminant, ticketPayload) = ReadSingularQuery(ticketEnvelope);
@@ -589,7 +623,7 @@ public sealed class SignedQueryBuilderTests
         var ticketStruct = ReadField(ticketPayload, out _);
         Assert.Equal(Convert.FromHexString(FixtureStorageTicket[2..]), ReadField(ticketStruct, out _));
 
-        var manifestEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var manifestEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindDaPinIntentByManifest(FixtureManifestDigest)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (manifestDiscriminant, manifestPayload) = ReadSingularQuery(manifestEnvelope);
@@ -597,7 +631,7 @@ public sealed class SignedQueryBuilderTests
         var manifestStruct = ReadField(manifestPayload, out _);
         Assert.Equal(Convert.FromHexString(FixtureManifestDigest[2..]), ReadField(manifestStruct, out _));
 
-        var aliasEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var aliasEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindDaPinIntentByAlias("manifest-root")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (aliasDiscriminant, aliasPayload) = ReadSingularQuery(aliasEnvelope);
@@ -605,7 +639,7 @@ public sealed class SignedQueryBuilderTests
         var aliasStruct = ReadField(aliasPayload, out _);
         Assert.Equal("manifest-root", ReadNoritoString(ReadField(aliasStruct, out _)));
 
-        var laneEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var laneEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindDaPinIntentByLaneEpochSequence(7, 11, 13)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (laneDiscriminant, lanePayload) = ReadSingularQuery(laneEnvelope);
@@ -618,7 +652,7 @@ public sealed class SignedQueryBuilderTests
         Assert.Equal(11ul, BinaryPrimitives.ReadUInt64LittleEndian(epoch));
         Assert.Equal(13ul, BinaryPrimitives.ReadUInt64LittleEndian(sequence));
 
-        var providerEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var providerEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindSorafsProviderOwner(FixtureProviderId)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (providerDiscriminant, providerPayload) = ReadSingularQuery(providerEnvelope);
@@ -636,7 +670,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void SignedQueryUsesCanonicalCompactFieldsAndRejectsFixedFieldAlias()
     {
-        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindParameters()
             .BuildSigned(
                 Convert.FromHexString(FixtureSeedHex),
@@ -751,7 +785,7 @@ public sealed class SignedQueryBuilderTests
         offset += consumed;
 
         Assert.Equal(payload.Length, offset);
-        Assert.Equal(Convert.FromHexString(FixtureNetworkIdLiteral.Substring(5, 64)), networkId);
+        Assert.Equal(Convert.FromHexString(FixtureNetworkIdLiteral), networkId);
         Assert.NotEmpty(authority);
         Assert.True(BinaryPrimitives.ReadUInt64LittleEndian(creationTime) > 0);
         Assert.Equal(100_000ul, BinaryPrimitives.ReadUInt64LittleEndian(timeToLive));

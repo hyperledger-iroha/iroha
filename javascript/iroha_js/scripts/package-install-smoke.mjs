@@ -187,8 +187,8 @@ async function main() {
       '  ["buildBrowserTransferPayload", codec.buildBrowserTransferPayload],',
       '  ["NexusAppClient", nexus.NexusAppClient],',
       '  ["KotodamaCompilerClient", compiler.KotodamaCompilerClient],',
-      '  ["getPrivacyCapabilitiesV1", privacy.getPrivacyCapabilitiesV1],',
-      '  ["parsePrivacyCapabilitySnapshotV1", privacy.parsePrivacyCapabilitySnapshotV1],',
+      '  ["getLegacyPrivacyCapabilityInspectionV1", privacy.getLegacyPrivacyCapabilityInspectionV1],',
+      '  ["parseLegacyPrivacyCapabilityInspectionSnapshotV1", privacy.parseLegacyPrivacyCapabilityInspectionSnapshotV1],',
       '  ["parseSumeragiStatusPayload", sumeragi.parseSumeragiStatusPayload],',
       "];",
       "for (const [name, value] of checks) {",
@@ -197,11 +197,11 @@ async function main() {
       "if (sdk.computeIvmArtifactHashes !== artifact.computeIvmArtifactHashes) {",
       '  throw new Error("root and ivm-artifact subpath exports differ");',
       "}",
-      'for (const name of ["getPrivacyCapabilitiesV1", "parsePrivacyCapabilitySnapshotV1"]) {',
+      'for (const name of ["getLegacyPrivacyCapabilityInspectionV1", "parseLegacyPrivacyCapabilityInspectionSnapshotV1"]) {',
       '  if (Object.hasOwn(sdk, name)) throw new Error(`root leaks optional privacy export: ${name}`);',
       "}",
-      'if (Object.hasOwn(sdk.ToriiClient.prototype, "getPrivacyCapabilitiesV1") ||',
-      '    Object.hasOwn(sdk.ToriiBrowserClient.prototype, "getPrivacyCapabilitiesV1")) {',
+      'if (Object.hasOwn(sdk.ToriiClient.prototype, "getLegacyPrivacyCapabilityInspectionV1") ||',
+      '    Object.hasOwn(sdk.ToriiBrowserClient.prototype, "getLegacyPrivacyCapabilityInspectionV1")) {',
       '  throw new Error("base clients leak optional privacy policy methods");',
       "}",
     ].join("\n");
@@ -236,8 +236,8 @@ async function main() {
       cwd: consumerRoot,
     });
     for (const expected of [
-      "payload hash: f5bc4a4cc1b8df1125f847255995cc8d76f66c0045a0ea875df5b30dda16f14b",
-      "signed transaction hash: b410d55b960d396c1034221dea22464d08de1237363b02cb1f7c35d4c6eaf0a1",
+      "payload hash: 40aa373d59fb9c76d6a849dc36c2c0ca67b01926c5babd0eb02f964f29bdaac7",
+      "signed transaction hash: 4698dbf7f4a250029037275258fbaca1095bb476747929b279b02c1b0236d1d7",
       "final status: Applied",
     ]) {
       if (!recipe.stdout.includes(expected)) {

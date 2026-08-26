@@ -21,20 +21,36 @@ public abstract record class TransactionInstruction
             NoritoCodec.CanonicalLayoutFlags);
     }
 
+    /// <summary>Encodes an instruction for the public Taira testnet.</summary>
     public byte[] EncodeInstructionBox(string authorityAccountId)
+    {
+        return EncodeInstructionBox(
+            authorityAccountId,
+            Address.AccountAddress.TairaTestnetChainDiscriminant);
+    }
+
+    public byte[] EncodeInstructionBox(string authorityAccountId, ushort chainDiscriminant)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(authorityAccountId);
 
-        var context = new TransactionEncodingContext(authorityAccountId);
+        var context = new TransactionEncodingContext(authorityAccountId, chainDiscriminant);
         return Hyperledger.Iroha.Norito.NoritoCodec.EncodeWithSchemaHash(
             InstructionBoxSchemaHash,
             context.EncodeInstruction(this),
             NoritoCodec.CanonicalLayoutFlags);
     }
 
+    /// <summary>Encodes an instruction for the public Taira testnet.</summary>
     public string EncodeInstructionBoxBase64(string authorityAccountId)
     {
-        return Convert.ToBase64String(EncodeInstructionBox(authorityAccountId));
+        return EncodeInstructionBoxBase64(
+            authorityAccountId,
+            Address.AccountAddress.TairaTestnetChainDiscriminant);
+    }
+
+    public string EncodeInstructionBoxBase64(string authorityAccountId, ushort chainDiscriminant)
+    {
+        return Convert.ToBase64String(EncodeInstructionBox(authorityAccountId, chainDiscriminant));
     }
 
     public static TransferAssetInstruction TransferAsset(string assetDefinitionId, string quantity, string destinationAccountId)

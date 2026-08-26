@@ -17,12 +17,12 @@ import {
   buildRegisterAssetDefinitionAndMintTransaction,
   buildRegisterAssetDefinitionMintAndTransferTransaction,
 } from "../src/transaction.js";
-import { ToriiClient } from "../src/toriiClient.js";
+import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
 import { AccountAddress } from "../src/address.js";
 import { NetworkId } from "../src/networkId.js";
 import { makeNativeTest } from "./helpers/native.js";
 
-const BASE_URL = "http://localhost:8080";
+const BASE_URL = "https://localhost:8080";
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
 const NETWORK_ID = NetworkId.parse(
   "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
@@ -37,6 +37,11 @@ const AUTHORITY_ID_RAW = AccountAddress.fromAccount({
 }).toI105();
 const AUTHORITY_ID = i105FromEd25519AccountId(AUTHORITY_ID_RAW);
 const AUTHORITY_ID_INPUT = i105FromEd25519AccountId(AUTHORITY_ID_RAW);
+const CANONICAL_REQUEST_AUTH = Object.freeze({
+  accountId: AUTHORITY_ID,
+  privateKey: PRIVATE_KEY,
+});
+const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID);
 const NEW_ACCOUNT_ID_RAW = AccountAddress.fromAccount({
   publicKey: Buffer.from(ed25519.getPublicKey(NEW_ACCOUNT_PRIVATE_KEY)),
 }).toI105();
@@ -78,13 +83,11 @@ function pipelineTransactionStatus(hashBytes, kind, content = null) {
       ? { kind, block_height: 7 }
       : { kind };
   return {
-    kind: "Transaction",
     hash,
     status: {
       ...status,
       ...(content === null ? {} : { content }),
     },
-    summary: kind,
     scope: "global",
     resolved_from:
       kind === "Applied" || kind === "Rejected" || kind === "Expired"
@@ -267,7 +270,11 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
     }
     return statusQueue.shift() ?? statusQueue[statusQueue.length - 1];
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    canonicalRequestAuth: CANONICAL_REQUEST_AUTH,
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
+  });
   const binding = {
     hashSignedTransaction: () => hashBytes,
     signTransaction: (networkId, tx) => {
@@ -287,7 +294,7 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
   );
 
   assert.equal(result.hash, hashBytes.toString("hex"));
-  assert.equal(result.status.content.status.kind, "Applied");
+  assert.equal(result.status.status.kind, "Applied");
   assert.equal(calls.length >= 3, true);
   const statusCalls = calls.filter((call) =>
     String(call.url).includes("/v1/pipeline/transactions/status"),
@@ -383,7 +390,11 @@ test("submitSignedTransaction times out when no terminal status", async () => {
       headers: { "content-type": "application/json" },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    canonicalRequestAuth: CANONICAL_REQUEST_AUTH,
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
+  });
 
   await withNativeBinding(binding, async () => {
     await assert.rejects(
@@ -434,7 +445,11 @@ test("submitSignedTransaction rejects a deceptive non-canonical status envelope"
       headers: { "content-type": "application/json" },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    canonicalRequestAuth: CANONICAL_REQUEST_AUTH,
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
+  });
 
   await withNativeBinding(binding, async () => {
     await assert.rejects(
@@ -446,7 +461,7 @@ test("submitSignedTransaction rejects a deceptive non-canonical status envelope"
           networkId: NETWORK_ID,
           privateKey: Buffer.alloc(32, 0x03),
         }),
-      /missing or unsupported/i,
+      /status contains unsupported fields: content/u,
     );
   });
 });
@@ -996,6 +1011,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: {
           assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "rose",
           owningDomain: null, balanceScopePolicy: "Global",
           metadata: { description: "Rose asset" },
           mintable: "Not",
@@ -1016,6 +1032,9 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
     Register: {
       AssetDefinition: {
         id: ASSET_DEFINITION_ID,
+        name: "rose",
+        description: null,
+        alias: null,
         logo: null,
         metadata: { description: "Rose asset" },
         mintable: "Not",
@@ -1044,6 +1063,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects confidential policy
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: {
           assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "asset",
           owningDomain: null,
           balanceScopePolicy: "Global",
           confidentialPolicy: { mode: "Convertible" },
@@ -1075,7 +1095,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, name: "asset", owningDomain: null, balanceScopePolicy: "Global" },
         mints: [
           { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "4" },
           { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "2" },
@@ -1113,6 +1133,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction requires ownership intent",
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: {
           assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "asset",
           balanceScopePolicy: "Global",
         },
         privateKey: PRIVATE_KEY,
@@ -1130,6 +1151,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction requires balance policy int
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: {
           assetDefinitionId: ASSET_DEFINITION_ID,
+          name: "asset",
           owningDomain: null,
         },
         privateKey: PRIVATE_KEY,
@@ -1145,7 +1167,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects both mint and mints
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, name: "asset", owningDomain: null, balanceScopePolicy: "Global" },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "1" },
         mints: [],
         privateKey: PRIVATE_KEY,
@@ -1161,7 +1183,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction enforces mint destination f
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, name: "asset", owningDomain: null, balanceScopePolicy: "Global" },
         mints: [{ quantity: "1" }],
         privateKey: PRIVATE_KEY,
       }),
@@ -1176,7 +1198,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects mismatched assetId/
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, name: "asset", owningDomain: null, balanceScopePolicy: "Global" },
         mints: [
           {
             accountId: NEW_ACCOUNT_ID_INPUT,
@@ -1208,7 +1230,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, name: "asset", owningDomain: null, balanceScopePolicy: "Global" },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "5" },
         transfer: { destinationAccountId: AUTHORITY_ID_INPUT, quantity: "2" },
         privateKey: PRIVATE_KEY,
@@ -1260,7 +1282,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, name: "asset", owningDomain: null, balanceScopePolicy: "Global" },
         mints: [
           { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "6" },
           { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "1" },
@@ -1306,7 +1328,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects both transf
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, name: "asset", owningDomain: null, balanceScopePolicy: "Global" },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "3" },
         transfer: { destinationAccountId: AUTHORITY_ID_INPUT, quantity: "2" },
         transfers: [],
@@ -1323,7 +1345,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects both mint a
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, name: "asset", owningDomain: null, balanceScopePolicy: "Global" },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "2" },
         mints: [],
         transfers: [{ quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT }],
@@ -1340,7 +1362,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction requires mint spec"
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, name: "asset", owningDomain: null, balanceScopePolicy: "Global" },
         transfers: [{ quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT }],
         privateKey: PRIVATE_KEY,
       }),
@@ -1355,7 +1377,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction validates mint dest
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, name: "asset", owningDomain: null, balanceScopePolicy: "Global" },
         mints: [{ quantity: "1" }],
         transfers: [{ quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT }],
         privateKey: PRIVATE_KEY,
@@ -1371,7 +1393,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects mismatched 
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, name: "asset", owningDomain: null, balanceScopePolicy: "Global" },
         mints: [
           {
             accountId: NEW_ACCOUNT_ID_INPUT,

@@ -3818,7 +3818,7 @@ pub enum PrivacyCapabilityRowValidationErrorV1 {
         committed_height: u64,
     },
 }
-/// Authoritative committed privacy capability snapshot.
+/// Committed source snapshot used to derive the canonical Exact12 manifest.
 ///
 /// `protocols` must contain exactly [`PrivacyProtocolIdV1::ALL`] in Norito
 /// discriminant order. The ordering rule makes missing, duplicate, and

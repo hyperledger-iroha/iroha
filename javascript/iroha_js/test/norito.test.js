@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { blake2b } from "@noble/hashes/blake2.js";
 import { sha256 } from "@noble/hashes/sha2";
+import { AccountAddress } from "../src/address.js";
 import {
   encodeQuantityNoritoValue,
   noritoDecodeBlockProofs,
@@ -916,6 +917,228 @@ baseTest("noritoEncodeInstruction uses the pure JS codec for supported instructi
   assert.ok(encoded.length > 32);
   assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
 
+});
+
+baseTest("pure JS Mint, Burn, and Transfer codecs require exact instruction shapes", () => {
+  withMissingNativeBinding(() => {
+    const assetId = loadAssetIdFromFixture("mint_asset_quantity.json");
+    const cases = [
+      ["Mint", "Asset", { object: "1", destination: assetId }],
+      [
+        "Mint",
+        "TriggerRepetitions",
+        { object: 1, destination: "notify-users" },
+      ],
+      ["Burn", "Asset", { object: "1", destination: assetId }],
+      [
+        "Burn",
+        "TriggerRepetitions",
+        { object: 1, destination: "notify-users" },
+      ],
+      [
+        "Transfer",
+        "Asset",
+        { source: assetId, object: "1", destination: ACCOUNT_ID },
+      ],
+      [
+        "Transfer",
+        "Domain",
+        { source: ACCOUNT_ID, object: "wonderland.sora", destination: ACCOUNT_ID },
+      ],
+      [
+        "Transfer",
+        "AssetDefinition",
+        {
+          source: ACCOUNT_ID,
+          object: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+          destination: ACCOUNT_ID,
+        },
+      ],
+      [
+        "Transfer",
+        "Nft",
+        {
+          source: ACCOUNT_ID,
+          object: "dragon$wonderland.sora",
+          destination: ACCOUNT_ID,
+        },
+      ],
+    ];
+
+    for (const [instructionName, variant, body] of cases) {
+      const instruction = { [instructionName]: { [variant]: body } };
+      const encoded = noritoEncodeInstruction(instruction);
+      assert.deepEqual(
+        noritoDecodeInstruction(encoded),
+        instruction,
+        `${instructionName}.${variant} remains supported`,
+      );
+
+      assert.throws(
+        () =>
+          noritoEncodeInstruction({
+            [instructionName]: { [variant]: { ...body, ignored: true } },
+          }),
+        /contains unknown field ignored/u,
+        `${instructionName}.${variant} rejects extra body fields`,
+      );
+
+      const missingBody = { ...body };
+      delete missingBody[Object.keys(missingBody).at(-1)];
+      assert.throws(
+        () =>
+          noritoEncodeInstruction({
+            [instructionName]: { [variant]: missingBody },
+          }),
+        /is missing field/u,
+        `${instructionName}.${variant} rejects missing body fields`,
+      );
+
+      assert.throws(
+        () => noritoEncodeInstruction({ ...instruction, Unexpected: {} }),
+        /instruction contains unknown field Unexpected/u,
+        `${instructionName}.${variant} rejects extra instruction-envelope fields`,
+      );
+    }
+
+    for (const instructionName of ["Mint", "Burn", "Transfer"]) {
+      assert.throws(
+        () => noritoEncodeInstruction({ [instructionName]: {} }),
+        /must contain exactly one variant/u,
+      );
+      assert.throws(
+        () =>
+          noritoEncodeInstruction({
+            [instructionName]: { Unsupported: {} },
+          }),
+        new RegExp(`unsupported ${instructionName} instruction variant`, "u"),
+      );
+      assert.throws(
+        () => noritoEncodeInstruction({ [instructionName]: null }),
+        /must be an object containing exactly one variant/u,
+      );
+    }
+
+    assert.throws(
+      () =>
+        noritoEncodeInstruction({
+          Mint: {
+            Asset: { object: "1", destination: assetId },
+            TriggerRepetitions: { object: 1, destination: "notify-users" },
+          },
+        }),
+      /Mint instruction must contain exactly one variant/u,
+    );
+    assert.throws(
+      () =>
+        noritoEncodeInstruction({
+          Burn: {
+            Asset: { object: "1", destination: assetId },
+            TriggerRepetitions: { object: 1, destination: "notify-users" },
+          },
+        }),
+      /Burn instruction must contain exactly one variant/u,
+    );
+    assert.throws(
+      () =>
+        noritoEncodeInstruction({
+          Transfer: {
+            Domain: {
+              source: ACCOUNT_ID,
+              object: "wonderland.sora",
+              destination: ACCOUNT_ID,
+            },
+            Nft: {
+              source: ACCOUNT_ID,
+              object: "dragon$wonderland.sora",
+              destination: ACCOUNT_ID,
+            },
+          },
+        }),
+      /Transfer instruction must contain exactly one variant/u,
+    );
+    assert.throws(
+      () =>
+        noritoEncodeInstruction(
+          JSON.stringify({
+            Mint: {
+              TriggerRepetitions: {
+                object: 1,
+                destination: "notify-users",
+                ignored: true,
+              },
+            },
+          }),
+      ),
+      /Mint\.TriggerRepetitions contains unknown field ignored/u,
+    );
+
+    const assetBodyJson = JSON.stringify({ object: "1", destination: assetId });
+    for (const [json, duplicate] of [
+      [`{"Mint":{"Asset":${assetBodyJson}},"Mint":{"Asset":${assetBodyJson}}}`, "Mint"],
+      [`{"Mint":{"Asset":${assetBodyJson},"Asset":${assetBodyJson}}}`, "Asset"],
+      [
+        `{"Mint":{"Asset":{"object":"1","object":"2","destination":${JSON.stringify(assetId)}}}}`,
+        "object",
+      ],
+    ]) {
+      assert.throws(
+        () => noritoEncodeInstruction(json),
+        new RegExp(`duplicate object key "${duplicate}"`, "u"),
+      );
+    }
+
+    assert.throws(
+      () =>
+        noritoEncodeInstruction(
+          `{"Mint":{"Asset":${assetBodyJson}},"__proto__":{"ignored":true}}`,
+        ),
+      /instruction contains unknown field __proto__/u,
+    );
+    assert.throws(
+      () =>
+        noritoEncodeInstruction(
+          `{"Mint":{"Asset":${assetBodyJson},"__proto__":{"ignored":true}}}`,
+        ),
+      /Mint instruction must contain exactly one variant/u,
+    );
+    assert.throws(
+      () =>
+        noritoEncodeInstruction(
+          `{"Mint":{"Asset":{"object":"1","destination":${JSON.stringify(assetId)},"__proto__":{"ignored":true}}}}`,
+        ),
+      /Mint\.Asset contains unknown field __proto__/u,
+    );
+
+    const transferAccount = AccountAddress.parseEncoded(ACCOUNT_ID).address;
+    const sourceAccount369 = transferAccount.toI105(369);
+    const destinationAccount753 = transferAccount.toI105(753);
+    const assetDefinitionId = assetId.split("#")[0];
+    assert.doesNotThrow(() =>
+      noritoEncodeInstruction({
+        Transfer: {
+          Asset: {
+            source: `${assetDefinitionId}#${sourceAccount369}`,
+            object: "1",
+            destination: sourceAccount369,
+          },
+        },
+      }),
+    );
+    assert.throws(
+      () =>
+        noritoEncodeInstruction({
+          Transfer: {
+            Asset: {
+              source: `${assetDefinitionId}#${sourceAccount369}`,
+              object: "1",
+              destination: destinationAccount753,
+            },
+          },
+        }),
+      /source owner and destination I105 discriminants must match/u,
+    );
+  });
 });
 
 baseTest("contract manifest codec preserves the canonical seiyaku name", () => {

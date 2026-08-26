@@ -452,6 +452,10 @@ function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function hasOwn(value, key) {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
 function normalizeInstructionJsonValue(value) {
   if (value instanceof MultisigSpec) {
     return normalizeInstructionJsonValue(value.toPayload());
@@ -481,11 +485,12 @@ function normalizeInstructionJsonValue(value) {
     return value.map((entry) => normalizeInstructionJsonValue(entry));
   }
   if (isPlainObject(value)) {
-    const normalized = {};
-    for (const [key, entryValue] of Object.entries(value)) {
-      normalized[key] = normalizeInstructionJsonValue(entryValue);
-    }
-    return normalized;
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entryValue]) => [
+        key,
+        normalizeInstructionJsonValue(entryValue),
+      ]),
+    );
   }
   return value;
 }
@@ -559,7 +564,7 @@ function rejectRetiredGenericZkInstruction(instruction) {
     return;
   }
   for (const variant of RETIRED_GENERIC_ZK_VARIANTS) {
-    if (Object.prototype.hasOwnProperty.call(instruction.zk, variant)) {
+    if (hasOwn(instruction.zk, variant)) {
       throw new TypeError(
         `zk.${variant} is retired in ABI V1; use the typed Kagemusha flow`,
       );
@@ -660,7 +665,9 @@ export function noritoEncodeInstruction(instruction) {
       const parsed = JSON.parse(trimmed);
       const exactParsed = isStrictGovernanceInstructionCandidate(parsed)
         ? parseStrictGovernanceInstructionJson(trimmed, "governance instruction")
-        : parsed;
+        : isStrictMintBurnTransferInstructionCandidate(parsed)
+          ? parseStrictLosslessIntegerJson(trimmed, "Mint/Burn/Transfer instruction")
+          : parsed;
       const normalized = normalizeInstructionJsonValue(exactParsed);
       return encodeNormalizedInstruction(normalized);
     } catch (error) {
@@ -731,8 +738,8 @@ export function noritoEncodeSorafsBillingAcknowledgementProofV1(proof) {
   const keys = Object.keys(proof);
   if (
     keys.length !== 2 ||
-    !Object.prototype.hasOwnProperty.call(proof, "requestNonceHex") ||
-    !Object.prototype.hasOwnProperty.call(proof, "authenticationProof")
+    !hasOwn(proof, "requestNonceHex") ||
+    !hasOwn(proof, "authenticationProof")
   ) {
     throw new TypeError(
       "SoraFS billing acknowledgement proof must contain exactly requestNonceHex and authenticationProof",
@@ -847,7 +854,7 @@ function encodeFeePaymentIntentValue(intent, context) {
   const chargeLimits = encodeNoritoVec(
     Array.from(intent.value.charge_limits, (limit, index) => {
       const itemContext = `${context}.value.charge_limits[${index}]`;
-      if (!Object.prototype.hasOwnProperty.call(intent.value.charge_limits, index)) {
+      if (!hasOwn(intent.value.charge_limits, index)) {
         throw new TypeError(`${context}.value.charge_limits must not contain holes`);
       }
       if (!isPlainObject(limit)) {
@@ -1147,7 +1154,7 @@ function rejectValidationFeeCamelCaseDtoFields(request) {
     ["validationFeeInstructionIndex", "validation_fee_instruction_index"],
     ["validationFeeTransferEntryIndex", "validation_fee_transfer_entry_index"],
   ]) {
-    if (Object.prototype.hasOwnProperty.call(request, camelName)) {
+    if (hasOwn(request, camelName)) {
       throw new TypeError(
         `MultisigProposeDto uses unsupported camelCase validation fee field ${camelName}; use ${snakeName}`,
       );
@@ -1517,7 +1524,7 @@ function validateDecodedInstructionProofAttachments(instruction) {
     if (!isPlainObject(payload)) {
       continue;
     }
-    if (!Object.prototype.hasOwnProperty.call(payload, field)) {
+    if (!hasOwn(payload, field)) {
       throw new TypeError(`zk.${variant}.${field} is required`);
     }
     normalizeCanonicalProofAttachmentValue(
@@ -2623,74 +2630,51 @@ function encodePureJsInstructionPayload(instruction) {
   if (!isPlainObject(instruction)) {
     throw new TypeError("instruction must be a JSON object");
   }
-  if (isPlainObject(instruction.Mint)) {
-    if (isPlainObject(instruction.Mint.Asset)) {
-      const body = encodeAssetInstructionBody(instruction.Mint.Asset, "Mint.Asset");
-      return encodeEnumInstruction("iroha.mint", 0, body);
-    }
-    if (isPlainObject(instruction.Mint.TriggerRepetitions)) {
-      const body = encodeTriggerRepetitionsBody(
-        instruction.Mint.TriggerRepetitions,
-        "Mint.TriggerRepetitions",
-      );
-      return encodeEnumInstruction("iroha.mint", 1, body);
-    }
-  }
-  if (isPlainObject(instruction.Burn)) {
-    if (isPlainObject(instruction.Burn.Asset)) {
-      const body = encodeAssetInstructionBody(instruction.Burn.Asset, "Burn.Asset");
-      return encodeEnumInstruction("iroha.burn", 0, body);
-    }
-    if (isPlainObject(instruction.Burn.TriggerRepetitions)) {
-      const body = encodeTriggerRepetitionsBody(
-        instruction.Burn.TriggerRepetitions,
-        "Burn.TriggerRepetitions",
-      );
-      return encodeEnumInstruction("iroha.burn", 1, body);
-    }
-  }
-  if (isPlainObject(instruction.Transfer) && isPlainObject(instruction.Transfer.Asset)) {
-    const body = encodeTransferAssetBody(instruction.Transfer.Asset);
-    return encodeEnumInstruction("iroha.transfer", 2, body);
-  }
-  if (isPlainObject(instruction.Transfer) && isPlainObject(instruction.Transfer.Domain)) {
+  for (const instructionName of ["Mint", "Burn"]) {
+    if (!hasOwn(instruction, instructionName)) continue;
+    assertExactObjectKeys(instruction, [instructionName], "instruction");
+    const instructionValue = instruction[instructionName];
+    const variant = selectExactInstructionVariant(
+      instructionValue,
+      ["Asset", "TriggerRepetitions"],
+      instructionName,
+    );
+    const context = `${instructionName}.${variant}`;
+    const body =
+      variant === "Asset"
+        ? encodeAssetInstructionBody(instructionValue[variant], context)
+        : encodeTriggerRepetitionsBody(instructionValue[variant], context);
     return encodeEnumInstruction(
-      "iroha.transfer",
-      0,
-      encodeTransferObjectBody(
-        instruction.Transfer.Domain,
-        "Transfer.Domain",
-        encodeAccountIdValue,
-        encodeDomainIdValue,
-        encodeAccountIdValue,
-      ),
+      `iroha.${instructionName.toLowerCase()}`,
+      variant === "Asset" ? 0 : 1,
+      body,
     );
   }
-  if (
-    isPlainObject(instruction.Transfer) &&
-    isPlainObject(instruction.Transfer.AssetDefinition)
-  ) {
-    return encodeEnumInstruction(
-      "iroha.transfer",
-      1,
-      encodeTransferObjectBody(
-        instruction.Transfer.AssetDefinition,
-        "Transfer.AssetDefinition",
-        encodeAccountIdValue,
-        encodeAssetDefinitionIdValue,
-        encodeAccountIdValue,
-      ),
+  if (hasOwn(instruction, "Transfer")) {
+    assertExactObjectKeys(instruction, ["Transfer"], "instruction");
+    const variant = selectExactInstructionVariant(
+      instruction.Transfer,
+      ["Asset", "Domain", "AssetDefinition", "Nft"],
+      "Transfer",
     );
-  }
-  if (isPlainObject(instruction.Transfer) && isPlainObject(instruction.Transfer.Nft)) {
+    if (variant === "Asset") {
+      const body = encodeTransferAssetBody(instruction.Transfer.Asset);
+      return encodeEnumInstruction("iroha.transfer", 2, body);
+    }
+    const [variantIndex, encodeObject] =
+      variant === "Domain"
+        ? [0, encodeDomainIdValue]
+        : variant === "AssetDefinition"
+          ? [1, encodeAssetDefinitionIdValue]
+          : [3, encodeNftIdValue];
     return encodeEnumInstruction(
       "iroha.transfer",
-      3,
+      variantIndex,
       encodeTransferObjectBody(
-        instruction.Transfer.Nft,
-        "Transfer.Nft",
+        instruction.Transfer[variant],
+        `Transfer.${variant}`,
         encodeAccountIdValue,
-        encodeNftIdValue,
+        encodeObject,
         encodeAccountIdValue,
       ),
     );
@@ -2728,12 +2712,12 @@ function encodePureJsInstructionPayload(instruction) {
     const payload = encodeExecuteTriggerPayload(instruction.ExecuteTrigger);
     return encodeInstructionEnvelope("iroha.execute_trigger", payload);
   }
-  if (Object.prototype.hasOwnProperty.call(instruction, "CancelAssetLock")) {
+  if (hasOwn(instruction, "CancelAssetLock")) {
     assertOnlyObjectKeys(instruction, ["CancelAssetLock"], "instruction");
     return encodeCancelAssetLockInstruction(instruction.CancelAssetLock);
   }
   if (
-    Object.prototype.hasOwnProperty.call(
+    hasOwn(
       instruction,
       SET_ASSET_TRANSFER_AVAILABILITY_VARIANT,
     )
@@ -2748,7 +2732,7 @@ function encodePureJsInstructionPayload(instruction) {
     );
   }
   if (
-    Object.prototype.hasOwnProperty.call(
+    hasOwn(
       instruction,
       SET_ASSET_TRANSFER_BLACKLIST_VARIANT,
     )
@@ -2763,7 +2747,7 @@ function encodePureJsInstructionPayload(instruction) {
     );
   }
   if (
-    Object.prototype.hasOwnProperty.call(
+    hasOwn(
       instruction,
       SET_ASSET_TRANSFER_CONTROL_VARIANT,
     )
@@ -3211,7 +3195,7 @@ function encodeCancelAssetLockPayload(value) {
     "CancelAssetLock",
   );
   for (const field of ["escrow_id", "expected_remaining_amount"]) {
-    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+    if (!hasOwn(value, field)) {
       throw new TypeError(`CancelAssetLock.${field} is required`);
     }
   }
@@ -3430,7 +3414,7 @@ function encodeSetAssetTransferAvailabilityInstruction(value) {
   ];
   assertOnlyObjectKeys(value, fields, SET_ASSET_TRANSFER_AVAILABILITY_VARIANT);
   for (const field of fields.slice(0, 5)) {
-    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+    if (!hasOwn(value, field)) {
       throw new TypeError(`SetAssetTransferAvailability.${field} is required`);
     }
   }
@@ -3536,7 +3520,7 @@ function encodeSetAssetTransferBlacklistInstruction(value) {
   const fields = ["account_id", "asset_definition_id", "blacklisted"];
   assertOnlyObjectKeys(value, fields, SET_ASSET_TRANSFER_BLACKLIST_VARIANT);
   for (const field of fields) {
-    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+    if (!hasOwn(value, field)) {
       throw new TypeError(`SetAssetTransferBlacklist.${field} is required`);
     }
   }
@@ -3625,7 +3609,7 @@ function encodeAssetTransferLimitValue(value, context) {
   const fields = ["window", "cap_amount"];
   assertOnlyObjectKeys(value, fields, context);
   for (const field of fields) {
-    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+    if (!hasOwn(value, field)) {
       throw new TypeError(`${context}.${field} is required`);
     }
   }
@@ -3663,7 +3647,7 @@ function encodeSetAssetTransferControlInstruction(value) {
   const fields = ["account_id", "asset_definition_id", "limits"];
   assertOnlyObjectKeys(value, fields, SET_ASSET_TRANSFER_CONTROL_VARIANT);
   for (const field of fields) {
-    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+    if (!hasOwn(value, field)) {
       throw new TypeError(`SetAssetTransferControl.${field} is required`);
     }
   }
@@ -3671,7 +3655,7 @@ function encodeSetAssetTransferControlInstruction(value) {
     throw new TypeError("SetAssetTransferControl.limits must be an array");
   }
   for (let index = 0; index < value.limits.length; index += 1) {
-    if (!Object.prototype.hasOwnProperty.call(value.limits, index)) {
+    if (!hasOwn(value.limits, index)) {
       throw new TypeError("SetAssetTransferControl.limits must not contain holes");
     }
   }
@@ -4717,6 +4701,7 @@ function encodeTransferObjectBody(
   encodeObject,
   encodeDestination,
 ) {
+  assertExactObjectKeys(value, ["source", JS_TYPE_OBJECT, "destination"], context);
   return encodeStructValue([
     [encodeSource(value.source, `${context}.source`)],
     [encodeObject(value.object, `${context}.object`)],
@@ -5152,8 +5137,8 @@ function encodeNewAssetDefinitionValue(value, context) {
     );
   }
   if (
-    Object.prototype.hasOwnProperty.call(value, "confidential_policy") ||
-    Object.prototype.hasOwnProperty.call(value, "confidentialPolicy")
+    hasOwn(value, "confidential_policy") ||
+    hasOwn(value, "confidentialPolicy")
   ) {
     throw new TypeError(
       `${context} cannot carry confidential policy; use RegisterZkAsset with canonical verifier bindings`,
@@ -5300,11 +5285,40 @@ function assertExactObjectKeys(value, expectedKeys, context) {
   }
   assertOnlyObjectKeys(value, expectedKeys, context);
   const missing = expectedKeys.find(
-    (key) => !Object.prototype.hasOwnProperty.call(value, key),
+    (key) => !hasOwn(value, key),
   );
   if (missing !== undefined) {
     throw new TypeError(`${context} is missing field ${missing}`);
   }
+}
+
+function selectExactInstructionVariant(value, supportedVariants, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} instruction must be an object containing exactly one variant`);
+  }
+  const variants = Object.keys(value);
+  if (variants.length !== 1) {
+    throw new TypeError(`${context} instruction must contain exactly one variant`);
+  }
+  const [variant] = variants;
+  if (!supportedVariants.includes(variant)) {
+    throw new TypeError(
+      `unsupported ${context} instruction variant ${variant}; expected keys: ${supportedVariants.join(", ")}`,
+    );
+  }
+  if (!isPlainObject(value[variant])) {
+    throw new TypeError(`${context}.${variant} must be an object`);
+  }
+  return variant;
+}
+
+function isStrictMintBurnTransferInstructionCandidate(value) {
+  return (
+    isPlainObject(value) &&
+    ["Mint", "Burn", "Transfer"].some((key) =>
+      hasOwn(value, key),
+    )
+  );
 }
 
 function decodeNonzeroFixedBytesHex(payload, context) {
@@ -6919,6 +6933,7 @@ function decodeRwaControlPolicyValue(payload, context) {
 }
 
 function encodeAssetInstructionBody(value, context) {
+  assertExactObjectKeys(value, [JS_TYPE_OBJECT, "destination"], context);
   return Buffer.concat([
     encodeNoritoField(encodeQuantityValue(value.object, `${context}.object`)),
     encodeNoritoField(encodeAssetIdValue(value.destination, `${context}.destination`)),
@@ -6937,10 +6952,29 @@ function decodeAssetInstructionBody(payload, context) {
 }
 
 function encodeTransferAssetBody(value) {
+  assertExactObjectKeys(
+    value,
+    ["source", JS_TYPE_OBJECT, "destination"],
+    "Transfer.Asset",
+  );
+  const source = normalizeAssetHoldingId(value.source, "Transfer.Asset.source");
+  const destination = normalizeAccountId(
+    value.destination,
+    "Transfer.Asset.destination",
+  );
+  const sourceOwner = source.split("#")[1];
+  const sourceDiscriminant = AccountAddress.parseEncoded(sourceOwner).chainDiscriminant;
+  const destinationDiscriminant =
+    AccountAddress.parseEncoded(destination).chainDiscriminant;
+  if (sourceDiscriminant !== destinationDiscriminant) {
+    throw new TypeError(
+      "Transfer.Asset source owner and destination I105 discriminants must match exactly",
+    );
+  }
   return Buffer.concat([
-    encodeNoritoField(encodeAssetIdValue(value.source, "Transfer.Asset.source")),
+    encodeNoritoField(encodeAssetIdValue(source, "Transfer.Asset.source")),
     encodeNoritoField(encodeQuantityValue(value.object, "Transfer.Asset.object")),
-    encodeNoritoField(encodeAccountIdValue(value.destination, "Transfer.Asset.destination")),
+    encodeNoritoField(encodeAccountIdValue(destination, "Transfer.Asset.destination")),
   ]);
 }
 
@@ -6957,6 +6991,7 @@ function decodeTransferAssetBody(payload) {
 }
 
 function encodeTriggerRepetitionsBody(value, context) {
+  assertExactObjectKeys(value, [JS_TYPE_OBJECT, "destination"], context);
   return Buffer.concat([
     encodeNoritoField(encodeU32Value(value.object, `${context}.object`)),
     encodeNoritoField(
@@ -8033,7 +8068,7 @@ function normalizeCanonicalProofAttachmentValue(value, context) {
     context,
   );
   for (const field of ["backend", "proof", "vk_ref"]) {
-    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+    if (!hasOwn(value, field)) {
       throw new TypeError(`${context}.${field} is required`);
     }
   }

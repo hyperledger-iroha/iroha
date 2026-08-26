@@ -279,19 +279,29 @@ structural-only and must not be passed to the typed adapter.
 `PEER_OPTIMIZED` compression is cross-rail and
 uses zlib only when it saves at least 32 bytes and one 256-byte shard.
 
-From `java/iroha_android`, the normal checks below exercise the Java facades,
-shared fixture parity, Kotlin dependency wiring, manifest contract, and Android
-adapters:
+The normal checks below exercise the Java facades, shared fixture parity,
+Kotlin dependency wiring, manifest contract, and Android adapters. First build
+both Rust fixture executables from the same checked-out revision with the locked
+dependency graph, then supply their absolute paths explicitly:
 
 ```bash
-export IROHA_KOTLIN_FIXTURE_GEN_BIN=/absolute/path/to/kotlin-fixture-gen
-./gradlew :core:check :android:testDebugUnitTest
+cargo build --locked -p kotlin-fixture-gen --features dev-tools --bin kotlin-fixture-gen
+cargo build --locked -p connect_norito_bridge --example kotlin_offline_cash_v1
+export IROHA_KOTLIN_FIXTURE_GEN_BIN="$(pwd)/target/debug/kotlin-fixture-gen"
+export IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN="$(pwd)/target/debug/examples/kotlin_offline_cash_v1"
+(cd java/iroha_android && ./gradlew :core:check :android:testDebugUnitTest)
 ```
 
-The parity runner requires that single explicit executable and never invokes
-Cargo. A relative path is resolved from the Iroha repository root; unset,
+Run those commands from the Iroha repository root. The parity runners never
+invoke Cargo. A relative path is resolved from the repository root; unset,
 blank, missing, non-file, and non-executable values fail before a fixture
 process starts.
+
+The Offline Cash executable emits an exact 40-row inventory. Both Java and
+Kotlin loaders reject missing, duplicate, additional, or malformed rows before
+any fixture accessor can run. The rows include valid pending, applied top-up,
+applied redeem, and rejected statuses, plus independent transaction-marker,
+terminal-binding, coherent foreign-network, and rejection-envelope negatives.
 
 For a fast portable peer-only iteration, use:
 
@@ -328,6 +338,15 @@ and submitting the same payload. Use
 `HttpClientTransport.getFeeSponsorProgram(programId, canonicalAuth)` to inspect
 one exact lifecycle record before selecting its revision. Contract/IVM drafts
 require a positive gas bound in the intent.
+
+Fee quoting accepts only the ABI-22 `TransactionPayload` field set:
+`domain`, `authority`, `creation_time_ms`, `instructions`,
+`time_to_live_ms`, optional `nonce`, `fee_payment`, `admission_intent`,
+`metadata`, and required `attachments`. The domain must be exactly
+`{"kind":"network","value":"hash:<64 uppercase hex>#<CRC16>"}` and must
+equal `ClientConfig.localSigningContext()` when that context is configured.
+Legacy chain aliases, the genesis marker, unknown or missing fields, retired
+fee metadata, and malformed attachment bytes fail before dispatch.
 
 The metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and
 rejected. Sponsor rejection never falls back to the authority.
@@ -425,8 +444,13 @@ Artifact installation requires the canonical candidate-bound promotion record th
 internal-validation receipt, benchmark evidence, and cryptographic review. The receipt and review
 are each limited to 1 MiB. An authenticated-but-unpromoted release cannot become active.
 
-`newToriiClient(...)` requires an exact genesis-derived `LocalSigningContext` and exposes the
-query-free, asset-neutral `getOfflineCapability`, `submitTopUp`, `submitRedeem`, and `getOperation`.
+`OfflineCashToriiV1.ClientV1.create(...)` requires an exact genesis-derived
+`LocalSigningContext` and exposes the query-free, asset-neutral `getReadiness`, `submitTopUp`,
+`submitRedeem`, and `getOperation` public facade.
+Operation references and statuses accept transaction hashes only when they are
+canonical marked Iroha hashes. Rejected statuses accept exactly
+`offline_operation_rejected`, a canonical message of at most 1,024 Unicode
+scalars, and no error details.
 Receiver-registration lineage is carried inside the portable receive offer and verified locally by
 the native Kagemusha V4 receive-offer verifier; it is not fetched from Torii. Commands send the typed Norito
 request directly with `application/x-norito` and the signed lowercase operation id as
@@ -465,7 +489,13 @@ applications never parse lineage paths.
 generic proof request/build/verify ABI and free-form algorithm selectors are
 absent; proofs must use protocol-specific typed APIs. The local catalog never
 establishes activation or readiness; proof submission requires a fresh
-committed `/v1/privacy/capabilities` snapshot from live Torii.
+committed `/v1/privacy/capabilities` Exact12 capability manifest from live Torii.
+
+`HttpClientTransport.getPrivacyCapabilities` decodes that live response only as
+`PrivacyExact12CapabilityManifestV1`, and
+`requirePrivacyExact12CapabilityAdmission` is the sole capability-admission
+entry point. Java exports no legacy JSON snapshot DTO or parser; historical
+snapshot payloads cannot enter the transport or authorize proof construction.
 
 Genesis `confidential_features` and `zk_policy_hash` values are opaque consensus
 fingerprints, never client-side proof or backend selectors.

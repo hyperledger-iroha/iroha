@@ -380,7 +380,7 @@ test("browser transfer payload is byte-for-byte native Rust canonical", () => {
     sampleInput({
       metadata: { z: [true, null, { b: 2, a: "é" }], a: "-1.25" },
       quantity: "0.0000000000000000000000000001",
-      ttlMs: 0,
+      ttlMs: 1,
       nonce: 0xffff_ffff,
     }),
   ]) {
@@ -522,7 +522,7 @@ test("browser finalizer matches the native N-API bytes and entrypoint hash", () 
   );
 });
 
-test("browser signed hash matches the shared compact Android and native Rust golden", () => {
+test("shared Ordinary compact golden has direct/native hash parity and is rejected by public browser hashing", () => {
   const fixture = properties(FIXTURE_PATH);
   assert.equal(fixture["schema.version"], "2");
   assert.equal(fixture["source.fixture"], "transfer_asset");
@@ -557,7 +557,18 @@ test("browser signed hash matches the shared compact Android and native Rust gol
   const directHash = Buffer.from(blake2b256(canonical));
   directHash[directHash.length - 1] |= 1;
   assert.equal(directHash.toString("hex"), fixture["canonical.hash"]);
-  assert.equal(browserSignedTransactionHashHex(versioned), fixture["canonical.hash"]);
+  assert.throws(
+    () => browserSignedTransactionHashHex(versioned),
+    (error) => {
+      assert.ok(error instanceof BrowserTransactionCodecError);
+      assert.equal(error.code, "malformed_signed_transaction");
+      assert.match(
+        error.message,
+        /transaction payload\.admissionIntent must be TransactionAdmissionIntent::QueuePlanSynced/u,
+      );
+      return true;
+    },
+  );
   assert.equal(
     Buffer.from(getNativeBinding().hashSignedTransaction(versioned)).toString("hex"),
     fixture["canonical.hash"],
@@ -673,6 +684,10 @@ test("browser builder rejects ambiguous, non-canonical, and hostile inputs", () 
   );
   expectCodecError(
     () => buildBrowserTransferPayload(sampleInput({ nonce: 0 })),
+    "invalid_integer",
+  );
+  expectCodecError(
+    () => buildBrowserTransferPayload(sampleInput({ ttlMs: 0 })),
     "invalid_integer",
   );
   for (const quantity of [0, 1, -1, "01", "1.0", "1e3", Number.NaN]) {
@@ -816,18 +831,29 @@ test("browser metadata JSON strings must already be exact and canonical", () => 
     "stored Metadata Json must use Rust plain control escaping",
   );
   const canonicalControls =
-    '{"v":"\\u0008\\u000C\\u0000\\u001F\\n\\r\\t"}';
+    '{"v":"\\b\\f\\u0000\\u001f\\n\\r\\t"}';
   const canonicalControlInput = sampleInput({ metadata: canonicalControls });
   assert.deepEqual(
     buildBrowserTransferPayload(canonicalControlInput),
     Buffer.from(nativeBuild(canonicalControlInput).payloadBytes),
   );
   const javascriptControlAlias = JSON.stringify({ v: controlValue });
-  assert.notEqual(javascriptControlAlias, canonicalControls);
-  expectCodecError(
-    () => buildBrowserTransferPayload(sampleInput({ metadata: javascriptControlAlias })),
-    "invalid_metadata",
+  assert.equal(javascriptControlAlias, canonicalControls);
+  assert.deepEqual(
+    buildBrowserTransferPayload(sampleInput({ metadata: javascriptControlAlias })),
+    Buffer.from(nativeBuild(sampleInput({ metadata: javascriptControlAlias })).payloadBytes),
   );
+
+  for (const controlAlias of [
+    '{"v":"\\u0008\\f\\u0000\\u001f\\n\\r\\t"}',
+    '{"v":"\\b\\u000c\\u0000\\u001f\\n\\r\\t"}',
+    '{"v":"\\b\\f\\u0000\\u001F\\n\\r\\t"}',
+  ]) {
+    expectCodecError(
+      () => buildBrowserTransferPayload(sampleInput({ metadata: controlAlias })),
+      "invalid_metadata",
+    );
+  }
 
   for (const metadata of [
     '{"value":1.0}',
@@ -1047,14 +1073,6 @@ test("browser signed payload validation enforces byte caps before decoding or bi
   assert.equal(Buffer.byteLength(oversizedJson), 65_537);
 
   for (const [context, mutatedPayload] of [
-    [
-      "chain ID",
-      replacePayloadField(
-        payload,
-        0,
-        struct([stringArchive("c".repeat(1_025))]),
-      ),
-    ],
     ["wire ID", replaceTransferExecutable(payload, { wireId: "w".repeat(15) })],
     [
       "metadata key",
@@ -1403,7 +1421,7 @@ test("browser hash rejects wrong versions, trailing data, and overlong field len
       browserSignedTransactionHashHex(
         Buffer.concat([finalized.signedTransaction, Buffer.of(0)]),
       ),
-    "malformed_payload",
+    "malformed_signed_transaction",
   );
   expectCodecError(
     () =>
@@ -1423,6 +1441,6 @@ test("browser hash rejects wrong versions, trailing data, and overlong field len
   ]);
   expectCodecError(
     () => browserSignedTransactionHashHex(overlong),
-    "malformed_payload",
+    "malformed_signed_transaction",
   );
 });

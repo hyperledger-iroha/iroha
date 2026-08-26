@@ -1,7 +1,9 @@
 /**
- * Fail-closed parser for the authoritative `PrivacyCapabilitySnapshotV1` Torii
- * response. This snapshot is the sole first-release privacy catalog contract;
- * only committed, typed protocol state can authorize proof submission.
+ * Fail-closed parser for the legacy JSON privacy-capability inspection response.
+ *
+ * This surface is diagnostic only. It must never authorize proof submission;
+ * admission requires the canonical Norito Exact12 manifest and ABI22 native
+ * validation exposed below.
  */
 
 import { getNativeBinding } from "./native.js";
@@ -11,7 +13,7 @@ import {
   requirePrivacyExact12CapabilityTupleV1,
 } from "./privacyCapabilityAdmission.js";
 import {
-  privacyCapabilityTransportV1,
+  legacyPrivacyCapabilityInspectionTransportV1,
   privacyExact12CapabilityManifestTransportV1,
 } from "./privacyCapabilityTransport.js";
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
@@ -21,7 +23,7 @@ export {
   requirePrivacyExact12CapabilityTupleV1,
 };
 
-export const PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1 = 1;
+export const LEGACY_PRIVACY_CAPABILITY_INSPECTION_VERSION_V1 = 1;
 
 /** Canonical public Exact12 capability-manifest version. */
 export const PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1 = 1;
@@ -89,17 +91,17 @@ const CONSENSUS_LIMIT_MAXIMA = Object.freeze({
   retained_root_count: 2048,
 });
 
-/** Error raised when a privacy-capability response cannot be trusted. */
-export class PrivacyCapabilitySnapshotError extends TypeError {
-  constructor(message, path = "privacy capability snapshot") {
+/** Error raised when a legacy privacy-capability inspection response is malformed. */
+export class LegacyPrivacyCapabilityInspectionError extends TypeError {
+  constructor(message, path = "legacy privacy capability inspection") {
     super(`${path}: ${message}`);
-    this.name = "PrivacyCapabilitySnapshotError";
+    this.name = "LegacyPrivacyCapabilityInspectionError";
     this.path = path;
   }
 }
 
 /**
- * Parse and validate the exact first-release Torii privacy capability JSON.
+ * Parse and validate the legacy Torii privacy-capability inspection JSON.
  *
  * The output keeps the server's snake_case wire names so callers can compare
  * governed bindings byte-for-byte without an SDK-specific projection.
@@ -107,27 +109,27 @@ export class PrivacyCapabilitySnapshotError extends TypeError {
  * @param {unknown} payload Torii JSON response body.
  * @returns {Readonly<Record<string, unknown>>} validated immutable snapshot.
  */
-export function parsePrivacyCapabilitySnapshotV1(payload) {
+export function parseLegacyPrivacyCapabilityInspectionSnapshotV1(payload) {
   const snapshot = objectWithExactKeys(payload, [
     "version",
     "committed_height",
     "consensus_policy",
     "protocols",
-  ], "privacy capability snapshot");
-  if (u32(snapshot.version, "privacy capability snapshot.version") !== PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1) {
-    fail("version must be exactly 1", "privacy capability snapshot.version");
+  ], "legacy privacy capability inspection");
+  if (u32(snapshot.version, "legacy privacy capability inspection.version") !== LEGACY_PRIVACY_CAPABILITY_INSPECTION_VERSION_V1) {
+    fail("version must be exactly 1", "legacy privacy capability inspection.version");
   }
-  const committedHeight = u64(snapshot.committed_height, "privacy capability snapshot.committed_height");
+  const committedHeight = u64(snapshot.committed_height, "legacy privacy capability inspection.committed_height");
   const consensusPolicy = parseConsensusPolicy(snapshot.consensus_policy, committedHeight);
   if (!Array.isArray(snapshot.protocols) || snapshot.protocols.length !== PRIVACY_PROTOCOL_IDS_V1.length) {
-    fail("protocols must contain exactly the 12 canonical protocol rows", "privacy capability snapshot.protocols");
+    fail("protocols must contain exactly the 12 canonical protocol rows", "legacy privacy capability inspection.protocols");
   }
   const protocols = snapshot.protocols.map((row, index) => {
     const expected = PRIVACY_PROTOCOL_IDS_V1[index];
-    return parseCapabilityRow(row, expected, committedHeight, `privacy capability snapshot.protocols[${index}]`);
+    return parseCapabilityRow(row, expected, committedHeight, `legacy privacy capability inspection.protocols[${index}]`);
   });
   return deepFreeze({
-    version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
+    version: LEGACY_PRIVACY_CAPABILITY_INSPECTION_VERSION_V1,
     committed_height: committedHeight,
     consensus_policy: consensusPolicy,
     protocols,
@@ -135,38 +137,39 @@ export function parsePrivacyCapabilitySnapshotV1(payload) {
 }
 
 /**
- * Fetch and fail-closed validate the authoritative committed privacy
- * capability snapshot from a configured Iroha JS Torii client.
+ * Fetch and fail-closed validate the legacy privacy-capability inspection
+ * response from a configured Iroha JS Torii client. The returned object is
+ * diagnostic only and is never valid admission evidence.
  *
  * @param {unknown} client A package ToriiClient or ToriiBrowserClient.
  * @param {object} [options] Client-specific request options.
  * @returns {Promise<Readonly<Record<string, unknown>>>}
  */
-export async function getPrivacyCapabilitiesV1(client, options) {
+export async function getLegacyPrivacyCapabilityInspectionV1(client, options) {
   if (
     (typeof client !== "object" && typeof client !== "function")
     || client === null
   ) {
     throw new TypeError(
-      "getPrivacyCapabilitiesV1 client must be an Iroha JS Torii client",
+      "getLegacyPrivacyCapabilityInspectionV1 client must be an Iroha JS Torii client",
     );
   }
-  const transport = client[privacyCapabilityTransportV1];
+  const transport = client[legacyPrivacyCapabilityInspectionTransportV1];
   if (typeof transport !== "function") {
     throw new TypeError(
-      "getPrivacyCapabilitiesV1 client must be an Iroha JS Torii client",
+      "getLegacyPrivacyCapabilityInspectionV1 client must be an Iroha JS Torii client",
     );
   }
   const payload = await Reflect.apply(transport, client, [options]);
-  return parsePrivacyCapabilitySnapshotV1(payload);
+  return parseLegacyPrivacyCapabilityInspectionSnapshotV1(payload);
 }
 
 function parseConsensusPolicy(value, committedHeight) {
-  const policy = objectWithExactKeys(value, ["current_limits", "pending_tightening"], "privacy capability snapshot.consensus_policy");
-  const currentLimits = parseConsensusLimits(policy.current_limits, "privacy capability snapshot.consensus_policy.current_limits");
+  const policy = objectWithExactKeys(value, ["current_limits", "pending_tightening"], "legacy privacy capability inspection.consensus_policy");
+  const currentLimits = parseConsensusLimits(policy.current_limits, "legacy privacy capability inspection.consensus_policy.current_limits");
   let pending = null;
   if (policy.pending_tightening !== null) {
-    const path = "privacy capability snapshot.consensus_policy.pending_tightening";
+    const path = "legacy privacy capability inspection.consensus_policy.pending_tightening";
     const tightening = objectWithExactKeys(policy.pending_tightening, ["scheduled_at_height", "effective_at_height", "next_limits"], path);
     const scheduled = positiveU64(tightening.scheduled_at_height, `${path}.scheduled_at_height`);
     const effective = positiveU64(tightening.effective_at_height, `${path}.effective_at_height`);
@@ -420,7 +423,7 @@ function u64(value, path) {
 }
 function positiveU64(value, path) { const result = u64(value, path); if (result === 0n) fail("must be non-zero", path); return result; }
 function sameJson(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
-function fail(message, path) { throw new PrivacyCapabilitySnapshotError(message, path); }
+function fail(message, path) { throw new LegacyPrivacyCapabilityInspectionError(message, path); }
 function deepFreeze(value) { if (value && typeof value === "object" && !Object.isFrozen(value)) { Object.freeze(value); for (const item of Object.values(value)) deepFreeze(item); } return value; }
 
 const PRIVACY_EXACT12_CAPABILITY_MANIFEST_JSON_MAX_BYTES_V1 = 2 * 1024 * 1024;
@@ -612,7 +615,7 @@ export async function getPrivacyExact12CapabilityManifestV1(client, options) {
  * Require one committed active row and exact native-local compiled tuple.
  *
  * Transaction builders must call this guard with the validated manifest at
- * construction time. A legacy `PrivacyCapabilitySnapshotV1`, local catalog,
+ * construction time. A legacy `LegacyPrivacyCapabilityInspectionSnapshotV1`, local catalog,
  * digest shell, or caller-created object is never accepted as admission.
  */
 function admitPrivacyExact12CapabilityTupleV1(manifest, protocolId) {
@@ -741,7 +744,7 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
   ], "Exact12 capability manifest");
   let snapshot;
   try {
-    snapshot = parsePrivacyCapabilitySnapshotV1({
+    snapshot = parseLegacyPrivacyCapabilityInspectionSnapshotV1({
       version: manifest.version,
       committed_height: manifest.committed_height,
       consensus_policy: manifest.consensus_policy,

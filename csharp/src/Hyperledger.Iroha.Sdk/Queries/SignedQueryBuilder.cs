@@ -32,16 +32,31 @@ public sealed class SignedQueryBuilder
     private ulong? dataspaceId;
     private ulong? dataspaceOwnerId;
 
+    /// <summary>Creates a query builder for the public Taira testnet.</summary>
     public SignedQueryBuilder(string authorityAccountId, NetworkId networkId)
+        : this(authorityAccountId, networkId, AccountAddress.TairaTestnetChainDiscriminant)
     {
-        AuthorityAccountId = NormalizeAccountId(authorityAccountId, nameof(authorityAccountId));
+    }
+
+    public SignedQueryBuilder(
+        string authorityAccountId,
+        NetworkId networkId,
+        ushort chainDiscriminant)
+    {
+        AuthorityAccountId = NormalizeAccountId(
+            authorityAccountId,
+            nameof(authorityAccountId),
+            chainDiscriminant);
         NetworkId = networkId ?? throw new ArgumentNullException(nameof(networkId));
+        ChainDiscriminant = chainDiscriminant;
         networkIdBytes = NetworkId.ToBytes();
     }
 
     public string AuthorityAccountId { get; }
 
     public NetworkId NetworkId { get; }
+
+    public ushort ChainDiscriminant { get; }
 
     public SignedQueryBuilder FindExecutorDataModel()
     {
@@ -68,7 +83,7 @@ public sealed class SignedQueryBuilder
     {
         ResetArguments();
         singularQueryKind = ManagedSingularQueryKind.FindAliasesByAccountId;
-        subjectAccountId = NormalizeAccountId(accountId, nameof(accountId));
+        subjectAccountId = NormalizeAccountId(accountId, nameof(accountId), ChainDiscriminant);
         dataspaceAlias = NormalizeOptionalValue(dataspace, nameof(dataspace));
         this.domain = NormalizeOptionalValue(domain, nameof(domain));
         return this;
@@ -79,7 +94,7 @@ public sealed class SignedQueryBuilder
         ResetArguments();
         singularQueryKind = ManagedSingularQueryKind.FindAssetById;
         this.assetDefinitionId = NormalizeRequiredValue(assetDefinitionId, nameof(assetDefinitionId));
-        subjectAccountId = NormalizeAccountId(accountId, nameof(accountId));
+        subjectAccountId = NormalizeAccountId(accountId, nameof(accountId), ChainDiscriminant);
         this.dataspaceId = dataspaceId;
         return this;
     }
@@ -215,7 +230,7 @@ public sealed class SignedQueryBuilder
             throw new InvalidOperationException("Queries must select a singular request before signing.");
         }
 
-        var context = new TransactionEncodingContext(AuthorityAccountId);
+        var context = new TransactionEncodingContext(AuthorityAccountId, ChainDiscriminant);
         context.EnsureAuthorityMatchesPrivateKey(privateKeySeed);
 
         var payloadBytes = EncodeQueryRequestWithAuthority(
@@ -461,13 +476,16 @@ public sealed class SignedQueryBuilder
         return value is null ? null : NormalizeRequiredValue(value, paramName);
     }
 
-    private static string NormalizeAccountId(string value, string paramName)
+    private static string NormalizeAccountId(
+        string value,
+        string paramName,
+        ushort chainDiscriminant)
     {
         var exact = NormalizeRequiredValue(value, paramName);
         try
         {
-            return AccountAddress.Parse(exact, AccountAddress.DefaultChainDiscriminant)
-                .ToI105(AccountAddress.DefaultChainDiscriminant);
+            _ = AccountAddress.Parse(exact, chainDiscriminant);
+            return exact;
         }
         catch (AccountAddressException exception)
         {

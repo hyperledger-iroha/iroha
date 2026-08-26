@@ -44522,11 +44522,6 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
             ),
             ("step", "runtime_step", "live serialized runtime step"),
             (
-                "step_recovery",
-                "runtime_step_recovery",
-                "recovery serialized runtime step",
-            ),
-            (
                 "dispatch_one_adapter_deferred",
                 "dispatch_one_adapter_deferred",
                 "single adapter-deferred runtime dispatcher",
@@ -45439,33 +45434,6 @@ self.complete_driver_dispatch_leader_wire_owners(
             "orphans, and publish every terminal before observing effects",
         )
         require_runtime_item_order(
-            observed_runtime_items.get("step_recovery"),
-            (
-                """
-self.retain_effect_ownership(
-    RuntimeEffectSource::Fifo,
-    Some(&owner),
-    parent_statement.as_ref(),
-    &effects,
-)
-""",
-                "token.identity().admission_ordinal() != owner.lifecycle_ordinal()",
-                "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
-                "self.driver.acknowledge_producer_handoff(token, evidence)",
-                """
-self.complete_driver_dispatch_leader_wire_owners(
-    &owner,
-    retained_deferred_ingress,
-    completed_producer_handoff,
-)
-""",
-                "self.observe_effects(now, &effects)",
-            ),
-            "recovery dispatch must retain successors, acknowledge the exact "
-            "producer, terminalize the selected parent before adapter-side "
-            "orphans, and publish every terminal before observing effects",
-        )
-        require_runtime_item_order(
             observed_runtime_items.get("dispatch_one_adapter_deferred"),
             (
                 "self.retain_effect_ownership",
@@ -45487,10 +45455,6 @@ self.complete_driver_dispatch_leader_wire_owners(
         )
         for item_name, later_contract in (
             ("step", "let selected_round_tag = self.round_tag"),
-            (
-                "step_recovery",
-                "let round_tag = self.round_tag",
-            ),
         ):
             item = observed_runtime_items.get(item_name)
             if item is None:

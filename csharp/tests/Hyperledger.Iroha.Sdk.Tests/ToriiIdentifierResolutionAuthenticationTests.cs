@@ -94,7 +94,7 @@ public sealed class ToriiIdentifierResolutionAuthenticationTests
             httpClient ?? new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(networkId ?? ExactNetwork),
+                LocalSigningContext = new ToriiLocalSigningContext(networkId ?? ExactNetwork, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(AccountId, PrivateKeySeed),
             });
 

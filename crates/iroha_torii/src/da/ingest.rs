@@ -2,6 +2,8 @@
 
 #![allow(clippy::redundant_pub_crate)]
 use super::persistence::{ReceiptInsertOutcome, receipt_signature_placeholder};
+#[cfg(test)]
+use super::rs16::build_chunk_commitments_with_parity_observer;
 use super::rs16::{
     MAX_CANONICAL_PAYLOAD_BYTES, MAX_CHUNK_SIZE_BYTES, MAX_DATA_CHUNKS, MAX_DATA_SHARDS,
     MAX_PARITY_SHARDS, MAX_ROW_PARITY_SOURCE_STRIPES, MAX_ROW_PARITY_STRIPES, MIN_CHUNK_SIZE_BYTES,

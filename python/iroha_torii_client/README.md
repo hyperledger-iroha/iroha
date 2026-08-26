@@ -36,6 +36,31 @@ Use `get_status_snapshot()` for `/v1/status`. That route remains a distinct
 operational-health surface; its queue and historical lane telemetry must not be
 treated as consensus-authoritative state.
 
+## Offline Cash Torii transport
+
+The transport-only Kagemusha boundary exposes `get_offline_capability()`,
+`submit_kagemusha_top_up()`, `submit_kagemusha_redeem()`, and
+`get_kagemusha_operation_status()`. Submission accepts only the bounded V4
+Norito request DTOs produced by a supported wallet or prover; this package does
+not create witnesses or prove spends. It validates the exact top-up/redemption
+schema hash, compact `NRT0` framing, padding, payload length, CRC64, V4 field
+shape, and signed authorization projection. Each DTO derives its operation id,
+issuance time, and NetworkId from the archive; an optional caller-supplied
+operation id is only an equality assertion. Submission requires an immutable
+`ToriiLocalSigningContext`, rejects a request for another network before I/O,
+and requires the accepted reference timestamp to equal the signed issuance
+time. The producing wallet/prover and Torii remain responsible for witness and
+signature-authenticity checks.
+
+Accepted references and every pending, applied, or rejected status require a
+lowercase 32-byte transaction hash with the Iroha marker bit set in its final
+byte. A rejected status has exactly two error fields: code
+`offline_operation_rejected` and a trimmed, nonempty, control- and
+surrogate-free message of at most 1,024 Unicode scalars. Structured `details`,
+including an explicitly advertised null value, are not part of this contract.
+When `local_signing_context` is configured, an applied top-up anchor and its
+finality proof must bind that exact network.
+
 ## Node-local core and pipeline reads
 
 Peer addresses, detailed clock state, and pipeline preflight load/policy are
@@ -100,6 +125,8 @@ client.delete_attachment(meta["id"], canonical_auth=auth)
 
 Use a fresh nonce per call (the default). A human chain label, foreign genesis
 hash, unsigned call, redirect replay, or missing canonical auth is rejected.
+Session-level token, witness, precomputed signature, and `Session.auth`
+fallbacks are rejected before the signer runs.
 Methods must be ASCII HTTP tokens and signed paths must be the exact
 root-relative ASCII wire spelling. `build_canonical_request_headers` first
 prepares that target with Requests and signs its `PreparedRequest.path_url`;

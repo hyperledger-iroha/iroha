@@ -845,8 +845,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 445:
-        errors.append("internal release-regression seal must contain exactly 445 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 444:
+        errors.append("internal release-regression seal must contain exactly 444 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -1870,7 +1870,7 @@ def _production_liveness_release_inventory_errors(
                     "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
-                    "0f8c776e7ba182a8abe9aeb8c630d9946736389b7279d31939a20a7b7f8b7f16"
+                    "a74465a49f847a03ce4c7b17997f3434b8baf3f006c78d6e535854826848232d"
                 ),
             }
             if assignments["_RELEASE_RECEIPT_COMPONENT_SHA256"] != [

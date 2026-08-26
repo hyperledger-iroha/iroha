@@ -68,7 +68,7 @@ import {
   normalizeNodeCapabilitiesResponse,
 } from "./toriiCompatibility.js";
 import {
-  privacyCapabilityTransportV1,
+  legacyPrivacyCapabilityInspectionTransportV1,
   privacyExact12CapabilityManifestTransportV1,
 } from "./privacyCapabilityTransport.js";
 import {
@@ -188,6 +188,7 @@ import {
 } from "./sorafsOrderbookSubmission.js";
 export { SorafsOrderbookSubmissionAmbiguousError };
 
+const TAIRA_I105_DISCRIMINANT = 369;
 const DEFAULT_PAGE_SIZE = 100;
 const EXPLORER_CURSOR_DEFAULT_LIMIT = 25;
 const EXPLORER_CURSOR_MAX_LIMIT = 100;
@@ -472,6 +473,18 @@ const FEE_QUOTE_RESPONSE_KEYS = new Set([
   "components",
   "capacities",
   "decision",
+]);
+const FEE_QUOTE_TRANSACTION_PAYLOAD_KEYS = Object.freeze([
+  "domain",
+  "authority",
+  "creation_time_ms",
+  "instructions",
+  "time_to_live_ms",
+  "nonce",
+  "fee_payment",
+  "admission_intent",
+  "metadata",
+  "attachments",
 ]);
 const ISO_NON_TERMINAL_STATUS_VALUES = new Set(["pending", "accepted"]);
 const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
@@ -1376,9 +1389,9 @@ export class LocalSigningContext {
 
   /**
    * @param {import("./networkId.js").NetworkId} networkId Exact NetworkId expected in every draft.
-   * @param {number} [chainDiscriminant=753] Exact I105 deployment discriminant.
+   * @param {number} [chainDiscriminant=369] Exact I105 deployment discriminant (Taira by default).
    */
-  constructor(networkId, chainDiscriminant = 753) {
+  constructor(networkId, chainDiscriminant = TAIRA_I105_DISCRIMINANT) {
     networkIdBytes(networkId, "LocalSigningContext.networkId");
     if (!Number.isInteger(chainDiscriminant)
       || chainDiscriminant < 0 || chainDiscriminant > 0xffff) {
@@ -1644,7 +1657,11 @@ export class ToriiClient {
     if (!payload) {
       throw new TypeError("Kagemusha operation status response must contain JSON");
     }
-    return normalizeKagemushaOperationStatus(payload, canonicalId);
+    return normalizeKagemushaOperationStatus(payload, canonicalId, {
+      expectedNetworkId: this._localSigningContext === null
+        ? null
+        : this._localSigningContext.networkId.toString(),
+    });
   }
 
   async _submitKagemushaCommandV4(path, kind, request, options, context) {
@@ -1652,6 +1669,16 @@ export class ToriiClient {
       ? normalizeKagemushaTopUpRequestV4
       : normalizeKagemushaRedeemRequestV4;
     const normalized = normalizeRequest(request, `${context} request`);
+    if (!(this._localSigningContext instanceof LocalSigningContext)) {
+      throw new TypeError(
+        `${context} requires ToriiClient options.localSigningContext with the exact NetworkId`,
+      );
+    }
+    if (normalized.networkId !== this._localSigningContext.networkId.toString()) {
+      throw new TypeError(
+        `${context} signed request network does not match the local signing context`,
+      );
+    }
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, context);
     assertSupportedOptionKeys(rest, new Set([]), `${context} options`);
     const response = await this._request("POST", path, {
@@ -1669,6 +1696,7 @@ export class ToriiClient {
       "Kagemusha operation reference response",
     );
     const location = this._getHeader(response, "location");
+    const retryAfter = this._getHeader(response, "retry-after");
     const payload = await this._maybeJson(response);
     if (!payload) {
       throw new TypeError("Kagemusha operation reference response must contain JSON");
@@ -1676,7 +1704,9 @@ export class ToriiClient {
     return normalizeKagemushaOperationReference(payload, {
       expectedOperationId: normalized.operationId,
       expectedKind: kind,
+      expectedSubmittedAtMs: normalized.issuedAtMs,
       location,
+      retryAfter,
     });
   }
   /**
@@ -3071,19 +3101,39 @@ export class ToriiClient {
    * The account in `canonicalAuth` must equal the payload authority.
    */
   async quoteFees(payloadOrDraft, options = {}) {
-    const candidate = payloadOrDraft?.payload ?? payloadOrDraft;
-    const payload = ensureRecord(candidate, "quoteFees payload");
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
       options,
       "quoteFees",
     );
-    const authority = ensureCanonicalAccountId(
-      payload.authority,
-      "quoteFees payload.authority",
-    );
-    if (payload.authority !== authority) {
-      throw new TypeError("quoteFees payload.authority must be an exact canonical I105 account id");
+    let payloadJson = null;
+    let candidate = payloadOrDraft?.payload ?? payloadOrDraft;
+    if (
+      payloadOrDraft !== null &&
+      typeof payloadOrDraft === "object" &&
+      Object.prototype.hasOwnProperty.call(payloadOrDraft, "payloadJson")
+    ) {
+      payloadJson = requireExactNonEmptyString(
+        payloadOrDraft.payloadJson,
+        "quoteFees payloadJson",
+      );
+      try {
+        candidate = JSON.parse(payloadJson);
+      } catch (error) {
+        throw new TypeError("quoteFees payloadJson must contain exact JSON", { cause: error });
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(payloadOrDraft, "payload") &&
+        JSON.stringify(payloadOrDraft.payload) !== JSON.stringify(candidate)
+      ) {
+        throw new TypeError("quoteFees payloadJson must match the supplied payload object");
+      }
     }
+    const payload = validateFeeQuoteTransactionPayload(
+      candidate,
+      this._localSigningContext,
+      "quoteFees payload",
+    );
+    const authority = payload.authority;
     if (canonicalAuth.accountId !== authority) {
       throw new TypeError(
         "quoteFees canonicalAuth.accountId must equal the exact payload authority",
@@ -3091,7 +3141,7 @@ export class ToriiClient {
     }
     const response = await this._request("POST", "/v1/fees/quote", {
       headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify({ payload }),
+      body: payloadJson === null ? JSON.stringify({ payload }) : `{"payload":${payloadJson}}`,
       signal,
       canonicalAuth,
     });
@@ -3177,7 +3227,7 @@ export class ToriiClient {
    * Persist each page's `promotedCheckpoint` yourself when crash-durable
    * promotion is required; this convenience method promotes only in memory.
    */
-  async catchUpValidationFeeCurrentPolicyProof(binding, options) {
+  async catchUpValidationFeeCurrentPolicyProof(binding, options = {}) {
     const normalizedBinding = normalizeValidationFeeLedgerBindingV1(binding);
     const normalizedOptions = ensureRecord(
       options,
@@ -6389,8 +6439,8 @@ export class ToriiClient {
   }
 
   /** @internal Raw bounded transport for the optional privacy-capabilities API. */
-  async [privacyCapabilityTransportV1](options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getPrivacyCapabilitiesV1");
+  async [legacyPrivacyCapabilityInspectionTransportV1](options) {
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getLegacyPrivacyCapabilityInspectionV1");
     const response = await this._request("GET", "/v1/privacy/capabilities", {
       headers: JSON_ACCEPT_HEADERS,
       signal, canonicalAuth,
@@ -8645,7 +8695,7 @@ export class ToriiClient {
     }
     const payload = {
       sid,
-      network_id: input.networkId.toString(),
+      network_id: formatHashLiteral(input.networkId.toString()),
       app_pk: Buffer.from(appPublicKey).toString("base64url"),
       nonce: Buffer.from(nonce).toString("base64url"),
     };
@@ -8664,7 +8714,8 @@ export class ToriiClient {
     const session = normalizeConnectSessionResponse(body, "connect session response");
     validateConnectSessionResponseIdentity(session, {
       sid: payload.sid,
-      networkId: payload.network_id,
+      networkId: input.networkId.toString(),
+      networkIdJson: payload.network_id,
       appPk: payload.app_pk,
       nonce: payload.nonce,
       node: payload.node,
@@ -20107,6 +20158,14 @@ function formatHashLiteral(bodyHex) {
   return `hash:${upper}#${checksum}`;
 }
 
+function parseCanonicalHashLiteralToHex(literal, name) {
+  const exact = requireExactNonEmptyString(literal, name);
+  if (!/^hash:[0-9A-F]{64}#[0-9A-F]{4}$/u.test(exact)) {
+    throw new TypeError(`${name} must be a canonical marked Iroha hash literal`);
+  }
+  return parseHashLiteralToHex(exact, name);
+}
+
 function normalizeOptionalHashLiteral(value, name) {
   if (value === undefined || value === null) {
     return null;
@@ -20567,8 +20626,9 @@ const {
   normalizeManifestProvenancePayload,
   normalizeNetworkId(value, context) {
     networkIdBytes(value, context);
-    return value.toString();
+    return formatHashLiteral(value.toString());
   },
+  parseNetworkIdLiteral: parseCanonicalHashLiteralToHex,
   normalizeVpnSessionOptions,
   networkIdBytes,
   normalizeQuantityInput,
@@ -22621,6 +22681,38 @@ function normalizeFeePaymentIntentValue(
 
 function normalizeFeePaymentIntentResponse(intent, context) {
   return normalizeFeePaymentIntentValue(intent, context);
+}
+
+function validateFeeQuoteTransactionPayload(value, localSigningContext, context) {
+  const payload = exactEnumerableDataRecord(
+    value,
+    FEE_QUOTE_TRANSACTION_PAYLOAD_KEYS,
+    context,
+  );
+  const authority = ensureCanonicalAccountId(payload.authority, `${context}.authority`);
+  if (payload.authority !== authority) {
+    throw new TypeError(`${context}.authority must be an exact canonical I105 account id`);
+  }
+  const domain = exactEnumerableDataRecord(
+    payload.domain,
+    ["kind", "value"],
+    `${context}.domain`,
+  );
+  if (domain.kind !== "network") {
+    throw new TypeError(`${context}.domain must be the exact network transaction domain`);
+  }
+  const domainNetworkId = NetworkId.parse(
+    parseCanonicalHashLiteralToHex(domain.value, `${context}.domain.value`),
+  );
+  if (!(localSigningContext instanceof LocalSigningContext)) {
+    throw new TypeError(`${context}.domain requires ToriiClient options.localSigningContext`);
+  }
+  if (!domainNetworkId.equals(localSigningContext.networkId)) {
+    throw new TypeError(
+      `${context}.domain NetworkId must equal the client's exact LocalSigningContext`,
+    );
+  }
+  return payload;
 }
 
 function normalizeFeeQuoteResponse(payload, context = "fee quote response") {
@@ -31165,7 +31257,7 @@ function normalizeConnectSessionResponse(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const sid = normalizeConnectSid(record.sid, `${context}.sid`);
   const networkId = NetworkId.parse(
-    requireNonEmptyString(record.network_id, `${context}.network_id`),
+    parseCanonicalHashLiteralToHex(record.network_id, `${context}.network_id`),
   );
   const appPk = requireNonEmptyString(record.app_pk, `${context}.app_pk`);
   const nonce = requireNonEmptyString(record.nonce, `${context}.nonce`);

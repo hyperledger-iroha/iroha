@@ -36,6 +36,8 @@ transactions on a live network.
 - Uses deterministic fake Connect and Torii dependencies so the installed
   recipe is runnable offline while still checking the canonical payload and
   signed-transaction hashes.
+- Pins its deterministic account rendering to the Taira testnet discriminant
+  369 and exact NetworkId so release smoke catches application-default drift.
 
 Run with:
 
@@ -235,7 +237,7 @@ npm run build:native
 node ./recipes/governance.mjs
 ```
 
-Set `TORII_URL`, `CHAIN_ID`, `AUTHORITY`, and `PRIVATE_KEY_HEX` (32- or 64-byte Ed25519 key)
+Set `TORII_URL`, `NETWORK_ID`, `AUTHORITY`, and `PRIVATE_KEY_HEX` (32- or 64-byte Ed25519 key)
 when submitting to a live node. Ensure the authority holds the necessary
 governance permissions before enabling `GOV_SUBMIT=1`.
 

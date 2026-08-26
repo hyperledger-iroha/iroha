@@ -94,6 +94,32 @@ public final class HttpClientTransport implements IrohaClient {
   private static final String PIPELINE_STATUS_SIGNAL = "android.torii.pipeline.status";
   private static final String REDACTION_FAILURE_SIGNAL = "android.telemetry.redaction.failure";
   private static final long U32_MAX = 4_294_967_295L;
+  private static final BigInteger TRANSACTION_U32_MAX = new BigInteger("4294967295");
+  private static final BigInteger TRANSACTION_U64_MAX =
+      new BigInteger("18446744073709551615");
+  private static final Set<String> TRANSACTION_PAYLOAD_ALLOWED_FIELDS =
+      Set.of(
+          "domain",
+          "authority",
+          "creation_time_ms",
+          "instructions",
+          "time_to_live_ms",
+          "nonce",
+          "fee_payment",
+          "admission_intent",
+          "metadata",
+          "attachments");
+  private static final Set<String> TRANSACTION_PAYLOAD_REQUIRED_FIELDS =
+      Set.of(
+          "domain",
+          "authority",
+          "creation_time_ms",
+          "instructions",
+          "time_to_live_ms",
+          "fee_payment",
+          "admission_intent",
+          "metadata",
+          "attachments");
   private static final String TRON_BASE58_ALPHABET =
       "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
   private static final String ENTRYPOINT_HASH_HEADER = "x-iroha-entrypoint-hash";
@@ -478,7 +504,10 @@ public final class HttpClientTransport implements IrohaClient {
     return getLedgerExecutedBlockWire(BigInteger.valueOf(height));
   }
 
-  /** Fetch the exact committed Exact12 manifest with one-shot canonical account authentication. */
+  /**
+   * Fetch the exact committed Exact12 manifest with one-shot canonical account authentication.
+   * Legacy JSON snapshots are not accepted by this transport path.
+   */
   public CompletableFuture<PrivacyExact12CapabilityManifestV1> getPrivacyCapabilities(
       final ToriiCanonicalRequestAuth canonicalAuth) {
     return fetchExactNoritoBytes(
@@ -492,7 +521,8 @@ public final class HttpClientTransport implements IrohaClient {
 
   /**
    * Require committed/native tuple agreement before retained privacy construction, authenticated
-   * against the exact locally configured network.
+   * against the exact locally configured network. This is the sole capability-admission entry
+   * point; no legacy snapshot DTO or parser can enter it.
    */
   public CompletableFuture<PrivacyExact12CapabilityTupleAdmissionV1>
       requirePrivacyExact12CapabilityAdmission(
@@ -902,7 +932,7 @@ public final class HttpClientTransport implements IrohaClient {
       final ToriiCanonicalRequestAuth canonicalAuth) {
     Objects.requireNonNull(unsignedPayload, "unsignedPayload");
     Objects.requireNonNull(canonicalAuth, "canonicalAuth");
-    requireNetworkTransactionDomain(unsignedPayload);
+    requireExactTransactionPayload(unsignedPayload);
     final Object authority = unsignedPayload.get("authority");
     if (!(authority instanceof String) || !authority.equals(canonicalAuth.accountId())) {
       throw new IllegalArgumentException(
@@ -928,13 +958,17 @@ public final class HttpClientTransport implements IrohaClient {
             });
   }
 
-  private static NetworkId requireNetworkTransactionDomain(
-      final Map<String, Object> unsignedPayload) {
+  private NetworkId requireExactTransactionPayload(final Map<String, Object> unsignedPayload) {
     for (final String field : Arrays.asList("chain", "chainId", "chain_id")) {
       if (unsignedPayload.containsKey(field)) {
         throw new IllegalArgumentException(
             "unsignedPayload contains retired transaction identity field `" + field + "`");
       }
+    }
+    if (!TRANSACTION_PAYLOAD_ALLOWED_FIELDS.containsAll(unsignedPayload.keySet())
+        || !unsignedPayload.keySet().containsAll(TRANSACTION_PAYLOAD_REQUIRED_FIELDS)) {
+      throw new IllegalArgumentException(
+          "unsignedPayload must use the exact TransactionPayload field set");
     }
     final Object rawDomain = unsignedPayload.get("domain");
     if (!(rawDomain instanceof Map<?, ?>)) {
@@ -948,7 +982,114 @@ public final class HttpClientTransport implements IrohaClient {
       throw new IllegalArgumentException(
           "unsignedPayload.domain must contain exactly kind=network and a NetworkId value");
     }
-    return NetworkId.parse((String) domain.get("value"));
+    final NetworkId networkId =
+        NetworkId.parseNoritoJsonLiteral((String) domain.get("value"));
+    config
+        .localSigningContext()
+        .ifPresent(
+            signingContext -> {
+              if (!networkId.equals(signingContext.networkId())) {
+                throw new IllegalArgumentException(
+                    "unsignedPayload.domain NetworkId must equal localSigningContext.networkId");
+              }
+            });
+
+    if (!(unsignedPayload.get("authority") instanceof String)) {
+      throw new IllegalArgumentException("unsignedPayload.authority must be a string");
+    }
+    requireTransactionUnsignedInteger(
+        unsignedPayload.get("creation_time_ms"),
+        "unsignedPayload.creation_time_ms",
+        false,
+        TRANSACTION_U64_MAX);
+    if (!(unsignedPayload.get("instructions") instanceof Map<?, ?>)) {
+      throw new IllegalArgumentException("unsignedPayload.instructions must be an object");
+    }
+    requireTransactionUnsignedInteger(
+        unsignedPayload.get("time_to_live_ms"),
+        "unsignedPayload.time_to_live_ms",
+        true,
+        TRANSACTION_U64_MAX);
+    if (unsignedPayload.containsKey("nonce") && unsignedPayload.get("nonce") != null) {
+      requireTransactionUnsignedInteger(
+          unsignedPayload.get("nonce"),
+          "unsignedPayload.nonce",
+          true,
+          TRANSACTION_U32_MAX);
+    }
+    final Object rawAdmissionIntent = unsignedPayload.get("admission_intent");
+    if (!(rawAdmissionIntent instanceof Map<?, ?>)) {
+      throw new IllegalArgumentException(
+          "unsignedPayload.admission_intent must be an exact TransactionAdmissionIntent object");
+    }
+    final Map<?, ?> admissionIntent = (Map<?, ?>) rawAdmissionIntent;
+    final Object intent = admissionIntent.get("intent");
+    if (!admissionIntent.keySet().equals(Set.of("intent", "value"))
+        || (!("ordinary".equals(intent)) && !("queue_plan_synced".equals(intent)))
+        || admissionIntent.get("value") != null) {
+      throw new IllegalArgumentException(
+          "unsignedPayload.admission_intent must be an exact TransactionAdmissionIntent object");
+    }
+    final Object rawMetadata = unsignedPayload.get("metadata");
+    if (!(rawMetadata instanceof Map<?, ?>)) {
+      throw new IllegalArgumentException("unsignedPayload.metadata must be an object");
+    }
+    final Map<?, ?> metadata = (Map<?, ?>) rawMetadata;
+    for (final String retiredFeeField :
+        Arrays.asList("fee_sponsor", "gas_limit", "gas_asset_id")) {
+      if (metadata.containsKey(retiredFeeField)) {
+        throw new IllegalArgumentException(
+            "unsignedPayload.metadata contains retired fee field `" + retiredFeeField + "`");
+      }
+    }
+    requireCanonicalTransactionAttachments(unsignedPayload.get("attachments"));
+    return networkId;
+  }
+
+  private static BigInteger requireTransactionUnsignedInteger(
+      final Object rawValue,
+      final String field,
+      final boolean nonZero,
+      final BigInteger maximum) {
+    final BigInteger value;
+    if (rawValue instanceof BigInteger) {
+      value = (BigInteger) rawValue;
+    } else if (rawValue instanceof Byte
+        || rawValue instanceof Short
+        || rawValue instanceof Integer
+        || rawValue instanceof Long) {
+      value = BigInteger.valueOf(((Number) rawValue).longValue());
+    } else {
+      throw new IllegalArgumentException(field + " must be a canonical JSON integer");
+    }
+    if (value.signum() < 0
+        || (nonZero && value.signum() == 0)
+        || value.compareTo(maximum) > 0) {
+      throw new IllegalArgumentException(
+          field + (nonZero ? " must be a positive integer in range" : " must be an unsigned integer in range"));
+    }
+    return value;
+  }
+
+  private static void requireCanonicalTransactionAttachments(final Object rawAttachments) {
+    if (rawAttachments == null) {
+      return;
+    }
+    if (!(rawAttachments instanceof String)) {
+      throw new IllegalArgumentException(
+          "unsignedPayload.attachments must be null or canonical padded base64");
+    }
+    final String encoded = (String) rawAttachments;
+    try {
+      final byte[] decoded = Base64.getDecoder().decode(encoded);
+      if (decoded.length == 0 || !Base64.getEncoder().encodeToString(decoded).equals(encoded)) {
+        throw new IllegalArgumentException(
+            "unsignedPayload.attachments must be null or canonical padded base64");
+      }
+    } catch (final IllegalArgumentException error) {
+      throw new IllegalArgumentException(
+          "unsignedPayload.attachments must be null or canonical padded base64", error);
+    }
   }
 
   /** Fetches one exact on-chain fee sponsor program under canonical request authentication. */

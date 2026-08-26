@@ -27,7 +27,8 @@ import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 
-class PrivacyCapabilitiesV1Test {
+@Suppress("DEPRECATION")
+class LegacyPrivacyCapabilitySnapshotJsonInspectionV1Test {
     private val networkId = NetworkId.parse(
         "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     )
@@ -37,9 +38,9 @@ class PrivacyCapabilitiesV1Test {
     private val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
 
     @Test
-    fun parsesClosedSnapshotWithoutLosingU64Height() {
-        val snapshot = PrivacyCapabilitySnapshotJsonV1.parse(
-            unavailableSnapshot("18446744073709551615"),
+    fun legacyInspectionParsesClosedSnapshotWithoutLosingU64Height() {
+        val snapshot = LegacyPrivacyCapabilitySnapshotJsonInspectionV1.parse(
+            legacyUnavailableInspectionPayload("18446744073709551615"),
         )
         assertEquals(BigInteger("18446744073709551615"), snapshot.committedHeight)
         assertEquals(PrivacyProtocolIdV1.values().toList(), snapshot.protocols.map { it.protocolId })
@@ -49,63 +50,65 @@ class PrivacyCapabilitiesV1Test {
     }
 
     @Test
-    fun rejectsAliasesRetiredRowsAmbiguousJsonAndNonCanonicalIntegers() {
-        val canonical = unavailableSnapshot("42")
+    fun legacyInspectionRejectsAliasesRetiredRowsAmbiguousJsonAndNonCanonicalIntegers() {
+        val canonical = legacyUnavailableInspectionPayload("42")
         val hostile = listOf(
             canonical.replaceFirst("{", "{\"committed_height\":41,"),
             canonical.replace("\"zk-ace-pq-authorization-v0\"", "\"sis-with-hints\""),
             canonical.replace("\"zk-ace-pq-authorization-v0\"", "\"sis-hints-anoncred-pq-v0\""),
             canonical.replace("\"zk-ace-pq-authorization-v0\"", "\"ZK-ACE-PQ-AUTHORIZATION-V0\""),
-            unavailableSnapshot("-0"),
-            unavailableSnapshot("01"),
-            unavailableSnapshot("1.0"),
-            unavailableSnapshot("1e3"),
-            unavailableSnapshot("18446744073709551616"),
+            legacyUnavailableInspectionPayload("-0"),
+            legacyUnavailableInspectionPayload("01"),
+            legacyUnavailableInspectionPayload("1.0"),
+            legacyUnavailableInspectionPayload("1e3"),
+            legacyUnavailableInspectionPayload("18446744073709551616"),
             canonical.replaceFirst("\"activation\":null", "\"activation\":null,\"legacy\":true"),
         )
         for (payload in hostile) {
-            assertFailsWith<PrivacyCapabilitySnapshotException> {
-                PrivacyCapabilitySnapshotJsonV1.parse(payload)
+            assertFailsWith<LegacyPrivacyCapabilitySnapshotInspectionException> {
+                LegacyPrivacyCapabilitySnapshotJsonInspectionV1.parse(payload)
             }
         }
     }
 
     @Test
-    fun validatesAllGovernedBindingsAndRejectsCrossProfileSubstitution() {
-        val valid = PrivacyCapabilitySnapshotJsonV1.parse(activeAnonymousPgcSnapshot(false))
+    fun legacyInspectionValidatesBindingsAndRejectsCrossProfileSubstitution() {
+        val valid = LegacyPrivacyCapabilitySnapshotJsonInspectionV1.parse(
+            legacyActiveAnonymousPgcInspectionPayload(false),
+        )
         val row = valid.protocols[1]
         val compiled = assertIs<PrivacyCompiledProfileResultV1.Available>(row.compiledProfile)
         assertEquals(PrivacyEngineIdV1.NATIVE_ANONYMOUS_PGC_P256, compiled.profile.engineId)
         assertEquals(PrivacyProtocolLifecycleStateV1.ACTIVE, row.activation?.lifecycle?.state)
         assertEquals(PrivacyAssuranceV1.EXPERIMENTAL, row.activation?.assurance)
 
-        assertFailsWith<PrivacyCapabilitySnapshotException> {
-            PrivacyCapabilitySnapshotJsonV1.parse(activeAnonymousPgcSnapshot(true))
+        assertFailsWith<LegacyPrivacyCapabilitySnapshotInspectionException> {
+            LegacyPrivacyCapabilitySnapshotJsonInspectionV1.parse(legacyActiveAnonymousPgcInspectionPayload(true))
         }
     }
 
     @Test
-    fun rejectsUnsignedValuesThatWouldWrapTheJvmIntModel() {
-        val canonical = unavailableSnapshot("42")
+    fun legacyInspectionRejectsUnsignedValuesThatWouldWrapTheJvmIntModel() {
+        val canonical = legacyUnavailableInspectionPayload("42")
         val hostile = listOf(
             canonical.replace("\"retained_root_count\":2048", "\"retained_root_count\":2147483648"),
             canonical.replace("\"retained_root_count\":2048", "\"retained_root_count\":4294967295"),
-            activeAnonymousPgcSnapshot(false).replace(
+            legacyActiveAnonymousPgcInspectionPayload(false).replace(
                 "\"max_recipient_count\":8",
                 "\"max_recipient_count\":2147483648",
             ),
-            activeAnonymousPgcSnapshot(false).replace(
+            legacyActiveAnonymousPgcInspectionPayload(false).replace(
                 "\"max_recipient_count\":8",
                 "\"max_recipient_count\":4294967295",
             ),
-            activeAnonymousPgcSnapshot(false).replaceFirst(
+            legacyActiveAnonymousPgcInspectionPayload(false).replaceFirst(
                 "\"parameter_id\":[1,",
                 "\"parameter_id\":[4294967295,",
             ),
         )
         hostile.forEach { payload ->
-            assertFailsWith<PrivacyCapabilitySnapshotException> {
-                PrivacyCapabilitySnapshotJsonV1.parse(payload)
+            assertFailsWith<LegacyPrivacyCapabilitySnapshotInspectionException> {
+                LegacyPrivacyCapabilitySnapshotJsonInspectionV1.parse(payload)
             }
         }
     }
@@ -114,7 +117,7 @@ class PrivacyCapabilitiesV1Test {
     fun configuredClientUsesExactNoritoRouteAndRejectsLegacySnapshot() {
         val response = TransportResponse.builder()
             .setStatusCode(200)
-            .setBody(unavailableSnapshot("42").toByteArray(StandardCharsets.UTF_8))
+            .setBody(legacyUnavailableInspectionPayload("42").toByteArray(StandardCharsets.UTF_8))
             .addHeader("Content-Type", "application/x-norito")
             .build()
         val executor = OneResponseExecutor(response)
@@ -164,7 +167,7 @@ class PrivacyCapabilitiesV1Test {
 
     @Test
     fun exactTransportRejectsHeaderAmbiguityLengthSmugglingAndHostileBodies() {
-        val body = unavailableSnapshot("42").toByteArray(StandardCharsets.UTF_8)
+        val body = legacyUnavailableInspectionPayload("42").toByteArray(StandardCharsets.UTF_8)
         val canonicalHeaders = mapOf(
             "Content-Type" to listOf("application/x-norito"),
             "Content-Length" to listOf(body.size.toString()),
@@ -203,7 +206,7 @@ class PrivacyCapabilitiesV1Test {
 
     @Test
     fun exactTransportRejectsCaseVariantDefaultAcceptBeforeDispatch() {
-        val body = unavailableSnapshot("42").toByteArray(StandardCharsets.UTF_8)
+        val body = legacyUnavailableInspectionPayload("42").toByteArray(StandardCharsets.UTF_8)
         val executor = OneResponseExecutor(
             response(body = body, headers = mapOf("Content-Type" to listOf("application/x-norito"))),
         )
@@ -222,7 +225,7 @@ class PrivacyCapabilitiesV1Test {
 
     @Test
     fun privacyAdmissionRequiresNetworkContextAndCanonicalHeaderOwnership() {
-        val body = unavailableSnapshot("42").toByteArray(StandardCharsets.UTF_8)
+        val body = legacyUnavailableInspectionPayload("42").toByteArray(StandardCharsets.UTF_8)
         val response = response(
             body = body,
             headers = mapOf("Content-Type" to listOf("application/x-norito")),
@@ -263,13 +266,13 @@ class PrivacyCapabilitiesV1Test {
         assertEquals(RequestReplayPolicy.ONE_SHOT, admissionExecutor.request.replayPolicy)
     }
 
-    private fun unavailableSnapshot(height: String): String =
+    private fun legacyUnavailableInspectionPayload(height: String): String =
         """{"version":1,"committed_height":$height,"consensus_policy":{"current_limits":${consensusLimits()},"pending_tightening":null},"protocols":[${PrivacyProtocolIdV1.values().joinToString(",") { unavailableRow(it) }}]}"""
 
     private fun unavailableRow(protocol: PrivacyProtocolIdV1): String =
         """{"protocol_id":{"protocol":"${protocol.canonicalLabel}","value":null},"compiled_profile":{"status":"unavailable","value":{"reason":"engine-unavailable","detail":null}},"activation":null}"""
 
-    private fun activeAnonymousPgcSnapshot(substituteActivationDigest: Boolean): String {
+    private fun legacyActiveAnonymousPgcInspectionPayload(substituteActivationDigest: Boolean): String {
         val profile = profileFields("2")
         val activation = profileFields(if (substituteActivationDigest) "9" else "2") +
             ""","lifecycle":{"state":"active","record":{"proposed_at_height":1,"activated_at_height":2,"state_since_height":2}},"pending_protocol_limits_tightening":null,"assurance":{"assurance":"experimental","value":null}"""

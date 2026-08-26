@@ -380,6 +380,7 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./browser",
     "./canonical-request",
     "./connect-browser",
+    "./contract-payload",
     "./crypto",
     "./instruction-builders",
     "./ivm-artifact",
@@ -415,14 +416,14 @@ test("package privacy capability policy is isolated behind its explicit subpath"
   const optionalExports = [
     "compiledProfileCatalogV1",
     "decodePrivacyExact12CapabilityManifestV1",
-    "getPrivacyCapabilitiesV1",
+    "getLegacyPrivacyCapabilityInspectionV1",
     "getPrivacyExact12CapabilityManifestV1",
-    "parsePrivacyCapabilitySnapshotV1",
-    "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
+    "parseLegacyPrivacyCapabilityInspectionSnapshotV1",
+    "LEGACY_PRIVACY_CAPABILITY_INSPECTION_VERSION_V1",
     "PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES_V1",
     "PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1",
     "PRIVACY_PROTOCOL_IDS_V1",
-    "PrivacyCapabilitySnapshotError",
+    "LegacyPrivacyCapabilityInspectionError",
     "PrivacyExact12CapabilityManifestError",
     "PrivacyExact12CapabilityManifestV1",
     "requirePrivacyExact12CapabilityAdmissionV1",
@@ -441,11 +442,11 @@ test("package privacy capability policy is isolated behind its explicit subpath"
     );
   }
   assert.equal(
-    Object.hasOwn(packageExports.ToriiClient.prototype, "getPrivacyCapabilitiesV1"),
+    Object.hasOwn(packageExports.ToriiClient.prototype, "getLegacyPrivacyCapabilityInspectionV1"),
     false,
   );
   assert.equal(
-    Object.hasOwn(packageExports.ToriiBrowserClient.prototype, "getPrivacyCapabilitiesV1"),
+    Object.hasOwn(packageExports.ToriiBrowserClient.prototype, "getLegacyPrivacyCapabilityInspectionV1"),
     false,
   );
 });
@@ -583,6 +584,7 @@ test("package Nexus browser export has an enforced browser-only dependency graph
       "dist/multisig.js",
       "dist/native.browser.js",
       "dist/networkId.js",
+      "dist/networkIdNoritoJson.js",
       "dist/nexusApp.js",
       "dist/norito.js",
       "dist/noritoContractCodecs.js",
@@ -630,6 +632,36 @@ test("package lazy browser chunks ship with exact source and dist parity", () =>
 });
 
 test("package Nexus browser defaults build, finalize, and submit the shared canonical transfer", async () => {
+  assert.equal(
+    nexusFixture.expected.payload_hash_hex,
+    "2b1553daadf14385d797279fe662b01812e4bf37b7d62df8144a2f0bd60b6297",
+    "the Rust-owned transaction vector must remain stable under the Taira-default package profile",
+  );
+  const tairaSigningContext = new packageExports.LocalSigningContext(
+    nexusFixtureNetworkId,
+  );
+  const explicit753SigningContext = new packageExports.LocalSigningContext(
+    nexusFixtureNetworkId,
+    753,
+  );
+  assert.equal(tairaSigningContext.chainDiscriminant, 369);
+  assert.equal(explicit753SigningContext.chainDiscriminant, 753);
+  assert.notEqual(
+    tairaSigningContext.chainDiscriminant,
+    explicit753SigningContext.chainDiscriminant,
+  );
+  const fixtureAuthority = packageExports.AccountAddress.parseEncoded(
+    nexusFixture.transfer_input.authority,
+  );
+  assert.equal(fixtureAuthority.chainDiscriminant, 369);
+  const explicit753Authority = fixtureAuthority.address.toI105(753);
+  assert.notEqual(explicit753Authority, nexusFixture.transfer_input.authority);
+  assert.equal(
+    packageExports.AccountAddress.parseEncoded(explicit753Authority)
+      .chainDiscriminant,
+    753,
+  );
+
   const submissions = [];
   const client = new PackageNexusAppClient({
     networkId: nexusFixtureNetworkId,
@@ -907,7 +939,7 @@ test("package dist privacy compiled-profile catalog wrapper defensively copies n
   assert.equal(published[1], PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE[1]);
 });
 
-test("package declarations expose readonly snapshot metadata without retired privacy types", () => {
+test("package declarations expose legacy inspection metadata without retired privacy types", () => {
   const rootDeclarations = readFileSync(
     new URL("../index.d.ts", import.meta.url),
     "utf8",
@@ -939,11 +971,11 @@ test("package declarations expose readonly snapshot metadata without retired pri
   }
   assert.match(
     optionalDeclarations,
-    /export interface PrivacyCapabilitySnapshotV1\s*\{[\s\S]*readonly version:\s*1;[\s\S]*readonly committed_height:\s*PrivacyU64V1;[\s\S]*readonly consensus_policy:\s*PrivacyConsensusPolicyV1;[\s\S]*readonly protocols:\s*readonly PrivacyCapabilityRowV1\[\];/u,
+    /export interface LegacyPrivacyCapabilityInspectionSnapshotV1\s*\{[\s\S]*readonly version:\s*1;[\s\S]*readonly committed_height:\s*PrivacyU64V1;[\s\S]*readonly consensus_policy:\s*PrivacyConsensusPolicyV1;[\s\S]*readonly protocols:\s*readonly LegacyPrivacyCapabilityInspectionRowV1\[\];/u,
   );
   assert.match(
     optionalDeclarations,
-    /export declare class PrivacyCapabilitySnapshotError extends TypeError\s*\{[\s\S]*readonly path:\s*string;/u,
+    /export declare class LegacyPrivacyCapabilityInspectionError extends TypeError\s*\{[\s\S]*readonly path:\s*string;/u,
   );
   assert.match(
     rootDeclarations,
@@ -951,7 +983,7 @@ test("package declarations expose readonly snapshot metadata without retired pri
   );
   assert.match(
     rootDeclarations,
-    /network readiness requires `getPrivacyCapabilitiesV1` and a[\s\S]*fresh committed Torii response/u,
+    /network readiness requires the canonical Exact12 Norito[\s\S]*ABI22 native validation/u,
   );
   assert.doesNotMatch(
     readFileSync(new URL("../browser.d.ts", import.meta.url), "utf8"),

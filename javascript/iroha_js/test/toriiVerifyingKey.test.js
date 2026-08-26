@@ -1057,6 +1057,17 @@ test("verifying key local-signing APIs fail closed without immutable NetworkId c
 test("verifying key LocalSigningContext is canonical and immutable", () => {
   const context = new LocalSigningContext(VK_SIGNING_NETWORK_ID);
   assert.equal(context.networkId, VK_SIGNING_NETWORK_ID);
+  assert.equal(context.chainDiscriminant, 369, "Taira must be the SDK default");
+  assert.equal(
+    new LocalSigningContext(VK_SIGNING_NETWORK_ID, SORA_I105_DISCRIMINANT)
+      .chainDiscriminant,
+    SORA_I105_DISCRIMINANT,
+    "an explicit deployment discriminant remains authoritative",
+  );
+  const distContext = new DistLocalSigningContext(
+    DistNetworkId.parse(VK_SIGNING_NETWORK_ID_LITERAL),
+  );
+  assert.equal(distContext.chainDiscriminant, 369, "dist must default to Taira");
   assert.equal(Object.isFrozen(context), true);
   assert.throws(
     () => {

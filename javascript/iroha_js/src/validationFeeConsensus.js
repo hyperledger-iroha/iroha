@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 
 import { getNativeBinding } from "./native.js";
 import { networkIdBytes } from "./networkId.js";
+import { networkIdFromNoritoJson } from "./networkIdNoritoJson.js";
 
 export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA =
   "cbsi.mobile-validation-fee-ledger-binding.v1";
@@ -759,10 +760,14 @@ export function verifyValidationFeeCurrentPolicyProofV1(
     projection.trusted_checkpoint_height,
     "validation-fee projection.trusted_checkpoint_height",
   );
+  const projectedNetworkId = networkIdFromNoritoJson(
+    projection.network_id,
+    "validation-fee projection.network_id",
+  );
   if (
     projection.schema !== VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA ||
     projection.version !== 1 ||
-    projection.network_id !== binding.networkId.toString() ||
+    !projectedNetworkId.equals(binding.networkId) ||
     projection.policy_chain_genesis_hash !== binding.policyChainGenesisHash ||
     projection.trusted_checkpoint_context_id !== checkpoint.contextId ||
     projectedTrustedCheckpointHeight !== checkpoint.height
@@ -773,6 +778,7 @@ export function verifyValidationFeeCurrentPolicyProofV1(
   }
   const normalized = {
     ...projection,
+    network_id: projectedNetworkId.toString(),
     head_policy_version: projectionHeight(
       projection.head_policy_version,
       "validation-fee projection.head_policy_version",

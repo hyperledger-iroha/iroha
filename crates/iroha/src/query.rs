@@ -717,8 +717,9 @@ mod query_errors_handling {
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse, SignedQuery,
         },
     };
+    use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::gen_account_in;
-    use iroha_version::codec::DecodeVersioned as _;
+    use iroha_version::{DecodeAll as _, codec::DecodeVersioned as _};
     use norito::codec::{Decode, Encode};
     use sorafs_manifest::alias_cache::AliasCachePolicy;
     use sorafs_orchestrator::AnonymityPolicy;

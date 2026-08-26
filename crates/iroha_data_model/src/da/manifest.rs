@@ -151,9 +151,13 @@ pub struct DaManifestV1 {
     pub retention_policy: RetentionPolicy,
     /// Rent and incentive breakdown derived from the configured policy.
     pub rent_quote: DaRentQuote,
-    /// Chunk commitments ordered by chunk index (row-major over all stripes).
+    /// Canonical data commitments ordered by contiguous payload chunk index.
+    ///
+    /// Parity shards live in the recovery inventory governed by
+    /// [`Self::erasure_profile`]; their storage offsets are outside
+    /// `total_size` and are never projected into this payload plan.
     pub chunks: Vec<ChunkCommitment>,
-    /// IPA commitment for the full matrix (row+column parity).
+    /// IPA commitment for the canonical data commitment vector.
     pub ipa_commitment: BlobDigest,
     /// Additional metadata entries carried over from ingest.
     pub metadata: ExtraMetadata,

@@ -55,6 +55,20 @@ def test_offline_readiness_verifier_roles_are_public_exports() -> None:
     assert OfflineStatus.__name__ == "OfflineStatus"
 
 
+def test_kagemusha_v4_transport_types_are_public_root_exports() -> None:
+    import iroha_python
+    import iroha_torii_client
+
+    for name in (
+        "KagemushaTopUpRequestV4",
+        "KagemushaRedeemRequestV4",
+        "OfflineOperationReference",
+        "OfflineOperationStatus",
+    ):
+        assert name in iroha_python.__all__
+        assert getattr(iroha_python, name) is getattr(iroha_torii_client, name)
+
+
 def test_package_root_lazy_crypto_exports_preserve_import_error_cause() -> None:
     root = Path(__file__).resolve().parents[3]
     script = """
@@ -63,7 +77,16 @@ import types
 
 stub = types.ModuleType("iroha_python.crypto")
 
+class StubNetworkId:
+    pass
+
+stub.NetworkId = StubNetworkId
+stub._require_network_id = lambda value, _context="network_id": value
+stub.hash_blake2b_32 = lambda value: bytes(value)
+
 def fail_crypto_import(name):
+    if name.startswith("__"):
+        raise AttributeError(name)
     raise RuntimeError("forced crypto import failure")
 
 stub.__getattr__ = fail_crypto_import

@@ -144,32 +144,32 @@ export interface PrivacyProtocolActivationRecordV1
   }> | null;
   readonly assurance: Readonly<{ assurance: "experimental"; value: null }>;
 }
-export interface PrivacyCapabilityRowV1 {
+export interface LegacyPrivacyCapabilityInspectionRowV1 {
   readonly protocol_id: PrivacyProtocolTagV1;
   readonly compiled_profile: PrivacyCompiledProfileResultV1;
   readonly activation: PrivacyProtocolActivationRecordV1 | null;
 }
-export interface PrivacyCapabilitySnapshotV1 {
+export interface LegacyPrivacyCapabilityInspectionSnapshotV1 {
   readonly version: 1;
   readonly committed_height: PrivacyU64V1;
   readonly consensus_policy: PrivacyConsensusPolicyV1;
-  readonly protocols: readonly PrivacyCapabilityRowV1[];
+  readonly protocols: readonly LegacyPrivacyCapabilityInspectionRowV1[];
 }
 
-/** The only accepted authoritative privacy-capability snapshot version. */
-export const PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1: 1;
-/** Closed canonical order required for `PrivacyCapabilitySnapshotV1.protocols`. */
+/** Legacy JSON inspection version; never an admission credential. */
+export const LEGACY_PRIVACY_CAPABILITY_INSPECTION_VERSION_V1: 1;
+/** Closed canonical order required for `LegacyPrivacyCapabilityInspectionSnapshotV1.protocols`. */
 export const PRIVACY_PROTOCOL_IDS_V1: readonly PrivacyProtocolIdV1[];
 
-/** Error raised when a privacy-capability response cannot be trusted. */
-export declare class PrivacyCapabilitySnapshotError extends TypeError {
+/** Error raised when a legacy privacy-capability inspection response is malformed. */
+export declare class LegacyPrivacyCapabilityInspectionError extends TypeError {
   readonly path: string;
 }
 
-/** Parse the exact, fail-closed Torii `PrivacyCapabilitySnapshotV1` JSON shape. */
-export function parsePrivacyCapabilitySnapshotV1(
+/** Parse the legacy JSON inspection shape. Its result cannot authorize privacy operations. */
+export function parseLegacyPrivacyCapabilityInspectionSnapshotV1(
   payload: unknown,
-): PrivacyCapabilitySnapshotV1;
+): LegacyPrivacyCapabilityInspectionSnapshotV1;
 
 export interface PrivacyCapabilitiesNodeRequestOptions {
   signal?: AbortSignal;
@@ -202,17 +202,18 @@ export interface PrivacyCapabilitiesBrowserClientV1 {
 }
 
 /**
- * Fetch and validate the committed snapshot through the supplied configured
- * package client. The privacy policy parser remains outside base entry graphs.
+ * Fetch and validate the legacy JSON inspection response through the supplied
+ * configured package client. The result is diagnostic only; Exact12 admission
+ * requires the canonical Norito manifest and ABI22 native validation.
  */
-export function getPrivacyCapabilitiesV1(
+export function getLegacyPrivacyCapabilityInspectionV1(
   client: PrivacyCapabilitiesBrowserClientV1,
   options: PrivacyCapabilitiesBrowserRequestOptions,
-): Promise<PrivacyCapabilitySnapshotV1>;
-export function getPrivacyCapabilitiesV1(
+): Promise<LegacyPrivacyCapabilityInspectionSnapshotV1>;
+export function getLegacyPrivacyCapabilityInspectionV1(
   client: PrivacyCapabilitiesNodeClientV1,
   options: PrivacyCapabilitiesNodeRequestOptions,
-): Promise<PrivacyCapabilitySnapshotV1>;
+): Promise<LegacyPrivacyCapabilityInspectionSnapshotV1>;
 
 export type PrivacyOperationSchemaV1 =
   | "zk_ace_authorization_action_v1"
@@ -253,7 +254,7 @@ export type PrivacyCapabilityLimitationV1 = Readonly<{
   limitation: "missing-distribution-wide-knowledge-soundness-evidence";
   detail: null;
 }>;
-export interface PrivacyExact12CapabilityRowV1 extends PrivacyCapabilityRowV1 {
+export interface PrivacyExact12CapabilityRowV1 extends LegacyPrivacyCapabilityInspectionRowV1 {
   readonly operation_schema: Readonly<{
     operation_schema: PrivacyOperationSchemaV1;
     value: null;

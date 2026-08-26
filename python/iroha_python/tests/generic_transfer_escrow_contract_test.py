@@ -36,6 +36,16 @@ if f"{PURE_PACKAGE}.sorafs" not in sys.modules:
     sorafs.SorafsAliasPolicy = SorafsAliasPolicy
     sorafs.enforce_alias_policy = lambda *args, **kwargs: None
     sys.modules[f"{PURE_PACKAGE}.sorafs"] = sorafs
+if f"{PURE_PACKAGE}.crypto" not in sys.modules:
+    crypto = types.ModuleType(f"{PURE_PACKAGE}.crypto")
+    crypto.NetworkId = type("ImportOnlyNetworkId", (), {})
+    crypto._require_network_id = lambda value, _context="network_id": value
+
+    def unavailable_hash(_value: object) -> bytes:
+        raise AssertionError("native hash helper reached the import-only test stub")
+
+    crypto.hash_blake2b_32 = unavailable_hash
+    sys.modules[f"{PURE_PACKAGE}.crypto"] = crypto
 
 client_module = importlib.import_module(f"{PURE_PACKAGE}.client")
 settlement_module = importlib.import_module(f"{PURE_PACKAGE}.settlement")
@@ -623,7 +633,9 @@ def _prepared_batch_response(
     arguments = [b"first-arguments", b"second-arguments"]
     binding_items: list[dict[str, Any]] = []
     prepared_entries: list[dict[str, Any]] = []
-    for index, (call, encoded_arguments) in enumerate(zip(calls, arguments)):
+    for index, (call, encoded_arguments) in enumerate(
+        zip(calls, arguments, strict=True)
+    ):
         address = call.expected_contract_address or call.contract_address
         code_hash = call.expected_code_hash_hex
         abi_hash = call.expected_abi_hash_hex

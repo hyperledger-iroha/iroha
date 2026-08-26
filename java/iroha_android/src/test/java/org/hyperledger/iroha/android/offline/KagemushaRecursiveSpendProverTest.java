@@ -51,6 +51,8 @@ public final class KagemushaRecursiveSpendProverTest {
     canonicalPeerCodecsAreTypedAndDefensive();
     lifecycleArchivesAreTypedDefensiveAndFailClosed();
     branchRestoreRejectsMissingHeightAndLocalChangeOpeningsBeforeNativeDispatch();
+    canonicalArchiveInventoryUsesRustFullyQualifiedSchemas();
+    retainedTopUpArchivesUseRustFullyQualifiedSchemas();
     topUpProvenanceArchiveIsCanonicalBoundedAndDefensive();
     appendJoinRejectsZeroAndThreeInputsBeforeNativeDispatch();
     scaledAmountsAreExactAndNeverRound();
@@ -60,6 +62,16 @@ public final class KagemushaRecursiveSpendProverTest {
     toriiLifecycleRoutesAndHeadersAreExact();
     offlineCapabilityRejectsBackendReadinessClaims();
     publicSurfaceIsKagemushaOnly();
+  }
+
+  @org.junit.Test
+  public void canonicalArchiveInventoryUsesRustFullyQualifiedSchemasUnderJUnit() {
+    canonicalArchiveInventoryUsesRustFullyQualifiedSchemas();
+  }
+
+  @org.junit.Test
+  public void retainedTopUpArchivesUseRustFullyQualifiedSchemasUnderJUnit() {
+    retainedTopUpArchivesUseRustFullyQualifiedSchemas();
   }
 
   @org.junit.Test
@@ -163,7 +175,7 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void appAttestNativeProjectionRejectsCorruptAuxiliaryFields() {
-    final byte[] authorizationArchive = archive("KagemushaRequestAuthorizationV2");
+    final byte[] authorizationArchive = archive("iroha_data_model::offline::model::KagemushaRequestAuthorizationV2");
     final byte[] rawLowSSignature = new byte[64];
     rawLowSSignature[31] = 1;
     rawLowSSignature[63] = 1;
@@ -454,7 +466,7 @@ public final class KagemushaRecursiveSpendProverTest {
   private static void redemptionChangePreparationTransfersOpeningOwnershipExactlyOnce() {
     final KagemushaRecursiveSpendProver.NoteOpening opening =
         KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2"));
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2"));
     final KagemushaRecursiveSpendProver.RedemptionChangePreparationV4 preparation =
         new KagemushaRecursiveSpendProver.RedemptionChangePreparationV4(
             opening,
@@ -489,7 +501,7 @@ public final class KagemushaRecursiveSpendProverTest {
   private static void redemptionChangePreparationDestroysOnlyAnUntransferredOpening() {
     final KagemushaRecursiveSpendProver.NoteOpening opening =
         KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2"));
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2"));
     final KagemushaRecursiveSpendProver.RedemptionChangePreparationV4 preparation =
         new KagemushaRecursiveSpendProver.RedemptionChangePreparationV4(
             opening,
@@ -508,7 +520,7 @@ public final class KagemushaRecursiveSpendProverTest {
 
     final KagemushaRecursiveSpendProver.NoteOpening rejectedOpening =
         KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2"));
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2"));
     assertThrowsIllegalState(() ->
         new KagemushaRecursiveSpendProver.RedemptionChangePreparationV4(
             rejectedOpening,
@@ -523,7 +535,7 @@ public final class KagemushaRecursiveSpendProverTest {
   private static void redemptionChangeRequestFailureDestroysTransferredOpening() {
     final KagemushaRecursiveSpendProver.NoteOpening opening =
         KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x45));
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x45));
     assertThrowsIllegalArgument(() ->
         KagemushaRecursiveSpendProver.decodeRedeemRequestV4(new byte[0], opening));
     assert opening.isDestroyed();
@@ -531,7 +543,7 @@ public final class KagemushaRecursiveSpendProverTest {
     final KagemushaRecursiveSpendProver.SpendableBranchV4 redeemInput = spendableBranch(0x46);
     final KagemushaRecursiveSpendProver.NoteOpening redeemChange =
         KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x47));
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x47));
     try {
       assertThrowsNativeFailure(() -> KagemushaRecursiveSpendProver.buildRedeemRequestV4(
           redeemInput,
@@ -551,7 +563,7 @@ public final class KagemushaRecursiveSpendProverTest {
     final KagemushaRecursiveSpendProver.SpendableBranchV4 appendInput = spendableBranch(0x50);
     final KagemushaRecursiveSpendProver.NoteOpening appendChange =
         KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x51));
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x51));
     try {
       assertThrowsNativeFailure(() -> KagemushaRecursiveSpendProver.buildAppendRequestV4(
           Collections.singletonList(appendInput),
@@ -567,16 +579,16 @@ public final class KagemushaRecursiveSpendProverTest {
 
     final KagemushaRecursiveSpendProver.NoteOpening restoreOpening =
         KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x54));
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x54));
     assertThrowsIllegalArgument(() ->
         KagemushaRecursiveSpendProver.restoreSpendableBranchV4(
             KagemushaRecursiveSpendProver.decodeBundleV4(
-                archive("KagemushaRecursiveSpendBundleV4", 0x55)),
+                archive("iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV4", 0x55)),
             KagemushaRecursiveSpendProver.decodeNoteMembershipWitness(
-                archive("KagemushaNoteMembershipWitnessV2", 0x56)),
+                archive("iroha_data_model::offline::model::KagemushaNoteMembershipWitnessV2", 0x56)),
             restoreOpening,
             KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
-                archive("KagemushaRecursiveSpendTopUpProvenanceV4", 0x57)),
+                archive("iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpProvenanceV4", 0x57)),
             0));
     assert restoreOpening.isDestroyed();
   }
@@ -586,10 +598,10 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.SpendableBranchV4.class);
     final KagemushaRecursiveSpendProver.NoteOpening closeOwnedOpening =
         KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x4a));
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x4a));
     final KagemushaRecursiveSpendProver.RedeemRequestV4 closeOwnedRequest =
         KagemushaRecursiveSpendProver.decodeRedeemRequestV4(
-            archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x4b),
+            archive("connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV4", 0x4b),
             closeOwnedOpening);
     closeOwnedRequest.close();
     closeOwnedRequest.close();
@@ -598,10 +610,10 @@ public final class KagemushaRecursiveSpendProverTest {
 
     final KagemushaRecursiveSpendProver.NoteOpening handedOffOpening =
         KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x4c));
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x4c));
     final KagemushaRecursiveSpendProver.RedeemRequestV4 request =
         KagemushaRecursiveSpendProver.decodeRedeemRequestV4(
-            archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x4d),
+            archive("connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV4", 0x4d),
             handedOffOpening);
     final KagemushaRecursiveSpendProver.NoteOpening requestHandoff =
         request.takeChangeOpening();
@@ -613,7 +625,7 @@ public final class KagemushaRecursiveSpendProverTest {
 
     final KagemushaRecursiveSpendProver.RedeemBuildResultV4 result =
         KagemushaRecursiveSpendProver.decodeRedeemBuildResultV4(
-            archive("KagemushaRecursiveSpendRedeemBuildResultV4", 0x4e),
+            archive("iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemBuildResultV4", 0x4e),
             requestHandoff);
     final KagemushaRecursiveSpendProver.NoteOpening resultHandoff =
         result.takeChangeOpening();
@@ -643,7 +655,7 @@ public final class KagemushaRecursiveSpendProverTest {
     SecretArchiveWiper.wipeAll(null);
 
     final byte[] rawNativeArchive =
-        archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x63);
+        archive("connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV4", 0x63);
     final KagemushaRecursiveSpendProver.RedeemRequestV4 owner =
         KagemushaRecursiveSpendProver.decodeRedeemRequestV4(rawNativeArchive, null);
     SecretArchiveWiper.wipe(rawNativeArchive);
@@ -681,7 +693,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert allZero(firstAndSecondCopiesObserved.get(0));
     assert allZero(firstAndSecondCopiesObserved.get(1));
 
-    final byte[] rawOpeningArchive = archive("KagemushaNoteOpeningV2", 0x69);
+    final byte[] rawOpeningArchive = archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x69);
     final KagemushaRecursiveSpendProver.NoteOpening openingOwner =
         KagemushaRecursiveSpendProver.decodeNoteOpening(rawOpeningArchive);
     SecretArchiveWiper.wipe(rawOpeningArchive);
@@ -690,7 +702,7 @@ public final class KagemushaRecursiveSpendProverTest {
     openingOwner.close();
 
     final byte[] rawInitArchive =
-        archive("KagemushaRecursiveSpendInitLocalRequestV4", 0x6a);
+        archive("connect_norito_bridge::KagemushaRecursiveSpendInitLocalRequestV4", 0x6a);
     final KagemushaRecursiveSpendProver.InitRequestV4 initOwner =
         KagemushaRecursiveSpendProver.decodeInitRequestV4(rawInitArchive);
     SecretArchiveWiper.wipe(rawInitArchive);
@@ -704,7 +716,7 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.NoteOpening.class);
     final KagemushaRecursiveSpendProver.NoteOpening opening =
         KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x5c));
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x5c));
     opening.close();
     opening.close();
     assert opening.isDestroyed();
@@ -714,7 +726,7 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.InitRequestV4.class);
     final KagemushaRecursiveSpendProver.InitRequestV4 init =
         KagemushaRecursiveSpendProver.decodeInitRequestV4(
-            archive("KagemushaRecursiveSpendInitLocalRequestV4", 0x5d));
+            archive("connect_norito_bridge::KagemushaRecursiveSpendInitLocalRequestV4", 0x5d));
     init.close();
     init.close();
     assert init.isDestroyed();
@@ -722,14 +734,14 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void canonicalArchiveHashSurvivesZeroizationWithoutRetainingEquality() {
-    final byte[] encoded = archive("KagemushaNoteOpeningV2", 0x6b);
+    final byte[] encoded = archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x6b);
     final KagemushaRecursiveSpendProver.NoteOpening first =
         KagemushaRecursiveSpendProver.decodeNoteOpening(encoded);
     final KagemushaRecursiveSpendProver.NoteOpening equal =
         KagemushaRecursiveSpendProver.decodeNoteOpening(encoded);
     final KagemushaRecursiveSpendProver.NoteOpening different =
         KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x6c));
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x6c));
     final int initialHashCode = first.hashCode();
     final HashSet<KagemushaRecursiveSpendProver.NoteOpening> indexed = new HashSet<>();
     indexed.add(first);
@@ -797,7 +809,7 @@ public final class KagemushaRecursiveSpendProverTest {
   private static void preparationConstructorFailuresDestroyStagedOpenings() {
     final KagemushaRecursiveSpendProver.NoteOpening recipientOpening =
         KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x5e));
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x5e));
     assertThrowsIllegalArgument(() ->
         construct(
             KagemushaRecursiveSpendProver.RecipientRequestPreparation.class,
@@ -812,7 +824,7 @@ public final class KagemushaRecursiveSpendProverTest {
             construct(
                 KagemushaRecursiveSpendProver.RecipientRequestPayload.class,
                 new Class<?>[] {byte[].class},
-                archive("KagemushaRecipientPaymentRequestSigningPayloadV2", 0x5f)),
+                archive("iroha_data_model::offline::model::KagemushaRecipientPaymentRequestSigningPayloadV2", 0x5f)),
             new byte[] {1},
             recipientOpening,
             filled(0x60),
@@ -822,7 +834,7 @@ public final class KagemushaRecursiveSpendProverTest {
 
     final KagemushaRecursiveSpendProver.NoteOpening topUpOpening =
         KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x70));
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x70));
     assertThrowsIllegalArgument(() ->
         construct(
             KagemushaRecursiveSpendProver.TopUpPreparation.class,
@@ -841,7 +853,7 @@ public final class KagemushaRecursiveSpendProverTest {
             construct(
                 KagemushaRecursiveSpendProver.TopUpUnsigned.class,
                 new Class<?>[] {byte[].class},
-                archive("KagemushaRecursiveSpendTopUpUnsignedV4", 0x71)),
+                archive("iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpUnsignedV4", 0x71)),
             filled(0x72),
             topUpOpening,
             filled(0x73),
@@ -1121,7 +1133,7 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void lifecycleArchivesAreTypedDefensiveAndFailClosed() {
-    final byte[] initBytes = archive("KagemushaRecursiveSpendInitLocalRequestV4");
+    final byte[] initBytes = archive("connect_norito_bridge::KagemushaRecursiveSpendInitLocalRequestV4");
     final KagemushaRecursiveSpendProver.InitRequestV4 init =
         KagemushaRecursiveSpendProver.decodeInitRequestV4(initBytes);
     initBytes[initBytes.length - 1] = 0;
@@ -1129,22 +1141,22 @@ public final class KagemushaRecursiveSpendProverTest {
 
     final KagemushaRecursiveSpendProver.AppendRequestV4 append =
         KagemushaRecursiveSpendProver.decodeAppendRequestV4(
-            archive("KagemushaRecursiveSpendAppendLocalRequestV4"), null);
+            archive("connect_norito_bridge::KagemushaRecursiveSpendAppendLocalRequestV4"), null);
     assert append.noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
     assert KagemushaRecursiveSpendProver.decodeVerifyRequestV4(
-            archive("KagemushaRecursiveSpendVerifyLocalRequestV4"))
+            archive("connect_norito_bridge::KagemushaRecursiveSpendVerifyLocalRequestV4"))
         .noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
     assert KagemushaRecursiveSpendProver.decodeRedeemRequestV4(
-            archive("KagemushaRecursiveSpendRedeemLocalRequestV4"), null)
+            archive("connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV4"), null)
         .noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
     assert KagemushaRecursiveSpendProver.decodeInitResultV4(
-            archive("KagemushaRecursiveSpendInitResultV4"))
+            archive("iroha_data_model::offline::model::KagemushaRecursiveSpendInitResultV4"))
         .noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
 
     boolean wrongSchemaRejected = false;
     try {
       KagemushaRecursiveSpendProver.decodeVerifyRequestV4(
-          archive("KagemushaRecursiveSpendInitLocalRequestV4"));
+          archive("connect_norito_bridge::KagemushaRecursiveSpendInitLocalRequestV4"));
     } catch (final IllegalArgumentException expected) {
       wrongSchemaRejected = true;
     }
@@ -1188,15 +1200,15 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void topUpProvenanceArchiveIsCanonicalBoundedAndDefensive() {
-    final byte[] bytes = archive("KagemushaRecursiveSpendTopUpProvenanceV4");
+    final byte[] bytes = archive("iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpProvenanceV4");
     final KagemushaRecursiveSpendProver.TopUpProvenanceV4 provenance =
         KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(bytes);
     bytes[bytes.length - 1] = 0;
     assert provenance.noritoEncoded()[provenance.noritoEncoded().length - 1] == 0x51;
 
     assertThrowsIllegalArgument(() -> KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
-        archive("KagemushaRecursiveSpendTopUpFinalityEvidenceV4")));
-    final byte[] corrupted = archive("KagemushaRecursiveSpendTopUpProvenanceV4");
+        archive("iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpFinalityEvidenceV4")));
+    final byte[] corrupted = archive("iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpProvenanceV4");
     corrupted[corrupted.length - 1] ^= 1;
     assertThrowsIllegalArgument(() ->
         KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(corrupted));
@@ -1205,27 +1217,186 @@ public final class KagemushaRecursiveSpendProverTest {
 
     final KagemushaRecursiveSpendProver.BundleV4 bundle =
         KagemushaRecursiveSpendProver.decodeBundleV4(
-            archive("KagemushaRecursiveSpendBundleV4"));
+            archive("iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV4"));
     final KagemushaRecursiveSpendProver.TopUpFinalityRosterArtifact roster =
         KagemushaRecursiveSpendProver.decodeTopUpFinalityRosterArtifact(
-            archive("KagemushaTopUpFinalityRosterArtifactV2"));
-    assertThrowsIllegalArgument(() -> KagemushaRecursiveSpendProver.buildTopUpProvenanceV4(
-        bundle, roster, Collections.emptyList(), Collections.emptyList(), 1));
-    assertThrowsIllegalArgument(() -> KagemushaRecursiveSpendProver.buildTopUpProvenanceV4(
-        bundle,
-        roster,
-        Collections.singletonList(KagemushaRecursiveSpendProver.decodeTopUpAnchorV4(
-            archive("KagemushaRecursiveSpendTopUpAnchorV4"))),
-        Collections.emptyList(),
-        1));
+            archive("iroha_data_model::offline::model::KagemushaTopUpFinalityRosterArtifactV2"));
+    final KagemushaRecursiveSpendProver.TopUpAnchorV4 anchor =
+        KagemushaRecursiveSpendProver.decodeTopUpAnchorV4(
+            archive("iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpAnchorV4"));
+    final KagemushaRecursiveSpendProver.TopUpFinalityProof proof =
+        construct(
+            KagemushaRecursiveSpendProver.TopUpFinalityProof.class,
+            new Class<?>[] {byte[].class},
+            archive("iroha_data_model::offline::model::KagemushaTopUpFinalityProofV2"));
+    assertThrowsIllegalArgument(
+        () ->
+            KagemushaRecursiveSpendProver.decodeTopUpAnchorV4(
+                archive("KagemushaRecursiveSpendTopUpAnchorV4")));
+    assertThrowsIllegalArgument(
+        () ->
+            construct(
+                KagemushaRecursiveSpendProver.TopUpFinalityProof.class,
+                new Class<?>[] {byte[].class},
+                archive("KagemushaTopUpFinalityProofV2")));
+    assertThrowsIllegalArgument(
+        () ->
+            KagemushaRecursiveSpendProver.buildTopUpProvenanceV4(
+                bundle, roster, Collections.emptyList(), Collections.emptyList(), 1));
+    assertThrowsIllegalArgument(
+        () ->
+            KagemushaRecursiveSpendProver.buildTopUpProvenanceV4(
+                bundle, roster, Collections.singletonList(anchor), Collections.emptyList(), 1));
+    assertThrowsNativeFailure(
+        () ->
+            KagemushaRecursiveSpendProver.buildTopUpProvenanceV4(
+                bundle,
+                roster,
+                Collections.singletonList(anchor),
+                Collections.singletonList(proof),
+                1));
+  }
+
+  private static void retainedTopUpArchivesUseRustFullyQualifiedSchemas() {
+    final String model = "iroha_data_model::offline::model::";
+    final String rosterSchema = model + "KagemushaTopUpFinalityRosterArtifactV2";
+    final String evidenceSchema =
+        model + "KagemushaRecursiveSpendTopUpFinalityEvidenceV4";
+    final String provenanceSchema = model + "KagemushaRecursiveSpendTopUpProvenanceV4";
+
+    assert Arrays.equals(
+        archive(rosterSchema),
+        KagemushaRecursiveSpendProver.decodeTopUpFinalityRosterArtifact(
+                archive(rosterSchema))
+            .noritoEncoded());
+    assert Arrays.equals(
+        archive(evidenceSchema),
+        KagemushaRecursiveSpendProver.decodeTopUpFinalityEvidenceV4(
+                archive(evidenceSchema))
+            .noritoEncoded());
+    assert Arrays.equals(
+        archive(provenanceSchema),
+        KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
+                archive(provenanceSchema))
+            .noritoEncoded());
+
+    assertThrowsIllegalArgument(
+        () ->
+            KagemushaRecursiveSpendProver.decodeTopUpFinalityRosterArtifact(
+                archive("KagemushaTopUpFinalityRosterArtifactV2")));
+    assertThrowsIllegalArgument(
+        () ->
+            KagemushaRecursiveSpendProver.decodeTopUpFinalityEvidenceV4(
+                archiveWithPadding(
+                    "KagemushaRecursiveSpendTopUpFinalityEvidenceV4", 1, 8)));
+    assertThrowsIllegalArgument(
+        () ->
+            KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
+                archive("KagemushaRecursiveSpendTopUpProvenanceV4")));
+  }
+
+  private static void canonicalArchiveInventoryUsesRustFullyQualifiedSchemas() {
+    final String model = "iroha_data_model::offline::model::";
+    final String bridge = "connect_norito_bridge::";
+    assertCanonicalArchiveSchema(
+        model + "KagemushaNoteMembershipWitnessV2",
+        KagemushaRecursiveSpendProver.NoteMembershipWitness.class);
+    assertCanonicalArchiveSchema(
+        bridge + "KagemushaNoteOpeningV2",
+        KagemushaRecursiveSpendProver.NoteOpening.class);
+    assertCanonicalArchiveSchema(
+        model + "KagemushaRecipientPaymentRequestSigningPayloadV2",
+        KagemushaRecursiveSpendProver.RecipientRequestPayload.class);
+    assertCanonicalArchiveSchema(
+        model + "KagemushaRecursiveSpendBundleV4",
+        KagemushaRecursiveSpendProver.BundleV4.class);
+    assertCanonicalArchiveSchema(
+        model + "KagemushaRecursiveSpendBranchClaimV2",
+        KagemushaRecursiveSpendProver.BranchClaim.class);
+    assertCanonicalArchiveSchema(
+        model + "KagemushaRecursiveSpendArtifactBindingV4",
+        KagemushaRecursiveSpendProver.ArtifactBindingV4.class);
+    assertCanonicalArchiveSchema(
+        model + "KagemushaRecursiveSpendTopUpUnsignedV4",
+        KagemushaRecursiveSpendProver.TopUpUnsigned.class);
+    assertCanonicalArchiveSchema(
+        model + "KagemushaTopUpFinalityRosterArtifactV2",
+        KagemushaRecursiveSpendProver.TopUpFinalityRosterArtifact.class);
+    assertCanonicalArchiveSchema(
+        model + "KagemushaRecursiveSpendTopUpFinalityEvidenceV4",
+        KagemushaRecursiveSpendProver.TopUpFinalityEvidenceV4.class);
+    assertCanonicalArchiveSchema(
+        model + "KagemushaRecursiveSpendTopUpProvenanceV4",
+        KagemushaRecursiveSpendProver.TopUpProvenanceV4.class);
+    assertCanonicalArchiveSchema(
+        model + "KagemushaRecursiveSpendRedeemUnsignedV4",
+        KagemushaRecursiveSpendProver.RedeemUnsignedV4.class);
+    assertCanonicalArchiveSchema(
+        bridge + "KagemushaRequestAuthorizationPreparationV2",
+        KagemushaRecursiveSpendProver.RequestAuthorizationPreparationArchive.class);
+    assertCanonicalArchiveSchema(
+        model + "KagemushaRequestAuthorizationV2",
+        KagemushaRecursiveSpendProver.RequestAuthorization.class);
+    assertCanonicalArchiveSchema(
+        bridge + "KagemushaRecursiveSpendInitLocalRequestV4",
+        KagemushaRecursiveSpendProver.InitRequestV4.class);
+    assertCanonicalArchiveSchema(
+        bridge + "KagemushaRecursiveSpendAppendLocalRequestV4",
+        KagemushaRecursiveSpendProver.AppendRequestV4.class,
+        KagemushaRecursiveSpendProver.NoteOpening.class);
+    assertCanonicalArchiveSchema(
+        bridge + "KagemushaRecursiveSpendVerifyLocalRequestV4",
+        KagemushaRecursiveSpendProver.VerifyRequestV4.class);
+    assertCanonicalArchiveSchema(
+        bridge + "KagemushaRecursiveSpendRedeemLocalRequestV4",
+        KagemushaRecursiveSpendProver.RedeemRequestV4.class,
+        KagemushaRecursiveSpendProver.NoteOpening.class);
+    assertCanonicalArchiveSchema(
+        model + "KagemushaRecursiveSpendInitResultV4",
+        KagemushaRecursiveSpendProver.InitResultV4.class);
+    assertCanonicalArchiveSchema(
+        model + "KagemushaRecursiveSpendSplitResultV4",
+        KagemushaRecursiveSpendProver.SplitResultV4.class,
+        KagemushaRecursiveSpendProver.NoteOpening.class);
+    assertCanonicalArchiveSchema(
+        model + "KagemushaRecursiveSpendVerifyResultV4",
+        KagemushaRecursiveSpendProver.VerifyResultV4.class);
+    assertCanonicalArchiveSchema(
+        model + "KagemushaRecursiveSpendRedeemBuildResultV4",
+        KagemushaRecursiveSpendProver.RedeemBuildResultV4.class,
+        KagemushaRecursiveSpendProver.NoteOpening.class);
+    assertCanonicalArchiveSchema(
+        model + "KagemushaReceiverAcknowledgementPayloadV2",
+        KagemushaRecursiveSpendProver.AcknowledgementPayload.class);
+    assertCanonicalArchiveSchema(
+        "iroha_data_model::offline::status::OfflineReadiness",
+        KagemushaRecursiveSpendProver.Readiness.class);
+  }
+
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  private static void assertCanonicalArchiveSchema(
+      final String schema,
+      final Class<? extends KagemushaRecursiveSpendProver.CanonicalArchive> type,
+      final Class<?>... extraParameterTypes) {
+    final Class<?>[] parameterTypes = new Class<?>[extraParameterTypes.length + 1];
+    parameterTypes[0] = byte[].class;
+    System.arraycopy(
+        extraParameterTypes, 0, parameterTypes, 1, extraParameterTypes.length);
+    final Object[] arguments = new Object[extraParameterTypes.length + 1];
+    final byte[] bytes = archive(schema);
+    arguments[0] = bytes;
+    final KagemushaRecursiveSpendProver.CanonicalArchive value =
+        (KagemushaRecursiveSpendProver.CanonicalArchive)
+            construct((Class) type, parameterTypes, arguments);
+    assert Arrays.equals(bytes, value.noritoEncoded()) : schema;
   }
 
   private static void branchRestoreRejectsMissingHeightAndLocalChangeOpeningsBeforeNativeDispatch() {
     final KagemushaRecursiveSpendProver.NoteOpening opening =
-        KagemushaRecursiveSpendProver.decodeNoteOpening(archive("KagemushaNoteOpeningV2"));
+        KagemushaRecursiveSpendProver.decodeNoteOpening(archive("connect_norito_bridge::KagemushaNoteOpeningV2"));
     final KagemushaRecursiveSpendProver.InitResultV4 init =
         KagemushaRecursiveSpendProver.decodeInitResultV4(
-            archive("KagemushaRecursiveSpendInitResultV4"));
+            archive("iroha_data_model::offline::model::KagemushaRecursiveSpendInitResultV4"));
     assertThrowsIllegalArgument(() ->
         KagemushaRecursiveSpendProver.restoreInitBranchV4(init, opening, 0));
     final KagemushaRecursiveSpendProver.PeerPayment payment =
@@ -1236,12 +1407,12 @@ public final class KagemushaRecursiveSpendProverTest {
 
     final KagemushaRecursiveSpendProver.SplitResultV4 split =
         KagemushaRecursiveSpendProver.decodeSplitResultV4(
-            archive("KagemushaRecursiveSpendSplitResultV4"), null);
+            archive("iroha_data_model::offline::model::KagemushaRecursiveSpendSplitResultV4"), null);
     assertThrowsIllegalState(() ->
         KagemushaRecursiveSpendProver.restoreSplitChangeBranchV4(split, 1));
     final KagemushaRecursiveSpendProver.RedeemBuildResultV4 redeem =
         KagemushaRecursiveSpendProver.decodeRedeemBuildResultV4(
-            archive("KagemushaRecursiveSpendRedeemBuildResultV4"), null);
+            archive("iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemBuildResultV4"), null);
     assertThrowsIllegalState(() ->
         KagemushaRecursiveSpendProver.restoreRedeemChangeBranchV4(redeem, 1));
   }
@@ -1311,7 +1482,7 @@ public final class KagemushaRecursiveSpendProverTest {
             archive("iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2"))
         .noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
     assert KagemushaRecursiveSpendProver.decodeNoteMembershipWitness(
-            archive("KagemushaNoteMembershipWitnessV2"))
+            archive("iroha_data_model::offline::model::KagemushaNoteMembershipWitnessV2"))
         .noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
 
     boolean rejected = false;
@@ -1348,6 +1519,11 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static byte[] archive(final String schema, final int payloadLength) {
+    return archiveWithPadding(schema, payloadLength, archivePadding(schema));
+  }
+
+  private static byte[] archiveWithPadding(
+      final String schema, final int payloadLength, final int padding) {
     final byte[] payload = new byte[payloadLength];
     for (int index = 0; index < payload.length; index++) {
       payload[index] = (byte) (0x51 + index * 17);
@@ -1359,15 +1535,48 @@ public final class KagemushaRecursiveSpendProverTest {
             CRC64.compute(payload),
             NoritoHeader.COMPACT_LEN,
             NoritoHeader.COMPRESSION_NONE);
-    final int padding = schema.equals(
-            "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2")
-        || schema.equals(
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4")
-        ? 8 : 0;
     final byte[] archive = new byte[NoritoHeader.HEADER_LENGTH + padding + payload.length];
     System.arraycopy(header.encode(), 0, archive, 0, NoritoHeader.HEADER_LENGTH);
     System.arraycopy(payload, 0, archive, NoritoHeader.HEADER_LENGTH + padding, payload.length);
     return archive;
+  }
+
+  private static int archivePadding(final String schema) {
+    return schema.equals(
+            "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2")
+        || schema.equals(
+            "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestSigningPayloadV2")
+        || schema.equals("iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2")
+        || schema.equals(
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4")
+        || schema.equals(
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV4")
+        || schema.equals(
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpUnsignedV4")
+        || schema.equals(
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpAnchorV4")
+        || schema.equals(
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpFinalityEvidenceV4")
+        || schema.equals(
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemUnsignedV4")
+        || schema.equals(
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendInitResultV4")
+        || schema.equals(
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitResultV4")
+        || schema.equals(
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV4")
+        || schema.equals(
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemBuildResultV4")
+        || schema.equals(
+            "connect_norito_bridge::KagemushaRecursiveSpendInitLocalRequestV4")
+        || schema.equals(
+            "connect_norito_bridge::KagemushaRecursiveSpendVerifyLocalRequestV4")
+        || schema.equals(
+            "connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV4")
+        || schema.equals("iroha.torii.v1.offline.top_up.request")
+        || schema.equals("iroha.torii.v1.offline.redeem.request")
+        || schema.equals("iroha_torii_shared::offline_api::OfflineOperationStatus")
+        ? 8 : 0;
   }
 
   private static void peerTransportGoldenVectorsAreExact() {
@@ -1597,8 +1806,7 @@ public final class KagemushaRecursiveSpendProverTest {
 
   private static void toriiLifecycleRoutesAndHeadersAreExact() {
     final NetworkId networkId =
-        NetworkId.parse(
-            "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149");
+        NetworkId.parse(OfflineCashToriiV1Fixtures.networkId());
     final AtomicReference<TransportRequest> captured = new AtomicReference<>();
     final org.hyperledger.iroha.android.client.transport.TransportExecutor neverTransport =
         request -> {
@@ -1619,7 +1827,11 @@ public final class KagemushaRecursiveSpendProverTest {
               final boolean capability = request.uri().getPath().endsWith("/readiness");
               final boolean command = "POST".equals(request.method());
               return CompletableFuture.completedFuture(
-                  TransportResponse.builder()
+                  toriiResponseBuilder(
+                          command,
+                          request.uri().getPath().endsWith("/top-up")
+                              ? OfflineCashToriiV1Fixtures.topUpOperationId()
+                              : OfflineCashToriiV1Fixtures.redeemOperationId())
                       .setStatusCode(command ? 202 : 200)
                       .addHeader(
                           "content-type",
@@ -1627,12 +1839,13 @@ public final class KagemushaRecursiveSpendProverTest {
                       .setBody(
                           capability
                               ? universalOfflineCapabilityJson().getBytes(StandardCharsets.UTF_8)
-                              : archive(
-                                  command
-                                      ? "OfflineOperationReference"
-                                      : request.uri().getPath().contains("/operations/")
-                                          ? "OfflineOperationStatus"
-                                          : unexpectedToriiRoute(request)))
+                              : command
+                                  ? request.uri().getPath().endsWith("/top-up")
+                                      ? OfflineCashToriiV1Fixtures.topUpReference()
+                                      : OfflineCashToriiV1Fixtures.redeemReference()
+                                  : request.uri().getPath().contains("/operations/")
+                                      ? OfflineCashToriiV1Fixtures.topUpPendingStatus()
+                                      : unexpectedToriiRoute(request))
                       .build());
             },
             new LocalSigningContext(networkId));
@@ -1662,11 +1875,11 @@ public final class KagemushaRecursiveSpendProverTest {
         .equals("https://torii.example/api/v1/offline/readiness");
     assert captured.get().headers().get("Accept").equals(Arrays.asList("application/json"));
 
-    final String operationId = repeat("11", 32);
+    final String operationId = OfflineCashToriiV1Fixtures.topUpOperationId();
     client
         .submitTopUp(
             new KagemushaRecursiveSpendProver.TopUpRequest(
-                archive("iroha.torii.v1.offline.top_up.request")),
+                OfflineCashToriiV1Fixtures.topUpRequest()),
             operationId)
         .join();
     assert captured.get().method().equals("POST");
@@ -1678,13 +1891,23 @@ public final class KagemushaRecursiveSpendProverTest {
     client
         .submitRedeem(
             new KagemushaRecursiveSpendProver.RedeemSubmissionRequest(
-                archive("iroha.torii.v1.offline.redeem.request")),
-            operationId)
+                OfflineCashToriiV1Fixtures.redeemRequest()),
+            OfflineCashToriiV1Fixtures.redeemOperationId())
         .join();
     assert captured.get().uri().getPath().equals("/api/v1/offline/redeem");
 
     client.getOperation(operationId).join();
     assert captured.get().uri().getPath().equals("/api/v1/offline/operations/" + operationId);
+  }
+
+  private static TransportResponse.Builder toriiResponseBuilder(
+      final boolean command, final String operationId) {
+    final TransportResponse.Builder builder = TransportResponse.builder();
+    if (command) {
+      final String statusUri = "/v1/offline/operations/" + operationId;
+      builder.addHeader("Location", statusUri).addHeader("Retry-After", "1");
+    }
+    return builder;
   }
 
   private static String universalOfflineCapabilityJson() {
@@ -1696,7 +1919,7 @@ public final class KagemushaRecursiveSpendProverTest {
         + "{\"code\":\"offline_cash_proof_backend_unavailable\",\"message\":\"No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response.\"}]}";
   }
 
-  private static String unexpectedToriiRoute(final TransportRequest request) {
+  private static byte[] unexpectedToriiRoute(final TransportRequest request) {
     throw new AssertionError("unexpected Torii route " + request.uri());
   }
 
@@ -1944,13 +2167,13 @@ public final class KagemushaRecursiveSpendProverTest {
       constructor.setAccessible(true);
       return constructor.newInstance(
           KagemushaRecursiveSpendProver.decodeBundleV4(
-              archive("KagemushaRecursiveSpendBundleV4", seed)),
+              archive("iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV4", seed)),
           KagemushaRecursiveSpendProver.decodeNoteMembershipWitness(
-              archive("KagemushaNoteMembershipWitnessV2", seed + 1)),
+              archive("iroha_data_model::offline::model::KagemushaNoteMembershipWitnessV2", seed + 1)),
           KagemushaRecursiveSpendProver.decodeNoteOpening(
-              archive("KagemushaNoteOpeningV2", seed + 2)),
+              archive("connect_norito_bridge::KagemushaNoteOpeningV2", seed + 2)),
           KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
-              archive("KagemushaRecursiveSpendTopUpProvenanceV4", seed + 3)),
+              archive("iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpProvenanceV4", seed + 3)),
           KagemushaRecursiveSpendProver.decodeOutputMembershipFrontierV4(
               archive(
                   "connect_norito_bridge::KagemushaOutputMembershipFrontierV4",

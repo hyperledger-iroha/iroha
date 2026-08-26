@@ -37,7 +37,8 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
             new ToriiClientOptions
             {
                 LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(ExactNetworkIdLiteral)),
+                    NetworkId.Parse(ExactNetworkIdLiteral),
+                    global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
             });
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -191,7 +192,8 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
             new ToriiClientOptions
             {
                 LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(ForeignNetworkIdLiteral)),
+                    NetworkId.Parse(ForeignNetworkIdLiteral),
+                    global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     AccountId,
                     PrivateKeySeed),
@@ -281,7 +283,8 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
             new ToriiClientOptions
             {
                 LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(ExactNetworkIdLiteral)),
+                    NetworkId.Parse(ExactNetworkIdLiteral),
+                    global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     AccountId,
                     PrivateKeySeed),

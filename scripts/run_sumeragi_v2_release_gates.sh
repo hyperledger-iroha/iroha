@@ -2404,7 +2404,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::adapter_command_identity_is_derived_from_exact_immutable_payload
   sumeragi::v2_runtime::tests::admission_ordinal_exhaustion_fails_runtime_closed
   sumeragi::v2_runtime::tests::runtime_rejects_replayed_foreign_and_mutated_deferred_tokens
-  sumeragi::v2_runtime::tests::scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches
+  sumeragi::v2_runtime::tests::scheduler_owner_carrier_covers_live_and_typed_deferred_branches
   sumeragi::v2_runtime::tests::scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields
   sumeragi::v2_runtime::tests::scheduler_owner_must_be_taken_before_a_later_step_can_enter
   sumeragi::v2_runtime::tests::selected_owner_without_a_runtime_minted_ordinal_fails_closed

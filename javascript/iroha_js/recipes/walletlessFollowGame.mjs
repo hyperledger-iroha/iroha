@@ -106,7 +106,7 @@ async function main() {
     trimToNull(args.get("--sponsor")) ??
     trimToNull(process.env.SPONSOR_ID) ??
     AccountAddress.fromAccount({ publicKey: publicKeyFromPrivate(sessionPrivate),
-    }).toI105();
+    }).toI105(369);
 
   const instructions = [
     buildSendToTwitterInstruction({ bindingHash: binding, amount }),

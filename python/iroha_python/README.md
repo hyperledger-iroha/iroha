@@ -17,7 +17,7 @@ cd python/iroha_python
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install "maturin>=1.5,<2"
-maturin develop --release
+maturin develop --release --locked
 ```
 
 ```python
@@ -30,7 +30,8 @@ from iroha_python import (
 )
 
 pair = derive_ed25519_keypair_from_seed(b"demo-seed")
-authority = pair.default_account_id("wonderland")  # Canonical I105 account id
+# Application clients default to public Taira, whose I105 discriminant is 369.
+authority = pair.default_account_id("wonderland", 369)
 network_id = NetworkId.parse(
     "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
 )
@@ -65,19 +66,11 @@ client = create_torii_client(
 )
 ```
 
-Account onboarding uses a dedicated credential in addition to any global
-`X-API-Token`. Callers must pass the raw 32–256 byte printable-ASCII value for
-each request; the SDK does not trim it, store it in default headers, put it in
-the JSON body, retry the POST, or forward it across redirects.
-
-```python
-response = client.onboard_account(
-    onboarding_token=route_token,
-    alias="alice@universal",
-    uaid="uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    public_key_hex="ab" * 32,
-)
-```
+The retired one-step account-onboarding payload is not exposed. Current Torii
+uses a signed, stateless plan receipt (`/v1/accounts/onboard/plan`) followed by
+receipt-only apply (`/v1/accounts/onboard`). Python does not yet ship the exact
+Norito body encoder and pinned receipt verifier required to expose that flow
+safely, and it rejects onboarding credentials in default headers.
 
 ## Exact Kotodama numbers
 
@@ -105,11 +98,34 @@ mantissa plus an explicit scale. Higher-level ledger helpers additionally
 accept `Decimal` because it is a lossless host value and normalize it before
 calling the codec.
 
-## Kagemusha lifecycle support
+## Kagemusha Offline Cash transport
 
-The Python package intentionally exposes no offline-spend lifecycle. The first-release typed
-Kagemusha lifecycle is supported by the Swift SDK; Python keeps only generic online transaction,
-query, and privacy primitives.
+Python exposes the strict transport-only Kagemusha Offline Cash boundary inherited by
+`ToriiClient`: `get_offline_capability()`, `submit_kagemusha_top_up()`,
+`submit_kagemusha_redeem()`, and `get_kagemusha_operation_status()`. Requests remain bounded,
+externally produced Kagemusha V4 envelopes. The SDK validates their exact request schema hash,
+compact NRT0 framing, padding, payload length, CRC64, V4 structure, and signed authorization
+projection. It derives the operation id, issuance time, and NetworkId from the archive, binds the
+request network to the client's immutable local signing context before I/O, and requires Torii's
+accepted-reference timestamp to equal the signed issuance time. Callers must still obtain the
+archive from a supported wallet/prover. Responses are closed typed states whose transaction
+markers, finalized top-up anchors, finality proofs, and rejection envelopes are cross-checked
+before return.
+
+The high-level package exports the request and result-union types directly:
+
+```python
+from iroha_python import KagemushaTopUpRequestV4
+
+request = KagemushaTopUpRequestV4(
+    norito=wallet.create_canonical_top_up_request_v4(),
+)
+reference = client.submit_kagemusha_top_up(request)
+```
+
+Python does not expose a local wallet-session, secure-device, or peer-handoff lifecycle. Those
+closed payment operations are also not generic `OpenVerify` algorithms; Python keeps no alias that
+would route Kagemusha through the privacy proof dispatcher.
 
 
 ## Native Privacy Bridge
@@ -119,10 +135,14 @@ The first-release native surface exposes local build metadata only:
 `privacy_compiled_profile_catalog_v1()`. The latter returns this binary's
 canonical Norito `PrivacyCompiledProfileCatalogV1` archive and contains no
 committed height, governance activation, or readiness state. The distinct
-`Client.privacy_capabilities_v1()` method fetches and strictly parses a fresh
-authoritative JSON `PrivacyCapabilitySnapshotV1` from live Torii. There is no
-local `privacy_capabilities_v1()` alias, generic request/build/verify
-dispatcher, or legacy algorithm alias.
+`Client.privacy_capabilities_v1()` method fetches a fresh canonical Norito
+`PrivacyExact12CapabilityManifestV1` from live Torii and validates it through
+the authenticated native ABI. That exact manifest and its admission API are
+the only capability authority. `LegacyPrivacyCapabilityInspectionSnapshotV1`
+and the `parse_legacy_privacy_capability_inspection_*` helpers are retired JSON
+diagnostics: the client never calls them, and they cannot authorize proof
+construction. There is no local `privacy_capabilities_v1()` alias, generic
+request/build/verify dispatcher, or legacy algorithm alias.
 
 `PRIVACY_PROTOCOL_IDS_V1` contains exactly twelve identities in wire order:
 `zk-ace-pq-authorization-v0`, `anonymous-pgc-k-out-of-n-v1`,
@@ -133,7 +153,8 @@ dispatcher, or legacy algorithm alias.
 `monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
 `pq-masp-stark-v0`. The parser rejects unknown fields, duplicate JSON keys,
 non-finite numbers, aliases, reordered or duplicate rows, normalized labels,
-and malformed nested policy or profile data.
+and malformed nested policy or profile data when explicitly inspecting a
+retired JSON payload.
 
 The eleven generic privacy protocols are constructed only by the admitted
 Rust `iroha_privacy_wallet_worker`. `PrivacyWalletWorkerControllerV1` is the
@@ -198,8 +219,10 @@ print(formats["chain_discriminant"])
 print(formats["i105_warning"])
 ```
 
-> ℹ️ Use i105 literals consistently across SDK samples and operator tooling.
-> For Sora network discriminant `753`, literals should start with the `sora` sentinel.
+> ℹ️ This low-level renderer example intentionally retains the generic Sora
+> compatibility discriminant `753`; literals then start with the `sora`
+> sentinel. BPNG signing contexts and `ToriiClient` default to the Taira testnet
+> discriminant `369` (`0x0171`).
 
 ## Ledger reads and faucet bootstrap
 
@@ -280,7 +303,8 @@ network_id = NetworkId.parse(
 
 signing_client = ToriiClient(
     "https://taira.sora.org",
-    # Immutable local-signing context. Read-only clients may omit this.
+    # Immutable local-signing context. Its I105 deployment default is Taira (369).
+    # Read-only clients may omit this.
     local_signing_context=LocalSigningContext(network_id),
 )
 
@@ -885,8 +909,9 @@ signed_order_request_from_fields = build_signed_orderbook_order_request(
 # nine fractional digits. Integer JSON numbers and retired micro-XOR fields are rejected.
 # Embed `signed_order_request_from_fields` in a SubmitSorafsOrderbookOrder ISI,
 # build and sign the native transaction, then encode its versioned Norito bytes.
-# Configure `ToriiClient(chain_discriminant=...)` for the deployment before
-# submitting (`369` for Taira); the default `753` is the Sora discriminant.
+# `ToriiClient` and `LocalSigningContext` default application traffic to the
+# public Taira testnet discriminant (`369`). Pass one matching explicit
+# discriminant to both when targeting another deployment.
 # Strict submission requires canonical HTTPS and uses an internally owned,
 # zero-retry Requests adapter with only explicit headers/proxies/verify/cert.
 # It ignores trust_env/netrc/environment proxy or CA discovery, hooks, cookies,
@@ -1385,6 +1410,9 @@ receive a node operator key.
 first-release session response does not advertise a wall-clock expiry, so
 `expires_at` remains `None`; clients must not infer it from operator-only
 aggregate policy.
+Public `NetworkId` values and Connect deep links use the canonical 64-character
+lowercase identity. The client converts that identity to and from the marked
+`hash:<uppercase hex>#<CRC16>` form only at the Torii JSON boundary.
 The response also carries `management_token` for session deletion/per-session status and `relay_token` for wallet/app relay authentication; keep the management token out of launch links and QR payloads.
 `ToriiClient.connect_websocket(...)` accepts only canonical 32-byte base64url
 session IDs and role tokens. It keeps the token out of the URL and sends it
@@ -1975,7 +2003,7 @@ client.stream_pipeline_witnesses(
 ```
 
 Connect frame encoding and crypto helpers require the compiled
-`iroha_python._crypto` extension. Run `maturin develop --release` from this
+`iroha_python._crypto` extension. Run `maturin develop --release --locked` from this
 directory before running tests that exercise Connect payloads.
 
 From the repository root, the SoraFS V1 native parity lane uses exact Python
@@ -2170,18 +2198,16 @@ canonical Norito artifacts. Set `SKIP_LINT=1`, `SKIP_TESTS=1`, or
 Run the Rust unit tests for the bindings with:
 
 ```bash
-./python/iroha_python/scripts/test_rs.sh
+PYO3_PYTHON="$(command -v python3)" \
+  cargo test --locked -p iroha_python_rs
 ```
 
-The helper script wraps `cargo test -p iroha_python_rs`, automatically loading a
-local CPython runtime when needed.
-
-The script first looks for an explicit path in
+The native crate first looks for an explicit path in
 `python/iroha_python/iroha_python_rs/python-runtime-path`. If that file is
-absent, it tries to auto-detect the shared library by querying `${PYTHON_BIN:-python3}`
-via `sysconfig`. Set `PYTHON_BIN` to point at a specific interpreter (for
-example, a virtualenv) before running the script if you need to override the
-default.
+absent, its build script tries to auto-detect the shared library by querying
+`PYO3_PYTHON`, `PYTHON_SYS_EXECUTABLE`, or `PYTHON` in that order, then falls
+back to `python3` and `python`. Point `PYO3_PYTHON` at the intended interpreter
+(for example, a virtualenv) so the test binary and discovered runtime agree.
 
 ### macOS runtime configuration
 
@@ -2189,9 +2215,9 @@ When running tests on macOS the binary embeds CPython directly. If your system
 Python does not expose the shared library globally (for example, the
 Xcode-provided interpreter), create a `python-runtime-path` file alongside
 `python/iroha_python/iroha_python_rs/Cargo.toml` containing the absolute path to
-the CPython dynamic library. The `test_rs.sh` wrapper reads this file and sets
-the necessary dynamic loader environment variables for you. Lines starting with
-`#` are treated as comments, so the file can also include short notes.
+the CPython dynamic library. The crate build script reads this file and embeds
+the matching link and runtime-search arguments. Lines starting with `#` are
+treated as comments, so the file can also include short notes.
 
 Example `python-runtime-path`:
 

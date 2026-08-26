@@ -337,8 +337,8 @@ public final class PrivacyNativeBridge {
   /**
    * Returns this binary's canonical {@code PrivacyCompiledProfileCatalogV1} Norito archive.
    *
-   * <p>This is local build metadata only. Fetch a fresh committed capability snapshot from live
-   * Torii for activation and proof-submission readiness.
+   * <p>This is local build metadata only. Fetch a fresh committed Exact12 capability manifest from
+   * live Torii for activation and proof-submission readiness.
    */
   public static byte[] compiledProfileCatalogV1() {
     if (!NATIVE_AVAILABLE) {

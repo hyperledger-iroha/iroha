@@ -8,6 +8,22 @@ import requests
 
 from .canonical_request_v1 import require_zero_retry_adapter
 
+_RESERVED_AUTH_HEADERS = frozenset(
+    {
+        "authorization",
+        "x-api-token",
+        "x-iroha-account",
+        "x-iroha-signature",
+        "x-iroha-timestamp-ms",
+        "x-iroha-nonce",
+        "x-iroha-witness",
+        "x-iroha-operator-public-key",
+        "x-iroha-operator-timestamp-ms",
+        "x-iroha-operator-nonce",
+        "x-iroha-operator-signature",
+    }
+)
+
 
 class CanonicalRequestHeaderPlan(dict[str, str]):
     """Base headers plus signer state deferred until Requests fixes the target."""
@@ -62,6 +78,8 @@ def send_request(
         )
     if allow_retry or allow_redirects:
         raise ValueError("canonical requests must disable redirects and retries")
+    if getattr(session, "auth", None) is not None:
+        raise ValueError("canonical requests reject Session.auth fallback")
     request = requests.Request(
         method,
         url,
@@ -75,6 +93,12 @@ def send_request(
         raise ValueError(
             "canonical requests require a verifiable prepared-request transport"
         ) from exc
+    for name in prepared.headers:
+        if str(name).lower() in _RESERVED_AUTH_HEADERS:
+            raise ValueError(
+                "canonical requests reject token, witness, and precomputed "
+                f"authentication header {name}"
+            )
     prepared_body = prepared.body
     if prepared_body is None:
         body = b""

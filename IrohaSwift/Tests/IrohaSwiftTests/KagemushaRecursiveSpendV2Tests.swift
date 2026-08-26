@@ -36,7 +36,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
     }
 
-    func testTopUpWitnessBindingRetriesOnlySnapshotDriftAndKeepsMatchedSnapshot() throws {
+    func testTopUpWitnessBindingKeepsTheSingleAuthenticatedSnapshot() throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -46,21 +46,27 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
                 .appendingPathComponent("Sources/IrohaSwift/TxBuilder.swift"),
             encoding: .utf8
         )
-        let start = try XCTUnwrap(source.range(of: "public func prepareKagemushaTopUpShield("))
+        let start = try XCTUnwrap(source.range(of: "package func prepareKagemushaTopUpShield("))
         let tail = source[start.lowerBound...]
         let end = try XCTUnwrap(tail.range(of: "    /// Generates a new signing key"))
         let implementation = String(tail[..<end.lowerBound])
 
-        XCTAssertTrue(implementation.contains("for attempt in 0..<3"))
-        XCTAssertTrue(implementation.contains("matching: readiness"))
-        XCTAssertTrue(implementation.contains("if attempt < 2 { continue }"))
+        XCTAssertTrue(implementation.contains("getZkAssetMerklePathSnapshot("))
+        XCTAssertTrue(implementation.contains("canonicalAuth: canonicalAuth"))
         XCTAssertTrue(implementation.contains(
-            "evaluatedBlockHeight: readiness.evaluatedBlockHeight"
+            "snapshot.evaluatedBlockHeight >= expectedReadiness.minimumEvaluatedBlockHeight"
         ))
         XCTAssertTrue(implementation.contains(
-            "evaluatedBlockHash: readiness.evaluatedBlockHashBytes"
+            "verifier.activationHeight <= snapshot.evaluatedBlockHeight"
+        ))
+        XCTAssertTrue(implementation.contains(
+            "evaluatedBlockHeight: snapshot.evaluatedBlockHeight"
+        ))
+        XCTAssertTrue(implementation.contains(
+            "evaluatedBlockHash: snapshot.evaluatedBlockHash"
         ))
         XCTAssertFalse(implementation.contains("let currentReadiness"))
+        XCTAssertFalse(implementation.contains("getKagemushaReadiness"))
     }
 
     func testReleaseQualifiedStepEqVerifierKeyIDBindsExactManifest() throws {
@@ -749,6 +755,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertEqual(capabilities.missingGates, gates)
         XCTAssertFalse(capabilities.proofBackendAvailable)
 
+        // ABI 21 is intentionally retained only as a retired negative vector.
         XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilitiesV4(
             bridgeABIVersion: 21,
             artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchemaV4,

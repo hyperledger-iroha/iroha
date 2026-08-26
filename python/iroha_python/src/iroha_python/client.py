@@ -42,9 +42,17 @@ from urllib.parse import quote, urlencode, urlparse, urlunparse
 
 import requests
 from blake3 import blake3
+from iroha_torii_client.canonical_transport import (
+    CanonicalRequestHeaderPlan as _CanonicalRequestHeaderPlan,
+)
+from iroha_torii_client.canonical_transport import (
+    OperatorRequestHeaderPlan as _OperatorRequestHeaderPlan,
+)
 from iroha_torii_client.client import (
     ConfidentialGasSchedule,
     ConfigurationSnapshot,
+    KagemushaRedeemRequestV4,
+    KagemushaTopUpRequestV4,
     MultisigResponse,
     NetworkTimeRttBucket,
     NetworkTimeSample,
@@ -59,10 +67,8 @@ from iroha_torii_client.client import (
     OfflineAppliedResult,
     OfflineAssetScale,
     OfflineAuthorizationJson,
-    OfflineAxtErrorDetails,
     OfflineBranchClaimJson,
     OfflineBranchPathJson,
-    OfflineErrorDetails,
     OfflineErrorEnvelope,
     OfflineLanePrivacyMerkleVariantJson,
     OfflineLanePrivacyMerkleWitnessJson,
@@ -79,7 +85,6 @@ from iroha_torii_client.client import (
     OfflineProofAttachmentJson,
     OfflineProofBackend,
     OfflineProofBoxJson,
-    OfflineQueueErrorDetails,
     OfflineReadiness,
     OfflineReadinessBlocker,
     OfflineStatus,
@@ -142,6 +147,7 @@ from iroha_torii_client.client import (
     VpnReceiptSubmitRequest,
     VpnSession,
     VpnSessionCreateRequest,
+    _offline_hash_literal_from_bytes,
     build_canonical_request_headers,
     canonical_network_request_signature_message,
     canonical_query_string,
@@ -345,24 +351,15 @@ def _encode_sort_arg(sort_value: Optional[Any]) -> Optional[str]:
     return str(sort_value)
 
 
+# Generic address helpers retain the protocol-wide Sora rendering default.
+# Application clients deliberately default to the public Taira testnet below.
 DEFAULT_I105_DISCRIMINANT = 0x02F1
+TAIRA_I105_DISCRIMINANT = 0x0171
 # Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
 DATA_MODEL_VERSION = 4
 ACCOUNT_FAUCET_POW_ALGORITHM = "scrypt-leading-zero-bits-v2"
 ACCOUNT_FAUCET_POW_DOMAIN_SEPARATOR = b"iroha:accounts:faucet:pow:v3"
 ACCOUNT_ONBOARDING_TOKEN_HEADER = "X-Iroha-Onboarding-Token"
-
-
-def _require_account_onboarding_token(value: Any) -> str:
-    if not isinstance(value, str):
-        raise TypeError("onboarding_token must be a string")
-    encoded = value.encode("utf-8")
-    if not 32 <= len(encoded) <= 256 or any(byte < 0x21 or byte > 0x7E for byte in encoded):
-        raise ValueError(
-            "onboarding_token must contain 32..256 printable ASCII bytes "
-            "without spaces or normalization"
-        )
-    return value
 
 
 def _set_exact_header(headers: MutableMapping[str, str], name: str, value: str) -> None:
@@ -378,7 +375,7 @@ def _reject_reserved_default_headers(headers: Mapping[str, Any], context: str) -
     if ACCOUNT_ONBOARDING_TOKEN_HEADER.lower() in normalized:
         raise ValueError(
             f"{context} must not contain {ACCOUNT_ONBOARDING_TOKEN_HEADER}; "
-            "pass onboarding_token explicitly to onboard_account"
+            "the retired one-step onboarding API is not exposed"
         )
     reserved_auth = "x-iroha-account x-iroha-signature x-iroha-timestamp-ms x-iroha-nonce x-iroha-witness"
     if any(f" {name} " in f" {reserved_auth} " for name in normalized):
@@ -480,9 +477,10 @@ class AppApiTransactionDraft(TypedDict):
 
 @dataclass(frozen=True)
 class LocalSigningContext:
-    """Immutable client-owned context for validating local-signing drafts."""
+    """Immutable exact-network and exact-deployment local-signing context."""
 
     network_id: "NetworkId"
+    chain_discriminant: int = TAIRA_I105_DISCRIMINANT
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -491,6 +489,14 @@ class LocalSigningContext:
             _normalize_network_id(
                 self.network_id,
                 "LocalSigningContext.network_id",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "chain_discriminant",
+            normalize_i105_discriminant(
+                self.chain_discriminant,
+                "LocalSigningContext.chain_discriminant",
             ),
         )
 
@@ -2977,7 +2983,12 @@ def _ensure_governance_lock_hints_complete(
         )
 
 
-def _ensure_governance_owner_canonical(owner: Any, *, context: str) -> None:
+def _ensure_governance_owner_canonical(
+    owner: Any,
+    *,
+    context: str,
+    expected_discriminant: int,
+) -> None:
     if owner is None:
         return
     if not isinstance(owner, str):
@@ -2991,11 +3002,12 @@ def _ensure_governance_owner_canonical(owner: Any, *, context: str) -> None:
         raise ValueError(f"{context}.owner must be a canonical I105 account id")
     try:
         address = AccountAddress.parse_encoded(
-            trimmed, expected_discriminant=DEFAULT_I105_DISCRIMINANT
+            trimmed,
+            expected_discriminant=expected_discriminant,
         )
     except AccountAddressError as exc:
         raise ValueError(f"{context}.owner must be a canonical I105 account id") from exc
-    canonical = address.to_i105(DEFAULT_I105_DISCRIMINANT)
+    canonical = address.to_i105(expected_discriminant)
     if canonical != owner:
         raise ValueError(f"{context}.owner must be a canonical I105 account id")
 
@@ -3085,13 +3097,19 @@ def _normalize_governance_u64_decimal(value: Any, context: str) -> str:
     )
 
 
-_normalize_governance_ballot_network_id = bind_governance_ballot_network_id(_normalize_network_id)
+_normalize_governance_ballot_network_id = bind_governance_ballot_network_id(
+    _normalize_network_id,
+    _offline_hash_literal_from_bytes,
+)
+
 
 def _normalize_governance_plain_ballot_payload(
     payload: Mapping[str, Any],
     *,
     context: str,
+    expected_discriminant: int = TAIRA_I105_DISCRIMINANT,
 ) -> Dict[str, Any]:
+    del expected_discriminant
     record = _copy_exact_governance_payload(
         payload,
         _GOVERNANCE_PLAIN_BALLOT_FIELDS,
@@ -3126,7 +3144,9 @@ def _normalize_governance_parliament_ballot_payload(
     payload: Mapping[str, Any],
     *,
     context: str,
+    expected_discriminant: int = TAIRA_I105_DISCRIMINANT,
 ) -> Dict[str, Any]:
+    del expected_discriminant
     record = _copy_exact_governance_payload(
         payload,
         _GOVERNANCE_PARLIAMENT_BALLOT_FIELDS,
@@ -3148,6 +3168,7 @@ def _normalize_governance_zk_ballot_v1_payload(
     payload: Mapping[str, Any],
     *,
     context: str,
+    expected_discriminant: int = TAIRA_I105_DISCRIMINANT,
 ) -> Dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise TypeError(f"{context} must be a JSON object")
@@ -3232,7 +3253,11 @@ def _normalize_governance_zk_ballot_v1_payload(
             record["amount"],
             f"{context}.amount",
         )
-    _ensure_governance_owner_canonical(record.get("owner"), context=context)
+    _ensure_governance_owner_canonical(
+        record.get("owner"),
+        context=context,
+        expected_discriminant=expected_discriminant,
+    )
     if record.get("duration_blocks") is not None:
         record["duration_blocks"] = int(
             _normalize_governance_u64_decimal(
@@ -3258,6 +3283,7 @@ def _normalize_governance_zk_ballot_proof_payload(
     payload: Mapping[str, Any],
     *,
     context: str,
+    expected_discriminant: int = TAIRA_I105_DISCRIMINANT,
 ) -> Dict[str, Any]:
     record = _copy_exact_governance_payload(
         payload,
@@ -3345,7 +3371,11 @@ def _normalize_governance_zk_ballot_proof_payload(
             ballot_record["amount"],
             f"{ballot_context}.amount",
         )
-    _ensure_governance_owner_canonical(ballot_record.get("owner"), context=ballot_context)
+    _ensure_governance_owner_canonical(
+        ballot_record.get("owner"),
+        context=ballot_context,
+        expected_discriminant=expected_discriminant,
+    )
     if ballot_record.get("duration_blocks") is not None:
         ballot_record["duration_blocks"] = int(
             _normalize_governance_u64_decimal(
@@ -11833,7 +11863,8 @@ def _require_crypto() -> ModuleType:
     except RuntimeError as exc:  # pragma: no cover - optional runtime dependency
         raise RuntimeError(
             "iroha_python._crypto extension module is required for transaction helpers. "
-            "Run `maturin develop --release` inside `python/iroha_python` (or install the wheel) "
+            "Run `maturin develop --release --locked` inside `python/iroha_python` "
+            "(or install the wheel) "
             "before using these APIs."
         ) from exc
     _CRYPTO_MODULE = _crypto
@@ -11987,6 +12018,10 @@ __all__ = [
     "NetworkTimeStatus",
     "NetworkTimeSample",
     "NetworkTimeRttBucket",
+    "KagemushaTopUpRequestV4",
+    "KagemushaRedeemRequestV4",
+    "OfflineOperationReference",
+    "OfflineOperationStatus",
     "OfflineActiveTransferVerifier",
     "OfflineActiveTopUpShieldVerifier",
     "OfflineActiveUnshieldVerifier",
@@ -12442,20 +12477,33 @@ class ToriiClient(
         ):
             raise TypeError("local_signing_context must be a LocalSigningContext")
         self.__local_signing_context = local_signing_context
+        context_discriminant = (
+            local_signing_context.chain_discriminant
+            if local_signing_context is not None
+            else TAIRA_I105_DISCRIMINANT
+        )
+        self._chain_discriminant = normalize_i105_discriminant(
+            context_discriminant if chain_discriminant is None else chain_discriminant,
+            "chain_discriminant",
+        )
+        if (
+            local_signing_context is not None
+            and self._chain_discriminant != local_signing_context.chain_discriminant
+        ):
+            raise ValueError(
+                "chain_discriminant must match local_signing_context.chain_discriminant"
+            )
         self._install_operator_signing_context(operator_signing_context)
         if canonical_request_auth is not None:
             canonical_request_auth = self._require_canonical_auth(
                 canonical_request_auth, "canonical_request_auth"
             )
-            self._require_exact_i105_account_id(
+            _normalize_exact_i105_account_id(
                 canonical_request_auth.account_id,
                 "canonical_request_auth.account_id",
+                expected_discriminant=self._chain_discriminant,
             )
         self._canonical_request_auth = canonical_request_auth
-        self._chain_discriminant = normalize_i105_discriminant(
-            DEFAULT_I105_DISCRIMINANT if chain_discriminant is None else chain_discriminant,
-            "chain_discriminant",
-        )
         self._timeout = timeout
         self._max_retries = max(0, int(max_retries))
         self._retry_statuses = (
@@ -12512,6 +12560,21 @@ class ToriiClient(
 
         return self.__local_signing_context
 
+    def _kagemusha_expected_network_id(self) -> Optional[str]:
+        signing_context = self.__local_signing_context
+        if signing_context is None:
+            return None
+        return _offline_hash_literal_from_bytes(
+            signing_context.network_id.to_bytes(),
+            "ToriiClient.local_signing_context.network_id",
+        )
+
+    @property
+    def chain_discriminant(self) -> int:
+        """Exact I105 deployment discriminant used by this client."""
+
+        return self._chain_discriminant
+
     def _require_local_signing_context(self, context: str) -> LocalSigningContext:
         signing_context = self.__local_signing_context
         if signing_context is None:
@@ -12531,19 +12594,21 @@ class ToriiClient(
         literal = _require_non_empty_string(value, context)
         if "@" in literal:
             return literal
-        candidate_discriminants = [DEFAULT_I105_DISCRIMINANT]
-        if self._chain_discriminant != DEFAULT_I105_DISCRIMINANT:
-            candidate_discriminants.append(self._chain_discriminant)
-        for discriminant in candidate_discriminants:
+        try:
+            address = AccountAddress.parse_encoded(
+                literal,
+                expected_discriminant=self._chain_discriminant,
+            )
+        except AccountAddressError as error:
             try:
-                address = AccountAddress.parse_encoded(
-                    literal,
-                    expected_discriminant=discriminant,
-                )
+                AccountAddress.parse_encoded(literal)
             except AccountAddressError:
-                continue
-            return address.to_i105(DEFAULT_I105_DISCRIMINANT)
-        return literal
+                return literal
+            raise ValueError(
+                f"{context} must use ToriiClient chain_discriminant "
+                f"{self._chain_discriminant}"
+            ) from error
+        return address.to_i105(self._chain_discriminant)
 
     def _native_transaction_asset_id(self, value: Any, context: str) -> str:
         literal = _require_non_empty_string(value, context)
@@ -12843,8 +12908,8 @@ class ToriiClient(
         """Authenticate, live-gate, and submit one exact ZK-X509 action.
 
         The signed wire is inspected locally against the exact ``network_id``
-        before any network operation.  A fresh authoritative capability
-        snapshot must then expose the unique ZK-X509 row with an available
+        before any network operation. A fresh authoritative Exact12 capability
+        manifest must then expose the unique ZK-X509 row with an available
         compiled profile and an active governed lifecycle.  No submission is
         attempted when either check fails.
         """
@@ -16843,6 +16908,8 @@ class ToriiClient(
         if json_body is not None and data is not None:
             raise ValueError("provide either `json_body` or `data`, not both")
 
+        canonical_header_plan = isinstance(headers, _CanonicalRequestHeaderPlan)
+        operator_header_plan = isinstance(headers, _OperatorRequestHeaderPlan)
         final_headers: Dict[str, str] = dict(self._default_headers)
         if headers:
             for name, value in headers.items():
@@ -16860,6 +16927,32 @@ class ToriiClient(
         max_attempts = 1 + (self._max_retries if retry_enabled else 0)
         request_timeout = timeout if timeout is not None else self._timeout
         url = f"{self._base_url}{path}"
+
+        if canonical_header_plan or operator_header_plan:
+            if canonical_header_plan:
+                deferred_headers: MutableMapping[str, str] = _CanonicalRequestHeaderPlan(
+                    final_headers,
+                    headers.canonical_auth,
+                )
+            else:
+                deferred_headers = _OperatorRequestHeaderPlan(
+                    final_headers,
+                    headers.context,
+                )
+            response = _BaseToriiClient._request(
+                self,
+                method,
+                path,
+                params=params,
+                headers=deferred_headers,
+                data=payload,
+                timeout=request_timeout,
+                allow_retry=allow_retry,
+                allow_redirects=allow_redirects,
+                stream=stream,
+            )
+            self._enforce_sorafs_alias_policy(response)
+            return response
 
         delay = self._backoff_initial
         for attempt in range(max_attempts):
@@ -18627,10 +18720,12 @@ class ToriiClient(
                 "account faucet puzzle algorithm must be "
                 f"{ACCOUNT_FAUCET_POW_ALGORITHM}"
             )
-        network_id_literal = puzzle.get("network_id")
-        if not isinstance(network_id_literal, str):
-            raise TypeError("account faucet puzzle network_id must be a string")
-        network_id = ExactNetworkId.parse(network_id_literal)
+        network_id_literal = _strict_hash_literal(
+            puzzle,
+            "network_id",
+            "account faucet puzzle",
+        )
+        network_id = ExactNetworkId.parse(network_id_literal[5:69].lower())
         chain_discriminant = normalize_i105_discriminant(
             puzzle.get("chain_discriminant"),
             "account faucet puzzle chain_discriminant",
@@ -18743,71 +18838,6 @@ class ToriiClient(
                     "pow_nonce_hex",
                 ),
             },
-        )
-
-    def onboard_account(
-        self,
-        *,
-        onboarding_token: str,
-        alias: str,
-        uaid: str,
-        account_id: Optional[str] = None,
-        public_key_hex: Optional[str] = None,
-        identity_commitment_hex: Optional[str] = None,
-        permissions: Optional[Sequence[str]] = None,
-    ) -> requests.Response:
-        """Submit a JSON-only account onboarding request with an explicit route credential."""
-
-        exact_onboarding_token = _require_account_onboarding_token(onboarding_token)
-        if (account_id is None) == (public_key_hex is None):
-            raise ValueError("onboard_account requires exactly one of account_id or public_key_hex")
-        payload: Dict[str, Any] = {
-            "alias": _require_non_empty_string(alias, "onboard_account.alias"),
-            "uaid": _normalize_uaid_literal(uaid, context="onboard_account.uaid"),
-        }
-        if account_id is not None:
-            canonical_account_id = self._normalize_canonical_account_id(
-                account_id,
-                "onboard_account.account_id",
-            )
-            if "@" in canonical_account_id:
-                raise ValueError("onboard_account.account_id must be a canonical I105 account id")
-            payload["account_id"] = canonical_account_id
-        else:
-            assert public_key_hex is not None
-            payload["public_key_hex"] = _normalize_32_byte_hex(
-                public_key_hex,
-                "onboard_account.public_key_hex",
-            )
-        if identity_commitment_hex is not None:
-            payload["identity_commitment_hex"] = _normalize_32_byte_hex(
-                identity_commitment_hex,
-                "onboard_account.identity_commitment_hex",
-            )
-        if permissions is not None:
-            if isinstance(permissions, (str, bytes, bytearray)):
-                raise TypeError("onboard_account.permissions must be a sequence of strings")
-            normalized_permissions: List[str] = []
-            for index, permission in enumerate(permissions):
-                normalized = _require_non_empty_string(
-                    permission,
-                    f"onboard_account.permissions[{index}]",
-                )
-                if normalized not in normalized_permissions:
-                    normalized_permissions.append(normalized)
-            if normalized_permissions:
-                payload["permissions"] = normalized_permissions
-        return self._request(
-            "POST",
-            "/v1/accounts/onboard",
-            headers={
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                ACCOUNT_ONBOARDING_TOKEN_HEADER: exact_onboarding_token,
-            },
-            json_body=payload,
-            allow_retry=False,
-            allow_redirects=False,
         )
 
     def find_domain(self, domain_id: str, *, limit: int = 200) -> Optional[Mapping[str, Any]]:
@@ -20327,8 +20357,13 @@ class ToriiClient(
         """
 
         request_body = _normalize_connect_session_request(payload)
-        response = self.create_connect_session(request_body)
-        return _connect_session_info_from_response(response, request_body, None)
+        response = self.request_json(
+            "POST",
+            "/v1/connect/session",
+            json_body=request_body,
+            expected_status=(200, 201),
+        )
+        return _connect_session_info_from_response(response, payload, None)
 
     def send_connect_control(
         self,
@@ -21610,6 +21645,7 @@ class ToriiClient(
         )
         return TriggerListPage.from_payload(payload)
 
+
 def create_torii_client(
     base_url: str,
     *,
@@ -21624,6 +21660,7 @@ def create_torii_client(
     backoff_factor: float = 0.5,
     retry_on_status: Optional[Sequence[int]] = None,
     retry_on_methods: Optional[Sequence[str]] = None,
+    chain_discriminant: Optional[int] = None,
     config: Optional[Mapping[str, Any]] = None,
     env: Optional[Mapping[str, str]] = None,
     overrides: Optional[Mapping[str, Any]] = None,
@@ -21632,7 +21669,7 @@ def create_torii_client(
     sorafs_alias_warning: Optional[Callable[[SorafsAliasWarning], None]] = None,
     sorafs_alias_logger: Optional[logging.Logger] = None,
 ) -> ToriiClient:
-    """Return a :class:`ToriiClient` instance with the given base URL."""
+    """Return a client whose address-bound operations default to public Taira."""
     resolved = resolved_config
     if resolved is None and (config is not None or overrides is not None or env is not None):
         resolved = resolve_torii_client_config(config=config, env=env, overrides=overrides)
@@ -21692,6 +21729,7 @@ def create_torii_client(
         backoff_multiplier=backoff_mult,
         retry_on_status=retry_statuses,
         retry_on_methods=retry_methods,
+        chain_discriminant=chain_discriminant,
         sorafs_alias_policy=policy_value,
         sorafs_alias_warning=sorafs_alias_warning,
         sorafs_alias_logger=sorafs_alias_logger,

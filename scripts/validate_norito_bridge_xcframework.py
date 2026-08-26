@@ -18,6 +18,7 @@ import sys
 from typing import NoReturn
 
 
+REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 22
 EXPECTED_SLICES = {
     "ios-arm64": {
         "architectures": ["arm64"],
@@ -271,7 +272,7 @@ def expected_kagemusha_roles(production: bool) -> list[dict[str, object]]:
             "role": "native_bridge",
             "purpose": "typed Norito codecs and privacy proof execution",
             "circuit_id": None,
-            "abi": 21,
+            "abi": REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             "artifact_type": "xcframework",
             "delivery": "bridge_embedded",
             "required_by": ["topup", "peer_send", "peer_receive", "redemption"],
@@ -280,7 +281,7 @@ def expected_kagemusha_roles(production: bool) -> list[dict[str, object]]:
             "role": "transfer_proving_key",
             "purpose": "prove exact confidential top-up and offline split transitions",
             "circuit_id": "confidential-transfer-v2",
-            "abi": 21,
+            "abi": REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             "artifact_type": "halo2_ipa_proving_key",
             "delivery": "bridge_embedded",
             "production_ready": production,
@@ -290,7 +291,7 @@ def expected_kagemusha_roles(production: bool) -> list[dict[str, object]]:
             "role": "transfer_verifier_record",
             "purpose": "verify top-up and offline split evidence at an active height",
             "circuit_id": "confidential-transfer-v2",
-            "abi": 21,
+            "abi": REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             "artifact_type": "norito_verifying_key_record",
             "delivery": "torii_readiness_snapshot",
             "required_by": ["topup", "peer_send", "peer_receive"],
@@ -299,7 +300,7 @@ def expected_kagemusha_roles(production: bool) -> list[dict[str, object]]:
             "role": "unshield_proving_key",
             "purpose": "prove full or partial offline-to-online redemption",
             "circuit_id": "confidential-unshield-v3",
-            "abi": 21,
+            "abi": REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             "artifact_type": "halo2_ipa_proving_key",
             "delivery": "bridge_embedded",
             "production_ready": production,
@@ -309,7 +310,7 @@ def expected_kagemusha_roles(production: bool) -> list[dict[str, object]]:
             "role": "unshield_verifier_record",
             "purpose": "verify proof-bound public credit and optional offline change",
             "circuit_id": "confidential-unshield-v3",
-            "abi": 21,
+            "abi": REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             "artifact_type": "norito_verifying_key_record",
             "delivery": "torii_readiness_snapshot",
             "required_by": ["redemption"],
@@ -319,7 +320,7 @@ def expected_kagemusha_roles(production: bool) -> list[dict[str, object]]:
             "purpose": "step_eq_params_ipa",
             "file_name": "step-eq.params-ipa.krv4",
             "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-            "abi": 21,
+            "abi": REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
             "delivery": "content_addressed_external",
             "required_by": ["topup", "peer_send", "peer_receive", "redemption"],
@@ -329,7 +330,7 @@ def expected_kagemusha_roles(production: bool) -> list[dict[str, object]]:
             "purpose": "step_eq_proving_key",
             "file_name": "step-eq.proving-key.krv4",
             "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-            "abi": 21,
+            "abi": REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
             "delivery": "content_addressed_external",
             "required_by": ["topup", "peer_send", "redemption"],
@@ -339,7 +340,7 @@ def expected_kagemusha_roles(production: bool) -> list[dict[str, object]]:
             "purpose": "step_eq_verifying_key",
             "file_name": "step-eq.verifying-key.krv4",
             "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-            "abi": 21,
+            "abi": REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
             "delivery": "content_addressed_external",
             "required_by": ["topup", "peer_send", "peer_receive", "redemption"],
@@ -349,7 +350,7 @@ def expected_kagemusha_roles(production: bool) -> list[dict[str, object]]:
             "purpose": "step_eq_bootstrap_witness",
             "file_name": "step-eq.bootstrap-witness.krv4",
             "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-            "abi": 21,
+            "abi": REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
             "delivery": "content_addressed_external",
             "required_by": ["topup", "peer_send", "peer_receive", "redemption"],
@@ -359,7 +360,7 @@ def expected_kagemusha_roles(production: bool) -> list[dict[str, object]]:
             "purpose": "step_ep_params_ipa",
             "file_name": "step-ep.params-ipa.krv4",
             "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-            "abi": 21,
+            "abi": REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
             "delivery": "content_addressed_external",
             "required_by": ["topup", "peer_send", "peer_receive", "redemption"],
@@ -369,7 +370,7 @@ def expected_kagemusha_roles(production: bool) -> list[dict[str, object]]:
             "purpose": "step_ep_proving_key",
             "file_name": "step-ep.proving-key.krv4",
             "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-            "abi": 21,
+            "abi": REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
             "delivery": "content_addressed_external",
             "required_by": ["topup", "peer_send", "redemption"],
@@ -379,7 +380,7 @@ def expected_kagemusha_roles(production: bool) -> list[dict[str, object]]:
             "purpose": "step_ep_verifying_key",
             "file_name": "step-ep.verifying-key.krv4",
             "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-            "abi": 21,
+            "abi": REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
             "delivery": "content_addressed_external",
             "required_by": ["topup", "peer_send", "peer_receive", "redemption"],
@@ -389,7 +390,7 @@ def expected_kagemusha_roles(production: bool) -> list[dict[str, object]]:
             "purpose": "step_ep_bootstrap_witness",
             "file_name": "step-ep.bootstrap-witness.krv4",
             "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-            "abi": 21,
+            "abi": REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
             "delivery": "content_addressed_external",
             "required_by": ["topup", "peer_send", "peer_receive", "redemption"],
@@ -398,7 +399,7 @@ def expected_kagemusha_roles(production: bool) -> list[dict[str, object]]:
             "role": "topup_finality_roster",
             "purpose": "topup_finality_roster",
             "circuit_id": "kagemusha-topup-finality-qc-merkle-v2",
-            "abi": 21,
+            "abi": REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             "artifact_type": (
                 "iroha_data_model::offline::model::"
                 "KagemushaTopUpFinalityRosterArtifactV2"
@@ -623,8 +624,12 @@ def _validate_root_identity(
         header.read_text(encoding="utf-8"),
         re.MULTILINE,
     )
-    if header_abis != ["22"]:
-        raise ValidationError("authoritative NoritoBridge header ABI is not exact 22")
+    expected_abi = str(REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
+    if header_abis != [expected_abi]:
+        raise ValidationError(
+            "authoritative NoritoBridge header ABI is not exact "
+            f"{REQUIRED_NATIVE_BRIDGE_ABI_VERSION}"
+        )
 
     bridge_source = root / "crates/connect_norito_bridge/src/lib.rs"
     _regular_file(bridge_source, "authoritative NoritoBridge source")
@@ -645,8 +650,11 @@ def _validate_root_identity(
         protocol.read_text(encoding="utf-8"),
         re.MULTILINE,
     )
-    if protocol_abis != ["22"]:
-        raise ValidationError("authoritative privacy bridge ABI is not exact 22")
+    if protocol_abis != [expected_abi]:
+        raise ValidationError(
+            "authoritative privacy bridge ABI is not exact "
+            f"{REQUIRED_NATIVE_BRIDGE_ABI_VERSION}"
+        )
 
 
 def _load_manifest(
@@ -672,8 +680,11 @@ def _load_manifest(
         or SEMVER.fullmatch(payload["version"]) is None
     ):
         raise ValidationError("artifact version is not canonical")
-    if payload["native_bridge_abi_version"] != 22:
-        raise ValidationError("artifact does not bind exact native bridge ABI 22")
+    if payload["native_bridge_abi_version"] != REQUIRED_NATIVE_BRIDGE_ABI_VERSION:
+        raise ValidationError(
+            "artifact does not bind exact native bridge ABI "
+            f"{REQUIRED_NATIVE_BRIDGE_ABI_VERSION}"
+        )
     production = payload["privacy_production_enabled"]
     if type(production) is not bool:
         raise ValidationError("privacy_production_enabled must be boolean")

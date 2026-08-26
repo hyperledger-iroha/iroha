@@ -36,7 +36,7 @@ class NoRequestSession:
         raise AssertionError(f"unexpected request {method} {url}")
 
 
-def account_address(seed: int, discriminant: int = 0x02F1) -> str:
+def account_address(seed: int, discriminant: int = 0x0171) -> str:
     """Derive a deterministic account address for one test key."""
 
     return Ed25519KeyPair.from_private_key(bytes([seed] * 32)).default_account_id(

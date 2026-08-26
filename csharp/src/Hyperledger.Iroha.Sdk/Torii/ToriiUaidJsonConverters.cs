@@ -1366,8 +1366,8 @@ internal static class ToriiUaidJson
         var text = RequireExactNonEmptyText(value, field);
         try
         {
-            return AccountAddress.Parse(text, AccountAddress.DefaultChainDiscriminant)
-                .ToI105(AccountAddress.DefaultChainDiscriminant);
+            _ = AccountAddress.Parse(text);
+            return text;
         }
         catch (AccountAddressException exception)
         {

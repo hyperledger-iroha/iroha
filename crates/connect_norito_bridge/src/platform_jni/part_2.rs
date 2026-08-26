@@ -2067,6 +2067,13 @@ pub(super) fn java_kagemusha_lower_hex_32(value: &str, field: &str) -> Result<Ve
     }
     Ok(digest)
 }
+pub(super) fn java_kagemusha_transaction_hash(value: &str, field: &str) -> Result<Vec<u8>, String> {
+    let digest = java_kagemusha_lower_hex_32(value, field)?;
+    value
+        .parse::<Hash>()
+        .map_err(|_| format!("{field} must be a canonical marked Iroha hash"))?;
+    Ok(digest)
+}
 pub(super) fn java_kagemusha_validate_active_verifier(
     verifier: &iroha_torii_shared::offline_api::OfflineActiveTransferVerifier,
     evaluated_height: u64,
@@ -2974,69 +2981,109 @@ pub(super) fn java_native_kagemusha_project_operation_status_v4(
                 kind,
                 transaction_hash,
                 submitted_at_ms,
-            } => vec![
-                b"pending".to_vec(),
-                match kind {
-                    OfflineOperationKind::TopUp => b"top_up".to_vec(),
-                    OfflineOperationKind::Redeem => b"redeem".to_vec(),
-                },
-                java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
-                java_kagemusha_lower_hex_32(&transaction_hash, "transactionHash")?,
-                submitted_at_ms.to_string().into_bytes(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            ],
+            } => {
+                if submitted_at_ms == 0 {
+                    return Err("pending operation status contains zero submission time".to_owned());
+                }
+                vec![
+                    b"pending".to_vec(),
+                    match kind {
+                        OfflineOperationKind::TopUp => b"top_up".to_vec(),
+                        OfflineOperationKind::Redeem => b"redeem".to_vec(),
+                    },
+                    java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
+                    java_kagemusha_transaction_hash(&transaction_hash, "transactionHash")?,
+                    submitted_at_ms.to_string().into_bytes(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                ]
+            }
             OfflineOperationStatus::Applied {
                 operation_id,
                 result: OfflineOperationResult::TopUp(result),
-            } => vec![
-                b"applied".to_vec(),
-                b"top_up".to_vec(),
-                java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
-                java_kagemusha_lower_hex_32(&result.transaction_hash, "transactionHash")?,
-                result.finalized_block_height.to_string().into_bytes(),
-                result.server_time_ms.to_string().into_bytes(),
-                norito::to_bytes(&result.anchor).map_err(|error| {
-                    format!("failed to encode finalized top-up anchor: {error}")
-                })?,
-                norito::to_bytes(&result.finality_proof)
-                    .map_err(|error| format!("failed to encode top-up finality proof: {error}"))?,
-                Vec::new(),
-                Vec::new(),
-            ],
+            } => {
+                if result.finalized_block_height == 0 || result.server_time_ms == 0 {
+                    return Err(
+                        "applied top-up status contains zero finality height or time".to_owned(),
+                    );
+                }
+                result.anchor.validate_public_binding().map_err(|_| {
+                    "applied top-up status contains an invalid finalized anchor".to_owned()
+                })?;
+                result.finality_proof.validate_structure().map_err(|_| {
+                    "applied top-up status contains an invalid finality proof".to_owned()
+                })?;
+                let operation_id = java_kagemusha_lower_hex_32(&operation_id, "operationId")?;
+                let transaction_hash =
+                    java_kagemusha_transaction_hash(&result.transaction_hash, "transactionHash")?;
+                let anchor_ref = result.anchor.compact_ref().map_err(|_| {
+                    "applied top-up status contains an invalid finalized anchor".to_owned()
+                })?;
+                if result.anchor.topup_operation_id.as_slice() != operation_id.as_slice()
+                    || result.anchor.finalized_tx_hash.as_slice() != transaction_hash.as_slice()
+                    || result.anchor.finalized_height != result.finalized_block_height
+                    || result.finality_proof.anchor != anchor_ref
+                    || result.finality_proof.commit_qc.height_context.height
+                        != result.finalized_block_height
+                    || result.finality_proof.commit_qc.height_context.network_id
+                        != result.anchor.network_id
+                {
+                    return Err(
+                        "applied top-up status operation, transaction, height, network, or proof binding is invalid"
+                            .to_owned(),
+                    );
+                }
+                vec![
+                    b"applied".to_vec(),
+                    b"top_up".to_vec(),
+                    operation_id,
+                    transaction_hash,
+                    result.finalized_block_height.to_string().into_bytes(),
+                    result.server_time_ms.to_string().into_bytes(),
+                    norito::to_bytes(&result.anchor).map_err(|error| {
+                        format!("failed to encode finalized top-up anchor: {error}")
+                    })?,
+                    norito::to_bytes(&result.finality_proof).map_err(|error| {
+                        format!("failed to encode top-up finality proof: {error}")
+                    })?,
+                    Vec::new(),
+                    Vec::new(),
+                    result.anchor.network_id.as_bytes().to_vec(),
+                ]
+            }
             OfflineOperationStatus::Applied {
                 operation_id,
                 result: OfflineOperationResult::Redeem(result),
-            } => vec![
-                b"applied".to_vec(),
-                b"redeem".to_vec(),
-                java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
-                java_kagemusha_lower_hex_32(&result.transaction_hash, "transactionHash")?,
-                result.finalized_block_height.to_string().into_bytes(),
-                result.server_time_ms.to_string().into_bytes(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            ],
+            } => {
+                if result.finalized_block_height == 0 || result.server_time_ms == 0 {
+                    return Err(
+                        "applied redeem status contains zero finality height or time".to_owned(),
+                    );
+                }
+                vec![
+                    b"applied".to_vec(),
+                    b"redeem".to_vec(),
+                    java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
+                    java_kagemusha_transaction_hash(&result.transaction_hash, "transactionHash")?,
+                    result.finalized_block_height.to_string().into_bytes(),
+                    result.server_time_ms.to_string().into_bytes(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                ]
+            }
             OfflineOperationStatus::Rejected {
                 operation_id,
                 kind,
                 transaction_hash,
                 error,
             } => {
-                if error.code.is_empty()
-                    || error.code.trim() != error.code
-                    || error.code.chars().any(char::is_control)
-                    || error.message.is_empty()
-                    || error.message.trim() != error.message
-                    || error.message.chars().any(char::is_control)
-                {
-                    return Err("rejected status contains a malformed error".to_owned());
-                }
                 vec![
                     b"rejected".to_vec(),
                     match kind {
@@ -3044,17 +3091,112 @@ pub(super) fn java_native_kagemusha_project_operation_status_v4(
                         OfflineOperationKind::Redeem => b"redeem".to_vec(),
                     },
                     java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
-                    java_kagemusha_lower_hex_32(&transaction_hash, "transactionHash")?,
+                    java_kagemusha_transaction_hash(&transaction_hash, "transactionHash")?,
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),
-                    error.code.into_bytes(),
-                    error.message.into_bytes(),
+                    error.code().as_bytes().to_vec(),
+                    error.message().as_bytes().to_vec(),
+                    Vec::new(),
                 ]
             }
         };
         java_kagemusha_byte_arrays(env, &fields)
+    })
+}
+pub(super) fn java_native_kagemusha_project_top_up_submission_request_v4(
+    env: &mut jni::JNIEnv<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_kagemusha_archive_array_result(env, "top-up submission request projection", |env| {
+        let request = java_kagemusha_decode_archive_bounded::<
+            iroha_torii_shared::offline_api::OfflineTopUpRequest,
+        >(
+            env,
+            &archive,
+            "topUpRequest",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4,
+        )?;
+        request
+            .validate_public_binding()
+            .map_err(|_| "top-up request authorization or public binding is invalid".to_owned())?;
+        java_kagemusha_byte_arrays(
+            env,
+            &[
+                request.current_note.network_id.as_bytes().to_vec(),
+                request.operation_id.to_vec(),
+                request.authorization.issued_at_ms.to_string().into_bytes(),
+            ],
+        )
+    })
+}
+pub(super) fn java_native_kagemusha_project_redeem_submission_request_v4(
+    env: &mut jni::JNIEnv<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_kagemusha_archive_array_result(env, "redeem submission request projection", |env| {
+        let request = java_kagemusha_decode_archive_bounded::<
+            iroha_torii_shared::offline_api::OfflineRedeemRequest,
+        >(
+            env,
+            &archive,
+            "redeemRequest",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4,
+        )?;
+        request
+            .validate_public_binding()
+            .map_err(|_| "redeem request authorization or public binding is invalid".to_owned())?;
+        java_kagemusha_byte_arrays(
+            env,
+            &[
+                request.bundle.statement.network_id.as_bytes().to_vec(),
+                request.operation_id.to_vec(),
+                request.authorization.issued_at_ms.to_string().into_bytes(),
+            ],
+        )
+    })
+}
+pub(super) fn java_native_kagemusha_project_operation_reference_v4(
+    env: &mut jni::JNIEnv<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_kagemusha_archive_array_result(env, "operation reference projection", |env| {
+        use iroha_torii_shared::offline_api::{
+            OfflineOperationKind, OfflineOperationReference, OfflineOperationState,
+        };
+        let reference = java_kagemusha_decode_archive_bounded::<OfflineOperationReference>(
+            env,
+            &archive,
+            "operationReference",
+            KAGEMUSHA_JNI_TORII_RESPONSE_MAX_BYTES,
+        )?;
+        let operation_id = java_kagemusha_lower_hex_32(&reference.operation_id, "operationId")?;
+        if reference.submitted_at_ms == 0 {
+            return Err("operation reference contains zero submission time".to_owned());
+        }
+        let expected_status_uri = format!("/v1/offline/operations/{}", reference.operation_id);
+        if reference.status_uri != expected_status_uri {
+            return Err("operation reference contains a non-canonical status URI".to_owned());
+        }
+        let kind = match reference.kind {
+            OfflineOperationKind::TopUp => b"top_up".to_vec(),
+            OfflineOperationKind::Redeem => b"redeem".to_vec(),
+        };
+        let state = match reference.state {
+            OfflineOperationState::Pending => b"pending".to_vec(),
+        };
+        java_kagemusha_byte_arrays(
+            env,
+            &[
+                operation_id,
+                kind,
+                state,
+                java_kagemusha_transaction_hash(&reference.transaction_hash, "transactionHash")?,
+                reference.status_uri.into_bytes(),
+                reference.submitted_at_ms.to_string().into_bytes(),
+            ],
+        )
     })
 }
 pub(super) fn java_privacy_compiled_profile_catalog_archive() -> Result<Vec<u8>, String> {

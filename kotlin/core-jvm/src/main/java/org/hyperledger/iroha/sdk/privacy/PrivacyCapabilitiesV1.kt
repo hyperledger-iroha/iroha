@@ -1,6 +1,8 @@
 // Copyright 2026 Hyperledger Iroha Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:Suppress("DEPRECATION")
+
 package org.hyperledger.iroha.sdk.privacy
 
 import java.math.BigInteger
@@ -476,7 +478,15 @@ class PrivacyProtocolActivationRecordV1(
     }
 }
 
-class PrivacyCapabilityRowV1(
+/**
+ * Retired JSON snapshot row retained only for explicit legacy-payload inspection.
+ *
+ * This type is not live Torii capability state and cannot authorize privacy construction.
+ */
+@Deprecated(
+    message = "Legacy JSON inspection only; use the Exact12 manifest and admission APIs for live capabilities",
+)
+class LegacyPrivacyCapabilityRowInspectionV1(
     @JvmField val protocolId: PrivacyProtocolIdV1,
     @JvmField val compiledProfile: PrivacyCompiledProfileResultV1,
     @JvmField val activation: PrivacyProtocolActivationRecordV1?,
@@ -484,31 +494,31 @@ class PrivacyCapabilityRowV1(
     init {
         val available = compiledProfile as? PrivacyCompiledProfileResultV1.Available
         require(available == null || available.profile.protocolId == protocolId) {
-            "privacy capability row does not match its compiled-profile protocol"
+            "legacy privacy inspection row does not match its compiled-profile protocol"
         }
         require(activation == null || available != null) {
-            "unavailable privacy capability row cannot carry an activation"
+            "unavailable legacy privacy inspection row cannot carry an activation"
         }
         activation?.let { governed ->
             val compiled = requireNotNull(available).profile
             require(governed.profileBindings.protocolId == protocolId) {
-                "privacy capability row does not match its activation protocol"
+                "legacy privacy inspection row does not match its activation protocol"
             }
             requirePrivacyProfileBindingsEqualV1(
                 governed.profileBindings,
                 compiled,
-                "privacy capability activation",
+                "legacy privacy inspection activation",
             )
             requireProtocolLimitsAtMostV1(
                 governed.profileBindings.protocolLimits,
                 compiled.protocolLimits,
-                "privacy capability activation limits",
+                "legacy privacy inspection activation limits",
             )
         }
     }
 
     override fun equals(other: Any?): Boolean =
-        other is PrivacyCapabilityRowV1 &&
+        other is LegacyPrivacyCapabilityRowInspectionV1 &&
             protocolId == other.protocolId &&
             compiledProfile == other.compiledProfile &&
             activation == other.activation
@@ -520,29 +530,36 @@ class PrivacyCapabilityRowV1(
     }
 }
 
-/** Authoritative committed first-release privacy capability snapshot. */
-class PrivacyCapabilitySnapshotV1(
+/**
+ * Retired JSON snapshot retained only for explicit legacy-payload inspection.
+ *
+ * It is neither authoritative nor accepted by the live Exact12 admission path.
+ */
+@Deprecated(
+    message = "Legacy JSON inspection only; use the Exact12 manifest and admission APIs for live capabilities",
+)
+class LegacyPrivacyCapabilitySnapshotInspectionV1(
     @JvmField val version: Int,
     @JvmField val committedHeight: BigInteger,
     @JvmField val consensusPolicy: PrivacyConsensusPolicyV1,
-    protocols: List<PrivacyCapabilityRowV1>,
+    protocols: List<LegacyPrivacyCapabilityRowInspectionV1>,
 ) {
     @JvmField
-    val protocols: List<PrivacyCapabilityRowV1>
+    val protocols: List<LegacyPrivacyCapabilityRowInspectionV1>
 
     init {
-        require(version == PrivacyCapabilitySnapshotJsonV1.VERSION) {
-            "privacy capability snapshot version must be ${PrivacyCapabilitySnapshotJsonV1.VERSION}"
+        require(version == LegacyPrivacyCapabilitySnapshotJsonInspectionV1.VERSION) {
+            "legacy privacy capability inspection version must be ${LegacyPrivacyCapabilitySnapshotJsonInspectionV1.VERSION}"
         }
-        requirePrivacyHeightV1(committedHeight, "privacy committed height")
+        requirePrivacyHeightV1(committedHeight, "legacy privacy inspection committed height")
         requirePrivacyConsensusPolicyAtHeightV1(consensusPolicy, committedHeight)
         val expected = PrivacyProtocolIdV1.values()
         require(protocols.size == expected.size) {
-            "privacy capability snapshot must contain exactly ${expected.size} rows"
+            "legacy privacy capability inspection must contain exactly ${expected.size} rows"
         }
         protocols.forEachIndexed { index, row ->
             require(row.protocolId == expected[index]) {
-                "privacy capability snapshot row $index is out of canonical protocol order"
+                "legacy privacy capability inspection row $index is out of canonical protocol order"
             }
             requirePrivacyCapabilityRowAtHeightV1(row, committedHeight)
         }
@@ -550,7 +567,7 @@ class PrivacyCapabilitySnapshotV1(
     }
 
     override fun equals(other: Any?): Boolean =
-        other is PrivacyCapabilitySnapshotV1 &&
+        other is LegacyPrivacyCapabilitySnapshotInspectionV1 &&
             version == other.version &&
             committedHeight == other.committedHeight &&
             consensusPolicy == other.consensusPolicy &&
@@ -708,7 +725,7 @@ private fun requirePrivacyConsensusPolicyAtHeightV1(
 }
 
 private fun requirePrivacyCapabilityRowAtHeightV1(
-    row: PrivacyCapabilityRowV1,
+    row: LegacyPrivacyCapabilityRowInspectionV1,
     committedHeight: BigInteger,
 ) {
     val activation = row.activation ?: return
@@ -746,14 +763,26 @@ private fun requirePrivacyCapabilityRowAtHeightV1(
     }
 }
 
-class PrivacyCapabilitySnapshotException(
+/** Parse failure raised only by the retired JSON snapshot inspection helper. */
+@Deprecated(
+    message = "Legacy JSON inspection only; live Exact12 responses use the native manifest decoder",
+)
+class LegacyPrivacyCapabilitySnapshotInspectionException(
     @JvmField val path: String,
     detail: String,
     cause: Throwable? = null,
 ) : IllegalArgumentException("$path: $detail", cause)
 
-/** Exact JSON decoder and semantic validator for `/v1/privacy/capabilities`. */
-object PrivacyCapabilitySnapshotJsonV1 {
+/**
+ * Retired JSON decoder for inspecting historical capability payloads.
+ *
+ * Live `/v1/privacy/capabilities` responses are exact Norito manifests decoded by
+ * `PrivacyNativeBridge`; this helper is not a transport decoder and cannot issue admission.
+ */
+@Deprecated(
+    message = "Legacy JSON inspection only; use HttpClientTransport.getPrivacyCapabilities for live Exact12 state",
+)
+object LegacyPrivacyCapabilitySnapshotJsonInspectionV1 {
     const val VERSION: Int = 1
     const val MAX_RESPONSE_BYTES: Long = 256L * 1024L
 
@@ -761,18 +790,18 @@ object PrivacyCapabilitySnapshotJsonV1 {
     private val CONSENSUS_MAXIMA = CONSENSUS_LIMIT_MAXIMA_V1
 
     @JvmStatic
-    fun parse(payload: ByteArray): PrivacyCapabilitySnapshotV1 {
-        require(payload.isNotEmpty()) { "privacy capability response must not be empty" }
+    fun parse(payload: ByteArray): LegacyPrivacyCapabilitySnapshotInspectionV1 {
+        require(payload.isNotEmpty()) { "legacy privacy inspection payload must not be empty" }
         require(payload.size.toLong() <= MAX_RESPONSE_BYTES) {
-            "privacy capability response exceeds $MAX_RESPONSE_BYTES bytes"
+            "legacy privacy inspection payload exceeds $MAX_RESPONSE_BYTES bytes"
         }
         val json = String(payload, StandardCharsets.UTF_8)
         requireCanonicalUnsignedIntegerTokens(json)
         val decoded = try {
             JsonParser.parse(json)
         } catch (error: RuntimeException) {
-            throw PrivacyCapabilitySnapshotException(
-                "privacy capability snapshot",
+            throw LegacyPrivacyCapabilitySnapshotInspectionException(
+                "legacy privacy capability inspection",
                 "contains invalid JSON",
                 error,
             )
@@ -781,11 +810,11 @@ object PrivacyCapabilitySnapshotJsonV1 {
     }
 
     @JvmStatic
-    fun parse(json: String): PrivacyCapabilitySnapshotV1 =
+    fun parse(json: String): LegacyPrivacyCapabilitySnapshotInspectionV1 =
         parse(json.toByteArray(StandardCharsets.UTF_8))
 
-    private fun parseValue(value: Any?): PrivacyCapabilitySnapshotV1 {
-        val path = "privacy capability snapshot"
+    private fun parseValue(value: Any?): LegacyPrivacyCapabilitySnapshotInspectionV1 {
+        val path = "legacy privacy capability inspection"
         val root = exactObject(
             value,
             setOf("version", "committed_height", "consensus_policy", "protocols"),
@@ -808,11 +837,16 @@ object PrivacyCapabilitySnapshotJsonV1 {
                 "$path.protocols[$index]",
             )
         }
-        return PrivacyCapabilitySnapshotV1(version, committedHeight, consensusPolicy, protocols)
+        return LegacyPrivacyCapabilitySnapshotInspectionV1(
+            version,
+            committedHeight,
+            consensusPolicy,
+            protocols,
+        )
     }
 
     private fun parseConsensusPolicy(value: Any?, committedHeight: BigInteger): PrivacyConsensusPolicyV1 {
-        val path = "privacy capability snapshot.consensus_policy"
+        val path = "legacy privacy capability inspection.consensus_policy"
         val policy = exactObject(value, setOf("current_limits", "pending_tightening"), path)
         val current = parseConsensusLimits(policy["current_limits"], "$path.current_limits")
         val pendingValue = policy["pending_tightening"]
@@ -872,7 +906,7 @@ object PrivacyCapabilitySnapshotJsonV1 {
         expected: PrivacyProtocolIdV1,
         committedHeight: BigInteger,
         path: String,
-    ): PrivacyCapabilityRowV1 {
+    ): LegacyPrivacyCapabilityRowInspectionV1 {
         val row = exactObject(value, setOf("protocol_id", "compiled_profile", "activation"), path)
         val protocol = protocolTag(row["protocol_id"], "$path.protocol_id")
         if (protocol != expected) fail("must be canonical protocol ${expected.canonicalLabel}", "$path.protocol_id")
@@ -883,7 +917,7 @@ object PrivacyCapabilitySnapshotJsonV1 {
         if (activation != null && compiled !is PrivacyCompiledProfileResultV1.Available) {
             fail("cannot activate an unavailable compiled profile", "$path.activation")
         }
-        return PrivacyCapabilityRowV1(protocol, compiled, activation)
+        return LegacyPrivacyCapabilityRowInspectionV1(protocol, compiled, activation)
     }
 
     private fun parseCompiledProfile(
@@ -1279,16 +1313,16 @@ object PrivacyCapabilitySnapshotJsonV1 {
                 continue
             }
             if (character == '-') {
-                fail("negative integers are not canonical", "privacy capability snapshot")
+                fail("negative integers are not canonical", "legacy privacy capability inspection")
             }
             if (character in '0'..'9') {
                 val start = index
                 while (index < json.length && json[index] in '0'..'9') index += 1
                 if (index - start > 1 && json[start] == '0') {
-                    fail("integer tokens must not contain leading zeroes", "privacy capability snapshot")
+                    fail("integer tokens must not contain leading zeroes", "legacy privacy capability inspection")
                 }
                 if (index < json.length && json[index] in ".eE+") {
-                    fail("numeric values must be canonical unsigned integers", "privacy capability snapshot")
+                    fail("numeric values must be canonical unsigned integers", "legacy privacy capability inspection")
                 }
                 continue
             }
@@ -1297,7 +1331,7 @@ object PrivacyCapabilitySnapshotJsonV1 {
     }
 
     private fun fail(message: String, path: String, cause: Throwable? = null): Nothing =
-        throw PrivacyCapabilitySnapshotException(path, message, cause)
+        throw LegacyPrivacyCapabilitySnapshotInspectionException(path, message, cause)
 
     private val PROFILE_KEYS = setOf(
         "protocol_id",

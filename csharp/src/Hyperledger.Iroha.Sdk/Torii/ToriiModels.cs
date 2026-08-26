@@ -3434,10 +3434,8 @@ internal static class ToriiExplorerDirectMetadata
 
         try
         {
-            return global::Hyperledger.Iroha.Address.AccountAddress.Parse(
-                    exact,
-                    global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
-                .ToI105(global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
+            _ = global::Hyperledger.Iroha.Address.AccountAddress.Parse(exact);
+            return exact;
         }
         catch (global::Hyperledger.Iroha.AccountAddressException exception)
         {

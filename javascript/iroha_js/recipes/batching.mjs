@@ -24,9 +24,10 @@ const privateKey = Buffer.from(
 );
 const authority = AccountAddress.fromAccount({
   publicKey: Buffer.from(ed25519.getPublicKey(privateKey)),
-}).toI105();
-const recipient =
-  "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L";
+}).toI105(369);
+const recipient = AccountAddress.parseEncoded(
+  "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L",
+).address.toI105(369);
 const assetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const assetId = `${assetDefinitionId}#${authority}`;
 // Local encoding-only intent. Live submissions must replace the empty maxima
@@ -94,6 +95,9 @@ const registerMintTransfer = buildRegisterAssetDefinitionMintAndTransferTransact
     feePayment,
     assetDefinition: {
       assetDefinitionId,
+      name: "sample",
+      owningDomain: null,
+      balanceScopePolicy: "Global",
       metadata: { description: "Sample asset" },
     },
     mint: { accountId: authority, quantity: "6" },

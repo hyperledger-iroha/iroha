@@ -416,11 +416,13 @@ Broader iterable families beyond the current canonical subset, richer typed even
 
 ## Kagemusha Torii transport
 
-The managed SDK exposes the unchanged Kagemusha routes through
-`GetKagemushaReadinessV4Async`, `SubmitKagemushaTopUpV4Async`,
+The managed SDK exposes the Kagemusha routes through
+`GetOfflineCapabilityAsync`, `SubmitKagemushaTopUpV4Async`,
 `SubmitKagemushaRedeemV4Async`, and `GetKagemushaOperationStatusAsync`.
-Readiness accepts bridge ABI 22 and the manifest-V4 Eq/Ep verifier identity;
-ABI-19 and V3 projections fail instead of being upgraded.
+Capability discovery is asset-neutral and accepts only Torii's exact universal
+`cash_handoff_v1` response: bridge ABI 22, eight hops, no asset entries, and
+the three canonical fail-closed activation blockers. The removed asset-selected
+V4 readiness snapshot and older ABI projections are not upgraded.
 
 The C# surface is transport-only and does not claim a native prover. Top-up and
 redemption methods accept bounded canonical Norito archives created by a
@@ -514,8 +516,13 @@ the closed `PrivacyProtocolIdV1 : uint` enum with explicit discriminants 0 throu
 11 in exact wire order. `CanonicalTypedVariantLabel()` mirrors the native
 statement/proof variant tag for each row, while both canonical parsers reject
 nulls, aliases, retired tags, case changes, and whitespace.
-The local catalog contains no governance or readiness state; fetch a fresh
-committed `PrivacyCapabilitySnapshotV1` from live Torii before proof submission.
+The local catalog contains no governance or readiness state. The sole admission
+authority is a fresh, authenticated `PrivacyExact12CapabilityManifestV1` fetched
+from live Torii and admitted through
+`PrivacyExact12CapabilityAdmissionV1.RequireExact12CapabilityTupleV1(...)`; the
+result must match the exact ABI22 native capability tuple for the selected
+protocol. Any legacy JSON `PrivacyCapabilitySnapshotV1` is diagnostic-only and
+must never authorize proof construction or submission.
 `Exact12FixtureBundleV1()` returns the byte-complete Rust-derived statements,
 envelopes, submit instructions, intent projections and digests, unsigned
 payloads, versioned signed transactions, and pipeline hashes for all twelve

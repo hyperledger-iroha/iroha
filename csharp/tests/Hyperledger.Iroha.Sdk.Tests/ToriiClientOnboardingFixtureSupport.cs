@@ -15,7 +15,8 @@ public sealed partial class ToriiClientTests
             .GetRawText())!.AsObject();
         var body = receipt["body"]!.AsObject();
         _ = body.Remove("chain_id");
-        body["network_id"] = CanonicalNetworkId;
+        body["network_id"] =
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
         receipt["plan_hash"] =
             "hash:B470C0FC328FE6BFF36A20946DBDC531FE67CC3A04B1E8F95CE03697C13466F7#1D51";
         receipt["signature"] =

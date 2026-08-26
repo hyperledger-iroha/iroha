@@ -24,6 +24,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 
 import {
+  NATIVE_BINDING_PROBE_TIMEOUT_MS,
   probeNativeBindingExports,
   publishNativeBinding,
   recoverNativeBindingPublication,
@@ -44,6 +45,10 @@ const SOURCE_TREE_DIGEST = "b".repeat(64);
 const TRANSACTION_INITIALIZER_PREFIX = ".iroha-js-host-init-txn-v1-";
 const CLEANUP_MARKER_PATTERN =
   /^\.iroha-js-host-cleanup-v1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.owner\.json$/u;
+
+test("native export probe has a bounded Exact12 cold-start budget", () => {
+  assert.equal(NATIVE_BINDING_PROBE_TIMEOUT_MS, 120_000);
+});
 
 function nativeProbeFixtureSource({
   omit = [],

@@ -85,8 +85,6 @@ function authoritativeAppliedStatus(
   return {
     hash,
     status: { kind: "Applied", block_height: blockHeight },
-    summary: "Applied",
-    diagnostics: [],
     scope: "global",
     resolved_from: "state",
   };
@@ -2531,4 +2529,38 @@ test("NexusAppClient rejects a delegated waiter that returns before Applied", as
       return true;
     },
   );
+});
+
+test("NexusAppClient rejects retired delegated status fields", async () => {
+  for (const [field, value] of [["summary", "Applied"], ["diagnostics", []]]) {
+    const client = new NexusAppClient({
+      signingPublicKey: fixturePublicKey,
+      transactionCodec: {
+        finalizeSignedTransaction() {
+          return {
+            signedTransaction: fixtureSignedTransaction,
+            hashHex: fixtureSignedTransactionHashHex,
+          };
+        },
+      },
+      toriiClient: {
+        async submitTransaction() {
+          return { hashHex: fixtureSignedTransactionHashHex };
+        },
+        async waitForTransactionStatus() {
+          return { ...authoritativeAppliedStatus(), [field]: value };
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => client.finalizeAndSubmit(fixtureSignable(), fixtureWalletSignature),
+      (error) => {
+        assert.ok(error instanceof NexusAppError);
+        assert.equal(error.code, "status_wait_non_applied");
+        assert.match(error.cause?.message ?? "", /retired or unsupported fields/u);
+        return true;
+      },
+    );
+  }
 });

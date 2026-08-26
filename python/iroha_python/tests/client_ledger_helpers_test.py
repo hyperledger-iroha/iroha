@@ -13,6 +13,7 @@ import requests
 
 import iroha_python.client as client_module
 import iroha_python.crypto as crypto_module
+from client_expensive_query_test_support import authenticated_query_client
 from iroha_python import (
     AccountAsset,
     AccountAssetsPage,
@@ -26,6 +27,7 @@ from iroha_python import (
     LocalSigningContext,
     NetworkId,
     RwaListItem,
+    ToriiCanonicalRequestAuth,
     ToriiClient,
     TransactionConfig,
     TransactionDraft,
@@ -39,7 +41,6 @@ from iroha_python._privacy_backends import (
     _verifier_backend_registry_tag_v1,
 )
 from iroha_python.client import ACCOUNT_ONBOARDING_TOKEN_HEADER, DATA_MODEL_VERSION
-from client_expensive_query_test_support import authenticated_query_client
 from iroha_python.repo import (
     RepoAgreementListPage,
     RepoAgreementRecord,
@@ -60,6 +61,7 @@ NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
 FEE_PAYMENT = authority_fee_payment(charge_limits=[])
 VK_LOCAL_SIGNING_CONTEXT = LocalSigningContext(NETWORK_ID)
 TRANSACTION_LOCAL_SIGNING_CONTEXT = LocalSigningContext(NETWORK_ID)
+
 
 def canonical_proof_attachment(
     *,
@@ -83,6 +85,47 @@ def iroha_hash_bytes(payload: bytes) -> bytes:
 
 def test_data_model_version_matches_current_wire_contract() -> None:
     assert DATA_MODEL_VERSION == 4
+
+
+def test_application_client_and_signing_context_default_to_taira() -> None:
+    signing_context = LocalSigningContext(NETWORK_ID)
+    assert signing_context.chain_discriminant == 0x0171
+
+    client = ToriiClient(
+        "http://torii.example",
+        session=FakeSession([]),
+        local_signing_context=signing_context,
+        max_retries=0,
+    )
+    assert client.chain_discriminant == 0x0171
+
+    with pytest.raises(ValueError, match="must match local_signing_context"):
+        ToriiClient(
+            "http://torii.example",
+            session=FakeSession([]),
+            local_signing_context=signing_context,
+            chain_discriminant=0x02F1,
+        )
+
+    explicit_minamoto = LocalSigningContext(NETWORK_ID, chain_discriminant=0x02F1)
+    assert (
+        ToriiClient(
+            "http://torii.example",
+            session=FakeSession([]),
+            local_signing_context=explicit_minamoto,
+        ).chain_discriminant
+        == 0x02F1
+    )
+
+
+def test_native_transaction_account_conversion_has_no_minamoto_fallback() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    taira_account = account_address(0x45, 0x0171)
+    minamoto_account = account_address(0x45, 0x02F1)
+
+    assert client._native_transaction_account_id(taira_account, "account_id") == taira_account
+    with pytest.raises(ValueError, match="chain_discriminant 369"):
+        client._native_transaction_account_id(minamoto_account, "account_id")
 
 
 def test_signed_pipeline_details_is_exact_network_bound_and_one_shot(
@@ -170,7 +213,7 @@ def test_signed_pipeline_details_never_replays_redirects(
         local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT,
     )
 
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(RuntimeError, match=f"unexpected status {redirect_status}"):
         client.get_pipeline_transaction_details(
             "cd" * 32,
             authority="alice@wonderland",
@@ -185,8 +228,9 @@ def test_confidential_gas_schedule_has_no_runtime_setter() -> None:
     assert not hasattr(ToriiClient, "set_confidential_gas_schedule")
 
 
-class FakeSession:
+class FakeSession(requests.Session):
     def __init__(self, responses: list[requests.Response]):
+        super().__init__()
         self.responses = responses
         self.calls: list[dict[str, object]] = []
 
@@ -207,27 +251,18 @@ class FakeSession:
         response.url = url
         return response
 
-
-class OnboardingSession:
-    def __init__(self, responses: list[requests.Response]):
-        self.responses = responses
-        self.calls: list[dict[str, object]] = []
-
-    def request(self, method: str, url: str, **kwargs: object) -> requests.Response:
-        self.calls.append(
-            {
-                "method": method,
-                "path": urlsplit(url).path,
-                "headers": dict(kwargs.get("headers") or {}),
-                "data": kwargs.get("data"),
-                "allow_redirects": kwargs.get("allow_redirects"),
-            }
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        **kwargs: object,
+    ) -> requests.Response:
+        return self.request(
+            request.method or "",
+            request.url or "",
+            headers=dict(request.headers),
+            data=request.body,
+            **kwargs,
         )
-        if not self.responses:
-            raise AssertionError(f"unexpected request {method} {url}")
-        response = self.responses.pop(0)
-        response.url = url
-        return response
 
 
 def response(
@@ -248,126 +283,18 @@ def response(
     return result
 
 
-ONBOARDING_TOKEN = "0123456789abcdef0123456789ABCDEF"
-ONBOARDING_UAID = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+def test_retired_one_step_account_onboarding_is_not_exposed() -> None:
+    assert not hasattr(ToriiClient, "onboard_account")
 
 
-def test_onboard_account_sends_exact_route_token_and_current_json_contract() -> None:
-    session = OnboardingSession([response(202, {"status": "QUEUED"})])
-    client = ToriiClient(
-        "https://torii.example",
-        session=session,
-        api_token="global-api-token",
-    )
-
-    result = client.onboard_account(
-        onboarding_token=ONBOARDING_TOKEN,
-        alias="merchant@universal",
-        uaid=ONBOARDING_UAID.upper(),
-        public_key_hex="AB" * 32,
-        identity_commitment_hex="CD" * 32,
-        permissions=["CanFoo", "CanFoo", "CanBar"],
-    )
-
-    assert result.status_code == 202
-    assert len(session.calls) == 1
-    call = session.calls[0]
-    assert call["method"] == "POST"
-    assert call["path"] == "/v1/accounts/onboard"
-    assert call["allow_redirects"] is False
-    headers = call["headers"]
-    assert isinstance(headers, dict)
-    onboarding_headers = [
-        (name, value)
-        for name, value in headers.items()
-        if name.lower() == ACCOUNT_ONBOARDING_TOKEN_HEADER.lower()
-    ]
-    assert onboarding_headers == [(ACCOUNT_ONBOARDING_TOKEN_HEADER, ONBOARDING_TOKEN)]
-    assert headers["X-API-Token"] == "global-api-token"
-    assert headers["Accept"] == "application/json"
-    assert headers["Content-Type"] == "application/json"
-    data = call["data"]
-    assert isinstance(data, bytes)
-    assert ONBOARDING_TOKEN.encode() not in data
-    assert json.loads(data) == {
-        "alias": "merchant@universal",
-        "uaid": ONBOARDING_UAID,
-        "public_key_hex": "ab" * 32,
-        "identity_commitment_hex": "cd" * 32,
-        "permissions": ["CanFoo", "CanBar"],
-    }
-
-
-@pytest.mark.parametrize(
-    "token",
-    [
-        None,
-        "",
-        "T" * 31,
-        "T" * 257,
-        "T" * 31 + " ",
-        "T" * 31 + "é",
-    ],
-)
-def test_onboard_account_rejects_malformed_route_token_before_dispatch(
-    token: object,
-) -> None:
-    session = OnboardingSession([])
-    client = ToriiClient("https://torii.example", session=session)
-
-    with pytest.raises((TypeError, ValueError)) as error:
-        client.onboard_account(
-            onboarding_token=token,  # type: ignore[arg-type]
-            alias="merchant@universal",
-            uaid=ONBOARDING_UAID,
-            public_key_hex="ab" * 32,
-        )
-
-    if token:
-        assert str(token) not in str(error.value)
-    assert session.calls == []
-
-
-def test_onboard_account_requires_explicit_token_and_rejects_global_default() -> None:
-    session = OnboardingSession([])
-    client = ToriiClient("https://torii.example", session=session)
-
-    with pytest.raises(TypeError, match="onboarding_token"):
-        client.onboard_account(  # type: ignore[call-arg]
-            alias="merchant@universal",
-            uaid=ONBOARDING_UAID,
-            public_key_hex="ab" * 32,
-        )
-    with pytest.raises(ValueError, match="pass onboarding_token explicitly"):
+def test_account_onboarding_token_cannot_leak_through_default_headers() -> None:
+    with pytest.raises(ValueError, match="retired one-step onboarding API"):
         ToriiClient(
             "https://torii.example",
-            session=session,
-            default_headers={ACCOUNT_ONBOARDING_TOKEN_HEADER.lower(): ONBOARDING_TOKEN},
-        )
-    assert session.calls == []
-
-
-def test_onboard_account_does_not_follow_redirect_or_accept_retired_fields() -> None:
-    session = OnboardingSession([response(307, text="redirect")])
-    client = ToriiClient("https://torii.example", session=session)
-
-    result = client.onboard_account(
-        onboarding_token=ONBOARDING_TOKEN,
-        alias="merchant@universal",
-        uaid=ONBOARDING_UAID,
-        public_key_hex="ab" * 32,
-    )
-
-    assert result.status_code == 307
-    assert len(session.calls) == 1
-    assert session.calls[0]["allow_redirects"] is False
-    with pytest.raises(TypeError, match="gas_asset_id"):
-        client.onboard_account(  # type: ignore[call-arg]
-            onboarding_token=ONBOARDING_TOKEN,
-            alias="merchant@universal",
-            uaid=ONBOARDING_UAID,
-            public_key_hex="ab" * 32,
-            gas_asset_id="retired",
+            session=FakeSession([]),
+            default_headers={
+                ACCOUNT_ONBOARDING_TOKEN_HEADER.lower(): "T" * 32,
+            },
         )
 
 
@@ -616,7 +543,7 @@ def expected_zk_verifying_key_instruction(
     return client_module._expected_zk_verifying_key_instruction(normalized)
 
 
-def account_address(seed: int, discriminant: int = 0x02F1) -> str:
+def account_address(seed: int, discriminant: int = 0x0171) -> str:
     return Ed25519KeyPair.from_private_key(bytes([seed] * 32)).default_account_id(
         "wonderland",
         discriminant,
@@ -724,12 +651,16 @@ def test_account_exists_falls_back_to_listing_on_route_unavailable() -> None:
             "path": "/v1/accounts/adult%40is",
             "params": None,
             "data": None,
+            "headers": {"Accept": "application/json"},
+            "allow_redirects": True,
         },
         {
             "method": "GET",
             "path": "/v1/accounts",
             "params": {"limit": 200, "offset": 0},
             "data": None,
+            "headers": {"Accept": "application/json"},
+            "allow_redirects": True,
         },
     ]
 
@@ -747,6 +678,8 @@ def test_asset_balance_rejects_wrong_network_prefix_without_retry() -> None:
             "path": f"/v1/accounts/{quote(taira_account, safe='')}/assets",
             "params": None,
             "data": None,
+            "headers": {"Accept": "application/json"},
+            "allow_redirects": True,
         }
     ]
 
@@ -937,19 +870,31 @@ def test_data_model_validation_uses_typed_node_capabilities() -> None:
     session = FakeSession(
         [response(200, {"abi_version": 1, "data_model_version": DATA_MODEL_VERSION})]
     )
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        max_retries=0,
+        canonical_request_auth=ToriiCanonicalRequestAuth(
+            network_id=NETWORK_ID.literal,
+            account_id=account_address(0x31),
+            signer=lambda _message: bytes([0x44]) * 64,
+            timestamp_ms=4_102_444_801_000,
+            nonce="python-data-model-validation",
+        ),
+    )
 
     client._ensure_data_model_validation()
 
     assert client._data_model_validation == "matched"
-    assert session.calls == [
-        {
-            "method": "GET",
-            "path": "/v1/node/capabilities",
-            "params": None,
-            "data": None,
-        }
-    ]
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    assert call["method"] == "GET"
+    assert call["path"] == "/v1/node/capabilities"
+    assert call["params"] is None
+    assert call["data"] is None
+    assert call["allow_redirects"] is False
+    assert call["headers"]["X-Iroha-Nonce"] == "python-data-model-validation"
+    assert call["headers"]["X-Iroha-Signature"]
 
 
 def test_query_accounts_typed_preserves_bounded_page_metadata() -> None:
@@ -2397,12 +2342,14 @@ def test_account_permission_listing_accepts_configured_chain_discriminant() -> N
             "path": f"/v1/accounts/{quote(taira_account, safe='')}/permissions",
             "params": None,
             "data": None,
+            "headers": {"Accept": "application/json"},
+            "allow_redirects": True,
         }
     ]
 
 
 def test_account_permission_listing_rejects_foreign_chain_discriminant() -> None:
-    taira_account = account_address(6, 0x0171)
+    minamoto_account = account_address(6, 0x02F1)
     session = FakeSession([])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
@@ -2410,7 +2357,7 @@ def test_account_permission_listing_rejects_foreign_chain_discriminant() -> None
         ValueError,
         match="account_id must be a canonical I105 account id or on-chain account alias",
     ):
-        client.list_account_permissions(taira_account)
+        client.list_account_permissions(minamoto_account)
     assert session.calls == []
 
 

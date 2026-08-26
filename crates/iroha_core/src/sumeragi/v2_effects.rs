@@ -6063,7 +6063,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.commit_ready_body_install(ready_plan);
         self.publish_status(services)
     }
-    /// Consume startup or reducer effects in their exact emitted order.
+    /// Consume startup or reducer effects in their exact emitted order for
+    /// fixture drivers which have no runner-owned Decision cleanup.
+    #[cfg(test)]
     pub(crate) fn consume_effects<S: V2EffectServices>(
         &mut self,
         effects: Vec<AdapterEffect>,
@@ -7752,6 +7754,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             AdapterEffect::Sign { .. } | AdapterEffect::EnterView { .. } => false,
         }
     }
+    #[cfg(test)]
     fn consume_pacemaker_effects<S: V2EffectServices>(
         &mut self,
         effects: Vec<AdapterEffect>,
@@ -8099,10 +8102,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             "one bounded pending-Kura attempt settles exactly once"
         );
         self.pending_tip_recovery_last_result = Some(result);
-        self.pending_tip_recovery_attempts
-    }
-    /// Number of serialized interrupted-tip recovery attempts made so far.
-    pub(crate) const fn pending_tip_recovery_attempts(&self) -> u64 {
         self.pending_tip_recovery_attempts
     }
     /// Begin the asynchronous durable-store → deterministic-validation chain
@@ -10258,56 +10257,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         };
         result?;
         Ok(())
-    }
-    fn ensure_pending_tip_recovery_effect_is_local(
-        &self,
-        effect: &AdapterEffect,
-    ) -> Result<(), EffectExecutorError> {
-        let local_only_error = || {
-            EffectExecutorError::Contract(
-                "interrupted-tip recovery attempted a non-local consensus effect before finality"
-                    .to_owned(),
-            )
-        };
-        match effect {
-            AdapterEffect::FetchBody { round, subject, .. } => self
-                .recovered_bodies
-                .contains_key(&(*round, *subject))
-                .then_some(())
-                .ok_or_else(local_only_error),
-            AdapterEffect::StoreBody { round, subject, .. } => self
-                .durable_bodies
-                .contains_key(&(*round, *subject))
-                .then_some(())
-                .ok_or_else(local_only_error),
-            AdapterEffect::ValidateBody { round, subject, .. } => self
-                .validated_bodies
-                .contains_key(&(*round, *subject))
-                .then_some(())
-                .ok_or_else(local_only_error),
-            AdapterEffect::Apply {
-                subject,
-                certificate,
-                ..
-            } => self
-                .pending_tip_recovery
-                .as_ref()
-                .filter(|evidence| {
-                    evidence.commit_qc() == certificate
-                        && evidence.commit_subject() == *subject
-                        && self
-                            .validated_bodies
-                            .get(&(evidence.durable_round(), evidence.durable_subject()))
-                            == Some(evidence.validated_receipt())
-                })
-                .map(|_| ())
-                .ok_or_else(local_only_error),
-            AdapterEffect::Sign { .. }
-            | AdapterEffect::Broadcast(_)
-            | AdapterEffect::EnterView { .. }
-            | AdapterEffect::ReportEquivocation { .. }
-            | AdapterEffect::ReportInvalidCertifiedBody { .. } => Err(local_only_error()),
-        }
     }
     #[cfg(test)]
     fn bind_body_pipeline_owner(

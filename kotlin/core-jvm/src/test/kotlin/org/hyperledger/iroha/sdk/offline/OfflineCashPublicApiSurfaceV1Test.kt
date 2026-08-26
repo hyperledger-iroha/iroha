@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.offline
 
+import java.lang.reflect.Modifier
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -64,6 +65,100 @@ class OfflineCashPublicApiSurfaceV1Test {
         assertEquals("kgm2:", OfflineCashPeerAdapterV1.TEXT_PREFIX)
         assertFalse(source.contains("PKK2"))
         assertFalse(source.contains("PKKQ1"))
+    }
+
+    @Test
+    fun `Offline Cash V1 Torii facade is public without Kagemusha type leakage`() {
+        val sourceDirectory = repositoryRoot().resolve(
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline",
+        )
+        val source = listOf(
+            "OfflineCashToriiV1.kt",
+            "OfflineCashReadinessBlockerV1.java",
+            "OfflineCashReadinessV1.java",
+            "OfflineCashOperationRejectionV1.java",
+            "OfflineCashFinalizedTopUpV1.java",
+            "OfflineCashOperationStatusProjectionV1.java",
+        ).joinToString("\n") { name ->
+            sourceDirectory.resolve(name).toFile().readText(Charsets.UTF_8)
+        }
+        for (declaration in listOf(
+            "class OfflineCashTopUpRequestV1",
+            "class OfflineCashRedeemRequestV1",
+            "class OfflineCashReadinessBlockerV1",
+            "class OfflineCashReadinessV1",
+            "class OfflineCashOperationReferenceV1",
+            "enum class OfflineCashOperationStateV1",
+            "enum class OfflineCashOperationKindV1",
+            "class OfflineCashOperationRejectionV1",
+            "class OfflineCashFinalizedTopUpV1",
+            "class OfflineCashOperationStatusProjectionV1",
+            "class OfflineCashOperationStatusV1",
+            "class OfflineCashToriiClientV1",
+        )) {
+            assertTrue(source.contains(declaration), "missing $declaration")
+        }
+
+        assertEquals("/v1/offline/readiness", OfflineCashToriiClientV1.READINESS_PATH)
+        assertEquals("/v1/offline/top-up", OfflineCashToriiClientV1.TOP_UP_PATH)
+        assertEquals("/v1/offline/redeem", OfflineCashToriiClientV1.REDEEM_PATH)
+        assertEquals("/v1/offline/operations", OfflineCashToriiClientV1.OPERATIONS_PATH)
+
+        val publicTypes = listOf(
+            OfflineCashTopUpRequestV1::class.java,
+            OfflineCashRedeemRequestV1::class.java,
+            OfflineCashReadinessBlockerV1::class.java,
+            OfflineCashReadinessV1::class.java,
+            OfflineCashOperationReferenceV1::class.java,
+            OfflineCashOperationStateV1::class.java,
+            OfflineCashOperationKindV1::class.java,
+            OfflineCashOperationRejectionV1::class.java,
+            OfflineCashFinalizedTopUpV1::class.java,
+            OfflineCashOperationStatusProjectionV1::class.java,
+            OfflineCashOperationStatusV1::class.java,
+            OfflineCashToriiClientV1::class.java,
+        )
+        val exposedSignatures = buildList {
+            for (type in publicTypes) {
+                type.constructors
+                    .filter { constructor -> Modifier.isPublic(constructor.modifiers) }
+                    .flatMapTo(this) { constructor ->
+                        constructor.genericParameterTypes.map { parameter -> parameter.typeName }
+                    }
+                type.methods
+                    .filter { method ->
+                        Modifier.isPublic(method.modifiers) && method.declaringClass == type
+                    }
+                    .forEach { method ->
+                        add(method.genericReturnType.typeName)
+                        method.genericParameterTypes.mapTo(this) { parameter -> parameter.typeName }
+                    }
+                type.fields
+                    .filter { field -> Modifier.isPublic(field.modifiers) }
+                    .mapTo(this) { field -> field.genericType.typeName }
+            }
+        }
+        val leakedSignatures = exposedSignatures.filter { signature ->
+            signature.contains("KagemushaRecursiveSpendProver")
+        }
+        assertTrue(
+            leakedSignatures.isEmpty(),
+            "public Offline Cash V1 signatures expose internal types: $leakedSignatures",
+        )
+
+        val nativeValidatedProjectionTypes = listOf(
+            OfflineCashReadinessBlockerV1::class.java,
+            OfflineCashReadinessV1::class.java,
+            OfflineCashOperationRejectionV1::class.java,
+            OfflineCashFinalizedTopUpV1::class.java,
+            OfflineCashOperationStatusProjectionV1::class.java,
+        )
+        for (type in nativeValidatedProjectionTypes) {
+            assertTrue(
+                type.constructors.isEmpty(),
+                "${type.name} must not expose a public constructor that bypasses validation",
+            )
+        }
     }
 
     private fun repositoryRoot(): Path {

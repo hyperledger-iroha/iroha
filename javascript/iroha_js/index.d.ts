@@ -39,6 +39,11 @@ export interface KagemushaNoritoRequestV4 {
   readonly norito: Uint8Array;
 }
 
+export interface NormalizedKagemushaNoritoRequestV4 extends KagemushaNoritoRequestV4 {
+  readonly issuedAtMs: number;
+  readonly networkId: string;
+}
+
 export interface KagemushaReadinessBlocker {
   readonly code: string;
   readonly message: string;
@@ -135,9 +140,8 @@ export type KagemushaOperationStatus =
         kind: KagemushaOperationKind;
         transaction_hash: string;
         error: Readonly<{
-          code: string;
+          code: "offline_operation_rejected";
           message: string;
-          details?: Readonly<Record<string, JsonValue>>;
         }>;
       }>;
     }>;
@@ -146,11 +150,11 @@ export function normalizeKagemushaOperationId(value: string, context?: string): 
 export function normalizeKagemushaTopUpRequestV4(
   value: KagemushaNoritoRequestV4,
   context?: string,
-): KagemushaNoritoRequestV4;
+): NormalizedKagemushaNoritoRequestV4;
 export function normalizeKagemushaRedeemRequestV4(
   value: KagemushaNoritoRequestV4,
   context?: string,
-): KagemushaNoritoRequestV4;
+): NormalizedKagemushaNoritoRequestV4;
 export function normalizeOfflineStatus(
   payload: Record<string, unknown>,
 ): OfflineStatus;
@@ -159,12 +163,15 @@ export function normalizeKagemushaOperationReference(
   expected: {
     expectedOperationId: string;
     expectedKind: "top_up" | "redeem";
+    expectedSubmittedAtMs: number;
     location: string | null;
+    retryAfter: string | null;
   },
 ): KagemushaOperationReference;
 export function normalizeKagemushaOperationStatus(
   payload: Record<string, unknown>,
   expectedOperationId: string,
+  expected?: { expectedNetworkId?: string | null },
 ): KagemushaOperationStatus;
 
 export type CryptoAlgorithm =
@@ -181,8 +188,8 @@ export type CryptoAlgorithm =
   | "sm2";
 
 export type {
-  PrivacyCapabilityRowV1,
-  PrivacyCapabilitySnapshotV1,
+  LegacyPrivacyCapabilityInspectionRowV1,
+  LegacyPrivacyCapabilityInspectionSnapshotV1,
   PrivacyCompiledProfileBindingsV1,
   PrivacyCompiledProfileResultV1,
   PrivacyConsensusLimitsV1,
@@ -7244,6 +7251,10 @@ interface RegisterAssetDefinitionAndMintInputBase {
   authority: string;
   assetDefinition: {
     assetDefinitionId: string;
+    /** Required canonical ledger name for the asset definition. */
+    name: string;
+    description?: string | null;
+    alias?: string | null;
     /** Immutable ownership intent; null means intentionally unowned global. */
     owningDomain: string | null;
     metadata?: object;
@@ -11685,8 +11696,8 @@ export const PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1: Readonly<{
 export function isPrivacyNativeAvailable(): boolean;
 /**
  * Return this native binary's local compiled-profile catalog. This is build
- * metadata only; network readiness requires `getPrivacyCapabilitiesV1` and a
- * fresh committed Torii response.
+ * metadata only; network readiness requires the canonical Exact12 Norito
+ * manifest plus ABI22 native validation.
  */
 export function privacyCompiledProfileCatalogV1(): Buffer;
 

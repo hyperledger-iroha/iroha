@@ -2133,6 +2133,16 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
             "exact_ready.len() != 2",
             "persist_exact_successor",
             "TurnOutcome::Terminal",
+            "TODO:",
+        ],
+    );
+    assert_required_source_tokens(
+        refanout,
+        &[
+            "Keep the Broadcast live as the durable crash-recovery source",
+            "finalization census authenticates this exact `Recovery(digest)` wait",
+            "only `ProductionLifecyclePostOutputHandoffV1` may retire the row",
+            "all-row LedgerV1 tombstone is durable",
         ],
     );
 

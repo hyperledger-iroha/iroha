@@ -58,8 +58,11 @@ public struct NetworkId: Equatable, Hashable, Sendable, Codable, CustomStringCon
 
     public var description: String { literal }
 
-    /// Tagged checksummed form required only by the Norito JSON codec.
-    var noritoJSONLiteral: String {
+    /// Exact uppercase, tagged, checksummed form required by Norito JSON and
+    /// typed Torii `NetworkId` fields, including fee-quote
+    /// `TransactionDomain::Network.value`. Public URI/deep-link surfaces use
+    /// ``description`` instead.
+    public var noritoJSONLiteral: String {
         guard let literal = CanonicalIrohaHashJSONLiteral.encode(storage) else {
             preconditionFailure("a validated NetworkId must have a Norito JSON literal")
         }

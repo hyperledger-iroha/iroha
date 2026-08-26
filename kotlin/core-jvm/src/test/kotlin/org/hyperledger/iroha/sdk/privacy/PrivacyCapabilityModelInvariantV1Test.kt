@@ -9,6 +9,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
+@Suppress("DEPRECATION")
 class PrivacyCapabilityModelInvariantV1Test {
     @Test
     fun consensusLimitsRejectInvalidDirectConstruction() {
@@ -217,11 +218,11 @@ class PrivacyCapabilityModelInvariantV1Test {
     }
 
     @Test
-    fun capabilityRowRejectsUnavailableCrossProtocolAndSubstitutedBindings() {
+    fun legacyInspectionRowRejectsUnavailableCrossProtocolAndSubstitutedBindings() {
         val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
         val compiled = profile(protocol, pgcLimits(64, 8))
         val governed = profile(protocol, pgcLimits(32, 4))
-        val valid = PrivacyCapabilityRowV1(
+        val valid = LegacyPrivacyCapabilityRowInspectionV1(
             protocol,
             PrivacyCompiledProfileResultV1.Available(compiled),
             activation(governed),
@@ -229,14 +230,14 @@ class PrivacyCapabilityModelInvariantV1Test {
         assertEquals(protocol, valid.protocolId)
 
         assertFailsWith<IllegalArgumentException> {
-            PrivacyCapabilityRowV1(
+            LegacyPrivacyCapabilityRowInspectionV1(
                 PrivacyProtocolIdV1.VERANGE_TRANSPARENT_RANGE_V1,
                 PrivacyCompiledProfileResultV1.Available(compiled),
                 null,
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            PrivacyCapabilityRowV1(
+            LegacyPrivacyCapabilityRowInspectionV1(
                 protocol,
                 unavailable(),
                 activation(governed),
@@ -251,7 +252,7 @@ class PrivacyCapabilityModelInvariantV1Test {
             ),
         )
         assertFailsWith<IllegalArgumentException> {
-            PrivacyCapabilityRowV1(
+            LegacyPrivacyCapabilityRowInspectionV1(
                 protocol,
                 PrivacyCompiledProfileResultV1.Available(compiled),
                 activation(otherProfile),
@@ -264,7 +265,7 @@ class PrivacyCapabilityModelInvariantV1Test {
             parameterDigestByte = 99,
         )
         assertFailsWith<IllegalArgumentException> {
-            PrivacyCapabilityRowV1(
+            LegacyPrivacyCapabilityRowInspectionV1(
                 protocol,
                 PrivacyCompiledProfileResultV1.Available(compiled),
                 activation(substitutedDigest),
@@ -274,7 +275,7 @@ class PrivacyCapabilityModelInvariantV1Test {
         val lowCompiledCeiling = profile(protocol, pgcLimits(32, 4))
         val excessiveActivation = profile(protocol, pgcLimits(64, 8))
         assertFailsWith<IllegalArgumentException> {
-            PrivacyCapabilityRowV1(
+            LegacyPrivacyCapabilityRowInspectionV1(
                 protocol,
                 PrivacyCompiledProfileResultV1.Available(lowCompiledCeiling),
                 activation(excessiveActivation),
@@ -283,26 +284,46 @@ class PrivacyCapabilityModelInvariantV1Test {
     }
 
     @Test
-    fun snapshotRejectsInvalidVersionHeightPolicyRegistryAndMutableInput() {
+    fun legacyInspectionSnapshotRejectsInvalidVersionHeightPolicyRegistryAndMutableInput() {
         val rows = canonicalUnavailableRows().toMutableList()
-        val snapshot = PrivacyCapabilitySnapshotV1(1, BigInteger.ZERO, consensusPolicy(), rows)
+        val snapshot = LegacyPrivacyCapabilitySnapshotInspectionV1(
+            1,
+            BigInteger.ZERO,
+            consensusPolicy(),
+            rows,
+        )
         rows.clear()
         assertEquals(PrivacyProtocolIdV1.values().size, snapshot.protocols.size)
         assertFailsWith<UnsupportedOperationException> {
             @Suppress("UNCHECKED_CAST")
-            (snapshot.protocols as MutableList<PrivacyCapabilityRowV1>).clear()
+            (snapshot.protocols as MutableList<LegacyPrivacyCapabilityRowInspectionV1>).clear()
         }
 
         assertFailsWith<IllegalArgumentException> {
-            PrivacyCapabilitySnapshotV1(0, BigInteger.ZERO, consensusPolicy(), canonicalUnavailableRows())
+            LegacyPrivacyCapabilitySnapshotInspectionV1(
+                0,
+                BigInteger.ZERO,
+                consensusPolicy(),
+                canonicalUnavailableRows(),
+            )
         }
         for (height in listOf(BigInteger.ONE.negate(), U64_MAX_TEST.add(BigInteger.ONE))) {
             assertFailsWith<IllegalArgumentException> {
-                PrivacyCapabilitySnapshotV1(1, height, consensusPolicy(), canonicalUnavailableRows())
+                LegacyPrivacyCapabilitySnapshotInspectionV1(
+                    1,
+                    height,
+                    consensusPolicy(),
+                    canonicalUnavailableRows(),
+                )
             }
         }
         assertFailsWith<IllegalArgumentException> {
-            PrivacyCapabilitySnapshotV1(1, BigInteger.ZERO, consensusPolicy(), canonicalUnavailableRows().dropLast(1))
+            LegacyPrivacyCapabilitySnapshotInspectionV1(
+                1,
+                BigInteger.ZERO,
+                consensusPolicy(),
+                canonicalUnavailableRows().dropLast(1),
+            )
         }
         val reordered = canonicalUnavailableRows().toMutableList().also {
             val first = it[0]
@@ -310,22 +331,37 @@ class PrivacyCapabilityModelInvariantV1Test {
             it[1] = first
         }
         assertFailsWith<IllegalArgumentException> {
-            PrivacyCapabilitySnapshotV1(1, BigInteger.ZERO, consensusPolicy(), reordered)
+            LegacyPrivacyCapabilitySnapshotInspectionV1(
+                1,
+                BigInteger.ZERO,
+                consensusPolicy(),
+                reordered,
+            )
         }
 
         val next = consensusLimits(retainedRootCount = 1024)
         val pending = PrivacyConsensusPolicyTighteningV1(height(10), height(310), next)
         val scheduledAfterSnapshot = PrivacyConsensusPolicyV1(consensusLimits(), pending)
         assertFailsWith<IllegalArgumentException> {
-            PrivacyCapabilitySnapshotV1(1, height(9), scheduledAfterSnapshot, canonicalUnavailableRows())
+            LegacyPrivacyCapabilitySnapshotInspectionV1(
+                1,
+                height(9),
+                scheduledAfterSnapshot,
+                canonicalUnavailableRows(),
+            )
         }
         assertFailsWith<IllegalArgumentException> {
-            PrivacyCapabilitySnapshotV1(1, height(310), scheduledAfterSnapshot, canonicalUnavailableRows())
+            LegacyPrivacyCapabilitySnapshotInspectionV1(
+                1,
+                height(310),
+                scheduledAfterSnapshot,
+                canonicalUnavailableRows(),
+            )
         }
     }
 
     @Test
-    fun snapshotRejectsLifecycleAndProtocolScheduleClaimsOutsideCommittedState() {
+    fun legacyInspectionSnapshotRejectsLifecycleAndProtocolScheduleClaimsOutsideCommittedState() {
         val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
         val compiled = profile(protocol, pgcLimits(64, 8))
 
@@ -390,7 +426,7 @@ class PrivacyCapabilityModelInvariantV1Test {
 
     private fun assertSnapshotRejectsRow(
         committedHeight: BigInteger,
-        capabilityRow: PrivacyCapabilityRowV1,
+        capabilityRow: LegacyPrivacyCapabilityRowInspectionV1,
     ) {
         assertFailsWith<IllegalArgumentException> {
             snapshotWithRow(committedHeight, capabilityRow)
@@ -399,16 +435,21 @@ class PrivacyCapabilityModelInvariantV1Test {
 
     private fun snapshotWithRow(
         committedHeight: BigInteger,
-        capabilityRow: PrivacyCapabilityRowV1,
-    ): PrivacyCapabilitySnapshotV1 {
+        capabilityRow: LegacyPrivacyCapabilityRowInspectionV1,
+    ): LegacyPrivacyCapabilitySnapshotInspectionV1 {
         val rows = canonicalUnavailableRows().toMutableList()
         rows[capabilityRow.protocolId.ordinal] = capabilityRow
-        return PrivacyCapabilitySnapshotV1(1, committedHeight, consensusPolicy(), rows)
+        return LegacyPrivacyCapabilitySnapshotInspectionV1(
+            1,
+            committedHeight,
+            consensusPolicy(),
+            rows,
+        )
     }
 
-    private fun canonicalUnavailableRows(): List<PrivacyCapabilityRowV1> =
+    private fun canonicalUnavailableRows(): List<LegacyPrivacyCapabilityRowInspectionV1> =
         PrivacyProtocolIdV1.values().map { protocol ->
-            PrivacyCapabilityRowV1(protocol, unavailable(), null)
+            LegacyPrivacyCapabilityRowInspectionV1(protocol, unavailable(), null)
         }
 
     private fun unavailable(): PrivacyCompiledProfileResultV1.Unavailable =
@@ -420,7 +461,7 @@ class PrivacyCapabilityModelInvariantV1Test {
     private fun row(
         compiled: PrivacyCompiledProfileV1,
         governed: PrivacyProtocolActivationRecordV1,
-    ): PrivacyCapabilityRowV1 = PrivacyCapabilityRowV1(
+    ): LegacyPrivacyCapabilityRowInspectionV1 = LegacyPrivacyCapabilityRowInspectionV1(
         compiled.protocolId,
         PrivacyCompiledProfileResultV1.Available(compiled),
         governed,

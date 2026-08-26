@@ -7,27 +7,31 @@
  * path and Fetch-backed Torii client instead.
  */
 import { NexusAppClient } from "@iroha/iroha-js/nexus-app";
-import { NetworkId } from "@iroha/iroha-js";
+import {
+  AccountAddress,
+  NetworkId,
+  generateKeyPair,
+  signEd25519,
+} from "@iroha/iroha-js";
 import {
   browserSignedTransactionHashHex,
   browserTransactionCodec,
 } from "@iroha/iroha-js/transaction-codec";
 
-const accountId = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
-const destinationAccountId = "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L";
+const walletKeyPair = generateKeyPair({ seed: Buffer.alloc(32, 0x11) });
+const accountId = AccountAddress.fromAccount({
+  publicKey: walletKeyPair.publicKey,
+}).toI105(369);
+const destinationAccountId = AccountAddress.parseEncoded(
+  "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L",
+).address.toI105(369);
 const sourceAssetId = `7EAD8EFYUx1aVKZPUU1fyKvr8dF1#${accountId}`;
 const networkId = NetworkId.parse(
   "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
 );
-const signingPublicKey = Buffer.from(
-  "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
-  "hex",
-);
-const walletSignature = Buffer.from(
-  "d39065822f28108f70f8089f64357cc33a0072e45aa65f6b3e2696b93a3d9779d376ddf19c8e7dabce79a484275b681dea5213df060848d8fe098edeebcc3c07",
-  "hex",
-);
-const signedTransactionHashHex = "b410d55b960d396c1034221dea22464d08de1237363b02cb1f7c35d4c6eaf0a1";
+const signingPublicKey = walletKeyPair.publicKey;
+const signingPrivateKey = walletKeyPair.privateKey;
+const signedTransactionHashHex = "4698dbf7f4a250029037275258fbaca1095bb476747929b279b02c1b0236d1d7";
 
 const connectTransport = {
   async startConnect() {
@@ -45,7 +49,13 @@ const connectTransport = {
   },
   async requestSignature(_session, signable) {
     console.log("payload hash:", signable.payloadHashHex);
-    return { algorithm: "ed25519", signature: walletSignature };
+    return {
+      algorithm: "ed25519",
+      signature: signEd25519(
+        Buffer.from(signable.payloadHashHex, "hex"),
+        signingPrivateKey,
+      ),
+    };
   },
 };
 
@@ -60,8 +70,6 @@ const toriiClient = {
     return {
       hash: hashHex,
       status: { kind: "Applied", block_height: 1 },
-      summary: "Applied",
-      diagnostics: [],
       scope: "global",
       resolved_from: "state",
     };
@@ -89,7 +97,9 @@ const receipt = await client.transferWithWallet(approval.session, {
 });
 
 if (receipt.signedTransactionHashHex !== signedTransactionHashHex) {
-  throw new Error("recipe signed transaction hash drifted from the shared fixture");
+  throw new Error(
+    `recipe signed transaction hash ${receipt.signedTransactionHashHex} drifted from the shared fixture`,
+  );
 }
 console.log("wallet URI:", session.walletLaunchUri);
 console.log("signed transaction hash:", receipt.signedTransactionHashHex);

@@ -4,6 +4,12 @@ import Foundation
 import Darwin
 #endif
 
+package struct KagemushaSubmissionRequestProjectionV4: Equatable, Sendable {
+    public let networkId: NetworkId
+    public let operationId: Data
+    public let submittedAtMilliseconds: UInt64
+}
+
 extension NoritoNativeBridge {
     private typealias KagemushaV2SymbolProbeFn = @convention(c) () -> Void
     private typealias KagemushaV2FreeFn = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
@@ -1061,6 +1067,15 @@ extension NoritoNativeBridge {
         )
     }
 
+    func kagemushaTopUpSubmissionRequestProjectV4(
+        requestArchive: Data
+    ) throws -> KagemushaSubmissionRequestProjectionV4? {
+        try kagemushaSubmissionRequestProjectV4(
+            symbol: "connect_norito_kagemusha_project_top_up_submission_request_v4",
+            requestArchive: requestArchive
+        )
+    }
+
     func kagemushaRecursiveSpendRedeemUnsignedPayloadDigestV4(
         unsignedArchive: Data
     ) throws -> Data? {
@@ -1078,6 +1093,26 @@ extension NoritoNativeBridge {
             symbol: "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
             first: buildResultArchive,
             second: authorizationArchive
+        )
+    }
+
+    func kagemushaRedeemSubmissionRequestProjectV4(
+        requestArchive: Data
+    ) throws -> KagemushaSubmissionRequestProjectionV4? {
+        try kagemushaSubmissionRequestProjectV4(
+            symbol: "connect_norito_kagemusha_project_redeem_submission_request_v4",
+            requestArchive: requestArchive
+        )
+    }
+
+    func kagemushaOperationStatusValidateV4(statusArchive: Data) throws -> Data? {
+        guard !statusArchive.isEmpty,
+              statusArchive.count <= KagemushaOperationCodec.statusMaximumArchiveBytes else {
+            throw NativeBridgeError.kagemushaProve
+        }
+        return try callKagemushaV2Archive(
+            symbol: "connect_norito_kagemusha_validate_operation_status_v4",
+            archive: statusArchive
         )
     }
 
@@ -1317,6 +1352,45 @@ extension NoritoNativeBridge {
         #else
         return nil
         #endif
+    }
+
+    private func kagemushaSubmissionRequestProjectV4(
+        symbol: String,
+        requestArchive: Data
+    ) throws -> KagemushaSubmissionRequestProjectionV4? {
+        guard let projection = try callKagemushaV2Archive(
+            symbol: symbol,
+            archive: requestArchive
+        ) else {
+            return nil
+        }
+        return try Self.decodeKagemushaSubmissionRequestProjectionV4(projection)
+    }
+
+    package static func decodeKagemushaSubmissionRequestProjectionV4(
+        _ projection: Data
+    ) throws -> KagemushaSubmissionRequestProjectionV4 {
+        guard projection.count == 72 else {
+            throw NativeBridgeError.invalidKagemushaVerifierOutput
+        }
+        let networkBytes = Data(projection.prefix(NetworkId.byteCount))
+        let operationId = Data(projection[32..<64])
+        let submittedAtMilliseconds = projection.suffix(8).reduce(UInt64(0)) {
+            ($0 << 8) | UInt64($1)
+        }
+        guard operationId.contains(where: { $0 != 0 }),
+              submittedAtMilliseconds > 0 else {
+            throw NativeBridgeError.invalidKagemushaVerifierOutput
+        }
+        do {
+            return KagemushaSubmissionRequestProjectionV4(
+                networkId: try NetworkId(bytes: networkBytes),
+                operationId: operationId,
+                submittedAtMilliseconds: submittedAtMilliseconds
+            )
+        } catch {
+            throw NativeBridgeError.invalidKagemushaVerifierOutput
+        }
     }
 
     private func callKagemushaV2ArchiveAtTime(

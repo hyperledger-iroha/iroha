@@ -38,7 +38,8 @@ except RuntimeError as err:  # pragma: no cover - optional dependency
         def __getattr__(self, name: str) -> Any:
             raise RuntimeError(
                 f"{name} requires the compiled iroha_python._crypto extension module. "
-                "Run `maturin develop --release` inside `python/iroha_python` (or install the wheel)."
+                "Run `maturin develop --release --locked` inside `python/iroha_python` "
+                "(or install the wheel)."
             ) from _CRYPTO_IMPORT_ERROR
 
     _crypto = _UnavailableCrypto()

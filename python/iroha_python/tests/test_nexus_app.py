@@ -454,7 +454,7 @@ def test_nexus_app_default_codec_matches_shared_fixture():
     approval = FIXTURE["connect"]["approval_frame"]
     client = NexusAppClient(
         NexusAppConfig(
-            network_id=NETWORK_ID,
+            network_id=NetworkId.parse(transfer["network_id"]),
             authority=transfer["authority"],
             signing_public_key=bytes.fromhex(approval["signing_public_key_hex"]),
         ),
@@ -474,6 +474,11 @@ def test_nexus_app_default_codec_matches_shared_fixture():
         )
     )
 
+    decoded_payload = json.loads(draft.signable.native.payload_json())
+    assert decoded_payload["admission_intent"] == {
+        "intent": "queue_plan_synced",
+        "value": None,
+    }
     assert draft.signable.payload_bytes.hex() == expected["payload_bytes_hex"]
     assert draft.signable.payload_hash_hex == expected["payload_hash_hex"]
 

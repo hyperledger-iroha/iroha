@@ -2,17 +2,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  getPrivacyCapabilitiesV1,
+  getLegacyPrivacyCapabilityInspectionV1,
   PRIVACY_PROTOCOL_IDS_V1,
-  PrivacyCapabilitySnapshotError,
-  parsePrivacyCapabilitySnapshotV1,
+  LegacyPrivacyCapabilityInspectionError,
+  parseLegacyPrivacyCapabilityInspectionSnapshotV1,
 } from "../src/privacyCapabilities.js";
 import { signEd25519 } from "../src/crypto.js";
 import { NetworkId } from "../src/networkId.js";
 import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
 import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
 import {
-  getPrivacyCapabilitiesV1 as getDistPrivacyCapabilitiesV1,
+  getLegacyPrivacyCapabilityInspectionV1 as getDistPrivacyCapabilitiesV1,
 } from "../dist/privacyCapabilities.js";
 import {
   LocalSigningContext as DistLocalSigningContext,
@@ -35,7 +35,7 @@ const BROWSER_CANONICAL_AUTH = Object.freeze({
 const CLIENT_SURFACES = Object.freeze([
   Object.freeze({
     label: "source",
-    get: getPrivacyCapabilitiesV1,
+    get: getLegacyPrivacyCapabilityInspectionV1,
     NodeClient: ToriiClient,
     BrowserClient: ToriiBrowserClient,
     networkId: NetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
@@ -141,8 +141,8 @@ function rawSnapshotWithCommittedHeight(integerToken) {
   return JSON.stringify(payload).replace(JSON.stringify(placeholder), integerToken);
 }
 
-test("parses the exact canonical privacy capability snapshot and freezes it", () => {
-  const parsed = parsePrivacyCapabilitySnapshotV1(snapshot());
+test("parses the exact legacy privacy-capability inspection response and freezes it", () => {
+  const parsed = parseLegacyPrivacyCapabilityInspectionSnapshotV1(snapshot());
   assert.equal(parsed.version, 1);
   assert.equal(parsed.committed_height, 42n);
   assert.equal(
@@ -159,7 +159,7 @@ test("parses the exact canonical privacy capability snapshot and freezes it", ()
   assert.ok(Object.isFrozen(parsed.protocols[0].compiled_profile));
 });
 
-test("rejects snapshot structure, aliases, non-canonical order, and unsafe integers", () => {
+test("rejects legacy inspection structure, aliases, non-canonical order, and unsafe integers", () => {
   const hostileProtocolIds = [
     "",
     "unknown-privacy-protocol-v1",
@@ -201,7 +201,7 @@ test("rejects snapshot structure, aliases, non-canonical order, and unsafe integ
   for (const mutate of cases) {
     const hostile = snapshot();
     mutate(hostile);
-    assert.throws(() => parsePrivacyCapabilitySnapshotV1(hostile), PrivacyCapabilitySnapshotError);
+    assert.throws(() => parseLegacyPrivacyCapabilityInspectionSnapshotV1(hostile), LegacyPrivacyCapabilityInspectionError);
   }
 });
 
@@ -231,7 +231,7 @@ test("rejects nested unknown fields, malformed fixed bindings, and cross-protoco
   for (const mutate of cases) {
     const hostile = snapshot();
     mutate(hostile);
-    assert.throws(() => parsePrivacyCapabilitySnapshotV1(hostile), PrivacyCapabilitySnapshotError);
+    assert.throws(() => parseLegacyPrivacyCapabilityInspectionSnapshotV1(hostile), LegacyPrivacyCapabilityInspectionError);
   }
 });
 
@@ -253,7 +253,7 @@ test("accepts a fully bound active profile only when all governed bindings match
     pending_protocol_limits_tightening: null,
     assurance: { assurance: "experimental", value: null },
   };
-  const parsed = parsePrivacyCapabilitySnapshotV1(valid);
+  const parsed = parseLegacyPrivacyCapabilityInspectionSnapshotV1(valid);
   assert.equal(parsed.protocols[1].compiled_profile.status, "available");
   assert.equal(parsed.protocols[1].activation.lifecycle.state, "active");
   assert.deepEqual(parsed.protocols[1].activation.lifecycle.record, {
@@ -272,7 +272,7 @@ test("normalizes every governed schedule height to bigint", () => {
     effective_at_height: 342,
     next_limits: nextLimits,
   };
-  const parsed = parsePrivacyCapabilitySnapshotV1(valid);
+  const parsed = parseLegacyPrivacyCapabilityInspectionSnapshotV1(valid);
   assert.equal(parsed.committed_height, 42n);
   assert.equal(parsed.consensus_policy.pending_tightening.scheduled_at_height, 42n);
   assert.equal(parsed.consensus_policy.pending_tightening.effective_at_height, 342n);
@@ -297,7 +297,7 @@ test("rejects forged governance activation and malformed delayed transitions", (
     pending_protocol_limits_tightening: null,
     assurance: { assurance: "experimental", value: null },
   };
-  assert.throws(() => parsePrivacyCapabilitySnapshotV1(hostile), /does not match compiled profile/);
+  assert.throws(() => parseLegacyPrivacyCapabilityInspectionSnapshotV1(hostile), /does not match compiled profile/);
 
   const schedule = snapshot();
   schedule.consensus_policy.pending_tightening = {
@@ -305,10 +305,10 @@ test("rejects forged governance activation and malformed delayed transitions", (
     effective_at_height: 342,
     next_limits: clone(schedule.consensus_policy.current_limits),
   };
-  assert.throws(() => parsePrivacyCapabilitySnapshotV1(schedule), /strict tightening/);
+  assert.throws(() => parseLegacyPrivacyCapabilityInspectionSnapshotV1(schedule), /strict tightening/);
 });
 
-test("node and browser clients request and validate the authoritative route", async () => {
+test("node and browser clients request and validate the legacy inspection route", async () => {
   for (const surface of CLIENT_SURFACES) {
     const calls = [];
     const fetchImpl = async (url, init) => {
@@ -318,12 +318,12 @@ test("node and browser clients request and validate the authoritative route", as
     const node = privacyClient(surface, surface.NodeClient, fetchImpl);
     const browser = privacyClient(surface, surface.BrowserClient, fetchImpl);
     assert.equal(
-      Object.hasOwn(surface.NodeClient.prototype, "getPrivacyCapabilitiesV1"),
+      Object.hasOwn(surface.NodeClient.prototype, "getLegacyPrivacyCapabilityInspectionV1"),
       false,
       `${surface.label} node client`,
     );
     assert.equal(
-      Object.hasOwn(surface.BrowserClient.prototype, "getPrivacyCapabilitiesV1"),
+      Object.hasOwn(surface.BrowserClient.prototype, "getLegacyPrivacyCapabilityInspectionV1"),
       false,
       `${surface.label} browser client`,
     );
@@ -448,12 +448,12 @@ test("optional helper rejects non-clients and unsupported options before transpo
       null,
       {},
       { getNodeCapabilities: async () => ({}) },
-      { getPrivacyCapabilitiesV1() {} },
+      { getLegacyPrivacyCapabilityInspectionV1() {} },
     ]) {
       await assert.rejects(
         surface.get(client),
         new TypeError(
-          "getPrivacyCapabilitiesV1 client must be an Iroha JS Torii client",
+          "getLegacyPrivacyCapabilityInspectionV1 client must be an Iroha JS Torii client",
         ),
       );
     }

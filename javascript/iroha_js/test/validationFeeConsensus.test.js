@@ -7,6 +7,7 @@ import {
   verifyValidationFeeCurrentPolicyProofV1,
 } from "../src/validationFeeConsensus.js";
 import { NetworkId } from "../src/networkId.js";
+import { networkIdToNoritoJson } from "../src/networkIdNoritoJson.js";
 import { ToriiClient } from "../src/toriiClient.js";
 
 const binding = Object.freeze({
@@ -18,6 +19,7 @@ const binding = Object.freeze({
     contextId: "57".repeat(32),
   }),
 });
+const bindingNetworkIdJson = networkIdToNoritoJson(binding.networkId);
 
 function completePlainElectorateRules() {
   return {
@@ -124,7 +126,7 @@ function completeVerifiedProjection() {
   return {
     schema: "iroha.validation_fee.verified_policy_projection.v1",
     version: 1,
-    network_id: binding.networkId.toString(),
+    network_id: bindingNetworkIdJson,
     policy_chain_genesis_hash: binding.policyChainGenesisHash,
     registry_hash: "79".repeat(32),
     head_policy_version: 1,
@@ -247,7 +249,7 @@ test("native verified projection remains bound to the release checkpoint", () =>
   const projection = {
     schema: "iroha.validation_fee.verified_policy_projection.v1",
     version: 1,
-    network_id: binding.networkId.toString(),
+    network_id: bindingNetworkIdJson,
     policy_chain_genesis_hash: binding.policyChainGenesisHash,
     registry_hash: "79".repeat(32),
     head_policy_version: 2,
@@ -292,6 +294,7 @@ test("native verified projection remains bound to the release checkpoint", () =>
         binding.checkpoint,
       );
       assert.equal(verified.head_policy_version, 2n);
+      assert.equal(verified.network_id, binding.networkId.toString());
       assert.equal(verified.evaluated_block_height, 127n);
       assert.equal(verified.more_available, true);
       assert.equal(Object.isFrozen(verified), true);
@@ -307,6 +310,29 @@ test("native verified projection remains bound to the release checkpoint", () =>
       );
       projection.evaluated_block_hash = "df".repeat(32);
     },
+  );
+});
+
+test("native verified projection requires marked NetworkId JSON but exposes raw identity", () => {
+  const badChecksum = `${bindingNetworkIdJson.slice(0, -1)}${
+    bindingNetworkIdJson.endsWith("0") ? "1" : "0"
+  }`;
+  for (const networkId of [
+    binding.networkId.toString(),
+    bindingNetworkIdJson.toLowerCase(),
+    badChecksum,
+  ]) {
+    assert.throws(
+      () => verifyProjectionFixture({
+        ...completeVerifiedProjection(),
+        network_id: networkId,
+      }),
+      /projection\.network_id.*canonical marked Iroha NetworkId|checksum/u,
+    );
+  }
+  assert.equal(
+    verifyProjectionFixture(completeVerifiedProjection()).network_id,
+    binding.networkId.toString(),
   );
 });
 

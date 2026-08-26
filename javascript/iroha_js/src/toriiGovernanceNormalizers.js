@@ -31,6 +31,7 @@ export function createToriiGovernanceNormalizers({
   normalizeHex32String,
   normalizeManifestProvenancePayload,
   normalizeNetworkId,
+  parseNetworkIdLiteral,
   normalizeVpnSessionOptions,
   networkIdBytes,
   normalizeQuantityInput,
@@ -902,7 +903,9 @@ export function createToriiGovernanceNormalizers({
     if (!(localSigningContext instanceof LocalSigningContext)) {
       throw new TypeError(`${context} requires an immutable LocalSigningContext`);
     }
-    const exactNetworkId = NetworkId.parse(payload.network_id);
+    const exactNetworkId = NetworkId.parse(
+      parseNetworkIdLiteral(payload.network_id, `${context}.networkId`),
+    );
     const actual = networkIdBytes(exactNetworkId, `${context}.networkId`);
     const expected = networkIdBytes(
       localSigningContext.networkId,

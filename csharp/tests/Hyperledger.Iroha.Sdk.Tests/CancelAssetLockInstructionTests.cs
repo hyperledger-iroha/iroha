@@ -49,7 +49,7 @@ public sealed class CancelAssetLockInstructionTests
             Encoding.UTF8.GetString(instruction.EncodeInstructionJson()));
 
         var payload = new FixedFieldReader(
-            instruction.EncodePayload(new TransactionEncodingContext(AccountId)));
+            instruction.EncodePayload(new TransactionEncodingContext(AccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)));
         Assert.Equal(
             Convert.FromHexString(
                 "996264C84790C64086AAB0EF693A1D33EC18FC0B1C1229774C461A00939A6687"),
@@ -64,7 +64,9 @@ public sealed class CancelAssetLockInstructionTests
             "1.25");
         Assert.Equal(
             JavascriptInstructionBoxV1,
-            parityInstruction.EncodeInstructionBoxBase64(AccountId));
+            parityInstruction.EncodeInstructionBoxBase64(
+                AccountId,
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant));
     }
 
     [Fact]
@@ -174,7 +176,7 @@ public sealed class CancelAssetLockInstructionTests
             "merchant-lock-001",
             "20");
         var canonicalPayload = canonical.EncodePayload(
-            new TransactionEncodingContext(AccountId));
+            new TransactionEncodingContext(AccountId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant));
         var payload = new FixedFieldReader(canonicalPayload);
         var escrowField = payload.ReadField().ToArray();
         _ = payload.ReadField();
@@ -290,6 +292,7 @@ public sealed class CancelAssetLockInstructionTests
     {
         var builder = new TransactionBuilder(
                 NetworkId.Parse(NetworkIdLiteral),
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
                 AccountId,
                 FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>()))
             .CancelAssetLock("merchant-lock-001", "20");

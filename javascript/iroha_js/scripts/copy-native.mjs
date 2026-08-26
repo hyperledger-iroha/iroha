@@ -140,6 +140,11 @@ export const REQUIRED_NATIVE_EXPORTS = Object.freeze([
   "securePrivateFileWriteAtomic",
 ]);
 export const REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 22;
+// The debug addon constructs and authenticates the Exact12 compiled-profile
+// catalog during this probe. A cold macOS build currently needs about 30s for
+// that work alone, so the process budget must also cover Node startup and
+// slower release hosts while remaining bounded.
+export const NATIVE_BINDING_PROBE_TIMEOUT_MS = 120_000;
 export const REQUIRED_NATIVE_EXPORT_RESULTS = Object.freeze({
   connectNoritoBridgeAbiVersion: REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   securePrivateFileAbiVersion: 1,
@@ -483,7 +488,7 @@ if (
       cwd: repoRoot,
       encoding: "utf8",
       env: process.env,
-      timeout: 30_000,
+      timeout: NATIVE_BINDING_PROBE_TIMEOUT_MS,
       windowsHide: true,
       maxBuffer: 64 * 1024,
     },

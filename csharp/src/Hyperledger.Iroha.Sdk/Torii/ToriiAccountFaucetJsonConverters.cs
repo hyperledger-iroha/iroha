@@ -104,17 +104,18 @@ internal static class ToriiAccountFaucetJson
     {
         if (reader.TokenType != JsonTokenType.String)
         {
-            throw new JsonException($"{field} must be a canonical NetworkId string.");
+            throw new JsonException(
+                $"{field} must be a canonical checksummed Norito NetworkId hash literal.");
         }
 
         try
         {
-            return NetworkId.Parse(reader.GetString()!);
+            return NetworkId.ParseNoritoJsonLiteral(reader.GetString()!);
         }
         catch (FormatException error)
         {
             throw new JsonException(
-                $"{field} must be exactly 64 lowercase hexadecimal NetworkId characters with the marker bit set.",
+                $"{field} must be a canonical checksummed Norito NetworkId hash literal.",
                 error);
         }
     }
@@ -372,7 +373,7 @@ internal sealed class ToriiAccountFaucetPuzzleJsonConverter : JsonConverter<Tori
 
         writer.WriteStartObject();
         writer.WriteString("algorithm", value.Algorithm);
-        writer.WriteString("network_id", value.NetworkId.ToString());
+        writer.WriteString("network_id", value.NetworkId.ToNoritoJsonLiteral());
         writer.WriteNumber("chain_discriminant", value.ChainDiscriminant);
         writer.WriteNumber("difficulty_bits", value.DifficultyBits);
         writer.WriteNumber("anchor_height", value.AnchorHeight);

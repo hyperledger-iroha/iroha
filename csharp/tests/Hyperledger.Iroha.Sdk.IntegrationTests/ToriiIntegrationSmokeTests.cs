@@ -46,7 +46,8 @@ public sealed class ToriiIntegrationSmokeTests
             options: new ToriiClientOptions
             {
                 LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(networkId)),
+                    NetworkId.Parse(networkId),
+                    AccountAddress.TairaTestnetChainDiscriminant),
                 CanonicalRequestCredentials = canonicalCredentials,
             });
 

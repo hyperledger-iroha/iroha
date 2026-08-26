@@ -5,7 +5,14 @@ import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha2";
 import { AccountAddress } from "./address.js";
 import { crc64Xz } from "./crc64Xz.js";
-import { NetworkId, networkIdBytes } from "./networkId.js";
+import {
+  NetworkId,
+  networkIdBytes,
+} from "./networkId.js";
+import {
+  networkIdFromNoritoJson,
+  networkIdToNoritoJson,
+} from "./networkIdNoritoJson.js";
 
 export { NetworkId };
 
@@ -311,7 +318,7 @@ export async function registerConnectSession(baseUrl, preview, options = {}) {
   const normalized = normalizePreviewInput(preview);
   const payload = {
     sid: toBase64Url(normalized.sidBytes),
-    network_id: normalized.networkId.toString(),
+    network_id: networkIdToNoritoJson(normalized.networkId, "preview.networkId"),
     app_pk: toBase64Url(normalized.appKeyPair.publicKey),
     nonce: toBase64Url(normalized.nonce),
   };
@@ -334,11 +341,15 @@ export async function registerConnectSession(baseUrl, preview, options = {}) {
     throw new Error(`${response.status} ${response.statusText}: ${message || "unable to create connect session"}`);
   }
   const session = await response.json();
-  validateRegisteredConnectSession(session, payload);
-  return session;
+  const responseNetworkId = validateRegisteredConnectSession(
+    session,
+    payload,
+    normalized.networkId,
+  );
+  return { ...session, network_id: responseNetworkId.toString() };
 }
 
-function validateRegisteredConnectSession(session, expected) {
+function validateRegisteredConnectSession(session, expected, expectedNetworkId) {
   if (!session || typeof session !== "object" || Array.isArray(session)) {
     throw new TypeError("Connect session response must be an object");
   }
@@ -353,6 +364,10 @@ function validateRegisteredConnectSession(session, expected) {
     app_pk: requireExactNonEmptyString(session.app_pk, "session.app_pk"),
     nonce: requireExactNonEmptyString(session.nonce, "session.nonce"),
   };
+  const responseNetworkId = networkIdFromNoritoJson(
+    identity.network_id,
+    "session.network_id",
+  );
   for (const field of ["sid", "network_id", "app_pk", "nonce"]) {
     if (identity[field] !== expected[field]) {
       throw new Error(`Torii substituted the canonical Connect session ${field}`);
@@ -364,8 +379,24 @@ function validateRegisteredConnectSession(session, expected) {
     management: requireConnectToken(session.token_management, "session.token_management"),
     relay: requireConnectToken(session.token_relay, "session.token_relay"),
   };
-  validateRegisteredConnectUri(session.wallet_uri, "wallet", identity, expected.node, tokens.wallet, tokens.relay);
-  validateRegisteredConnectUri(session.app_uri, "app", identity, expected.node, tokens.app, tokens.relay);
+  const deepLinkIdentity = { ...identity, network_id: expectedNetworkId.toString() };
+  validateRegisteredConnectUri(
+    session.wallet_uri,
+    "wallet",
+    deepLinkIdentity,
+    expected.node,
+    tokens.wallet,
+    tokens.relay,
+  );
+  validateRegisteredConnectUri(
+    session.app_uri,
+    "app",
+    deepLinkIdentity,
+    expected.node,
+    tokens.app,
+    tokens.relay,
+  );
+  return responseNetworkId;
 }
 
 function validateRegisteredConnectUri(value, role, identity, node, token, relay) {

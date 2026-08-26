@@ -1,5 +1,6 @@
 export function createRegisterAssetDefinitionInstructionBuilder({
   normalizeTransactionAssetDefinitionId,
+  buildRegisterAssetDefinitionInstruction,
   buildMintAssetInstruction,
 }) {
   function buildRegisterAssetDefinitionInstructions({
@@ -76,19 +77,20 @@ export function createRegisterAssetDefinitionInstructionBuilder({
         "assetDefinition cannot carry confidential policy; use RegisterZkAsset with canonical verifier bindings",
       );
     }
-    instructions.push({
-      Register: {
-        AssetDefinition: {
-          id: assetDefinitionId,
-          logo: assetDefinition.logo ?? null,
-          metadata: assetDefinition.metadata ?? {},
-          mintable: assetDefinition.mintable ?? "Infinitely",
-          spec: assetDefinition.spec ?? { scale: null },
-          balance_scope_policy: balanceScopePolicy,
-          owning_domain: owningDomain,
-        },
-      },
-    });
+    instructions.push(
+      buildRegisterAssetDefinitionInstruction({
+        assetDefinitionId,
+        name: assetDefinition.name,
+        description: assetDefinition.description ?? null,
+        alias: assetDefinition.alias ?? null,
+        logo: assetDefinition.logo ?? null,
+        scale: assetDefinition.spec?.scale ?? null,
+        mintable: assetDefinition.mintable ?? "Infinitely",
+        metadata: assetDefinition.metadata ?? {},
+        balanceScopePolicy,
+        owningDomain,
+      }),
+    );
     mints.forEach((mint) => {
       instructions.push(
         buildMintAssetInstruction({

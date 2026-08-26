@@ -1130,7 +1130,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         try requireKeys(anchor, ["height", "block_hash"])
         return try MusubiProviderBundleVerificationBindingV1(
             networkId: NetworkId(
-                literal: try XCTUnwrap(binding["network_id"] as? String)
+                noritoJSONLiteral: try XCTUnwrap(binding["network_id"] as? String)
             ),
             providerID: digestFromNewtypeHex(binding["provider_id"]),
             completedBy: XCTUnwrap(binding["completed_by"] as? String),

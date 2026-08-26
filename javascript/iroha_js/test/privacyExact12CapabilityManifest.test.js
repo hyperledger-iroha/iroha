@@ -12,8 +12,9 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import * as productionPrivacyCapabilities from "../src/privacyCapabilities.js";
+import { NetworkId } from "../src/networkId.js";
 import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
-import { ToriiClient } from "../src/toriiClient.js";
+import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
 
 const TEST_NATIVE_BINDING = Symbol.for("iroha.test.exact12.native-binding");
 const SUBJECT_ROOT = mkdtempSync(join(tmpdir(), "iroha-exact12-native-authority-"));
@@ -73,7 +74,7 @@ const {
   PrivacyExact12CapabilityManifestV1,
   decodePrivacyExact12CapabilityManifestV1,
   getPrivacyExact12CapabilityManifestV1,
-  parsePrivacyCapabilitySnapshotV1,
+  parseLegacyPrivacyCapabilityInspectionSnapshotV1,
   requirePrivacyExact12CapabilityAdmissionV1,
 } = authenticatedTestSubject;
 
@@ -399,7 +400,7 @@ test("admission requires active committed state and the native exact local tuple
 
 test("legacy snapshots and caller-created shells cannot authorize construction", async () => {
   const legacy = manifestPayload();
-  const snapshot = parsePrivacyCapabilitySnapshotV1({
+  const snapshot = parseLegacyPrivacyCapabilityInspectionSnapshotV1({
     version: legacy.version,
     committed_height: legacy.committed_height,
     consensus_policy: legacy.consensus_policy,
@@ -431,6 +432,9 @@ test("N-API Torii fetch requests exact bounded Norito and browser fallback is ab
   await withNative(fakeNative(), async () => {
     const calls = [];
     const node = new ToriiClient("https://privacy.example.test", {
+      localSigningContext: new LocalSigningContext(
+        NetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
+      ),
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init });
         return new Response(ARCHIVE, {
@@ -439,7 +443,12 @@ test("N-API Torii fetch requests exact bounded Norito and browser fallback is ab
         });
       },
     });
-    const manifest = await getPrivacyExact12CapabilityManifestV1(node);
+    const manifest = await getPrivacyExact12CapabilityManifestV1(node, {
+      canonicalAuth: {
+        accountId: "alice-1@wonderland",
+        privateKey: Buffer.alloc(32, 0x31),
+      },
+    });
     assert.equal(manifest.committed_height, 42n);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, "https://privacy.example.test/v1/privacy/capabilities");

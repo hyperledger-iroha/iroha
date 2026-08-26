@@ -83,8 +83,11 @@ public sealed class TransactionTtlContractTests
             Assert.Equal(
                 descriptorTtl,
                 RequirePositiveTimeToLive(payload.GetProperty("payload"), $"{name}.payload"));
-            var payloadBytes = Convert.FromBase64String(
+            var archiveBytes = Convert.FromBase64String(
                 descriptor.GetProperty("payload_base64").GetString()!);
+            var payloadBytes = NoritoCodec.DecodeWithSchemaHash(
+                archiveBytes.AsSpan(6, 16),
+                archiveBytes).Payload;
             Assert.Equal(
                 NetworkId.Parse(descriptorNetworkId).ToBytes(),
                 ReadNetworkId(payloadBytes));
@@ -119,6 +122,7 @@ public sealed class TransactionTtlContractTests
     private static TransactionBuilder NewBuilder() =>
         new(
             NetworkId.Parse(FixtureNetworkId),
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             FixtureAccountId,
             FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>()));
 

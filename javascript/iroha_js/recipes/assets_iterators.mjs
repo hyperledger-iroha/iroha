@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { ToriiClient } from "../src/index.js";
+import { AccountAddress, ToriiClient } from "../src/index.js";
 
 function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(value ?? "", 10);
@@ -19,7 +19,9 @@ function parseBooleanFlag(value, fallback, context) {
 const toriiUrl = process.env.TORII_URL ?? "http://localhost:8080";
 const accountId =
   process.env.ACCOUNT_ID ??
-  "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
+  AccountAddress.parseEncoded(
+    "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
+  ).address.toI105(369);
 const nftId = process.env.NFT_ID ?? null;
 const pageSize = parsePositiveInt(process.env.PAGE_SIZE, 25);
 const maxItemsEnv = parsePositiveInt(process.env.MAX_ITEMS, null);

@@ -29,6 +29,7 @@ from iroha_torii_client import (  # noqa: E402
 )
 
 GOVERNANCE_NETWORK_ID = canonical_hash(0xA5)
+PUBLIC_NETWORK_ID = "a5" * 32
 
 
 def governance_auth(captured: Optional[List[bytes]] = None) -> ToriiCanonicalRequestAuth:
@@ -42,6 +43,32 @@ def governance_auth(captured: Optional[List[bytes]] = None) -> ToriiCanonicalReq
         account_id=CANONICAL_OWNER,
         signer=signer,
     )
+
+
+def test_public_network_id_context_matches_normalized_canonical_auth() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(status_code=200, payload=app_api_transaction_draft()))
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=ToriiLocalSigningContext(PUBLIC_NETWORK_ID),
+    )
+    auth = ToriiCanonicalRequestAuth(
+        network_id=PUBLIC_NETWORK_ID,
+        account_id=CANONICAL_OWNER,
+        signer=lambda _message: b"\x44" * 64,
+    )
+
+    client.revoke_space_directory_manifest(
+        authority=CANONICAL_OWNER,
+        uaid="uaid:" + "23" * 32,
+        dataspace=3,
+        revoked_epoch=4096,
+        canonical_auth=auth,
+    )
+
+    assert auth.network_id == GOVERNANCE_NETWORK_ID
+    assert len(session.calls) == 1
 
 
 def test_publish_space_directory_manifest_posts_payload() -> None:

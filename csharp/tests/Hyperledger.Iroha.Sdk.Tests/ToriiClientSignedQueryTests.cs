@@ -39,7 +39,8 @@ public sealed partial class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         seenEnvelope = new SignedQueryBuilder(
             CanonicalAccountId,
-            NetworkId.Parse(CanonicalNetworkId))
+            NetworkId.Parse(CanonicalNetworkId),
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindParameters()
             .BuildSigned(Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032"));
 

@@ -295,7 +295,7 @@ object PrivacyExact12CapabilityAdmissionV1 {
      * Require committed availability and an exact native local compiled-profile tuple match.
      *
      * A local catalog is used only for equality. It never creates network availability, and the
-     * retired [PrivacyCapabilitySnapshotV1] type has no admission overload.
+     * retired legacy JSON inspection model has no admission overload.
      */
     @JvmStatic
     fun requireExact12CapabilityTupleV1(

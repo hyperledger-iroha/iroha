@@ -56,7 +56,8 @@ public final class HttpClientRejectCodeTests {
                 org.hyperledger.iroha.android.model.FeePaymentIntent.authority(
                     java.util.Collections.emptyList(), 1L))
             .setNetworkId(
-                org.hyperledger.iroha.android.testing.TestNetworkIds.canonical())
+                org.hyperledger.iroha.android.model.NetworkId.parse(
+                    "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"))
             .setAuthority("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
             .setCreationTimeMs(1L)
             .setExecutable(Executable.ivm(new byte[] {0x01}))

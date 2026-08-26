@@ -44,6 +44,14 @@ def _network_identity(
     return canonical, bytes.fromhex(canonical[5:69])
 
 
+def _public_network_id(canonical: str, context: str) -> str:
+    """Project one validated Torii hash literal to public NetworkId text."""
+
+    if re.fullmatch(r"hash:[0-9A-F]{64}#[0-9A-F]{4}", canonical) is None:
+        raise ValueError(f"{context} must be a canonical marked NetworkId")
+    return canonical[5:69].lower()
+
+
 def _base64url(value: Any, length: int, context: str) -> Tuple[str, bytes]:
     encoded = _require_exact_non_empty_string(value, context)
     if re.fullmatch(r"[A-Za-z0-9_-]+", encoded) is None:
@@ -181,7 +189,11 @@ def ensure_connect_session_matches_request(
     if any(
         (
             session.sid != request["sid"],
-            session.network_id != request["network_id"],
+            session.network_id
+            != _public_network_id(
+                request["network_id"],
+                "Connect session request.network_id",
+            ),
             session.app_pk != request["app_pk"],
             session.nonce != request["nonce"],
         )
@@ -257,7 +269,10 @@ def parse_connect_session(
     token_relay = _base64url(record.get("token_relay"), 32, f"{context}.token_relay")[0]
     session = ConnectSessionInfo(
         sid=identity["sid"],
-        network_id=identity["network_id"],
+        network_id=_public_network_id(
+            identity["network_id"],
+            f"{context}.network_id",
+        ),
         app_pk=identity["app_pk"],
         nonce=identity["nonce"],
         wallet_uri=wallet_uri,

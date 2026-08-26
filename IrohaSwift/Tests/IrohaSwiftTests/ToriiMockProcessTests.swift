@@ -2,6 +2,63 @@ import Foundation
 import XCTest
 
 #if os(macOS)
+  private final class ToriiMockHTTPSProxyURLProtocol: URLProtocol {
+    private var forwardingTask: URLSessionDataTask?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+      guard request.url?.scheme?.lowercased() == "https" else { return false }
+      switch request.url?.host?.lowercased() {
+      case "127.0.0.1", "localhost", "::1":
+        return true
+      default:
+        return false
+      }
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+      request
+    }
+
+    override func startLoading() {
+      guard let requestURL = request.url,
+        var components = URLComponents(url: requestURL, resolvingAgainstBaseURL: false)
+      else {
+        client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+        return
+      }
+      components.scheme = "http"
+      guard let forwardedURL = components.url else {
+        client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+        return
+      }
+
+      var forwardedRequest = request
+      forwardedRequest.url = forwardedURL
+      forwardingTask = URLSession.shared.dataTask(with: forwardedRequest) { [weak self] data, response, error in
+        guard let self else { return }
+        if let error {
+          self.client?.urlProtocol(self, didFailWithError: error)
+          return
+        }
+        guard let response else {
+          self.client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+          return
+        }
+        self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        if let data {
+          self.client?.urlProtocol(self, didLoad: data)
+        }
+        self.client?.urlProtocolDidFinishLoading(self)
+      }
+      forwardingTask?.resume()
+    }
+
+    override func stopLoading() {
+      forwardingTask?.cancel()
+      forwardingTask = nil
+    }
+  }
+
   final class ToriiMockProcess {
     private let process: Process
     private let stdoutPipe: Pipe
@@ -61,6 +118,21 @@ import XCTest
 
     deinit {
       stop()
+    }
+
+    /// Presents the HTTP-only local mock as an HTTPS Torii endpoint to the SDK.
+    /// The matching session rewrites only loopback traffic after production
+    /// transport-policy validation has accepted the request.
+    var secureBaseURL: URL {
+      var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+      components.scheme = "https"
+      return components.url!
+    }
+
+    func makeSecureSession() -> URLSession {
+      let configuration = URLSessionConfiguration.ephemeral
+      configuration.protocolClasses = [ToriiMockHTTPSProxyURLProtocol.self]
+      return URLSession(configuration: configuration)
     }
 
     func stop() {

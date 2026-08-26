@@ -8,12 +8,11 @@ from iroha_python import LocalSigningContext, NetworkId, ToriiClient
 from iroha_python.address import AccountAddress
 from iroha_python.client import ToriiCanonicalRequestAuth
 
-
 _NETWORK_ID = NetworkId.from_bytes(bytes([0xA5]) * 32)
 _ACCOUNT_ID = AccountAddress.from_account(
     domain="query-tests",
     public_key=bytes([0x31]) * 32,
-).to_i105(0x02F1)
+).to_i105(0x0171)
 
 
 def authenticated_query_client(session: Any) -> ToriiClient:

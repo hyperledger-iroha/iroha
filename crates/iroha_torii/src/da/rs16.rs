@@ -28,9 +28,10 @@ pub(super) const MAX_ERASURE_GENERATED_BYTES: u64 = 128 * 1024 * 1024;
 /// Maximum transient RS16 symbol workspace admitted for one ingest request.
 pub(super) const MAX_ERASURE_WORKSPACE_BYTES: u64 = 128 * 1024 * 1024;
 // With at most 1,024 data chunks, 64 data/parity shards, and 64 row-parity
-// stripes, the largest legal manifest contains 10,240 commitments. Keep a
-// little headroom while retaining a hard allocation ceiling.
-const MAX_MANIFEST_CHUNK_COMMITMENTS: usize = 16 * 1024;
+// stripes, the largest legal derived inventory contains 10,240 data and
+// recovery artifacts. Canonical manifests contain only the data commitments;
+// this ceiling also bounds parity artifacts handed to the recovery observer.
+const MAX_DA_CHUNK_ARTIFACTS: usize = 16 * 1024;
 /// Reject erasure layouts whose bounded dimensions still multiply into an
 /// excessive CPU or memory workload.
 ///
@@ -120,9 +121,15 @@ pub(super) fn build_chunk_commitments(
         request,
         chunk_store,
         canonical_payload,
-        |_index, _symbols| Ok(()),
+        |_commitment, _symbols| Ok(()),
     )
 }
+/// Build the canonical, data-only manifest commitments while exposing derived
+/// parity shards to a separate recovery-artifact observer.
+///
+/// Parity offsets occupy the recovery address space after `total_size` and
+/// therefore must never be inserted into the manifest's contiguous payload
+/// commitment list.
 pub(super) fn build_chunk_commitments_with_parity_observer<F>(
     request: &DaIngestRequest,
     chunk_store: &ChunkStore,
@@ -130,7 +137,7 @@ pub(super) fn build_chunk_commitments_with_parity_observer<F>(
     mut parity_observer: F,
 ) -> Result<Vec<ChunkCommitment>, (StatusCode, String)>
 where
-    F: FnMut(u32, &[u16]) -> Result<(), (StatusCode, String)>,
+    F: FnMut(ChunkCommitment, &[u16]) -> Result<(), (StatusCode, String)>,
 {
     let chunk_size = usize::try_from(request.chunk_size).map_err(|_| {
         (
@@ -190,17 +197,16 @@ where
         row_parity,
     )
     .map_err(|message| (StatusCode::BAD_REQUEST, message.to_string()))?;
-    let commitment_count =
-        chunk_commitment_capacity_hint(chunks.len(), data_shards, parity_shards, row_parity)?;
+    let artifact_count =
+        chunk_artifact_capacity_hint(chunks.len(), data_shards, parity_shards, row_parity)?;
     let mut commitments = Vec::new();
-    commitments
-        .try_reserve_exact(commitment_count)
-        .map_err(|_| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "insufficient memory for bounded DA manifest commitments".into(),
-            )
-        })?;
+    commitments.try_reserve_exact(chunks.len()).map_err(|_| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "insufficient memory for bounded canonical DA data commitments".into(),
+        )
+    })?;
+    debug_assert!(artifact_count >= chunks.len());
     let retain_row_parity_matrix = row_parity > 0;
     let mut stripe_symbols_matrix: Vec<Vec<Vec<u16>>> = if retain_row_parity_matrix {
         let mut matrix = Vec::new();
@@ -215,7 +221,13 @@ where
         Vec::new()
     };
     let mut hash_scratch = Vec::with_capacity(symbol_count.saturating_mul(2));
-    let mut next_index: u32 = 0;
+    let mut next_data_index: u32 = 0;
+    let mut next_recovery_index = u32::try_from(chunks.len()).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "DA source chunk count exceeds supported chunk index space".into(),
+        )
+    })?;
     for stripe in 0..stripes {
         let mut stripe_symbols = Vec::with_capacity(data_shards + parity_shards);
         for shard_idx in 0..data_shards {
@@ -254,7 +266,7 @@ where
                 let symbols =
                     erasure_rs16::symbols_from_chunk(symbol_count, &canonical_payload[offset..end]);
                 stripe_symbols.push(symbols.clone());
-                let index = allocate_chunk_index(&mut next_index)?;
+                let index = allocate_chunk_index(&mut next_data_index)?;
                 let stripe_id = manifest_u32_index(stripe, "manifest stripe id")?;
                 commitments.push(ChunkCommitment::new_with_role(
                     index,
@@ -296,17 +308,17 @@ where
                     "parity chunk offset exceeded supported size".into(),
                 )
             })?;
-            let index = allocate_chunk_index(&mut next_index)?;
-            parity_observer(index, symbols)?;
+            let index = allocate_chunk_index(&mut next_recovery_index)?;
             let stripe_id = manifest_u32_index(stripe, "manifest stripe id")?;
-            commitments.push(ChunkCommitment::new_with_role(
+            let recovery_commitment = ChunkCommitment::new_with_role(
                 index,
                 offset,
                 request.chunk_size,
                 ChunkDigest::new(digest),
                 ChunkRole::GlobalParity,
                 stripe_id,
-            ));
+            );
+            parity_observer(recovery_commitment, symbols)?;
             stripe_symbols.push(symbols.clone());
         }
         if retain_row_parity_matrix {
@@ -378,17 +390,17 @@ where
                         "stripe parity chunk offset exceeded supported size".into(),
                     )
                 })?;
-                let index = allocate_chunk_index(&mut next_index)?;
-                parity_observer(index, symbols)?;
+                let index = allocate_chunk_index(&mut next_recovery_index)?;
                 let column_id = manifest_u32_index(column, "manifest stripe parity column id")?;
-                commitments.push(ChunkCommitment::new_with_role(
+                let recovery_commitment = ChunkCommitment::new_with_role(
                     index,
                     offset,
                     request.chunk_size,
                     ChunkDigest::new(digest),
                     ChunkRole::StripeParity,
                     column_id,
-                ));
+                );
+                parity_observer(recovery_commitment, symbols)?;
             }
         }
     }
@@ -410,7 +422,7 @@ fn manifest_u32_index(value: usize, label: &str) -> Result<u32, (StatusCode, Str
         )
     })
 }
-fn chunk_commitment_capacity_hint(
+fn chunk_artifact_capacity_hint(
     data_chunk_count: usize,
     data_shards: usize,
     parity_shards: usize,
@@ -429,19 +441,19 @@ fn chunk_commitment_capacity_hint(
     let column_count = data_shards.checked_add(parity_shards).ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
-            "manifest commitment count exceeds supported size".into(),
+            "DA chunk artifact count exceeds supported size".into(),
         )
     })?;
     let global_parity = stripes.checked_mul(parity_shards).ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
-            "manifest commitment count exceeds supported size".into(),
+            "DA chunk artifact count exceeds supported size".into(),
         )
     })?;
     let row_parity_chunks = row_parity.checked_mul(column_count).ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
-            "manifest commitment count exceeds supported size".into(),
+            "DA chunk artifact count exceeds supported size".into(),
         )
     })?;
     let total = data_chunk_count
@@ -450,13 +462,13 @@ fn chunk_commitment_capacity_hint(
         .ok_or_else(|| {
             (
                 StatusCode::BAD_REQUEST,
-                "manifest commitment count exceeds supported size".into(),
+                "DA chunk artifact count exceeds supported size".into(),
             )
         })?;
-    if total > MAX_MANIFEST_CHUNK_COMMITMENTS {
+    if total > MAX_DA_CHUNK_ARTIFACTS {
         return Err((
             StatusCode::BAD_REQUEST,
-            "manifest would exceed the bounded commitment allocation".into(),
+            "DA recovery inventory would exceed the bounded chunk artifact allocation".into(),
         ));
     }
     Ok(total)
@@ -501,22 +513,21 @@ mod tests {
         );
     }
     #[test]
-    fn chunk_commitment_capacity_hint_counts_row_parity_once_per_column() {
-        let capacity =
-            chunk_commitment_capacity_hint(5, 2, 1, 2).expect("capacity math should fit");
+    fn chunk_artifact_capacity_hint_counts_row_parity_once_per_column() {
+        let capacity = chunk_artifact_capacity_hint(5, 2, 1, 2).expect("capacity math should fit");
         assert_eq!(
             capacity, 14,
             "5 data chunks + 3 global parity chunks + 2 row parity stripes across 3 columns"
         );
     }
     #[test]
-    fn chunk_commitment_capacity_hint_rejects_resource_exhaustion_before_allocation() {
-        let data_chunks = MAX_MANIFEST_CHUNK_COMMITMENTS;
-        let err = chunk_commitment_capacity_hint(data_chunks, 1, 1, 0)
+    fn chunk_artifact_capacity_hint_rejects_resource_exhaustion_before_allocation() {
+        let data_chunks = MAX_DA_CHUNK_ARTIFACTS;
+        let err = chunk_artifact_capacity_hint(data_chunks, 1, 1, 0)
             .expect_err("commitment count over the operational limit must reject");
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
         assert!(
-            err.1.contains("bounded commitment allocation"),
+            err.1.contains("bounded chunk artifact allocation"),
             "unexpected error: {}",
             err.1
         );
@@ -535,7 +546,11 @@ mod tests {
     }
     #[test]
     fn erasure_work_budget_rejects_large_retained_row_matrix() {
-        let err = validate_erasure_work_budget(32, MAX_CHUNK_SIZE_BYTES as usize, 1, 32, 1)
+        // Sixteen 1+2 stripes generate only 35 parity vectors (70 MiB), but
+        // retaining the source matrix during row-parity encoding requires 66
+        // vectors (132 MiB). Keep this case below the generated-byte ceiling so
+        // it exercises the independent workspace bound.
+        let err = validate_erasure_work_budget(16, MAX_CHUNK_SIZE_BYTES as usize, 1, 2, 1)
             .expect_err("row-parity matrix must fit the explicit workspace budget");
         assert!(err.contains("RS16 workspace budget"), "{err}");
     }

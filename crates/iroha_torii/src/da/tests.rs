@@ -6820,28 +6820,54 @@ fn replay_cursor_store_open_discards_conflicting_temp_snapshot() {
     assert_replay_cursor_sequences(&store, &[(lane_a, 41), (lane_b, 50)]);
 }
 #[test]
-fn resolve_manifest_emits_parity_chunks() {
-    let (fixture, artifacts) = resolved_manifest_fixture(
-        sample_request(),
-        1_701_000_111,
-        "resolve manifest with parity",
-    );
-    let request = &fixture.request;
-    let expected =
-        build_chunk_commitments(request, &fixture.chunk_store, fixture.canonical.as_slice())
-            .expect("expected chunk commitments");
-    assert_eq!(artifacts.manifest.chunks, expected);
-    let parity_chunks: Vec<_> = artifacts
-        .manifest
-        .chunks
-        .iter()
-        .filter(|chunk| chunk.parity)
-        .collect();
+fn resolve_manifest_emits_data_only_plan_and_exposes_parity_recovery_artifacts() {
+    let (request, artifacts) = taikai_manifest_fixture();
+    let canonical = normalize_payload(&request)
+        .expect("normalize payload")
+        .into_vec();
+    let chunk_store = build_chunk_store(&request, canonical.as_slice());
+    let mut recovery_artifacts = Vec::new();
+    let expected_data = build_chunk_commitments_with_parity_observer(
+        &request,
+        &chunk_store,
+        canonical.as_slice(),
+        |commitment, symbols| {
+            let mut bytes = Vec::with_capacity(symbols.len().saturating_mul(2));
+            for symbol in symbols {
+                bytes.extend_from_slice(&symbol.to_le_bytes());
+            }
+            recovery_artifacts.push((commitment, bytes));
+            Ok(())
+        },
+    )
+    .expect("derive canonical data commitments and parity recovery artifacts");
+    assert_eq!(artifacts.manifest.chunks, expected_data);
+    assert_eq!(expected_data.len(), chunk_store.chunks().len());
+    assert!(expected_data.iter().all(|chunk| {
+        !chunk.parity
+            && matches!(chunk.role, ChunkRole::Data)
+            && chunk.offset + u64::from(chunk.length) <= request.total_size
+    }));
+    for (expected_index, chunk) in expected_data.iter().enumerate() {
+        assert_eq!(chunk.index as usize, expected_index);
+    }
+    let plan = build_plan_from_da_manifest(&artifacts.manifest)
+        .expect("live parity-enabled manifest must yield the strict data plan");
+    assert_eq!(plan.content_length, request.total_size);
+    assert_eq!(plan.chunks.len(), expected_data.len());
+    let taikai_hint = plan.chunks[0]
+        .taikai_segment_hint
+        .as_ref()
+        .expect("exact Taikai metadata must populate the data plan");
+    assert_eq!(taikai_hint.event, "global-keynote");
+    assert_eq!(taikai_hint.stream, "stage-a");
+    assert_eq!(taikai_hint.rendition, "1080p");
+    assert_eq!(taikai_hint.sequence, 42);
     assert_eq!(
-        parity_chunks.len(),
+        recovery_artifacts.len(),
         usize::from(request.erasure_profile.parity_shards)
     );
-    for (idx, chunk) in parity_chunks.into_iter().enumerate() {
+    for (idx, (commitment, bytes)) in recovery_artifacts.iter().enumerate() {
         let expected_offset = request
             .total_size
             .checked_add(
@@ -6851,9 +6877,25 @@ fn resolve_manifest_emits_parity_chunks() {
                     .expect("offset within test bounds"),
             )
             .expect("parity offset within test bounds");
-        assert_eq!(chunk.offset, expected_offset);
-        assert_eq!(chunk.length, request.chunk_size);
-        assert!(chunk.parity);
+        assert_eq!(commitment.index as usize, expected_data.len() + idx);
+        assert_eq!(commitment.offset, expected_offset);
+        assert_eq!(commitment.length, request.chunk_size);
+        assert!(commitment.parity);
+        assert!(matches!(commitment.role, ChunkRole::GlobalParity));
+        assert_eq!(bytes.len(), request.chunk_size as usize);
+        assert_eq!(
+            commitment.commitment.as_ref(),
+            blake3::hash(bytes).as_bytes(),
+            "recovery commitment {idx} must bind its parity bytes"
+        );
+        assert!(
+            artifacts
+                .manifest
+                .chunks
+                .iter()
+                .all(|data| data.index != commitment.index),
+            "recovery artifact must stay outside the canonical manifest"
+        );
     }
 }
 #[test]
@@ -6968,22 +7010,87 @@ fn provided_manifest_must_match_enforced_retention_policy() {
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
 }
 #[test]
-fn provided_manifest_with_wrong_parity_is_rejected() {
+fn provided_manifest_with_recovery_parity_commitment_is_rejected() {
     let mut fixture = ManifestResolutionFixture::new(sample_request());
     let artifacts = fixture.resolve(1_701_000_222).expect("resolve manifest");
     let mut tampered = artifacts.manifest.clone();
-    let first_parity = tampered
-        .chunks
-        .iter_mut()
-        .find(|chunk| chunk.parity)
-        .expect("expected parity chunk to mutate");
-    first_parity.parity = false;
+    tampered.chunks.push(ChunkCommitment::new_with_role(
+        u32::try_from(tampered.chunks.len()).expect("test chunk count fits u32"),
+        tampered.total_size,
+        tampered.chunk_size,
+        ChunkDigest::new([0xBC; 32]),
+        ChunkRole::GlobalParity,
+        0,
+    ));
     fixture.request.norito_manifest = Some(to_bytes(&tampered).expect("encode tampered manifest"));
     let err = match fixture.resolve(1_701_000_333) {
-        Ok(_) => panic!("manifest with mismatched parity flag must be rejected"),
+        Ok(_) => panic!("manifest with an out-of-range parity artifact must be rejected"),
         Err(err) => err,
     };
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert_eq!(err.1, "manifest chunk count does not match chunker output");
+}
+#[test]
+fn provided_manifest_with_wrong_data_parity_flag_is_rejected() {
+    let mut request = sample_request();
+    request.blob_class = BlobClass::NexusLaneSidecar;
+    let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
+    let digest = request.signing_digest();
+    request.signatures[0].signature = checked_signature(keypair.private_key(), &digest);
+    let mut fixture = ManifestResolutionFixture::new(request);
+    let artifacts = fixture.resolve(1_701_000_334).expect("resolve manifest");
+    let mut tampered = artifacts.manifest.clone();
+    tampered.chunks[0].parity = true;
+    fixture.request.norito_manifest = Some(to_bytes(&tampered).expect("encode tampered manifest"));
+    let err = fixture
+        .resolve(1_701_000_335)
+        .expect_err("manifest with a parity-marked data commitment must be rejected");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("parity flag mismatch"),
+        "unexpected error: {}",
+        err.1
+    );
+}
+#[test]
+fn provided_manifest_with_wrong_data_role_is_rejected() {
+    let mut request = sample_request();
+    request.blob_class = BlobClass::NexusLaneSidecar;
+    let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
+    let digest = request.signing_digest();
+    request.signatures[0].signature = checked_signature(keypair.private_key(), &digest);
+    let mut fixture = ManifestResolutionFixture::new(request);
+    let artifacts = fixture.resolve(1_701_000_336).expect("resolve manifest");
+    let mut tampered = artifacts.manifest.clone();
+    tampered.chunks[0].role = ChunkRole::GlobalParity;
+    fixture.request.norito_manifest = Some(to_bytes(&tampered).expect("encode tampered manifest"));
+    let err = fixture
+        .resolve(1_701_000_337)
+        .expect_err("manifest with a recovery role on data must be rejected");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("role mismatch"),
+        "unexpected error: {}",
+        err.1
+    );
+}
+#[test]
+fn provided_manifest_with_noncanonical_data_index_is_rejected() {
+    let mut request = sample_request();
+    request.blob_class = BlobClass::NexusLaneSidecar;
+    let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
+    let digest = request.signing_digest();
+    request.signatures[0].signature = checked_signature(keypair.private_key(), &digest);
+    let mut fixture = ManifestResolutionFixture::new(request);
+    let artifacts = fixture.resolve(1_701_000_338).expect("resolve manifest");
+    let mut tampered = artifacts.manifest.clone();
+    tampered.chunks[0].index = 1;
+    fixture.request.norito_manifest = Some(to_bytes(&tampered).expect("encode tampered manifest"));
+    let err = fixture
+        .resolve(1_701_000_339)
+        .expect_err("manifest with a noncanonical data index must be rejected");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert_eq!(err.1, "manifest chunk commitment mismatch at index 0");
 }
 #[test]
 fn provided_manifest_with_wrong_ipa_commitment_is_rejected() {

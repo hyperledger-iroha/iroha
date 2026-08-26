@@ -1,4 +1,5 @@
 ﻿using Hyperledger.Iroha;
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Transactions;
@@ -21,7 +22,9 @@ var privateKeySeed = Convert.FromHexString(seedHex);
 var exactNetworkId = NetworkId.Parse(networkId);
 var toriiOptions = new ToriiClientOptions
 {
-    LocalSigningContext = new ToriiLocalSigningContext(exactNetworkId),
+    LocalSigningContext = new ToriiLocalSigningContext(
+        exactNetworkId,
+        AccountAddress.TairaTestnetChainDiscriminant),
     CanonicalRequestCredentials = new CanonicalRequestCredentials(
         canonicalAccountId,
         privateKeySeed),
@@ -54,6 +57,7 @@ try
     var transaction = client.Ledger
         .BuildTransaction(
             exactNetworkId,
+            AccountAddress.TairaTestnetChainDiscriminant,
             canonicalAccountId,
             FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>()))
         .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "1", canonicalAccountId)

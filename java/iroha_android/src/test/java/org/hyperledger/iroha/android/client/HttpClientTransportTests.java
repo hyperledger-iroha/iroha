@@ -95,6 +95,29 @@ public final class HttpClientTransportTests {
     return FeePaymentIntent.authority(Collections.emptyList(), gasLimit);
   }
 
+  private static Map<String, Object> feeQuotePayload(final FeePaymentIntent feePayment) {
+    return feeQuotePayload(feePayment, VERIFYING_KEY_NETWORK_ID);
+  }
+
+  private static Map<String, Object> feeQuotePayload(
+      final FeePaymentIntent feePayment, final NetworkId networkId) {
+    final Map<String, Object> admissionIntent = new LinkedHashMap<>();
+    admissionIntent.put("intent", "ordinary");
+    admissionIntent.put("value", null);
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put(
+        "domain", Map.of("kind", "network", "value", networkId.noritoJsonLiteral()));
+    payload.put("authority", "alice@universal");
+    payload.put("creation_time_ms", 1L);
+    payload.put("instructions", Map.of("Instructions", Collections.emptyList()));
+    payload.put("time_to_live_ms", 60_000L);
+    payload.put("fee_payment", feePayment.toJsonMap());
+    payload.put("admission_intent", admissionIntent);
+    payload.put("metadata", Collections.emptyMap());
+    payload.put("attachments", null);
+    return payload;
+  }
+
   private HttpClientTransportTests() {}
   public static void main(final String[] args) throws Exception {
     submitBuildsToriiRequest();
@@ -425,7 +448,7 @@ public final class HttpClientTransportTests {
   private static void privacyCapabilitiesAreTypedAndExact() throws Exception {
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final byte[] body =
-        HttpClientTransportTestFixtures.privacyCapabilitySnapshotJson()
+        HttpClientTransportTestFixtures.legacyPrivacyCapabilityInspectionJson()
             .getBytes(StandardCharsets.UTF_8);
     final OneResponseExecutor executor =
         new OneResponseExecutor(
@@ -2305,12 +2328,7 @@ public final class HttpClientTransportTests {
         HttpClientTransport.withExecutor(
             executor,
             signedClientConfig("https://torii.example/api"));
-    final Map<String, Object> unsignedPayload = new LinkedHashMap<>();
-    unsignedPayload.put(
-        "domain",
-        Map.of("kind", "network", "value", VERIFYING_KEY_NETWORK_ID.literal()));
-    unsignedPayload.put("authority", "alice@universal");
-    unsignedPayload.put("fee_payment", feePayment(9_000L).toJsonMap());
+    final Map<String, Object> unsignedPayload = feeQuotePayload(feePayment(9_000L));
 
     final FeeQuoteResponse quote = transport.quoteFees(unsignedPayload, auth).join();
 
@@ -2362,13 +2380,8 @@ public final class HttpClientTransportTests {
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     for (final String legacyField : List.of("chain", "chainId", "chain_id")) {
-      final Map<String, Object> unsignedPayload = new LinkedHashMap<>();
-      unsignedPayload.put(
-          "domain",
-          Map.of("kind", "network", "value", VERIFYING_KEY_NETWORK_ID.literal()));
+      final Map<String, Object> unsignedPayload = feeQuotePayload(feePayment(9_000L));
       unsignedPayload.put(legacyField, VERIFYING_KEY_NETWORK_ID.literal());
-      unsignedPayload.put("authority", "alice@universal");
-      unsignedPayload.put("fee_payment", feePayment(9_000L).toJsonMap());
       expectIllegalArgument(
           () ->
               transport.quoteFees(
@@ -2376,6 +2389,92 @@ public final class HttpClientTransportTests {
           "fee quote must reject legacy flat transaction identity key " + legacyField);
       assert executor.lastRequest == null : "legacy identity must fail before dispatch";
     }
+    final String canonicalNetworkId = VERIFYING_KEY_NETWORK_ID.noritoJsonLiteral();
+    final String corruptedChecksum =
+        canonicalNetworkId.substring(0, canonicalNetworkId.length() - 1)
+            + (canonicalNetworkId.endsWith("0") ? "1" : "0");
+    for (final String invalidNetworkId :
+        List.of(
+            VERIFYING_KEY_NETWORK_ID.literal(),
+            canonicalNetworkId.toLowerCase(Locale.ROOT),
+            corruptedChecksum)) {
+      final Map<String, Object> unsignedPayload = feeQuotePayload(feePayment(9_000L));
+      unsignedPayload.put(
+          "domain", Map.of("kind", "network", "value", invalidNetworkId));
+      expectIllegalArgument(
+          () ->
+              transport.quoteFees(
+                  unsignedPayload, canonicalAuth("alice@universal", keyPair, null, null)),
+          "fee quote must reject a non-Norito NetworkId literal");
+      assert executor.lastRequest == null : "invalid NetworkId must fail before dispatch";
+    }
+
+    final List<Map<String, Object>> malformedPayloads = new ArrayList<>();
+    for (final String requiredField :
+        List.of(
+            "domain",
+            "authority",
+            "creation_time_ms",
+            "instructions",
+            "time_to_live_ms",
+            "fee_payment",
+            "admission_intent",
+            "metadata",
+            "attachments")) {
+      final Map<String, Object> missingField = feeQuotePayload(feePayment(9_000L));
+      missingField.remove(requiredField);
+      malformedPayloads.add(missingField);
+    }
+    final Map<String, Object> unknownField = feeQuotePayload(feePayment(9_000L));
+    unknownField.put("unknown", true);
+    malformedPayloads.add(unknownField);
+    final Map<String, Object> zeroTtl = feeQuotePayload(feePayment(9_000L));
+    zeroTtl.put("time_to_live_ms", 0L);
+    malformedPayloads.add(zeroTtl);
+    final Map<String, Object> negativeCreationTime = feeQuotePayload(feePayment(9_000L));
+    negativeCreationTime.put("creation_time_ms", -1L);
+    malformedPayloads.add(negativeCreationTime);
+    final Map<String, Object> fractionalCreationTime = feeQuotePayload(feePayment(9_000L));
+    fractionalCreationTime.put("creation_time_ms", 1.0D);
+    malformedPayloads.add(fractionalCreationTime);
+    final Map<String, Object> malformedInstructions = feeQuotePayload(feePayment(9_000L));
+    malformedInstructions.put("instructions", Collections.emptyList());
+    malformedPayloads.add(malformedInstructions);
+    final Map<String, Object> zeroNonce = feeQuotePayload(feePayment(9_000L));
+    zeroNonce.put("nonce", 0L);
+    malformedPayloads.add(zeroNonce);
+    final Map<String, Object> malformedAdmissionIntent = feeQuotePayload(feePayment(9_000L));
+    malformedAdmissionIntent.put("admission_intent", Map.of("intent", "ordinary"));
+    malformedPayloads.add(malformedAdmissionIntent);
+    final Map<String, Object> malformedMetadata = feeQuotePayload(feePayment(9_000L));
+    malformedMetadata.put("metadata", "not-an-object");
+    malformedPayloads.add(malformedMetadata);
+    final Map<String, Object> retiredMetadata = feeQuotePayload(feePayment(9_000L));
+    retiredMetadata.put("metadata", Map.of("gas_limit", 9_000L));
+    malformedPayloads.add(retiredMetadata);
+    final Map<String, Object> malformedAttachments = feeQuotePayload(feePayment(9_000L));
+    malformedAttachments.put("attachments", "");
+    malformedPayloads.add(malformedAttachments);
+    for (final Map<String, Object> malformedPayload : malformedPayloads) {
+      expectIllegalArgument(
+          () ->
+              transport.quoteFees(
+                  malformedPayload, canonicalAuth("alice@universal", keyPair, null, null)),
+          "fee quote must reject an incomplete or malformed TransactionPayload");
+      assert executor.lastRequest == null : "malformed payload must fail before dispatch";
+    }
+
+    final CapturingExecutor networkExecutor = new CapturingExecutor();
+    final HttpClientTransport networkBoundTransport =
+        HttpClientTransport.withExecutor(
+            networkExecutor, signedClientConfig("https://torii.example"));
+    expectIllegalArgument(
+        () ->
+            networkBoundTransport.quoteFees(
+                feeQuotePayload(feePayment(9_000L), OTHER_NETWORK_ID),
+                canonicalAuth("alice@universal", keyPair, null, null)),
+        "fee quote must reject a TransactionPayload from another network");
+    assert networkExecutor.lastRequest == null : "network mismatch must fail before dispatch";
   }
 
   private static void feeSponsorProgramRequestSignsExactSelectorAndParsesLifecycle()
@@ -2470,12 +2569,7 @@ public final class HttpClientTransportTests {
           HttpClientTransport.withExecutor(
               executor,
               signedClientConfig("https://torii.example"));
-      final Map<String, Object> unsignedPayload = new LinkedHashMap<>();
-      unsignedPayload.put(
-          "domain",
-          Map.of("kind", "network", "value", VERIFYING_KEY_NETWORK_ID.literal()));
-      unsignedPayload.put("authority", "alice@universal");
-      unsignedPayload.put("fee_payment", requested.toJsonMap());
+      final Map<String, Object> unsignedPayload = feeQuotePayload(requested);
 
       expectCompletionIllegalArgument(
           transport.quoteFees(unsignedPayload, auth),

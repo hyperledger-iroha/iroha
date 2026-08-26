@@ -16,11 +16,10 @@ import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVeri
 /**
  * {@link IrohaKeyManager.KeyProvider} backed by an Android Keystore backend.
  *
- * <p>The backend is supplied through {@link KeystoreBackend}; desktop JVM builds can rely on fake
- * implementations for tests while Android builds will provide a real backend that bridges to
- * {@code android.security.keystore.KeyStore} / {@code KeyGenParameterSpec}. Support for StrongBox
- * and discrete secure elements will land by swapping the backend at runtime depending on device
- * capabilities.
+ * <p>The backend is supplied through {@link KeystoreBackend}; desktop JVM tests can provide a fake,
+ * while Android uses {@link SystemAndroidKeystoreBackend} to bridge to
+ * {@code android.security.keystore.KeyStore} and {@code KeyGenParameterSpec}. StrongBox policy is
+ * enforced through {@link KeyGenParameters} and the selected backend's reported capabilities.
  */
 public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
 

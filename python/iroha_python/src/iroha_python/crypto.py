@@ -79,6 +79,8 @@ ED25519_PRIVATE_KEY_LENGTH: Final[int] = 32
 ED25519_PUBLIC_KEY_LENGTH: Final[int] = 32
 ED25519_SIGNATURE_LENGTH: Final[int] = 64
 _ED25519_MULTIHASH_PREFIX: Final[str] = "ed0120"
+# Low-level key-to-address renderer compatibility default. Application signing
+# and Torii client contexts deliberately use the Taira discriminant (0x0171).
 _DEFAULT_I105_DISCRIMINANT: Final[int] = 0x02F1
 _MAX_CONTRACT_ARGUMENT_RECORD_BYTES: Final[int] = 1024 * 1024
 # Keep this byte bound aligned with the native V1 CancelAssetLock builders in
@@ -2153,7 +2155,7 @@ def privacy_compiled_profile_catalog_v1() -> bytes:
 
     This archive has no committed height, governance activation, or readiness
     state. Use the client's authoritative Exact12 capability query for a fresh
-    snapshot from live Torii.
+    manifest from live Torii.
     """
 
     return _privacy_output_archive(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 import iroha_python
 import iroha_python.client as client_module
@@ -29,13 +30,13 @@ CANONICAL_AUTH = ToriiCanonicalRequestAuth(
     network_id=NETWORK_ID.literal,
     account_id=AccountAddress.from_account(
         domain="wonderland", public_key=bytes([0x11]) * 32
-    ).to_i105(0x02F1),
+    ).to_i105(0x0171),
     signer=lambda _message: bytes([0x44]) * 64,
     timestamp_ms=4_102_444_801_000,
     nonce="privacy-capability-test",
 )
 CANONICAL_AUTH_HEADER = AccountAddress.parse_encoded(
-    CANONICAL_AUTH.account_id, expected_discriminant=0x02F1
+    CANONICAL_AUTH.account_id, expected_discriminant=0x0171
 ).canonical_hex()
 
 
@@ -133,34 +134,33 @@ def test_privacy_capabilities_fetches_and_preserves_exact_norito_manifest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, _, events = _client_with_crypto(monkeypatch)
-    response = SimpleNamespace(
-        status_code=200,
-        headers={"Content-Type": "application/x-norito"},
-        content=b"canonical-exact12-manifest",
-        text="",
-    )
-    requests: list[tuple[str, str, object, object, object]] = []
+    response = requests.Response()
+    response.status_code = 200
+    response.headers["Content-Type"] = "application/x-norito"
+    response._content = b"canonical-exact12-manifest"
+    calls: list[tuple[str, str, object, object]] = []
 
-    def request(method: str, path: str, **kwargs: object) -> object:
-        requests.append(
+    def send(prepared: requests.PreparedRequest, **kwargs: object) -> requests.Response:
+        calls.append(
             (
-                method,
-                path,
-                kwargs.get("headers"),
-                kwargs.get("allow_retry"),
+                prepared.method or "",
+                prepared.path_url,
+                dict(prepared.headers),
                 kwargs.get("allow_redirects"),
             )
         )
+        response.url = prepared.url
         return response
 
-    monkeypatch.setattr(client, "_request", request)
+    monkeypatch.setattr(client._session, "send", send)
     manifest = client.privacy_capabilities_v1(canonical_auth=CANONICAL_AUTH)
 
     assert isinstance(manifest, _FakeManifest)
-    assert requests[0][:2] == ("GET", "/v1/privacy/capabilities")
-    assert requests[0][2]["Accept"] == "application/x-norito"
-    assert requests[0][2]["X-Iroha-Account"] == CANONICAL_AUTH_HEADER
-    assert requests[0][3:] == (False, False)
+    assert calls[0][:2] == ("GET", "/v1/privacy/capabilities")
+    assert calls[0][2]["Accept"] == "application/x-norito"
+    assert calls[0][2]["X-Iroha-Account"] == CANONICAL_AUTH_HEADER
+    assert calls[0][3] is False
+    assert len(calls) == 1
     assert events == ["decode-capabilities"]
 
 

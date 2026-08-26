@@ -955,6 +955,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_worker_main_02.rs',
         'tests/v2_worker_main_04.rs',
         'tests/v2_worker_main_05.rs',
+        'tests/v2_worker_kagemusha_runtime_gate.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_worker_io_execution.rs': (
         'v2_worker/exact_output_rollover_claim.rs',
@@ -1610,9 +1611,6 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "ca2db5b8e601e556e10001d3c0a6be5b18dd1cd1f92e5eecf0273fe158fb232d"
     ),
     "runtime_step": "aaa41e0366ae660537780528c97e763e8f292e9a80234c21d4cc37a390eea414",
-    "runtime_step_recovery": (
-        "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
-    ),
     "dispatch_one_adapter_deferred": (
         "a4c901cdd676731f6cfd3c4dcb52718df366f65bc7ca5e8d1a54a841ec30cdab"
     ),
@@ -1739,7 +1737,7 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
     ),
     "scheduler_evidence_validate_exact": (
-        "04da1f906e4e197bad4e49e962a92ae7d99c2749f6aecfdfe28f256c4426a188"
+        "2fb71fb9e5d2e5c2714a9ecabb0a44a67bdaf3b361c6f543c596720852e3c249"
     ),
     "adapter_pacemaker_escape_is_parked": (
         "5513bb3477396c268d3dc7ed75ded1d6c027bc5780c5f129b53920720c498d86"
@@ -2435,7 +2433,7 @@ _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
         "be3ae121e9728b1bf3e49e1f290e08f8ed9f09c310e5e510adf7b5aac7e792a9"
     ),
     "install_view": (
-        "d081de0f396bcb685e76d4f6906eff37347ae7da907a699616925deea89af379"
+        "09d31e09f4aa305f555b38165e6a27646096c9e2f858c06d3e43191f8d5bbdc8"
     ),
     "commit_fetch_completion": (
         "872cb0844dd0e1eb96ab8122b75f5cf9d4cc837f15581f07f81e02ea516fcab0"
@@ -2481,10 +2479,10 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 864
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 84
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "a7364ee89cfab31a3a48d13e7f74b6e353bc34871619da907200b84cdf482a07"
+    "331123d12b08027a9ac0ed0157ed84007eac5a8659b1995bf4c77c3eedb231c2"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "cd8ff3e24c006a404d0a05d1696557ff92909fb96676851b59647ac48965a295"
+    "44763040b4f30a177efc0613582de7925c0517ce7a306789df54551bc8089a9d"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2925,12 +2923,11 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2::tests::deferred_service_evidence_rejects_every_owner_and_rank_mutation",
     "sumeragi::v2::tests::deferred_zero_ordinal_is_exact_single_use_and_never_reminted",
     "sumeragi::v2_effects::tests::live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks",
-    "sumeragi::v2_effects::tests::recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks",
     "sumeragi::v2_lane_work::tests::durable_lane_certificate_coalescing_preserves_alternate_ingress_owners",
     "sumeragi::v2_runtime::tests::adapter_command_identity_is_derived_from_exact_immutable_payload",
     "sumeragi::v2_runtime::tests::admission_ordinal_exhaustion_fails_runtime_closed",
     "sumeragi::v2_runtime::tests::runtime_rejects_replayed_foreign_and_mutated_deferred_tokens",
-    "sumeragi::v2_runtime::tests::scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches",
+    "sumeragi::v2_runtime::tests::scheduler_owner_carrier_covers_live_and_typed_deferred_branches",
     "sumeragi::v2_runtime::tests::scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields",
     "sumeragi::v2_runtime::tests::scheduler_owner_must_be_taken_before_a_later_step_can_enter",
     "sumeragi::v2_runtime::tests::selected_owner_without_a_runtime_minted_ordinal_fails_closed",

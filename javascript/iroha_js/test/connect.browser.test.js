@@ -28,6 +28,7 @@ import {
   toHex,
 } from "../src/connect.browser.js";
 import { AccountAddress } from "../src/address.js";
+import { networkIdToNoritoJson } from "../src/networkIdNoritoJson.js";
 import {
   buildCanonicalJsonRequest,
   canonicalRequestSignatureMessage,
@@ -96,6 +97,7 @@ const APPROVE_DOMAIN = encoder.encode("iroha-connect|approve|v1");
 const RELAY_AUTH_DOMAIN = encoder.encode("iroha-connect|relay-auth|v1");
 const CONNECT_ENVELOPE_TYPE_NAME = "iroha_torii_shared::connect::EnvelopeV1";
 const CANONICAL_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
+const CANONICAL_NETWORK_ID_JSON = networkIdToNoritoJson(CANONICAL_NETWORK_ID);
 const REGISTER_TOKEN_APP = "A".repeat(43);
 const REGISTER_TOKEN_WALLET = "B".repeat(43);
 const REGISTER_TOKEN_MANAGEMENT = "C".repeat(43);
@@ -613,7 +615,7 @@ test("registerConnectSession posts the exact canonical session identity", async 
       return new Response(
         JSON.stringify({
           sid: preview.sidBase64Url,
-          network_id: preview.networkId.toString(),
+          network_id: CANONICAL_NETWORK_ID_JSON,
           app_pk: toBase64Url(preview.appKeyPair.publicKey),
           nonce: toBase64Url(preview.nonce),
           wallet_uri: `${preview.walletUri}&token=${REGISTER_TOKEN_WALLET}&relay=${REGISTER_TOKEN_RELAY}`,
@@ -636,12 +638,52 @@ test("registerConnectSession posts the exact canonical session identity", async 
   assert.equal(calls[0].init.method, "POST");
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     sid: preview.sidBase64Url,
-    network_id: preview.networkId.toString(),
+    network_id: CANONICAL_NETWORK_ID_JSON,
     app_pk: toBase64Url(preview.appKeyPair.publicKey),
     nonce: toBase64Url(preview.nonce),
     node: "https://taira.sora.org",
   });
   assert.equal(response.token_app, REGISTER_TOKEN_APP);
+  assert.equal(response.network_id, preview.networkId.toString());
+  assert.equal(
+    new URL(response.wallet_uri).searchParams.get("network_id"),
+    preview.networkId.toString(),
+  );
+});
+
+test("registerConnectSession rejects raw or noncanonical typed NetworkId JSON", async () => {
+  const preview = makePreview();
+  const badChecksum = `${CANONICAL_NETWORK_ID_JSON.slice(0, -1)}${
+    CANONICAL_NETWORK_ID_JSON.endsWith("0") ? "1" : "0"
+  }`;
+  for (const networkId of [
+    preview.networkId.toString(),
+    CANONICAL_NETWORK_ID_JSON.toLowerCase(),
+    badChecksum,
+  ]) {
+    const response = {
+      sid: preview.sidBase64Url,
+      network_id: networkId,
+      app_pk: toBase64Url(preview.appKeyPair.publicKey),
+      nonce: toBase64Url(preview.nonce),
+      wallet_uri: `${preview.walletUri}&token=${REGISTER_TOKEN_WALLET}&relay=${REGISTER_TOKEN_RELAY}`,
+      app_uri: `${preview.appUri}&token=${REGISTER_TOKEN_APP}&relay=${REGISTER_TOKEN_RELAY}`,
+      token_app: REGISTER_TOKEN_APP,
+      token_wallet: REGISTER_TOKEN_WALLET,
+      token_management: REGISTER_TOKEN_MANAGEMENT,
+      token_relay: REGISTER_TOKEN_RELAY,
+    };
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(
+      registerConnectSession("https://taira.sora.org", preview, {
+        fetchImpl: async () => new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      }),
+      /session\.network_id.*canonical marked Iroha NetworkId|checksum/u,
+    );
+  }
 });
 
 test("registerConnectSession rejects deep-link substitution and replay-shaped duplicates", async () => {
@@ -658,7 +700,7 @@ test("registerConnectSession rejects deep-link substitution and replay-shaped du
   ]) {
     const response = {
       sid: preview.sidBase64Url,
-      network_id: preview.networkId.toString(),
+      network_id: CANONICAL_NETWORK_ID_JSON,
       app_pk: toBase64Url(preview.appKeyPair.publicKey),
       nonce: toBase64Url(preview.nonce),
       wallet_uri: `${preview.walletUri}&token=${REGISTER_TOKEN_WALLET}&relay=${REGISTER_TOKEN_RELAY}`,

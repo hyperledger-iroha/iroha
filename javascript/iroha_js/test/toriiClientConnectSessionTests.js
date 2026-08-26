@@ -1,6 +1,7 @@
 // Exact-identity Connect session Torii client regression registrations.
 
 import { generateConnectSid } from "../src/connectSession.js";
+import { computeHashLiteralCrc } from "../src/hashLiteralCrc.js";
 
 export function registerToriiClientConnectSessionTests({
   assert,
@@ -23,6 +24,11 @@ export function registerToriiClientConnectSessionTests({
   const tokenManagement = "C".repeat(43);
   const tokenRelay = "D".repeat(43);
 
+  function markedNetworkId(networkId = VK_SIGNING_NETWORK_ID) {
+    const body = networkId.toString().toUpperCase();
+    return `hash:${body}#${computeHashLiteralCrc("hash", body)}`;
+  }
+
   function sampleInput(overrides = {}) {
     return {
       sid,
@@ -34,15 +40,19 @@ export function registerToriiClientConnectSessionTests({
   }
 
   function sampleResponse(overrides = {}, node = "") {
-    const identity = {
+    const responseIdentity = {
       sid,
-      network_id: VK_SIGNING_NETWORK_ID.toString(),
+      network_id: markedNetworkId(),
       app_pk: appPublicKey.toString("base64url"),
       nonce: nonce.toString("base64url"),
     };
+    const deepLinkIdentity = {
+      ...responseIdentity,
+      network_id: VK_SIGNING_NETWORK_ID.toString(),
+    };
     const uri = (role, token) => {
       const params = new URLSearchParams({
-        ...identity,
+        ...deepLinkIdentity,
         node,
         v: "1",
         role,
@@ -52,7 +62,7 @@ export function registerToriiClientConnectSessionTests({
       return `iroha://connect?${params}`;
     };
     return {
-      ...identity,
+      ...responseIdentity,
       wallet_uri: uri("wallet", tokenWallet),
       app_uri: uri("app", tokenApp),
       token_app: tokenApp,
@@ -89,11 +99,15 @@ export function registerToriiClientConnectSessionTests({
     assert.equal(captured.init.headers["Content-Type"], "application/json");
     assert.deepEqual(JSON.parse(captured.init.body), {
       sid,
-      network_id: VK_SIGNING_NETWORK_ID.toString(),
+      network_id: markedNetworkId(),
       app_pk: appPublicKey.toString("base64url"),
       nonce: nonce.toString("base64url"),
       node: "torii",
     });
+    assert.equal(
+      new URL(response.wallet_uri).searchParams.get("network_id"),
+      VK_SIGNING_NETWORK_ID.toString(),
+    );
   });
 
   test("createConnectSession rejects malformed responses", async () => {
@@ -127,10 +141,33 @@ export function registerToriiClientConnectSessionTests({
     assert.equal(captured.url, `${BASE_URL}/v1/connect/session`);
     assert.deepEqual(JSON.parse(captured.init.body), {
       sid,
-      network_id: VK_SIGNING_NETWORK_ID.toString(),
+      network_id: markedNetworkId(),
       app_pk: appPublicKey.toString("base64url"),
       nonce: nonce.toString("base64url"),
     });
+  });
+
+  test("createConnectSession rejects raw or noncanonical NetworkId response JSON", async () => {
+    const canonical = markedNetworkId();
+    const badChecksum = `${canonical.slice(0, -1)}${canonical.endsWith("0") ? "1" : "0"}`;
+    for (const networkId of [
+      VK_SIGNING_NETWORK_ID.toString(),
+      canonical.toLowerCase(),
+      badChecksum,
+    ]) {
+      const client = new ToriiClient(BASE_URL, {
+        fetchImpl: async () => createResponse({
+          status: 200,
+          jsonData: sampleResponse({ network_id: networkId }),
+          headers: { "content-type": "application/json" },
+        }),
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        () => client.createConnectSession(sampleInput()),
+        /network_id.*canonical marked Iroha hash literal|invalid checksum/u,
+      );
+    }
   });
 
   test("createConnectSession rejects invalid sid values", async () => {

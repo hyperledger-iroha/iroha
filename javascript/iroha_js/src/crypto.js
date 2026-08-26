@@ -906,8 +906,9 @@ export function isPrivacyNativeAvailable() {
  * Return this native binary's canonical local compiled-profile catalog.
  *
  * The catalog contains no committed height, governance activation, or network
- * readiness. Use `getPrivacyCapabilitiesV1` with a configured Torii client for
- * the authoritative fresh committed snapshot.
+ * readiness. Authoritative admission requires
+ * `getPrivacyExact12CapabilityManifestV1` and native ABI22 validation; the
+ * legacy JSON inspection response is never admission evidence.
  * @returns {Buffer}
  */
 export function privacyCompiledProfileCatalogV1() {

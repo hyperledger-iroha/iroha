@@ -50,6 +50,7 @@ def _session_fixture(
 ) -> tuple[Dict[str, str], Dict[str, Any]]:
     network_id = _canonical_hash(network_seed)
     network_bytes = bytes.fromhex(network_id[5:69])
+    public_network_id = network_bytes.hex()
     app_pk_bytes = bytes([app_seed]) * 32
     nonce_bytes = bytes([nonce_seed]) * 16
     sid = _base64url(
@@ -69,7 +70,7 @@ def _session_fixture(
     def role_uri(role: str, token: str) -> str:
         return (
             "iroha://connect"
-            f"?sid={sid}&network_id={quote(network_id, safe='')}&app_pk={app_pk}"
+            f"?sid={sid}&network_id={public_network_id}&app_pk={app_pk}"
             f"&nonce={nonce}&node={quote(node, safe='')}&v=1&role={role}"
             f"&token={token}&relay={token_relay}"
         )
@@ -119,7 +120,7 @@ def test_create_and_delete_session() -> None:
     deleted = client.delete_connect_session(request["sid"], session_info.token_management)
 
     assert session_info.sid == request["sid"]
-    assert session_info.network_id == request["network_id"]
+    assert session_info.network_id == request["network_id"][5:69].lower()
     assert session_info.app_pk == request["app_pk"]
     assert session_info.nonce == request["nonce"]
     assert session_info.token_relay == response["token_relay"]
@@ -128,6 +129,34 @@ def test_create_and_delete_session() -> None:
     assert session.calls[1]["headers"] == {
         "Authorization": f"Bearer {response['token_management']}"
     }
+
+
+def test_session_keeps_marked_json_network_out_of_public_identity_and_deep_links() -> None:
+    request, response = _session_fixture()
+    session = RecordingSession()
+    session.queue(StubResponse(payload=response))
+
+    info = ToriiClient("http://node.test", session=session).create_connect_session(request)
+
+    raw_network_id = request["network_id"][5:69].lower()
+    assert info.network_id == raw_network_id
+    assert f"network_id={raw_network_id}" in info.wallet_uri
+    assert "network_id=hash%3A" not in info.wallet_uri
+    assert json.loads(session.calls[0]["data"])["network_id"] == request["network_id"]
+
+
+def test_session_rejects_marked_network_identity_in_deep_link() -> None:
+    request, response = _session_fixture()
+    raw_network_id = request["network_id"][5:69].lower()
+    response["wallet_uri"] = response["wallet_uri"].replace(
+        f"network_id={raw_network_id}",
+        f"network_id={quote(request['network_id'], safe='')}",
+    )
+    session = RecordingSession()
+    session.queue(StubResponse(payload=response))
+
+    with pytest.raises(ValueError, match="substituted Connect session identity"):
+        ToriiClient("http://node.test", session=session).create_connect_session(request)
 
 
 @pytest.mark.parametrize("field", ["chain", "chain_id", "chainId", "genesis_hash", "scope"])

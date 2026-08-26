@@ -16,6 +16,8 @@ I105_SENTINEL_DEV = "dev"
 I105_NUMERIC_SENTINEL_PREFIX = "n"
 I105_CHECKSUM_LEN = 6
 BECH32M_CONST = 0x2BC830A3
+# Low-level renderer compatibility default for generic Sora address APIs.
+# BPNG signing and Torii client contexts deliberately default to Taira (0x0171).
 DEFAULT_CHAIN_DISCRIMINANT = 0x02F1
 I105_DISCRIMINANT_MAX = 0xFFFF
 CHAIN_DISCRIMINANT_SORA = DEFAULT_CHAIN_DISCRIMINANT

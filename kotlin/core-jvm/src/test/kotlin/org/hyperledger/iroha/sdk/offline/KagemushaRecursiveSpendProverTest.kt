@@ -85,7 +85,7 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun appAttestNativeProjectionRejectsCorruptAuxiliaryFields() {
-        val authorizationArchive = archive("KagemushaRequestAuthorizationV2")
+        val authorizationArchive = archive("iroha_data_model::offline::model::KagemushaRequestAuthorizationV2")
         val rawLowSSignature = ByteArray(64).also {
             it[31] = 1
             it[63] = 1
@@ -189,7 +189,7 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun redemptionChangePreparationTransfersOpeningOwnershipExactlyOnce() {
         val opening = KagemushaRecursiveSpendProver.NoteOpening(
-            archive("KagemushaNoteOpeningV2"),
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2"),
         )
         val preparation = KagemushaRecursiveSpendProver.RedemptionChangePreparationV4(
             opening = opening,
@@ -225,7 +225,7 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun redemptionChangePreparationDestroysOnlyAnUntransferredOpening() {
         val opening = KagemushaRecursiveSpendProver.NoteOpening(
-            archive("KagemushaNoteOpeningV2"),
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2"),
         )
         val preparation = KagemushaRecursiveSpendProver.RedemptionChangePreparationV4(
             opening = opening,
@@ -244,7 +244,7 @@ class KagemushaRecursiveSpendProverTest {
         assertFailsWith<IllegalStateException> { preparation.amount }
 
         val rejectedOpening = KagemushaRecursiveSpendProver.NoteOpening(
-            archive("KagemushaNoteOpeningV2"),
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2"),
         )
         assertFailsWith<IllegalStateException> {
             KagemushaRecursiveSpendProver.RedemptionChangePreparationV4(
@@ -262,7 +262,7 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun redemptionChangeRequestFailureDestroysTheTransferredOpening() {
         val opening = KagemushaRecursiveSpendProver.NoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x45),
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x45),
         )
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.decodeRedeemRequestV4(
@@ -274,7 +274,7 @@ class KagemushaRecursiveSpendProverTest {
 
         val redeemInput = spendableBranch(0x47)
         val backendOpening = KagemushaRecursiveSpendProver.NoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x46),
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x46),
         )
         try {
             assertFailsWith<RuntimeException> {
@@ -298,7 +298,7 @@ class KagemushaRecursiveSpendProverTest {
 
         val appendInput = spendableBranch(0x50)
         val appendOpening = KagemushaRecursiveSpendProver.NoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x51),
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x51),
         )
         try {
             assertFailsWith<RuntimeException> {
@@ -317,19 +317,19 @@ class KagemushaRecursiveSpendProverTest {
         }
 
         val restoreOpening = KagemushaRecursiveSpendProver.NoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x54),
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x54),
         )
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.restoreSpendableBranchV4(
                 bundle = KagemushaRecursiveSpendProver.decodeBundleV4(
-                    archive("KagemushaRecursiveSpendBundleV4", 0x55),
+                    archive("iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV4", 0x55),
                 ),
                 membershipWitness = KagemushaRecursiveSpendProver.NoteMembershipWitness(
-                    archive("KagemushaNoteMembershipWitnessV2", 0x56),
+                    archive("iroha_data_model::offline::model::KagemushaNoteMembershipWitnessV2", 0x56),
                 ),
                 opening = restoreOpening,
                 topUpProvenance = KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
-                    archive("KagemushaRecursiveSpendTopUpProvenanceV4", 0x57),
+                    archive("iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpProvenanceV4", 0x57),
                 ),
                 blockHeight = 0,
             )
@@ -340,10 +340,10 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun redemptionChangeCarriersCloseOrTransferOneOwnerExactlyOnce() {
         val closeOwnedOpening = KagemushaRecursiveSpendProver.NoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x4a),
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x4a),
         )
         val closeOwnedRequest = KagemushaRecursiveSpendProver.RedeemRequestV4(
-            archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x4b),
+            archive("connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV4", 0x4b),
             closeOwnedOpening,
         )
         closeOwnedRequest.close()
@@ -352,10 +352,10 @@ class KagemushaRecursiveSpendProverTest {
         assertFailsWith<IllegalStateException> { closeOwnedRequest.takeChangeOpening() }
 
         val handedOffOpening = KagemushaRecursiveSpendProver.NoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x4c),
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x4c),
         )
         val request = KagemushaRecursiveSpendProver.RedeemRequestV4(
-            archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x4d),
+            archive("connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV4", 0x4d),
             handedOffOpening,
         )
         val requestHandoff = request.takeChangeOpening()
@@ -366,7 +366,7 @@ class KagemushaRecursiveSpendProverTest {
         assertFailsWith<IllegalStateException> { request.takeChangeOpening() }
 
         val result = KagemushaRecursiveSpendProver.RedeemBuildResultV4(
-            archive("KagemushaRecursiveSpendRedeemBuildResultV4", 0x4e),
+            archive("iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemBuildResultV4", 0x4e),
             requestHandoff,
         )
         val resultHandoff = result.takeChangeOpening()
@@ -395,7 +395,7 @@ class KagemushaRecursiveSpendProverTest {
         assertTrue(second.all { it == 0.toByte() })
         KagemushaRecursiveSpendProver.SecretArchiveWiper.wipeAll(null)
 
-        val rawNativeArchive = archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x63)
+        val rawNativeArchive = archive("connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV4", 0x63)
         val owner = KagemushaRecursiveSpendProver.RedeemRequestV4(rawNativeArchive, null)
         KagemushaRecursiveSpendProver.SecretArchiveWiper.wipe(rawNativeArchive)
         assertTrue(rawNativeArchive.all { it == 0.toByte() })
@@ -433,14 +433,14 @@ class KagemushaRecursiveSpendProverTest {
         assertEquals(2, firstAndSecondCopiesObserved.size)
         assertTrue(firstAndSecondCopiesObserved.all { copy -> copy.all { it == 0.toByte() } })
 
-        val rawOpeningArchive = archive("KagemushaNoteOpeningV2", 0x69)
+        val rawOpeningArchive = archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x69)
         val openingOwner = KagemushaRecursiveSpendProver.decodeNoteOpening(rawOpeningArchive)
         KagemushaRecursiveSpendProver.SecretArchiveWiper.wipe(rawOpeningArchive)
         assertTrue(rawOpeningArchive.all { it == 0.toByte() })
         assertTrue(openingOwner.noritoEncoded().size > NoritoHeader.HEADER_LENGTH)
         openingOwner.close()
 
-        val rawInitArchive = archive("KagemushaRecursiveSpendInitLocalRequestV4", 0x6a)
+        val rawInitArchive = archive("connect_norito_bridge::KagemushaRecursiveSpendInitLocalRequestV4", 0x6a)
         val initOwner = KagemushaRecursiveSpendProver.decodeInitRequestV4(rawInitArchive)
         KagemushaRecursiveSpendProver.SecretArchiveWiper.wipe(rawInitArchive)
         assertTrue(rawInitArchive.all { it == 0.toByte() })
@@ -456,7 +456,7 @@ class KagemushaRecursiveSpendProverTest {
             ),
         )
         val opening = KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x5c),
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x5c),
         )
         opening.close()
         opening.close()
@@ -469,7 +469,7 @@ class KagemushaRecursiveSpendProverTest {
             ),
         )
         val init = KagemushaRecursiveSpendProver.decodeInitRequestV4(
-            archive("KagemushaRecursiveSpendInitLocalRequestV4", 0x5d),
+            archive("connect_norito_bridge::KagemushaRecursiveSpendInitLocalRequestV4", 0x5d),
         )
         init.close()
         init.close()
@@ -479,11 +479,11 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun canonicalArchiveHashSurvivesZeroizationWithoutRetainingEquality() {
-        val encoded = archive("KagemushaNoteOpeningV2", 0x6b)
+        val encoded = archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x6b)
         val first = KagemushaRecursiveSpendProver.decodeNoteOpening(encoded)
         val equal = KagemushaRecursiveSpendProver.decodeNoteOpening(encoded)
         val different = KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x6c),
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x6c),
         )
         val initialHashCode = first.hashCode()
         val indexed = hashSetOf(first)
@@ -532,12 +532,12 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun preparationConstructorFailuresDestroyStagedOpenings() {
         val recipientOpening = KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x5e),
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x5e),
         )
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.RecipientRequestPreparation(
                 payload = KagemushaRecursiveSpendProver.RecipientRequestPayload(
-                    archive("KagemushaRecipientPaymentRequestSigningPayloadV2", 0x5f),
+                    archive("iroha_data_model::offline::model::KagemushaRecipientPaymentRequestSigningPayloadV2", 0x5f),
                 ),
                 signingBytes = byteArrayOf(1),
                 opening = recipientOpening,
@@ -549,12 +549,12 @@ class KagemushaRecursiveSpendProverTest {
         assertTrue(recipientOpening.isDestroyed())
 
         val topUpOpening = KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2", 0x70),
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2", 0x70),
         )
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.TopUpPreparation(
                 unsigned = KagemushaRecursiveSpendProver.TopUpUnsigned(
-                    archive("KagemushaRecursiveSpendTopUpUnsignedV4", 0x71),
+                    archive("iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpUnsignedV4", 0x71),
                 ),
                 authorizationDigest = ByteArray(32) { 0x72 },
                 opening = topUpOpening,
@@ -1026,15 +1026,15 @@ class KagemushaRecursiveSpendProverTest {
     fun exactStateProjectionModelCarriesArtifactClaimsAndRejectsTampering() {
         val mutableClaims = mutableListOf(
             KagemushaRecursiveSpendProver.BranchClaim(
-                archive("KagemushaRecursiveSpendBranchClaimV2"),
+                archive("iroha_data_model::offline::model::KagemushaRecursiveSpendBranchClaimV2"),
             ),
         )
         val projection = KagemushaRecursiveSpendProver.BranchProjection(
             KagemushaRecursiveSpendProver.BundleV4(
-                archive("KagemushaRecursiveSpendBundleV4"),
+                archive("iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV4"),
             ),
             KagemushaRecursiveSpendProver.NoteMembershipWitness(
-                archive("KagemushaNoteMembershipWitnessV2"),
+                archive("iroha_data_model::offline::model::KagemushaNoteMembershipWitnessV2"),
             ),
             ByteArray(32) { 1 },
             ByteArray(32) { 2 },
@@ -1043,7 +1043,7 @@ class KagemushaRecursiveSpendProverTest {
             2,
             ByteArray(32) { 3 },
             KagemushaRecursiveSpendProver.ArtifactBindingV4(
-                archive("KagemushaRecursiveSpendArtifactBindingV4"),
+                archive("iroha_data_model::offline::model::KagemushaRecursiveSpendArtifactBindingV4"),
             ),
             mutableClaims,
         )
@@ -1061,7 +1061,7 @@ class KagemushaRecursiveSpendProverTest {
         assertFalse("parentBranchClaimDigest" in methods)
         assertFalse("branchClaimDigest" in methods)
 
-        val tampered = archive("KagemushaRecursiveSpendArtifactBindingV4")
+        val tampered = archive("iroha_data_model::offline::model::KagemushaRecursiveSpendArtifactBindingV4")
         tampered[tampered.lastIndex] = (tampered.last().toInt() xor 1).toByte()
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.ArtifactBindingV4(tampered)
@@ -1096,30 +1096,30 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun lifecycleArchivesAreTypedDefensiveAndFailClosed() {
-        val initBytes = archive("KagemushaRecursiveSpendInitLocalRequestV4")
+        val initBytes = archive("connect_norito_bridge::KagemushaRecursiveSpendInitLocalRequestV4")
         val init = KagemushaRecursiveSpendProver.decodeInitRequestV4(initBytes)
         initBytes[initBytes.lastIndex] = 0
         assertEquals(0x51, init.noritoEncoded().last().toInt() and 0xff)
 
         val append = KagemushaRecursiveSpendProver.decodeAppendRequestV4(
-            archive("KagemushaRecursiveSpendAppendLocalRequestV4"),
+            archive("connect_norito_bridge::KagemushaRecursiveSpendAppendLocalRequestV4"),
             null,
         )
         val verify = KagemushaRecursiveSpendProver.decodeVerifyRequestV4(
-            archive("KagemushaRecursiveSpendVerifyLocalRequestV4"),
+            archive("connect_norito_bridge::KagemushaRecursiveSpendVerifyLocalRequestV4"),
         )
         val redeem = KagemushaRecursiveSpendProver.decodeRedeemRequestV4(
-            archive("KagemushaRecursiveSpendRedeemLocalRequestV4"),
+            archive("connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV4"),
             null,
         )
         val topUpSubmission = KagemushaRecursiveSpendProver.decodeTopUpRequest(
-            archive("iroha.torii.v1.offline.top_up.request"),
+            OfflineCashToriiV1Fixtures.topUpRequest,
         )
         val redeemSubmission = KagemushaRecursiveSpendProver.decodeRedeemSubmissionRequest(
-            archive("iroha.torii.v1.offline.redeem.request"),
+            OfflineCashToriiV1Fixtures.redeemRequest,
         )
         val opening = KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2"),
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2"),
         )
         assertTrue(append.noritoEncoded().isNotEmpty())
         assertTrue(verify.noritoEncoded().isNotEmpty())
@@ -1129,12 +1129,12 @@ class KagemushaRecursiveSpendProverTest {
         assertTrue(opening.noritoEncoded().isNotEmpty())
         assertTrue(
             KagemushaRecursiveSpendProver.decodeInitResultV4(
-                archive("KagemushaRecursiveSpendInitResultV4"),
+                archive("iroha_data_model::offline::model::KagemushaRecursiveSpendInitResultV4"),
             ).noritoEncoded().isNotEmpty(),
         )
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.decodeVerifyRequestV4(
-                archive("KagemushaRecursiveSpendInitLocalRequestV4"),
+                archive("connect_norito_bridge::KagemushaRecursiveSpendInitLocalRequestV4"),
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -1168,10 +1168,10 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun branchRestoreRejectsMissingHeightAndLocalChangeOpeningsBeforeNativeDispatch() {
         val opening = KagemushaRecursiveSpendProver.decodeNoteOpening(
-            archive("KagemushaNoteOpeningV2"),
+            archive("connect_norito_bridge::KagemushaNoteOpeningV2"),
         )
         val init = KagemushaRecursiveSpendProver.decodeInitResultV4(
-            archive("KagemushaRecursiveSpendInitResultV4"),
+            archive("iroha_data_model::offline::model::KagemushaRecursiveSpendInitResultV4"),
         )
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.restoreInitBranchV4(init, opening, 0)
@@ -1184,14 +1184,14 @@ class KagemushaRecursiveSpendProverTest {
         }
 
         val split = KagemushaRecursiveSpendProver.decodeSplitResultV4(
-            archive("KagemushaRecursiveSpendSplitResultV4"),
+            archive("iroha_data_model::offline::model::KagemushaRecursiveSpendSplitResultV4"),
             null,
         )
         assertFailsWith<IllegalStateException> {
             KagemushaRecursiveSpendProver.restoreSplitChangeBranchV4(split, 1)
         }
         val redeem = KagemushaRecursiveSpendProver.decodeRedeemBuildResultV4(
-            archive("KagemushaRecursiveSpendRedeemBuildResultV4"),
+            archive("iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemBuildResultV4"),
             null,
         )
         assertFailsWith<IllegalStateException> {
@@ -1200,18 +1200,126 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     @Test
+    fun canonicalArchiveInventoryUsesRustFullyQualifiedSchemas() {
+        val model = "iroha_data_model::offline::model::"
+        val bridge = "connect_norito_bridge::"
+        val cases: List<Pair<String, (ByteArray) -> KagemushaRecursiveSpendProver.CanonicalArchive>> =
+            listOf(
+                model + "KagemushaNoteMembershipWitnessV2" to
+                    { KagemushaRecursiveSpendProver.NoteMembershipWitness(it) },
+                bridge + "KagemushaNoteOpeningV2" to
+                    { KagemushaRecursiveSpendProver.NoteOpening(it) },
+                model + "KagemushaRecipientPaymentRequestSigningPayloadV2" to
+                    { KagemushaRecursiveSpendProver.RecipientRequestPayload(it) },
+                model + "KagemushaRecursiveSpendBundleV4" to
+                    { KagemushaRecursiveSpendProver.BundleV4(it) },
+                model + "KagemushaRecursiveSpendBranchClaimV2" to
+                    { KagemushaRecursiveSpendProver.BranchClaim(it) },
+                model + "KagemushaRecursiveSpendArtifactBindingV4" to
+                    { KagemushaRecursiveSpendProver.ArtifactBindingV4(it) },
+                model + "KagemushaRecursiveSpendTopUpUnsignedV4" to
+                    { KagemushaRecursiveSpendProver.TopUpUnsigned(it) },
+                model + "KagemushaTopUpFinalityRosterArtifactV2" to
+                    { KagemushaRecursiveSpendProver.TopUpFinalityRosterArtifact(it) },
+                model + "KagemushaRecursiveSpendTopUpFinalityEvidenceV4" to
+                    { KagemushaRecursiveSpendProver.TopUpFinalityEvidenceV4(it) },
+                model + "KagemushaRecursiveSpendTopUpProvenanceV4" to
+                    { KagemushaRecursiveSpendProver.TopUpProvenanceV4(it) },
+                model + "KagemushaRecursiveSpendRedeemUnsignedV4" to
+                    { KagemushaRecursiveSpendProver.RedeemUnsignedV4(it) },
+                bridge + "KagemushaRequestAuthorizationPreparationV2" to
+                    { KagemushaRecursiveSpendProver.RequestAuthorizationPreparationArchive(it) },
+                model + "KagemushaRequestAuthorizationV2" to
+                    { KagemushaRecursiveSpendProver.RequestAuthorization(it) },
+                bridge + "KagemushaRecursiveSpendInitLocalRequestV4" to
+                    { KagemushaRecursiveSpendProver.InitRequestV4(it) },
+                bridge + "KagemushaRecursiveSpendAppendLocalRequestV4" to
+                    { KagemushaRecursiveSpendProver.AppendRequestV4(it) },
+                bridge + "KagemushaRecursiveSpendVerifyLocalRequestV4" to
+                    { KagemushaRecursiveSpendProver.VerifyRequestV4(it) },
+                bridge + "KagemushaRecursiveSpendRedeemLocalRequestV4" to
+                    { KagemushaRecursiveSpendProver.RedeemRequestV4(it) },
+                model + "KagemushaRecursiveSpendInitResultV4" to
+                    { KagemushaRecursiveSpendProver.InitResultV4(it) },
+                model + "KagemushaRecursiveSpendSplitResultV4" to
+                    { KagemushaRecursiveSpendProver.SplitResultV4(it) },
+                model + "KagemushaRecursiveSpendVerifyResultV4" to
+                    { KagemushaRecursiveSpendProver.VerifyResultV4(it) },
+                model + "KagemushaRecursiveSpendRedeemBuildResultV4" to
+                    { KagemushaRecursiveSpendProver.RedeemBuildResultV4(it) },
+                model + "KagemushaReceiverAcknowledgementPayloadV2" to
+                    { KagemushaRecursiveSpendProver.AcknowledgementPayload(it) },
+                "iroha_data_model::offline::status::OfflineReadiness" to
+                    { KagemushaRecursiveSpendProver.Readiness(it) },
+            )
+
+        for ((schema, constructor) in cases) {
+            val bytes = archive(schema)
+            val value = constructor(bytes)
+            assertContentEquals(bytes, value.noritoEncoded(), schema)
+            if (value is AutoCloseable) value.close()
+        }
+    }
+
+    @Test
+    fun retainedTopUpArchivesUseRustFullyQualifiedSchemas() {
+        val model = "iroha_data_model::offline::model::"
+        val rosterSchema = model + "KagemushaTopUpFinalityRosterArtifactV2"
+        val evidenceSchema = model + "KagemushaRecursiveSpendTopUpFinalityEvidenceV4"
+        val provenanceSchema = model + "KagemushaRecursiveSpendTopUpProvenanceV4"
+
+        assertContentEquals(
+            archive(rosterSchema),
+            KagemushaRecursiveSpendProver.decodeTopUpFinalityRosterArtifact(
+                archive(rosterSchema),
+            ).noritoEncoded(),
+        )
+        assertContentEquals(
+            archive(evidenceSchema),
+            KagemushaRecursiveSpendProver.decodeTopUpFinalityEvidenceV4(
+                archive(evidenceSchema),
+            ).noritoEncoded(),
+        )
+        assertContentEquals(
+            archive(provenanceSchema),
+            KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
+                archive(provenanceSchema),
+            ).noritoEncoded(),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.decodeTopUpFinalityRosterArtifact(
+                archive("KagemushaTopUpFinalityRosterArtifactV2"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.decodeTopUpFinalityEvidenceV4(
+                archive(
+                    "KagemushaRecursiveSpendTopUpFinalityEvidenceV4",
+                    paddingBytes = 8,
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
+                archive("KagemushaRecursiveSpendTopUpProvenanceV4"),
+            )
+        }
+    }
+
+    @Test
     fun topUpProvenanceArchiveIsCanonicalBoundedAndDefensive() {
-        val bytes = archive("KagemushaRecursiveSpendTopUpProvenanceV4")
+        val bytes = archive("iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpProvenanceV4")
         val provenance = KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(bytes)
         bytes[bytes.lastIndex] = 0
         assertEquals(0x51, provenance.noritoEncoded().last().toInt() and 0xff)
 
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
-                archive("KagemushaRecursiveSpendTopUpFinalityEvidenceV4"),
+                archive("iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpFinalityEvidenceV4"),
             )
         }
-        val corrupted = archive("KagemushaRecursiveSpendTopUpProvenanceV4").also {
+        val corrupted = archive("iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpProvenanceV4").also {
             it[it.lastIndex] = (it.last().toInt() xor 1).toByte()
         }
         assertFailsWith<IllegalArgumentException> {
@@ -1224,10 +1332,10 @@ class KagemushaRecursiveSpendProverTest {
         }
 
         val bundle = KagemushaRecursiveSpendProver.decodeBundleV4(
-            archive("KagemushaRecursiveSpendBundleV4"),
+            archive("iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV4"),
         )
         val roster = KagemushaRecursiveSpendProver.decodeTopUpFinalityRosterArtifact(
-            archive("KagemushaTopUpFinalityRosterArtifactV2"),
+            archive("iroha_data_model::offline::model::KagemushaTopUpFinalityRosterArtifactV2"),
         )
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.buildTopUpProvenanceV4(
@@ -1243,7 +1351,10 @@ class KagemushaRecursiveSpendProverTest {
                 bundle,
                 roster,
                 listOf(KagemushaRecursiveSpendProver.decodeTopUpAnchorV4(
-                    archive("KagemushaRecursiveSpendTopUpAnchorV4"),
+                    archive(
+                        "iroha_data_model::offline::model::" +
+                            "KagemushaRecursiveSpendTopUpAnchorV4",
+                    ),
                 )),
                 emptyList(),
                 1,
@@ -1489,7 +1600,7 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertTrue(
             KagemushaRecursiveSpendProver.decodeNoteMembershipWitness(
-                archive("KagemushaNoteMembershipWitnessV2"),
+                archive("iroha_data_model::offline::model::KagemushaNoteMembershipWitnessV2"),
             ).noritoEncoded().size > NoritoHeader.HEADER_LENGTH,
         )
         assertFailsWith<IllegalArgumentException> {
@@ -1744,7 +1855,7 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun toriiLifecycleRoutesAndHeadersAreExact() {
         val networkId = org.hyperledger.iroha.sdk.core.model.NetworkId.parse(
-            "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
+            OfflineCashToriiV1Fixtures.networkId,
         )
         val captured = AtomicReference<TransportRequest>()
         val neverTransport = object : TransportExecutor {
@@ -1774,20 +1885,34 @@ class KagemushaRecursiveSpendProverTest {
                                 "content-type",
                                 if (capability) "application/json" else "application/x-norito",
                             )
+                            .also { builder ->
+                                if (command) {
+                                    val operationId = if (request.uri.path.endsWith("/top-up")) {
+                                        OfflineCashToriiV1Fixtures.topUpOperationId
+                                    } else {
+                                        OfflineCashToriiV1Fixtures.redeemOperationId
+                                    }
+                                    builder.addHeader(
+                                        "Location",
+                                        "/v1/offline/operations/$operationId",
+                                    )
+                                    builder.addHeader("Retry-After", "1")
+                                }
+                            }
                             .setBody(
                                 if (capability) {
                                     """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false,"assets":[],"blockers":[{"code":"offline_cash_authenticated_release_unavailable","message":"No authenticated Offline Cash V1 release is selected by this asset-neutral response."},{"code":"offline_cash_eligible_asset_unavailable","message":"No eligible Offline Cash V1 asset is selected by this asset-neutral response."},{"code":"offline_cash_proof_backend_unavailable","message":"No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response."}]}"""
                                         .toByteArray(StandardCharsets.UTF_8)
                                 } else {
-                                    archive(
-                                        if (command) {
-                                            "OfflineOperationReference"
-                                        } else if (request.uri.path.contains("/operations/")) {
-                                            "OfflineOperationStatus"
-                                        } else {
-                                            error("unexpected Torii route")
-                                        },
-                                    )
+                                    when {
+                                        request.uri.path.endsWith("/top-up") ->
+                                            OfflineCashToriiV1Fixtures.topUpReference
+                                        request.uri.path.endsWith("/redeem") ->
+                                            OfflineCashToriiV1Fixtures.redeemReference
+                                        request.uri.path.contains("/operations/") ->
+                                            OfflineCashToriiV1Fixtures.topUpPendingStatus
+                                        else -> error("unexpected Torii route")
+                                    }
                                 },
                             )
                             .build(),
@@ -1830,12 +1955,13 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertEquals(listOf("application/json"), captured.get().headers["Accept"])
 
-        val operationId = "11".repeat(32)
-        val topUpBody = archive("iroha.torii.v1.offline.top_up.request")
+        val topUpOperationId = OfflineCashToriiV1Fixtures.topUpOperationId
+        val redeemOperationId = OfflineCashToriiV1Fixtures.redeemOperationId
+        val topUpBody = OfflineCashToriiV1Fixtures.topUpRequest
         val topUpRequest = KagemushaRecursiveSpendProver.TopUpRequest(topUpBody)
         client.submitTopUp(
             topUpRequest,
-            operationId,
+            topUpOperationId,
         ).join()
         val firstTopUp = captured.get()
         assertEquals("POST", firstTopUp.method)
@@ -1844,25 +1970,25 @@ class KagemushaRecursiveSpendProverTest {
             listOf("application/x-norito"),
             firstTopUp.headers["Content-Type"],
         )
-        assertEquals(listOf(operationId), firstTopUp.headers["Idempotency-Key"])
+        assertEquals(listOf(topUpOperationId), firstTopUp.headers["Idempotency-Key"])
         assertEquals(RequestReplayPolicy.ONE_SHOT, firstTopUp.replayPolicy)
         assertContentEquals(topUpBody, firstTopUp.body)
-        client.submitTopUp(topUpRequest, operationId).join()
+        client.submitTopUp(topUpRequest, topUpOperationId).join()
         val retriedTopUp = captured.get()
         assertContentEquals(firstTopUp.body, retriedTopUp.body)
         assertEquals(firstTopUp.headers["Idempotency-Key"], retriedTopUp.headers["Idempotency-Key"])
 
-        val redeemBody = archive("iroha.torii.v1.offline.redeem.request")
+        val redeemBody = OfflineCashToriiV1Fixtures.redeemRequest
         val redeemRequest = KagemushaRecursiveSpendProver.RedeemSubmissionRequest(redeemBody)
         client.submitRedeem(
             redeemRequest,
-            operationId,
+            redeemOperationId,
         ).join()
         val firstRedeem = captured.get()
         assertEquals("/api/v1/offline/redeem", firstRedeem.uri.path)
-        assertEquals(listOf(operationId), firstRedeem.headers["Idempotency-Key"])
+        assertEquals(listOf(redeemOperationId), firstRedeem.headers["Idempotency-Key"])
         assertContentEquals(redeemBody, firstRedeem.body)
-        client.submitRedeem(redeemRequest, operationId).join()
+        client.submitRedeem(redeemRequest, redeemOperationId).join()
         val retriedRedeem = captured.get()
         assertContentEquals(firstRedeem.body, retriedRedeem.body)
         assertEquals(firstRedeem.headers["Idempotency-Key"], retriedRedeem.headers["Idempotency-Key"])
@@ -1880,8 +2006,8 @@ class KagemushaRecursiveSpendProverTest {
             }
         }
 
-        client.getOperation(operationId).join()
-        assertEquals("/api/v1/offline/operations/$operationId", captured.get().uri.path)
+        client.getOperation(topUpOperationId).join()
+        assertEquals("/api/v1/offline/operations/$topUpOperationId", captured.get().uri.path)
     }
 
     @Test
@@ -1911,16 +2037,16 @@ class KagemushaRecursiveSpendProverTest {
     private fun spendableBranch(seed: Int): KagemushaRecursiveSpendProver.SpendableBranchV4 =
         KagemushaRecursiveSpendProver.SpendableBranchV4(
             KagemushaRecursiveSpendProver.decodeBundleV4(
-                archive("KagemushaRecursiveSpendBundleV4", seed),
+                archive("iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV4", seed),
             ),
             KagemushaRecursiveSpendProver.NoteMembershipWitness(
-                archive("KagemushaNoteMembershipWitnessV2", seed + 1),
+                archive("iroha_data_model::offline::model::KagemushaNoteMembershipWitnessV2", seed + 1),
             ),
             KagemushaRecursiveSpendProver.NoteOpening(
-                archive("KagemushaNoteOpeningV2", seed + 2),
+                archive("connect_norito_bridge::KagemushaNoteOpeningV2", seed + 2),
             ),
             KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
-                archive("KagemushaRecursiveSpendTopUpProvenanceV4", seed + 3),
+                archive("iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpProvenanceV4", seed + 3),
             ),
             KagemushaRecursiveSpendProver.decodeOutputMembershipFrontierV4(
                 archive(
@@ -1996,7 +2122,11 @@ class KagemushaRecursiveSpendProverTest {
             root = root,
         )
 
-    private fun archive(schema: String, marker: Int = 0x51): ByteArray {
+    private fun archive(
+        schema: String,
+        marker: Int = 0x51,
+        paddingBytes: Int? = null,
+    ): ByteArray {
         val payload = byteArrayOf(marker.toByte())
         val header = NoritoHeader(
             SchemaHash.hash16(schema),
@@ -2005,12 +2135,27 @@ class KagemushaRecursiveSpendProverTest {
             NoritoHeader.COMPACT_LEN,
             NoritoHeader.COMPRESSION_NONE,
         )
-        val padding = when (schema) {
+        val canonicalPadding = when (schema) {
             "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4" ->
+            "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestSigningPayloadV2",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpUnsignedV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpAnchorV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpFinalityEvidenceV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemUnsignedV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendInitResultV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitResultV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV4",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemBuildResultV4",
+            "connect_norito_bridge::KagemushaRecursiveSpendInitLocalRequestV4",
+            "connect_norito_bridge::KagemushaRecursiveSpendVerifyLocalRequestV4",
+            "connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV4",
+            "iroha_torii_shared::offline_api::OfflineOperationStatus" ->
                 ByteArray(8)
             else -> byteArrayOf()
         }
+        val padding = paddingBytes?.let(::ByteArray) ?: canonicalPadding
         return header.encode() + padding + payload
     }
 

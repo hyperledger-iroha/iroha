@@ -25,16 +25,31 @@ public sealed class SignedIterableQueryBuilder
     private bool descendingSort;
     private string? entrypointHashHex;
 
+    /// <summary>Creates an iterable-query builder for the public Taira testnet.</summary>
     public SignedIterableQueryBuilder(string authorityAccountId, NetworkId networkId)
+        : this(authorityAccountId, networkId, AccountAddress.TairaTestnetChainDiscriminant)
     {
-        AuthorityAccountId = NormalizeAccountId(authorityAccountId, nameof(authorityAccountId));
+    }
+
+    public SignedIterableQueryBuilder(
+        string authorityAccountId,
+        NetworkId networkId,
+        ushort chainDiscriminant)
+    {
+        AuthorityAccountId = NormalizeAccountId(
+            authorityAccountId,
+            nameof(authorityAccountId),
+            chainDiscriminant);
         NetworkId = networkId ?? throw new ArgumentNullException(nameof(networkId));
+        ChainDiscriminant = chainDiscriminant;
         networkIdBytes = NetworkId.ToBytes();
     }
 
     public string AuthorityAccountId { get; }
 
     public NetworkId NetworkId { get; }
+
+    public ushort ChainDiscriminant { get; }
 
     public SignedIterableQueryBuilder FindDomains()
     {
@@ -167,7 +182,7 @@ public sealed class SignedIterableQueryBuilder
         Reset();
         requestMode = RequestMode.Start;
         iterableQueryKind = ManagedIterableQueryKind.FindPermissionsByAccountId;
-        this.accountId = NormalizeAccountId(accountId, nameof(accountId));
+        this.accountId = NormalizeAccountId(accountId, nameof(accountId), ChainDiscriminant);
         return this;
     }
 
@@ -176,7 +191,7 @@ public sealed class SignedIterableQueryBuilder
         Reset();
         requestMode = RequestMode.Start;
         iterableQueryKind = ManagedIterableQueryKind.FindRolesByAccountId;
-        this.accountId = NormalizeAccountId(accountId, nameof(accountId));
+        this.accountId = NormalizeAccountId(accountId, nameof(accountId), ChainDiscriminant);
         return this;
     }
 
@@ -292,7 +307,7 @@ public sealed class SignedIterableQueryBuilder
             throw new InvalidOperationException("Iterable queries must select a start or continue request before signing.");
         }
 
-        var context = new TransactionEncodingContext(AuthorityAccountId);
+        var context = new TransactionEncodingContext(AuthorityAccountId, ChainDiscriminant);
         context.EnsureAuthorityMatchesPrivateKey(privateKeySeed);
 
         var payloadBytes = EncodeQueryRequestWithAuthority(
@@ -512,13 +527,16 @@ public sealed class SignedIterableQueryBuilder
         return value;
     }
 
-    private static string NormalizeAccountId(string value, string paramName)
+    private static string NormalizeAccountId(
+        string value,
+        string paramName,
+        ushort chainDiscriminant)
     {
         var exact = NormalizeRequiredValue(value, paramName);
         try
         {
-            return AccountAddress.Parse(exact, AccountAddress.DefaultChainDiscriminant)
-                .ToI105(AccountAddress.DefaultChainDiscriminant);
+            _ = AccountAddress.Parse(exact, chainDiscriminant);
+            return exact;
         }
         catch (AccountAddressException exception)
         {

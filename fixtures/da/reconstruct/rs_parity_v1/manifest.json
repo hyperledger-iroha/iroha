@@ -83,38 +83,38 @@
   ],
   "chunk_root": [
     [
-      15,
-      146,
-      63,
-      15,
-      151,
-      45,
-      183,
-      55,
-      62,
-      251,
-      56,
-      67,
-      155,
-      116,
-      101,
-      25,
-      7,
-      69,
-      158,
-      206,
-      30,
-      249,
-      69,
-      100,
-      204,
-      236,
+      219,
       240,
-      99,
-      248,
+      54,
+      182,
+      19,
       137,
       61,
-      132
+      213,
+      183,
+      31,
+      191,
+      21,
+      196,
+      28,
+      93,
+      151,
+      122,
+      65,
+      6,
+      78,
+      19,
+      143,
+      79,
+      153,
+      15,
+      72,
+      125,
+      2,
+      137,
+      97,
+      54,
+      253
     ]
   ],
   "storage_ticket": [
@@ -180,12 +180,12 @@
     ]
   },
   "rent_quote": {
-    "base_rent": 0,
-    "protocol_reserve": 0,
-    "provider_reward": 0,
-    "pdp_bonus": 0,
-    "potr_bonus": 0,
-    "egress_credit_per_gib": 0
+    "base_rent": "0",
+    "protocol_reserve": "0",
+    "provider_reward": "0",
+    "pdp_bonus": "0",
+    "potr_bonus": "0",
+    "egress_credit_per_gib": "0"
   },
   "chunks": [
     {
@@ -469,328 +469,95 @@
         "value": null
       },
       "group_id": 2
-    },
-    {
-      "index": 6,
-      "offset": 192,
-      "length": 32,
-      "commitment": [
-        [
-          174,
-          111,
-          55,
-          198,
-          66,
-          95,
-          7,
-          34,
-          113,
-          133,
-          212,
-          206,
-          232,
-          181,
-          0,
-          237,
-          25,
-          187,
-          158,
-          163,
-          152,
-          176,
-          52,
-          38,
-          186,
-          153,
-          130,
-          16,
-          230,
-          49,
-          80,
-          34
-        ]
-      ],
-      "parity": true,
-      "role": {
-        "role": "GlobalParity",
-        "value": null
-      },
-      "group_id": 0
-    },
-    {
-      "index": 7,
-      "offset": 224,
-      "length": 32,
-      "commitment": [
-        [
-          35,
-          215,
-          24,
-          172,
-          195,
-          104,
-          8,
-          19,
-          177,
-          163,
-          174,
-          108,
-          78,
-          220,
-          156,
-          99,
-          26,
-          215,
-          23,
-          34,
-          85,
-          193,
-          49,
-          130,
-          183,
-          240,
-          250,
-          72,
-          5,
-          171,
-          221,
-          126
-        ]
-      ],
-      "parity": true,
-      "role": {
-        "role": "GlobalParity",
-        "value": null
-      },
-      "group_id": 0
-    },
-    {
-      "index": 8,
-      "offset": 256,
-      "length": 32,
-      "commitment": [
-        [
-          185,
-          250,
-          79,
-          85,
-          227,
-          69,
-          138,
-          220,
-          55,
-          96,
-          125,
-          43,
-          220,
-          22,
-          41,
-          121,
-          205,
-          137,
-          76,
-          188,
-          25,
-          227,
-          218,
-          214,
-          81,
-          154,
-          50,
-          155,
-          212,
-          101,
-          127,
-          227
-        ]
-      ],
-      "parity": true,
-      "role": {
-        "role": "GlobalParity",
-        "value": null
-      },
-      "group_id": 1
-    },
-    {
-      "index": 9,
-      "offset": 288,
-      "length": 32,
-      "commitment": [
-        [
-          193,
-          136,
-          16,
-          115,
-          117,
-          223,
-          4,
-          217,
-          28,
-          156,
-          35,
-          12,
-          206,
-          144,
-          46,
-          107,
-          49,
-          101,
-          55,
-          34,
-          74,
-          104,
-          31,
-          88,
-          238,
-          213,
-          126,
-          130,
-          79,
-          140,
-          67,
-          224
-        ]
-      ],
-      "parity": true,
-      "role": {
-        "role": "GlobalParity",
-        "value": null
-      },
-      "group_id": 1
-    },
-    {
-      "index": 10,
-      "offset": 320,
-      "length": 32,
-      "commitment": [
-        [
-          145,
-          173,
-          130,
-          71,
-          73,
-          5,
-          97,
-          185,
-          61,
-          160,
-          215,
-          172,
-          11,
-          81,
-          5,
-          21,
-          177,
-          122,
-          160,
-          42,
-          64,
-          141,
-          232,
-          128,
-          67,
-          149,
-          77,
-          211,
-          59,
-          138,
-          51,
-          9
-        ]
-      ],
-      "parity": true,
-      "role": {
-        "role": "GlobalParity",
-        "value": null
-      },
-      "group_id": 2
-    },
-    {
-      "index": 11,
-      "offset": 352,
-      "length": 32,
-      "commitment": [
-        [
-          7,
-          127,
-          34,
-          95,
-          224,
-          192,
-          159,
-          43,
-          43,
-          245,
-          77,
-          58,
-          154,
-          1,
-          21,
-          131,
-          155,
-          230,
-          23,
-          149,
-          115,
-          180,
-          71,
-          191,
-          229,
-          74,
-          227,
-          223,
-          77,
-          176,
-          135,
-          101
-        ]
-      ],
-      "parity": true,
-      "role": {
-        "role": "GlobalParity",
-        "value": null
-      },
-      "group_id": 2
     }
   ],
   "ipa_commitment": [
     [
-      15,
-      146,
-      63,
-      15,
-      151,
-      45,
-      183,
-      55,
-      62,
-      251,
-      56,
-      67,
-      155,
-      116,
-      101,
-      25,
-      7,
-      69,
-      158,
-      206,
-      30,
-      249,
-      69,
-      100,
-      204,
-      236,
+      219,
       240,
-      99,
-      248,
+      54,
+      182,
+      19,
       137,
       61,
-      132
+      213,
+      183,
+      31,
+      191,
+      21,
+      196,
+      28,
+      93,
+      151,
+      122,
+      65,
+      6,
+      78,
+      19,
+      143,
+      79,
+      153,
+      15,
+      72,
+      125,
+      2,
+      137,
+      97,
+      54,
+      253
     ]
   ],
   "metadata": {
-    "items": []
+    "items": [
+      {
+        "key": "taikai.event_id",
+        "value": "Zml4dHVyZS1ldmVudA==",
+        "visibility": {
+          "visibility": "Public",
+          "value": null
+        },
+        "encryption": {
+          "cipher": "None",
+          "params": null
+        }
+      },
+      {
+        "key": "taikai.stream_id",
+        "value": "Zml4dHVyZS1zdHJlYW0=",
+        "visibility": {
+          "visibility": "Public",
+          "value": null
+        },
+        "encryption": {
+          "cipher": "None",
+          "params": null
+        }
+      },
+      {
+        "key": "taikai.rendition_id",
+        "value": "Zml4dHVyZS1yZW5kaXRpb24=",
+        "visibility": {
+          "visibility": "Public",
+          "value": null
+        },
+        "encryption": {
+          "cipher": "None",
+          "params": null
+        }
+      },
+      {
+        "key": "taikai.segment.sequence",
+        "value": "MQ==",
+        "visibility": {
+          "visibility": "Public",
+          "value": null
+        },
+        "encryption": {
+          "cipher": "None",
+          "params": null
+        }
+      }
+    ]
   },
   "issued_at_unix": 1701111111
 }

@@ -9,13 +9,13 @@ import * as sourcePrivacyApi from "../src/privacyCapabilities.js";
 import * as distPrivacyApi from "../dist/privacyCapabilities.js";
 import {
   PRIVACY_PROTOCOL_IDS_V1 as SOURCE_IDS,
-  PrivacyCapabilitySnapshotError as SourceSnapshotError,
-  parsePrivacyCapabilitySnapshotV1 as parseSourceSnapshot,
+  LegacyPrivacyCapabilityInspectionError as SourceSnapshotError,
+  parseLegacyPrivacyCapabilityInspectionSnapshotV1 as parseSourceSnapshot,
 } from "../src/privacyCapabilities.js";
 import {
   PRIVACY_PROTOCOL_IDS_V1 as DIST_IDS,
-  PrivacyCapabilitySnapshotError as DistSnapshotError,
-  parsePrivacyCapabilitySnapshotV1 as parseDistSnapshot,
+  LegacyPrivacyCapabilityInspectionError as DistSnapshotError,
+  parseLegacyPrivacyCapabilityInspectionSnapshotV1 as parseDistSnapshot,
 } from "../dist/privacyCapabilities.js";
 
 const MATRIX_TEXT = readFileSync(
@@ -151,7 +151,7 @@ test("the shared exact12 matrix binds order, routes, typed envelopes, and retire
   );
 });
 
-test("source and checked dist parse the same closed capability snapshot", () => {
+test("source and checked dist parse the same closed legacy inspection payload", () => {
   assert.deepEqual(parseSourceSnapshot(snapshot()), parseDistSnapshot(snapshot()));
 });
 
@@ -197,18 +197,18 @@ test("retired catalog and research-builder exports are absent", () => {
 
 test("privacy capability policy is available only from the optional subpath", () => {
   const expectedOptionalExports = [
-    "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
+    "LEGACY_PRIVACY_CAPABILITY_INSPECTION_VERSION_V1",
     "PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES_V1",
     "PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1",
     "PRIVACY_PROTOCOL_IDS_V1",
-    "PrivacyCapabilitySnapshotError",
+    "LegacyPrivacyCapabilityInspectionError",
     "PrivacyExact12CapabilityManifestError",
     "PrivacyExact12CapabilityManifestV1",
     "compiledProfileCatalogV1",
     "decodePrivacyExact12CapabilityManifestV1",
-    "getPrivacyCapabilitiesV1",
+    "getLegacyPrivacyCapabilityInspectionV1",
     "getPrivacyExact12CapabilityManifestV1",
-    "parsePrivacyCapabilitySnapshotV1",
+    "parseLegacyPrivacyCapabilityInspectionSnapshotV1",
     "requirePrivacyExact12CapabilityAdmissionV1",
     "requirePrivacyExact12CapabilityTupleV1",
   ];
@@ -217,11 +217,11 @@ test("privacy capability policy is available only from the optional subpath", ()
     ["dist root", distApi],
   ]) {
     for (const name of [
-      "getPrivacyCapabilitiesV1",
-      "parsePrivacyCapabilitySnapshotV1",
-      "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
+      "getLegacyPrivacyCapabilityInspectionV1",
+      "parseLegacyPrivacyCapabilityInspectionSnapshotV1",
+      "LEGACY_PRIVACY_CAPABILITY_INSPECTION_VERSION_V1",
       "PRIVACY_PROTOCOL_IDS_V1",
-      "PrivacyCapabilitySnapshotError",
+      "LegacyPrivacyCapabilityInspectionError",
     ]) {
       assert.equal(Object.hasOwn(rootApi, name), false, `${label} export ${name}`);
     }
@@ -230,7 +230,11 @@ test("privacy capability policy is available only from the optional subpath", ()
     ["source optional API", sourcePrivacyApi],
     ["dist optional API", distPrivacyApi],
   ]) {
-    assert.deepEqual(Object.keys(privacyApi).sort(), expectedOptionalExports, label);
+    assert.deepEqual(
+      Object.keys(privacyApi).sort(),
+      expectedOptionalExports.slice().sort(),
+      label,
+    );
     for (const name of expectedOptionalExports) {
       assert.notEqual(privacyApi[name], undefined, `${label} export ${name}`);
     }

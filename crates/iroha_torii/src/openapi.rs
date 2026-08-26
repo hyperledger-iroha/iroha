@@ -166,7 +166,7 @@ mod tests {
         "offline_asset_scale_invalid",
         "offline_asset_scale_mismatch",
         "offline_authorization_invalid",
-        "offline_wrong_chain",
+        "offline_wrong_network",
     ];
     const OFFLINE_TOP_UP_BAD_REQUEST_REJECT_CODES: &[&str] = &[
         "offline_top_up_invalid",
@@ -306,7 +306,7 @@ mod tests {
         "OfflineOperationStatus",
         "OfflineTopUpResult",
         "OfflineRedeemResult",
-        "ErrorEnvelope",
+        "OfflineOperationRejectionError",
     ];
     const COMPONENT_SCHEMA_REF_PREFIX: &str = "#/components/schemas/";
     fn documented_reject_codes<'a>(responses: &'a Map, status: &str) -> Vec<&'a str> {
@@ -3296,6 +3296,10 @@ mod tests {
             .get("paths")
             .and_then(Value::as_object)
             .expect("paths section");
+        assert!(
+            !paths.contains_key("/v1/offline/receiver-lineage"),
+            "receiver-lineage is not a first-release Torii lifecycle route"
+        );
         for [path, method] in openapi_contract_fixed_rows::<2>(
             "openapi.generated_spec_matches_offline_negotiation_and_operation_lifecycle.rows.1",
         ) {
@@ -3528,6 +3532,41 @@ mod tests {
                 .and_then(|schema| schema.get("pattern"))
                 .and_then(Value::as_str),
             Some("^(?!0{64}$)[0-9a-f]{64}$")
+        );
+        assert_eq!(
+            schemas
+                .get("OfflineTransactionHash")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Value::as_str),
+            Some("^[0-9a-f]{63}[13579bdf]$")
+        );
+        let rejection = schemas
+            .get("OfflineOperationRejectionError")
+            .and_then(Value::as_object)
+            .expect("offline operation rejection schema");
+        assert_eq!(
+            rejection
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let rejection_properties = rejection
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("offline operation rejection properties");
+        assert_eq!(
+            rejection_properties["code"]["const"].as_str(),
+            Some("offline_operation_rejected")
+        );
+        assert_eq!(
+            rejection_properties["message"]["maxLength"].as_u64(),
+            Some(1024)
+        );
+        assert!(!rejection_properties.contains_key("details"));
+        assert_eq!(
+            property_ref(schemas, "OfflineOperationRejectedValue", "error"),
+            "#/components/schemas/OfflineOperationRejectionError"
         );
         assert!(
             schemas

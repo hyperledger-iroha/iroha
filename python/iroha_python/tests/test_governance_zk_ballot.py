@@ -21,12 +21,12 @@ from .helpers import RecordingSession, StubResponse
 
 def _canonical_owner_literal(domain: str = "wonderland") -> str:
     address = AccountAddress.from_account(domain=domain, public_key=bytes([0x11] * 32))
-    return address.to_i105(0x02F1)
+    return address.to_i105(0x0171)
 
 
 CANONICAL_AUTHORITY = _canonical_owner_literal()
 CANONICAL_AUTHORITY_HEADER = AccountAddress.parse_encoded(
-    CANONICAL_AUTHORITY, expected_discriminant=0x02F1
+    CANONICAL_AUTHORITY, expected_discriminant=0x0171
 ).canonical_hex()
 GOVERNANCE_NETWORK_ID = NetworkId.from_bytes(bytes([0xA5]) * 32)
 FOREIGN_GOVERNANCE_NETWORK_ID = NetworkId.from_bytes(bytes([0xA7]) * 32)
@@ -229,7 +229,7 @@ def test_governance_ballot_binds_canonical_principal_before_dispatch() -> None:
     other = AccountAddress.from_account(
         domain="other",
         public_key=bytes([0x33] * 32),
-    ).to_i105(0x02F1)
+    ).to_i105(0x0171)
     mismatched_auth = ToriiCanonicalRequestAuth(
         network_id=GOVERNANCE_NETWORK_ID.literal,
         account_id=other,
@@ -593,7 +593,7 @@ def test_governance_mutations_preserve_supported_canonical_payloads(
     assert session.calls[0]["url"] == f"http://node.test{path}"
     expected = dict(payload)
     if method_name in _GOVERNANCE_BALLOT_METHODS:
-        expected["network_id"] = GOVERNANCE_NETWORK_ID.literal
+        expected["network_id"] = GOVERNANCE_AUTH.network_id
         assert "chain_id" not in expected
     if method_name in _GOVERNANCE_CANONICAL_AUTH_METHODS:
         assert session.calls[0]["headers"]["X-Iroha-Account"] == CANONICAL_AUTHORITY_HEADER

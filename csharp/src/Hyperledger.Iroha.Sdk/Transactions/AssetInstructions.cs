@@ -47,12 +47,11 @@ public sealed record class TransferAssetInstruction(string AssetDefinitionId, st
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(2);
-        writer.WriteField(context.EncodeAssetId(AssetDefinitionId, context.AuthorityAccountId));
-        writer.WriteField(context.EncodeQuantity(quantity));
-        writer.WriteField(context.EncodeAccountId(DestinationAccountId));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            2,
+            context.EncodeAssetId(AssetDefinitionId, context.AuthorityAccountId),
+            context.EncodeQuantity(quantity),
+            context.EncodeAccountId(DestinationAccountId));
     }
 }
 
@@ -79,12 +78,11 @@ public sealed record class TransferDomainInstruction(string DomainId, string Des
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(DomainVariant);
-        writer.WriteField(context.EncodeAccountId(context.AuthorityAccountId));
-        writer.WriteField(context.EncodeName(DomainId));
-        writer.WriteField(context.EncodeAccountId(DestinationAccountId));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            DomainVariant,
+            context.EncodeAccountId(context.AuthorityAccountId),
+            context.EncodeName(DomainId),
+            context.EncodeAccountId(DestinationAccountId));
     }
 }
 
@@ -111,12 +109,11 @@ public sealed record class TransferAssetDefinitionInstruction(string AssetDefini
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(AssetDefinitionVariant);
-        writer.WriteField(context.EncodeAccountId(context.AuthorityAccountId));
-        writer.WriteField(context.EncodeAssetDefinitionId(AssetDefinitionId));
-        writer.WriteField(context.EncodeAccountId(DestinationAccountId));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            AssetDefinitionVariant,
+            context.EncodeAccountId(context.AuthorityAccountId),
+            context.EncodeAssetDefinitionId(AssetDefinitionId),
+            context.EncodeAccountId(DestinationAccountId));
     }
 }
 
@@ -143,12 +140,11 @@ public sealed record class TransferNftInstruction(string NftId, string Destinati
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(NftVariant);
-        writer.WriteField(context.EncodeAccountId(context.AuthorityAccountId));
-        writer.WriteField(context.EncodeNftId(NftId));
-        writer.WriteField(context.EncodeAccountId(DestinationAccountId));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            NftVariant,
+            context.EncodeAccountId(context.AuthorityAccountId),
+            context.EncodeNftId(NftId),
+            context.EncodeAccountId(DestinationAccountId));
     }
 }
 
@@ -195,11 +191,10 @@ public sealed record class MintAssetInstruction(string AssetDefinitionId, string
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(0);
-        writer.WriteField(context.EncodeQuantity(quantity));
-        writer.WriteField(context.EncodeAssetId(AssetDefinitionId, DestinationAccountId));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            0,
+            context.EncodeQuantity(quantity),
+            context.EncodeAssetId(AssetDefinitionId, DestinationAccountId));
     }
 }
 
@@ -246,11 +241,10 @@ public sealed record class BurnAssetInstruction(string AssetDefinitionId, string
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(0);
-        writer.WriteField(context.EncodeQuantity(quantity));
-        writer.WriteField(context.EncodeAssetId(AssetDefinitionId, DestinationAccountId));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            0,
+            context.EncodeQuantity(quantity),
+            context.EncodeAssetId(AssetDefinitionId, DestinationAccountId));
     }
 }
 
@@ -387,12 +381,11 @@ public sealed record class SetAccountKeyValueInstruction(string AccountId, strin
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(AccountVariant);
-        writer.WriteField(context.EncodeAccountId(AccountId));
-        writer.WriteField(context.EncodeName(Key));
-        writer.WriteField(context.EncodeJson(jsonValue));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            AccountVariant,
+            context.EncodeAccountId(AccountId),
+            context.EncodeName(Key),
+            context.EncodeJson(jsonValue));
     }
 }
 
@@ -416,12 +409,11 @@ public sealed record class SetDomainKeyValueInstruction(string DomainId, string 
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(DomainVariant);
-        writer.WriteField(context.EncodeName(DomainId));
-        writer.WriteField(context.EncodeName(Key));
-        writer.WriteField(context.EncodeJson(jsonValue));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            DomainVariant,
+            context.EncodeName(DomainId),
+            context.EncodeName(Key),
+            context.EncodeJson(jsonValue));
     }
 }
 
@@ -448,11 +440,10 @@ public sealed record class RemoveAccountKeyValueInstruction(string AccountId, st
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(AccountVariant);
-        writer.WriteField(context.EncodeAccountId(AccountId));
-        writer.WriteField(context.EncodeName(Key));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            AccountVariant,
+            context.EncodeAccountId(AccountId),
+            context.EncodeName(Key));
     }
 }
 
@@ -469,11 +460,10 @@ public sealed record class RemoveDomainKeyValueInstruction(string DomainId, stri
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(DomainVariant);
-        writer.WriteField(context.EncodeName(DomainId));
-        writer.WriteField(context.EncodeName(Key));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            DomainVariant,
+            context.EncodeName(DomainId),
+            context.EncodeName(Key));
     }
 }
 
@@ -497,12 +487,11 @@ public sealed record class SetAssetDefinitionKeyValueInstruction(string AssetDef
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(AssetDefinitionVariant);
-        writer.WriteField(context.EncodeAssetDefinitionId(AssetDefinitionId));
-        writer.WriteField(context.EncodeName(Key));
-        writer.WriteField(context.EncodeJson(jsonValue));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            AssetDefinitionVariant,
+            context.EncodeAssetDefinitionId(AssetDefinitionId),
+            context.EncodeName(Key),
+            context.EncodeJson(jsonValue));
     }
 }
 
@@ -519,11 +508,10 @@ public sealed record class RemoveAssetDefinitionKeyValueInstruction(string Asset
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(AssetDefinitionVariant);
-        writer.WriteField(context.EncodeAssetDefinitionId(AssetDefinitionId));
-        writer.WriteField(context.EncodeName(Key));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            AssetDefinitionVariant,
+            context.EncodeAssetDefinitionId(AssetDefinitionId),
+            context.EncodeName(Key));
     }
 }
 
@@ -547,12 +535,11 @@ public sealed record class SetNftKeyValueInstruction(string NftId, string Key, J
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(NftVariant);
-        writer.WriteField(context.EncodeNftId(NftId));
-        writer.WriteField(context.EncodeName(Key));
-        writer.WriteField(context.EncodeJson(jsonValue));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            NftVariant,
+            context.EncodeNftId(NftId),
+            context.EncodeName(Key),
+            context.EncodeJson(jsonValue));
     }
 }
 
@@ -569,11 +556,10 @@ public sealed record class RemoveNftKeyValueInstruction(string NftId, string Key
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(NftVariant);
-        writer.WriteField(context.EncodeNftId(NftId));
-        writer.WriteField(context.EncodeName(Key));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            NftVariant,
+            context.EncodeNftId(NftId),
+            context.EncodeName(Key));
     }
 }
 
@@ -597,12 +583,11 @@ public sealed record class SetTriggerKeyValueInstruction(string TriggerId, strin
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(TriggerVariant);
-        writer.WriteField(context.EncodeTriggerId(TriggerId));
-        writer.WriteField(context.EncodeName(Key));
-        writer.WriteField(context.EncodeJson(jsonValue));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            TriggerVariant,
+            context.EncodeTriggerId(TriggerId),
+            context.EncodeName(Key),
+            context.EncodeJson(jsonValue));
     }
 }
 
@@ -619,11 +604,10 @@ public sealed record class RemoveTriggerKeyValueInstruction(string TriggerId, st
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(TriggerVariant);
-        writer.WriteField(context.EncodeTriggerId(TriggerId));
-        writer.WriteField(context.EncodeName(Key));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            TriggerVariant,
+            context.EncodeTriggerId(TriggerId),
+            context.EncodeName(Key));
     }
 }
 
@@ -645,11 +629,10 @@ public sealed record class MintTriggerRepetitionsInstruction(uint Repetitions, s
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(TriggerRepetitionsVariant);
-        writer.WriteField(context.EncodeUInt32(Repetitions));
-        writer.WriteField(context.EncodeTriggerId(TriggerId));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            TriggerRepetitionsVariant,
+            context.EncodeUInt32(Repetitions),
+            context.EncodeTriggerId(TriggerId));
     }
 
     private static uint RequirePositiveRepetitions(uint repetitions, string paramName)
@@ -681,11 +664,10 @@ public sealed record class BurnTriggerRepetitionsInstruction(uint Repetitions, s
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(TriggerRepetitionsVariant);
-        writer.WriteField(context.EncodeUInt32(Repetitions));
-        writer.WriteField(context.EncodeTriggerId(TriggerId));
-        return writer.ToArray();
+        return context.EncodeEnumVariant(
+            TriggerRepetitionsVariant,
+            context.EncodeUInt32(Repetitions),
+            context.EncodeTriggerId(TriggerId));
     }
 
     private static uint RequirePositiveRepetitions(uint repetitions, string paramName)

@@ -9,7 +9,7 @@ fn operation_reference() -> OfflineOperationReference {
         operation_id: "11".repeat(32),
         kind: OfflineOperationKind::TopUp,
         state: OfflineOperationState::Pending,
-        transaction_hash: "22".repeat(32),
+        transaction_hash: "23".repeat(32),
         status_uri: format!("/v1/offline/operations/{}", "11".repeat(32)),
         submitted_at_ms: 1_725_000_000_123,
     }
@@ -18,7 +18,7 @@ fn assert_operation_reference(decoded: &OfflineOperationReference) {
     assert_eq!(decoded.operation_id, "11".repeat(32));
     assert_eq!(decoded.kind, OfflineOperationKind::TopUp);
     assert_eq!(decoded.state, OfflineOperationState::Pending);
-    assert_eq!(decoded.transaction_hash, "22".repeat(32));
+    assert_eq!(decoded.transaction_hash, "23".repeat(32));
     assert_eq!(
         decoded.status_uri,
         format!("/v1/offline/operations/{}", "11".repeat(32))

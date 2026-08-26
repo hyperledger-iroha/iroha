@@ -15,11 +15,13 @@ import {
 import { AccountAddress } from "../src/address.js";
 import { signEd25519 } from "../src/crypto.js";
 import { NetworkId } from "../src/networkId.js";
+import { networkIdToNoritoJson } from "../src/networkIdNoritoJson.js";
 
 const PRIVATE_KEY = Buffer.alloc(32, 0x24);
 const CLIENT_BLOB_ID = "11".repeat(32);
 const PAYLOAD = Buffer.from("payload-for-da");
 const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xA5));
+const NETWORK_ID_JSON = networkIdToNoritoJson(NETWORK_ID);
 const OWNER = AccountAddress.fromAccount({
   publicKey: Buffer.from(ed25519.getPublicKey(PRIVATE_KEY)),
 }).toI105();
@@ -65,7 +67,7 @@ test("buildDaIngestRequest signs the complete canonical intent and encodes DA fi
   assert.equal(request.signatures[0].signature, artifacts.signatureHex);
   assert.equal(artifacts.signingDigestHex, signingDigest.toString("hex").toUpperCase());
   assert.equal(request.signatures[0].signer, artifacts.signerPublicKey);
-  assert.equal(request.network_id, NETWORK_ID.toString());
+  assert.equal(request.network_id, NETWORK_ID_JSON);
   assert.equal(request.owner, OWNER);
   assert.deepEqual(request.client_blob_id, [Array.from(expectedBlobId.values())]);
   assert.equal(request.payload, PAYLOAD.toString("base64"));
@@ -146,7 +148,7 @@ test("DA intent digest matches the shared Rust protocol vector", () => {
   }).toI105();
   const vectorPayload = Buffer.from("hello data availability");
   const digest = computeDaIngestSigningDigest({
-    network_id: NETWORK_ID.toString(),
+    network_id: NETWORK_ID_JSON,
     owner: vectorOwner,
     client_blob_id: [
       Array.from({ length: 32 }, (_, index) => (0x11 + index) & 0xff),
@@ -192,6 +194,31 @@ test("DA intent digest matches the shared Rust protocol vector", () => {
     digest.toString("hex").toUpperCase(),
     "B97871DB051776138277C9000393FDC259910663A8C751D37BD054A0DA369DDA",
   );
+});
+
+test("DA signing digest requires canonical marked NetworkId JSON", () => {
+  const { request } = buildDaIngestRequest({
+    payload: PAYLOAD,
+    networkId: NETWORK_ID,
+    owner: OWNER,
+    clientBlobId: CLIENT_BLOB_ID,
+    signerPublicKey:
+      "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245",
+    signatureHex: "aa".repeat(64),
+  });
+  const badChecksum = `${NETWORK_ID_JSON.slice(0, -1)}${
+    NETWORK_ID_JSON.endsWith("0") ? "1" : "0"
+  }`;
+  for (const networkId of [
+    NETWORK_ID.toString(),
+    NETWORK_ID_JSON.toLowerCase(),
+    badChecksum,
+  ]) {
+    assert.throws(
+      () => computeDaIngestSigningDigest({ ...request, network_id: networkId }),
+      /network_id.*canonical marked Iroha NetworkId|checksum/u,
+    );
+  }
 });
 
 test("generateDaProofSummary normalizes native output for JS callers", () => {

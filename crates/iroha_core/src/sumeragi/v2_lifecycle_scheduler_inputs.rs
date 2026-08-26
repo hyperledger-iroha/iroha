@@ -724,8 +724,6 @@ pub(in crate::sumeragi) enum ProductionCompletionDispatchErrorV1 {
     Executor(RecoveredDecisionFetchRequestRegistrationErrorV1),
     /// A Ready Apply could not reconcile or reserve its exact executor work.
     LiveApplyReconciliation(EffectExecutorError),
-    /// The Apply executor was closed or retained an active mutation owner.
-    ApplyExecutor(EffectExecutorError),
     /// Planning selected no authenticated physical row or another work class.
     UnexpectedPlan,
     /// The selected claimed carrier could not project its exact task.
@@ -3296,9 +3294,11 @@ impl ProductionLifecycleOwnerV1 {
             return Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::RestartRequired);
         }
         output.commit_after_publication();
-        // TODO: Consume the still-live Broadcast only in the authenticated
-        // applied-height output handoff/owner rollover transaction. Process-
-        // local actor admission is not a durable terminal receipt.
+        // Keep the Broadcast live as the durable crash-recovery source. The
+        // finalization census authenticates this exact `Recovery(digest)` wait;
+        // only `ProductionLifecyclePostOutputHandoffV1` may retire the row,
+        // after the applied-height exact-output handoff is sealed and its
+        // all-row LedgerV1 tombstone is durable.
         Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned { ordinal })
     }
     /// Wake and reclaim one externally parked recovered Fetch, then publish

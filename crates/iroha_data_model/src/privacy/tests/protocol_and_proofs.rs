@@ -1227,7 +1227,7 @@ fn all_protocol_mappings_and_typed_variants_are_exact() {
 fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
     use crate::{
         isi::privacy::SubmitPrivacyProofV1,
-        transaction::{SignedTransaction, TransactionBuilder},
+        transaction::{SignedTransaction, TransactionBuilder, TransactionDomain},
     };
     use PrivacyExact12FixtureBundleValidationStatusV1 as Status;
     use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
@@ -1278,6 +1278,14 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
             TransactionBuilder::decode_payload(&row.unsigned_transaction_payload_norito)
                 .expect("canonical unsigned transaction payload");
         let unsigned_payload = unsigned_builder.payload().clone();
+        let TransactionDomain::Network(transaction_network_id) = unsigned_payload.domain() else {
+            panic!("Exact12 transaction fixture must use a network domain")
+        };
+        assert_eq!(
+            transaction_network_id,
+            &statement.context().network_id,
+            "Exact12 transaction and statement must bind the same network"
+        );
         assert_eq!(
             unsigned_payload
                 .privacy_transaction_intent_projection_bytes_v1()

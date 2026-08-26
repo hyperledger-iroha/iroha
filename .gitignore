@@ -160,6 +160,13 @@ java/iroha_android/.gradle/
 javascript/iroha_js/node_modules/
 javascript/iroha_js/dist/
 javascript/iroha_js/target-cargo/
+# Crash-safe build:dist publication state. These reserved names are generated
+# beside dist/ and must never perturb authenticated native-source sealing.
+javascript/iroha_js/.build-dist.lock
+javascript/iroha_js/.build-dist.lock.retired-*
+javascript/iroha_js/.dist-stage-*/
+javascript/iroha_js/.dist-backup-*/
+javascript/iroha_js/.dist-failed-*/
 
 # Developer portal build artifacts
 docs/portal/.docusaurus/

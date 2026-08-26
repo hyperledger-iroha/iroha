@@ -323,7 +323,7 @@ public static class ToriiAccountFaucetPow
 
     internal static string RequireExactAccountId(string? value, string paramName)
     {
-        return RequireExactAccountId(value, paramName, AccountAddress.DefaultChainDiscriminant);
+        return RequireExactAccountId(value, paramName, chainDiscriminant: null);
     }
 
     internal static string RequireExactAccountId(

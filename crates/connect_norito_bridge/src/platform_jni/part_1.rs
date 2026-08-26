@@ -3,8 +3,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     _env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jboolean {
-    use std::panic::catch_unwind;
     use jni::sys::{JNI_FALSE, JNI_TRUE};
+    use std::panic::catch_unwind;
     let available = catch_unwind(ivm::cuda_available).unwrap_or(false);
     if available { JNI_TRUE } else { JNI_FALSE }
 }
@@ -13,8 +13,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     _env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jboolean {
-    use std::panic::catch_unwind;
     use jni::sys::{JNI_FALSE, JNI_TRUE};
+    use std::panic::catch_unwind;
     let disabled = catch_unwind(ivm::cuda_disabled).unwrap_or(false);
     if disabled { JNI_TRUE } else { JNI_FALSE }
 }
@@ -1938,8 +1938,9 @@ pub(super) fn java_native_kagemusha_artifact_set_install_v4(
                 attestation.as_ptr(),
                 attestation_len.map_err(|_| "V4 attestation exceeds native range".to_owned())?,
                 internal_validation_receipt.as_ptr(),
-                internal_validation_receipt_len
-                    .map_err(|_| "V4 internal-validation receipt exceeds native range".to_owned())?,
+                internal_validation_receipt_len.map_err(|_| {
+                    "V4 internal-validation receipt exceeds native range".to_owned()
+                })?,
                 benchmark.as_ptr(),
                 benchmark_len.map_err(|_| "V4 benchmark exceeds native range".to_owned())?,
                 review.as_ptr(),
@@ -2505,6 +2506,7 @@ pub(super) const KAGEMUSHA_JNI_PEER_REQUEST_MAX_BYTES_V4: usize =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4;
 pub(super) const KAGEMUSHA_JNI_LIFECYCLE_RESULT_MAX_BYTES_V4: usize =
     KAGEMUSHA_RECURSIVE_SPEND_LIFECYCLE_RESULT_MAX_BYTES_V4;
+pub(super) const KAGEMUSHA_JNI_TORII_RESPONSE_MAX_BYTES: usize = 4 * 1024 * 1024;
 pub(super) enum JavaKagemushaLifecycleFailure {
     Invalid(String),
     Unavailable(String),

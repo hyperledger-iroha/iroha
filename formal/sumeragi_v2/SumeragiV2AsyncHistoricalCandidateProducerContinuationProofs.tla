@@ -9,12 +9,15 @@ The ordinary continuation kernel is intentionally scoped to the frozen
 voters.  Historical recovery has a different already-reviewed owner:
 `PostGstRunHistoricalRecoveryNode(node)` is weakly fair while its selected
 continuation has Ready evidence or a deterministic Local replay step.
-Production's `step_recovery` validates the selected lifecycle token before it
-acknowledges the handoff.  A non-Ready Local reservation first rematerializes
-the stored exact carrier and retains Reserved status; the following turn sees
-that carrier as Ready.  ConditionalTransport and VolatileBody reservations
-remain owned by their existing transport/body corridors until they become
-Ready, so runner fairness is never invented while the runner is disabled.
+Production exposes no generic serialized-Runtime recovery scheduler.
+Interrupted-tip recovery instead enters the lifecycle-owned
+`drive_apply_recovery_turn` corridor, which binds the exact recovered Apply
+ordinal and stage before dispatch.  A non-Ready Local reservation first
+rematerializes the stored exact carrier and retains Reserved status; the
+following turn sees that carrier as Ready.  ConditionalTransport and
+VolatileBody reservations remain owned by their existing transport/body
+corridors until they become Ready, so runner fairness is never invented while
+the runner is disabled.
 
 The selected record need not be the target record.  The frozen prefix rank
 therefore includes every immutable causal predecessor and active continuation

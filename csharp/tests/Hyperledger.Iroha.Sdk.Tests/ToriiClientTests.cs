@@ -23,6 +23,8 @@ public sealed partial class ToriiClientTests
     private static readonly byte[] CanonicalPrivateKeySeed = Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
     private const string CanonicalAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private const string CanonicalNetworkId = "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
+    private const string CanonicalNetworkIdJsonLiteral =
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
     private const string AlternateNetworkId = "82531ce8eae8bff6beeca4698bfd13a3bc8bec5f0ee0d23d428c97fc17ab0f3b";
     private static readonly string MultisigMemberAccountId1 = TestAccountId(0x41);
     private static readonly string MultisigMemberAccountId2 = TestAccountId(0x42);
@@ -246,7 +248,7 @@ public sealed partial class ToriiClientTests
         var options = new ToriiClientOptions
         {
             BearerToken = "dev-token",
-            LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+            LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
             CanonicalRequestCredentials = new CanonicalRequestCredentials(
                 CanonicalAccountId,
                 CanonicalPrivateKeySeed),
@@ -371,7 +373,7 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = bearerToken,
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -401,7 +403,7 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = bearerToken,
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -426,6 +428,33 @@ public sealed partial class ToriiClientTests
         Assert.Throws<ArgumentException>(() => new CanonicalRequestCredentials(
             accountId,
             CanonicalPrivateKeySeed));
+    }
+
+    [Fact]
+    public async Task QuoteFeesRejectsTransactionFromDifferentCanonicalNetworkBeforeDispatch()
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("network-substituted fee quote reached HTTP dispatch"));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
+        var payload = new TransactionBuilder(
+                NetworkId.Parse(AlternateNetworkId),
+                global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
+                CanonicalAccountId,
+                EmptyAuthorityFeePayment)
+            .TransferAsset(
+                "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+                "1",
+                CanonicalAccountId)
+            .SetCreationTimeMilliseconds(1_736_000_000_000)
+            .BuildUnsignedPayload();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.QuoteFeesAsync(
+                payload,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("LocalSigningContext.NetworkId", error.Message, StringComparison.Ordinal);
+        Assert.Null(handler.LastRequest);
     }
 
     [Theory]
@@ -463,7 +492,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -487,7 +516,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -514,7 +543,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -560,7 +589,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -603,7 +632,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -632,7 +661,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -657,7 +686,7 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = "dev-token",
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -693,7 +722,7 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = "dev-token",
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -6756,7 +6785,7 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -12573,7 +12602,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var transactionHash = new string('1', 64);
         var signedQuery = new SignedIterableQueryBuilder(
             CanonicalAccountId,
-            NetworkId.Parse(CanonicalNetworkId))
+            NetworkId.Parse(CanonicalNetworkId),
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
             .FindTransactionDetails(transactionHash)
             .BuildSigned(
                 CanonicalPrivateKeySeed,
@@ -13194,7 +13224,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent("""
                 {
                   "algorithm": "scrypt-leading-zero-bits-v2",
-                  "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
+                  "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
                   "chain_discriminant": 753,
                   "difficulty_bits": 10,
                   "anchor_height": 68,
@@ -13226,8 +13256,20 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "algorithm", " " + ToriiAccountFaucetPow.Algorithm, "surrounding whitespace" };
         yield return new object[] { "algorithm", ToriiAccountFaucetPow.Algorithm + "\u0001", "control characters" };
         yield return new object[] { "algorithm", "scrypt-leading-zero-bits-v1", ToriiAccountFaucetPow.Algorithm };
-        yield return new object?[] { "network_id", null, "canonical NetworkId string" };
-        yield return new object[] { "network_id", AlternateNetworkId.ToUpperInvariant(), "64 lowercase hexadecimal NetworkId" };
+        yield return new object?[] { "network_id", null, "checksummed Norito NetworkId hash literal" };
+        yield return new object[] { "network_id", CanonicalNetworkId, "checksummed Norito NetworkId hash literal" };
+        yield return new object[]
+        {
+            "network_id",
+            CanonicalNetworkIdJsonLiteral.ToLowerInvariant(),
+            "checksummed Norito NetworkId hash literal",
+        };
+        yield return new object[]
+        {
+            "network_id",
+            CanonicalNetworkIdJsonLiteral[..^4] + "0000",
+            "checksummed Norito NetworkId hash literal",
+        };
         yield return new object[] { "difficulty_bits", (byte)0, "positive" };
         yield return new object[] { "anchor_height", 0UL, "positive" };
         yield return new object?[] { "anchor_block_hash_hex", null, "must not be null" };
@@ -13294,7 +13336,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     public static IEnumerable<object[]> MissingAccountFaucetPuzzleRequiredFields()
     {
         yield return new object[] { "algorithm", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("algorithm", ToriiAccountFaucetPow.Algorithm), "algorithm") };
-        yield return new object[] { "network_id", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("network_id", CanonicalNetworkId), "network_id") };
+        yield return new object[] { "network_id", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("network_id", CanonicalNetworkIdJsonLiteral), "network_id") };
         yield return new object[] { "chain_discriminant", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("chain_discriminant", 753), "chain_discriminant") };
         yield return new object[] { "difficulty_bits", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("difficulty_bits", 10), "difficulty_bits") };
         yield return new object[] { "anchor_height", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("anchor_height", 68UL), "anchor_height") };
@@ -13348,6 +13390,20 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
+    public void AccountFaucetPuzzleWritesCanonicalMarkedNetworkId()
+    {
+        using var document = JsonDocument.Parse(
+            JsonSerializer.Serialize(DeterministicFaucetPuzzle(8)));
+
+        Assert.Equal(
+            CanonicalNetworkIdJsonLiteral,
+            document.RootElement.GetProperty("network_id").GetString());
+        Assert.NotEqual(
+            CanonicalNetworkId,
+            document.RootElement.GetProperty("network_id").GetString());
+    }
+
+    [Fact]
     public void AccountFaucetPuzzleWriteRejectsZeroScryptLogN()
     {
         var puzzle = DeterministicFaucetPuzzle(8);
@@ -13370,7 +13426,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
         yield return new object[] { "account faucet puzzle.audit.nonce", AccountFaucetPuzzleUnknownExtensionDuplicateJson(), "must not appear more than once" };
         yield return new object[] { "algorithm", AccountFaucetPuzzleResponseJson("algorithm", 1), "string" };
-        yield return new object[] { "network_id", AccountFaucetPuzzleResponseJson("network_id", 1), "canonical NetworkId string" };
+        yield return new object[] { "network_id", AccountFaucetPuzzleResponseJson("network_id", 1), "checksummed Norito NetworkId hash literal" };
         yield return new object[] { "chain_discriminant", AccountFaucetPuzzleResponseJson("chain_discriminant", -1), "unsigned 16-bit integer" };
         yield return new object[] { "difficulty_bits", AccountFaucetPuzzleResponseJson("difficulty_bits", 256), "unsigned 8-bit integer" };
         yield return new object[] { "anchor_height", AccountFaucetPuzzleResponseJson("anchor_height", -1), "unsigned integer" };
@@ -13784,7 +13840,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 Content = new StringContent("""
                     {
                       "algorithm": "scrypt-leading-zero-bits-v2",
-                      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
+                      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
                       "chain_discriminant": 753,
                       "difficulty_bits": 8,
                       "anchor_height": 68,
@@ -13822,7 +13878,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                     Content = new StringContent("""
                         {
                           "algorithm": "scrypt-leading-zero-bits-v2",
-                          "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
+                          "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
                           "chain_discriminant": 753,
                           "difficulty_bits": 8,
                           "anchor_height": 68,
@@ -17514,7 +17570,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         const string accountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
         var instructionBase64 = TransactionInstruction
             .ExecuteTrigger("daily-close")
-            .EncodeInstructionBoxBase64(accountId);
+            .EncodeInstructionBoxBase64(
+                accountId,
+                AccountAddress.DefaultChainDiscriminant);
 
         using var handler = new RecordingHandler(request =>
         {
@@ -17699,8 +17757,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         var instruction = TransactionInstruction.ExecuteTrigger("daily-close");
 
-        Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBoxBase64(""));
-        Assert.Throws<ArgumentNullException>(() => instruction.EncodeInstructionBoxBase64(null!));
+        Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBoxBase64(
+            "",
+            AccountAddress.DefaultChainDiscriminant));
+        Assert.Throws<ArgumentNullException>(() => instruction.EncodeInstructionBoxBase64(
+            null!,
+            AccountAddress.DefaultChainDiscriminant));
     }
 
     [Fact]
@@ -19636,7 +19698,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             TransactionHashHex = null,
             ExecutedTransactionHashHex = null,
             CreationTimeMilliseconds = 321,
-            TransactionPayloadBase64 = MultisigTransactionPayloadBase64, SigningMessageBase64 = MultisigSigningMessageBase64,
+            TransactionPayloadBase64 = MultisigTransactionPayloadBase64,
+            SigningMessageBase64 = MultisigSigningMessageBase64,
         };
     }
 
@@ -19652,7 +19715,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             TransactionHashHex = null,
             ExecutedTransactionHashHex = null,
             CreationTimeMilliseconds = 321,
-            TransactionPayloadBase64 = MultisigTransactionPayloadBase64, SigningMessageBase64 = MultisigSigningMessageBase64,
+            TransactionPayloadBase64 = MultisigTransactionPayloadBase64,
+            SigningMessageBase64 = MultisigSigningMessageBase64,
         };
     }
 
@@ -20177,7 +20241,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             AbiHashHex = ContractAbiHashHex,
             CreationTimeMilliseconds = 123456,
             TransactionHashHex = null,
-            TransactionPayloadBase64 = "cGF5bG9hZA==", SigningMessageBase64 = Convert.ToBase64String(IrohaHash.Hash(Encoding.UTF8.GetBytes("payload"))),
+            TransactionPayloadBase64 = "cGF5bG9hZA==",
+            SigningMessageBase64 = Convert.ToBase64String(IrohaHash.Hash(Encoding.UTF8.GetBytes("payload"))),
             Entrypoint = "main",
             OperationReceipt = ValidContractCallOperationReceipt(),
         };
@@ -21441,7 +21506,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
@@ -21456,7 +21521,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiClientOptions
             {
                 LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(CanonicalNetworkId)),
+                    NetworkId.Parse(CanonicalNetworkId),
+                    global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant),
             });
     }
 
@@ -26336,7 +26402,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var response = new JsonObject
         {
             ["algorithm"] = ToriiAccountFaucetPow.Algorithm,
-            ["network_id"] = CanonicalNetworkId,
+            ["network_id"] = CanonicalNetworkIdJsonLiteral,
             ["chain_discriminant"] = 753,
             ["difficulty_bits"] = 10,
             ["anchor_height"] = 68,
@@ -26384,11 +26450,28 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         using var fixture = JsonDocument.Parse(File.ReadAllText(
             Path.Combine(AppContext.BaseDirectory, "Fixtures", "alias_setup_v1.json")));
-        return Convert.FromHexString(fixture.RootElement
-            .GetProperty("account_onboarding_receipt_vector")
+        var vector = fixture.RootElement
+            .GetProperty("account_onboarding_receipt_vector");
+        var canonicalBody = Convert.FromHexString(vector
             .GetProperty("canonical_body_norito_hex")
             .GetString()
             ?? throw new InvalidOperationException("shared onboarding body fixture is missing"));
+        var fixtureNetworkLiteral = vector
+            .GetProperty("receipt_json")
+            .GetProperty("body")
+            .GetProperty("network_id")
+            .GetString()
+            ?? throw new InvalidOperationException("shared onboarding network fixture is missing");
+        var fixtureNetworkId = Convert.FromHexString(fixtureNetworkLiteral.Substring(5, 64));
+        var networkOffset = canonicalBody.AsSpan().IndexOf(fixtureNetworkId);
+        if (networkOffset < 0
+            || canonicalBody.AsSpan(networkOffset + fixtureNetworkId.Length).IndexOf(fixtureNetworkId) >= 0)
+        {
+            throw new InvalidOperationException(
+                "shared onboarding body fixture must contain exactly one network id");
+        }
+        OnboardingFixtureNetworkId.ToBytes().CopyTo(canonicalBody, networkOffset);
+        return canonicalBody;
     }
 
     private static string ContractMetadataHashResponseJson(string operation, string field, string value)
@@ -29382,6 +29465,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return new TransactionBuilder(
             NetworkId.Parse(CanonicalNetworkId),
+            global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant,
             CanonicalAccountId,
             EmptyAuthorityFeePayment)
             .TransferAsset(

@@ -232,8 +232,17 @@ use iroha_zkp_halo2::vega::{
     zk_ams_release_candidate_profile_digest_v1, zk_ams_t256_generator_digest_v1,
 };
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, sync::OnceLock};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+    thread,
+};
 use thiserror::Error;
+const COMPILED_PROFILE_CATALOG_WORKER_COUNT_V1: usize = 4;
+const COMPILED_PROFILE_CATALOG_WORKER_STACK_BYTES_V1: usize = 8 * 1024 * 1024;
 const PROFILE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.privacy.compiled-profile.digest.v1";
 const PARAMETER_ID_DOMAIN_V1: &[u8] = b"iroha.privacy.compiled-profile.parameter-id.v1";
 const PARAMETER_DIGEST_DOMAIN_V1: &[u8] = b"iroha.privacy.compiled-profile.parameter-digest.v1";
@@ -449,8 +458,10 @@ pub fn compiled_privacy_profile_snapshot_result_v1(
 ///
 /// The result contains one row for every closed first-release protocol in
 /// canonical discriminant order. It intentionally contains no committed
-/// height, policy, activation, lifecycle, or readiness projection; those are
-/// authoritative only in a live Torii [`PrivacyCapabilitySnapshotV1`].
+/// height, policy, activation, lifecycle, or readiness projection. Network
+/// admission requires a live Torii
+/// [`PrivacyExact12CapabilityManifestV1`](iroha_data_model::privacy::PrivacyExact12CapabilityManifestV1)
+/// and exact comparison with this binary's selected compiled-profile row.
 ///
 /// # Errors
 ///
@@ -467,18 +478,62 @@ pub fn compiled_privacy_profile_catalog_v1()
 }
 fn build_compiled_privacy_profile_catalog_v1()
 -> Result<PrivacyCompiledProfileCatalogV1, PrivacyCompiledProfileCatalogValidationErrorV1> {
+    let next_protocol_index = AtomicUsize::new(0);
+    let mut indexed_rows = thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(COMPILED_PROFILE_CATALOG_WORKER_COUNT_V1 - 1);
+        // A few profiles initialize large fixed cryptographic resources. Keep
+        // their independent work concurrent but statically bounded, and own
+        // the same stack budget used by the mobile FFI catalog boundary.
+        for worker_index in 1..COMPILED_PROFILE_CATALOG_WORKER_COUNT_V1 {
+            let Ok(worker) = thread::Builder::new()
+                .name(format!("iroha-privacy-profile-catalog-v1-{worker_index}"))
+                .stack_size(COMPILED_PROFILE_CATALOG_WORKER_STACK_BYTES_V1)
+                .spawn_scoped(scope, || {
+                    build_compiled_privacy_profile_catalog_rows_v1(&next_protocol_index)
+                })
+            else {
+                // Thread creation is only a latency optimization. The caller
+                // continues to derive every unclaimed row synchronously.
+                break;
+            };
+            workers.push(worker);
+        }
+        let mut indexed_rows = build_compiled_privacy_profile_catalog_rows_v1(&next_protocol_index);
+        for worker in workers {
+            let mut worker_rows = worker
+                .join()
+                .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
+            indexed_rows.append(&mut worker_rows);
+        }
+        indexed_rows
+    });
+    debug_assert_eq!(indexed_rows.len(), PrivacyProtocolIdV1::ALL.len());
+    indexed_rows.sort_unstable_by_key(|(index, _)| *index);
     let catalog = PrivacyCompiledProfileCatalogV1 {
         version: PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1,
-        protocols: PrivacyProtocolIdV1::ALL
-            .into_iter()
-            .map(|protocol_id| PrivacyCompiledProfileCatalogRowV1 {
-                protocol_id,
-                compiled_profile: compiled_privacy_profile_snapshot_result_v1(protocol_id),
-            })
-            .collect(),
+        protocols: indexed_rows.into_iter().map(|(_, row)| row).collect(),
     };
     catalog.validate()?;
     Ok(catalog)
+}
+fn build_compiled_privacy_profile_catalog_rows_v1(
+    next_protocol_index: &AtomicUsize,
+) -> Vec<(usize, PrivacyCompiledProfileCatalogRowV1)> {
+    let mut rows = Vec::new();
+    loop {
+        let index = next_protocol_index.fetch_add(1, Ordering::Relaxed);
+        let Some(protocol_id) = PrivacyProtocolIdV1::ALL.get(index).copied() else {
+            break;
+        };
+        rows.push((
+            index,
+            PrivacyCompiledProfileCatalogRowV1 {
+                protocol_id,
+                compiled_profile: compiled_privacy_profile_snapshot_result_v1(protocol_id),
+            },
+        ));
+    }
+    rows
 }
 /// Validate an archive as the exact compiled-profile catalog of this binary.
 ///

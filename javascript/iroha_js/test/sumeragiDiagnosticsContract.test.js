@@ -73,14 +73,39 @@ if (selectedClientPath === "") {
   );
   clientModuleUrl = pathToFileURL(selectedClientPath);
 }
-const { ToriiClient } = await import(clientModuleUrl.href);
+const { OperatorSigningContext, ToriiClient } = await import(clientModuleUrl.href);
 assert.equal(typeof ToriiClient, "function");
+assert.equal(typeof OperatorSigningContext, "function");
 const clientIndexModuleUrl = new URL("./index.js", clientModuleUrl);
 const { ValidationError } = await import(clientIndexModuleUrl.href);
 assert.equal(typeof ValidationError, "function");
+const clientNetworkIdModuleUrl = new URL("./networkId.js", clientModuleUrl);
+const { NetworkId } = await import(clientNetworkIdModuleUrl.href);
+assert.equal(typeof NetworkId, "function");
+const operatorSigningContext = new OperatorSigningContext(
+  NetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
+  {
+    publicKey: `ed0120${"11".repeat(32)}`,
+    sign: () => Buffer.alloc(64, 0x01),
+  },
+);
 const browserClientModuleUrl = new URL("./toriiBrowserClient.js", clientModuleUrl);
 const { ToriiBrowserClient } = await import(browserClientModuleUrl.href);
 assert.equal(typeof ToriiBrowserClient, "function");
+const browserOperatorModuleUrl = new URL(
+  "./operatorRequest.browser.js",
+  clientModuleUrl,
+);
+const {
+  OperatorSigningContext: BrowserOperatorSigningContext,
+} = await import(browserOperatorModuleUrl.href);
+const browserOperatorSigningContext = new BrowserOperatorSigningContext(
+  NetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
+  {
+    publicKey: `ed0120${"11".repeat(32)}`,
+    sign: () => Buffer.alloc(64, 0x01),
+  },
+);
 
 async function verifyTypedBrowserSurface() {
   const diagnosticsText = JSON.stringify(browserSumeragiDiagnosticsFixture())
@@ -94,6 +119,7 @@ async function verifyTypedBrowserSurface() {
     );
   const requests = [];
   const client = new ToriiBrowserClient("https://torii.example", {
+    operatorSigningContext: browserOperatorSigningContext,
     fetchImpl: async (url, init) => {
       requests.push([String(url), init.method, init.headers.Accept]);
       const body = String(url).endsWith("/v1/sumeragi/status")
@@ -124,6 +150,7 @@ async function verifyTypedBrowserSurface() {
 
   const rawPayload = { operational_note: "raw payload" };
   const separationClient = new ToriiBrowserClient("https://torii.example", {
+    operatorSigningContext: browserOperatorSigningContext,
     fetchImpl: async () => new Response(JSON.stringify(rawPayload), {
       headers: { "content-type": "application/json" },
     }),
@@ -141,6 +168,7 @@ async function verifyTypedBrowserSurface() {
 
   const declaredLengths = [1024 * 1024 + 1, 16 * 1024 * 1024 + 1];
   const boundedClient = new ToriiBrowserClient("https://torii.example", {
+    operatorSigningContext: browserOperatorSigningContext,
     fetchImpl: async () => new Response("{}", {
       headers: {
         "content-length": String(declaredLengths.shift()),
@@ -167,6 +195,7 @@ async function verifyTypedBrowserSurface() {
     }),
   ];
   const strictClient = new ToriiBrowserClient("https://torii.example", {
+    operatorSigningContext: browserOperatorSigningContext,
     fetchImpl: async () => strictResponses.shift(),
   });
   await assert.rejects(
@@ -187,6 +216,7 @@ async function verifyTypedBrowserSurface() {
     }),
   ];
   const invalidUtf8Client = new ToriiBrowserClient("https://torii.example", {
+    operatorSigningContext: browserOperatorSigningContext,
     fetchImpl: async () => invalidUtf8Responses.shift(),
   });
   await assert.rejects(
@@ -204,6 +234,7 @@ await verifyTypedBrowserSurface();
 const focus = {
   names: new Set(SUMERAGI_DIAGNOSTICS_CONTRACT_TESTS),
   observed: [],
+  operatorSigningContext,
   ToriiClient,
   ValidationError,
 };

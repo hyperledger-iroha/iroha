@@ -213,8 +213,9 @@ public sealed class PrivacyExact12FixtureBundleArchive
 
 /// <summary>
 /// Selector-free local privacy build metadata and exact-12 fixture surface. The catalog never
-/// establishes network activation or readiness; fetch a fresh authoritative capability snapshot
-/// from live Torii before submitting a privacy proof.
+/// establishes network activation or readiness. Proof admission requires a fresh authenticated
+/// <see cref="PrivacyExact12CapabilityManifestV1"/> from live Torii plus the exact ABI22 native
+/// capability tuple; legacy capability inspection is non-admitting.
 /// </summary>
 public static class PrivacyNative
 {

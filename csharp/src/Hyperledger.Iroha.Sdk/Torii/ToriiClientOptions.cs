@@ -8,15 +8,31 @@ namespace Hyperledger.Iroha.Torii;
 /// </summary>
 public sealed class ToriiLocalSigningContext
 {
-    /// <summary>Creates a signing context bound to one exact canonical network identifier.</summary>
+    /// <summary>
+    /// Creates a signing context for the public Taira testnet. Call the two-argument
+    /// overload for any other network; this overload never falls back to a legacy profile.
+    /// </summary>
     public ToriiLocalSigningContext(NetworkId networkId)
+        : this(networkId, Address.AccountAddress.TairaTestnetChainDiscriminant)
+    {
+    }
+
+    /// <summary>
+    /// Creates a signing context bound to one exact canonical network identifier and I105
+    /// chain discriminant.
+    /// </summary>
+    public ToriiLocalSigningContext(NetworkId networkId, ushort chainDiscriminant)
     {
         ArgumentNullException.ThrowIfNull(networkId);
         NetworkId = networkId;
+        ChainDiscriminant = chainDiscriminant;
     }
 
     /// <summary>Exact network identity expected in every server-prepared signing payload.</summary>
     public NetworkId NetworkId { get; }
+
+    /// <summary>Exact I105 chain discriminant required for locally signed account identities.</summary>
+    public ushort ChainDiscriminant { get; }
 }
 
 public sealed class ToriiClientOptions

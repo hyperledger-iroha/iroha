@@ -21,6 +21,13 @@
 //! The Soracloud host has no ledger world-state snapshot, so it rejects the
 //! complete state-backed AXT syscall family instead of delegating it to the
 //! standalone core-host shim.
+//!
+//! Production PortableVM launch is Linux-only. Other targets retain the shared
+//! planning, materialization, and recovery helpers for platform-independent
+//! unit coverage, but the fail-closed launch stub intentionally leaves that
+//! helper graph unreachable in non-test builds. Keep Linux dead-code diagnostics
+//! fully enabled while avoiding misleading warnings on unsupported hosts.
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 use eyre::WrapErr;
 use iroha_core::soracloud_runtime::{
     SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_MAX_BYTES_V1,

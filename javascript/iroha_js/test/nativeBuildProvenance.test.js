@@ -122,8 +122,13 @@ function withSourceRepository(run) {
   }
 }
 
-test("repository ignores every native publication artifact", () => {
+test("repository ignores every native and dist publication artifact", () => {
   const generatedPaths = [
+    "javascript/iroha_js/.build-dist.lock",
+    "javascript/iroha_js/.build-dist.lock.retired-123-00000000-0000-4000-8000-000000000000",
+    "javascript/iroha_js/.dist-stage-123-00000000-0000-4000-8000-000000000000/address.js",
+    "javascript/iroha_js/.dist-backup-123-00000000-0000-4000-8000-000000000000/address.js",
+    "javascript/iroha_js/.dist-failed-123-00000000-0000-4000-8000-000000000000/address.js",
     "javascript/iroha_js/native/.build-dist.lock",
     "javascript/iroha_js/native/iroha_js_host.node",
     "javascript/iroha_js/native/iroha_js_host.checksums.json",
@@ -653,6 +658,26 @@ test("source seal rejects inventory and content mutations during observation", (
     assert.throws(
       () => readNativeBuildSourceState(repoRoot, { run: mutateInventory }),
       /source inventory changed/u,
+    );
+  });
+
+  withSourceRepository((repoRoot) => {
+    const disappearingPath = path.join(repoRoot, "disappearing.txt");
+    writeFileSync(disappearingPath, "transient\n");
+    let untrackedInventoryCalls = 0;
+    const removeInventoriedSource = (command, args, options) => {
+      const result = spawnSync(command, args, options);
+      if (args.includes("ls-files") && args.includes("--others")) {
+        untrackedInventoryCalls += 1;
+        if (untrackedInventoryCalls === 1) {
+          unlinkSync(disappearingPath);
+        }
+      }
+      return result;
+    };
+    assert.throws(
+      () => readNativeBuildSourceState(repoRoot, { run: removeInventoriedSource }),
+      /untracked source disappeared while sealing \(path_hex=646973617070656172696e672e747874\)/u,
     );
   });
 });

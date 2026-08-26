@@ -8,9 +8,8 @@ from pathlib import Path
 
 import pytest
 import requests
-from requests.adapters import HTTPAdapter
-
 from client_test_support import CANONICAL_OWNER, CANONICAL_OWNER_HEADER, canonical_hash
+from requests.adapters import HTTPAdapter
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
@@ -36,6 +35,32 @@ from iroha_torii_client.canonical_request_v1 import (
 )
 
 NETWORK_ID = canonical_hash(0xA5)
+PUBLIC_NETWORK_ID = "a5" * 32
+
+
+def test_public_network_id_text_normalizes_to_canonical_auth_hash() -> None:
+    auth = ToriiCanonicalRequestAuth(
+        network_id=PUBLIC_NETWORK_ID,
+        account_id=CANONICAL_OWNER,
+        signer=lambda _message: b"signature",
+    )
+
+    assert auth.network_id == NETWORK_ID
+    assert canonical_network_request_signature_message(
+        PUBLIC_NETWORK_ID,
+        "POST",
+        "/v1/vpn/quotes",
+        b"{}",
+        timestamp_ms=1,
+        nonce="public-network-id",
+    ) == canonical_network_request_signature_message(
+        NETWORK_ID,
+        "POST",
+        "/v1/vpn/quotes",
+        b"{}",
+        timestamp_ms=1,
+        nonce="public-network-id",
+    )
 
 
 def test_canonical_nonce_v1_boundaries() -> None:
@@ -174,6 +199,82 @@ def test_canonical_transport_signs_and_sends_the_same_prepared_target() -> None:
             nonce="prepared-target",
         )
     ]
+
+
+@pytest.mark.parametrize(
+    "header",
+    (
+        "Authorization",
+        "X-Api-Token",
+        "X-Iroha-Witness",
+        "X-Iroha-Signature",
+        "X-Iroha-Operator-Nonce",
+    ),
+)
+def test_canonical_transport_rejects_session_auth_injection_before_signing(
+    header: str,
+) -> None:
+    messages: list[bytes] = []
+    auth = ToriiCanonicalRequestAuth(
+        network_id=NETWORK_ID,
+        account_id="alice@universal",
+        signer=lambda message: messages.append(message) or b"signature",
+        timestamp_ms=1,
+        nonce="session-auth-injection",
+    )
+    session = requests.Session()
+    session.headers[header] = "precomputed"
+    client = ToriiClient("https://node.test", session=session)
+    headers = client._canonical_request_headers(
+        "GET",
+        "/v1/test",
+        b"",
+        canonical_auth=auth,
+        headers=None,
+        has_body=False,
+    )
+
+    with pytest.raises(ValueError, match="precomputed authentication|token, witness"):
+        client._request(
+            "GET",
+            "/v1/test",
+            headers=headers,
+            allow_retry=False,
+            allow_redirects=False,
+        )
+    assert messages == []
+
+
+def test_canonical_transport_rejects_session_auth_before_signing() -> None:
+    messages: list[bytes] = []
+    auth = ToriiCanonicalRequestAuth(
+        network_id=NETWORK_ID,
+        account_id="alice@universal",
+        signer=lambda message: messages.append(message) or b"signature",
+        timestamp_ms=1,
+        nonce="session-auth",
+    )
+    session = requests.Session()
+    session.auth = ("alice", "secret")
+    client = ToriiClient("https://node.test", session=session)
+    headers = client._canonical_request_headers(
+        "GET",
+        "/v1/test",
+        b"",
+        canonical_auth=auth,
+        headers=None,
+        has_body=False,
+    )
+
+    with pytest.raises(ValueError, match="Session.auth"):
+        client._request(
+            "GET",
+            "/v1/test",
+            headers=headers,
+            allow_retry=False,
+            allow_redirects=False,
+        )
+    assert messages == []
 
 
 def test_public_header_builder_signs_the_requests_prepared_target() -> None:

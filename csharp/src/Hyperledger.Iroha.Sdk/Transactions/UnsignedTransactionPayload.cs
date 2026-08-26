@@ -84,7 +84,7 @@ public sealed class TransactionNetworkDomain
 {
     internal TransactionNetworkDomain(NetworkId networkId)
     {
-        Value = networkId.ToString();
+        Value = networkId.ToNoritoJsonLiteral();
     }
 
     [JsonPropertyName("kind")]

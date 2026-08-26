@@ -1,5 +1,4 @@
 //! Public Torii DTOs for the first-release Offline lifecycle.
-use crate::ErrorEnvelope;
 use iroha_crypto::Hash;
 pub use iroha_data_model::offline::{
     KagemushaRecursiveSpendRedeemRequestV4 as OfflineRedeemRequest,
@@ -27,6 +26,226 @@ use iroha_data_model::{
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 
+/// Exact terminal rejection code for an admitted Offline operation.
+pub const OFFLINE_OPERATION_REJECTION_CODE: &str = "offline_operation_rejected";
+/// Maximum Unicode scalar count in an Offline operation rejection message.
+pub const OFFLINE_OPERATION_REJECTION_MESSAGE_MAX_SCALARS: usize = 1_024;
+
+/// Closed wire value for [`OFFLINE_OPERATION_REJECTION_CODE`].
+///
+/// The zero-sized Rust representation makes every constructible value valid;
+/// the custom JSON and Norito decoders accept only the exact canonical string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OfflineOperationRejectionCode;
+
+impl OfflineOperationRejectionCode {
+    /// Return the one canonical wire spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        OFFLINE_OPERATION_REJECTION_CODE
+    }
+}
+
+impl core::fmt::Display for OfflineOperationRejectionCode {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(OFFLINE_OPERATION_REJECTION_CODE)
+    }
+}
+
+impl norito::core::NoritoSerialize for OfflineOperationRejectionCode {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        norito::core::NoritoSerialize::serialize(&OFFLINE_OPERATION_REJECTION_CODE, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_hint(&OFFLINE_OPERATION_REJECTION_CODE)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_exact(&OFFLINE_OPERATION_REJECTION_CODE)
+    }
+}
+
+impl<'a> norito::core::NoritoDeserialize<'a> for OfflineOperationRejectionCode {
+    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived)
+            .unwrap_or_else(|error| panic!("invalid Offline rejection code: {error}"))
+    }
+
+    fn try_deserialize(
+        archived: &'a norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let value =
+            <&'a str as norito::core::NoritoDeserialize>::try_deserialize(archived.cast::<&str>())?;
+        if value == OFFLINE_OPERATION_REJECTION_CODE {
+            Ok(Self)
+        } else {
+            Err(norito::core::Error::Message(format!(
+                "Offline rejection code must be `{OFFLINE_OPERATION_REJECTION_CODE}`"
+            )))
+        }
+    }
+}
+
+impl norito::json::JsonSerialize for OfflineOperationRejectionCode {
+    fn json_serialize(&self, out: &mut String) {
+        norito::json::write_json_string(OFFLINE_OPERATION_REJECTION_CODE, out);
+    }
+}
+
+impl norito::json::JsonDeserialize for OfflineOperationRejectionCode {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let mut preflight = *parser;
+        preflight.skip_string_bounded(OFFLINE_OPERATION_REJECTION_CODE.len())?;
+        let value = parser.parse_string()?;
+        if value == OFFLINE_OPERATION_REJECTION_CODE {
+            Ok(Self)
+        } else {
+            Err(norito::json::Error::Message(format!(
+                "Offline rejection code must be `{OFFLINE_OPERATION_REJECTION_CODE}`"
+            )))
+        }
+    }
+}
+
+/// Canonical bounded terminal rejection message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfflineOperationRejectionMessage(String);
+
+impl OfflineOperationRejectionMessage {
+    /// Validate and construct a rejection message.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless `message` contains 1 through 1,024 trimmed,
+    /// non-control Unicode scalar values.
+    pub fn try_new(message: impl Into<String>) -> Result<Self, String> {
+        let message = message.into();
+        validate_offline_operation_rejection_message(&message)?;
+        Ok(Self(message))
+    }
+
+    /// Borrow the canonical message.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for OfflineOperationRejectionMessage {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl core::fmt::Display for OfflineOperationRejectionMessage {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl norito::core::NoritoSerialize for OfflineOperationRejectionMessage {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        norito::core::NoritoSerialize::serialize(&self.0, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_exact(&self.0)
+    }
+}
+
+impl<'a> norito::core::NoritoDeserialize<'a> for OfflineOperationRejectionMessage {
+    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived)
+            .unwrap_or_else(|error| panic!("invalid Offline rejection message: {error}"))
+    }
+
+    fn try_deserialize(
+        archived: &'a norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let value =
+            <&'a str as norito::core::NoritoDeserialize>::try_deserialize(archived.cast::<&str>())?;
+        validate_offline_operation_rejection_message(value)
+            .map_err(norito::core::Error::Message)?;
+        Ok(Self(value.to_owned()))
+    }
+}
+
+impl norito::json::JsonSerialize for OfflineOperationRejectionMessage {
+    fn json_serialize(&self, out: &mut String) {
+        norito::json::write_json_string(self.as_str(), out);
+    }
+}
+
+impl norito::json::JsonDeserialize for OfflineOperationRejectionMessage {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let mut preflight = *parser;
+        preflight.skip_string_bounded(OFFLINE_OPERATION_REJECTION_MESSAGE_MAX_SCALARS * 4)?;
+        Self::try_new(parser.parse_string()?).map_err(norito::json::Error::Message)
+    }
+}
+
+/// Exact code-and-message error carried by a rejected Offline operation.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct OfflineOperationRejectionError {
+    code: OfflineOperationRejectionCode,
+    message: OfflineOperationRejectionMessage,
+}
+
+impl OfflineOperationRejectionError {
+    /// Construct the exact rejection envelope from a canonical message.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the message violates the public bound.
+    pub fn try_new(message: impl Into<String>) -> Result<Self, String> {
+        Ok(Self {
+            code: OfflineOperationRejectionCode,
+            message: OfflineOperationRejectionMessage::try_new(message)?,
+        })
+    }
+
+    /// Return the exact stable rejection code.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        self.code.as_str()
+    }
+
+    /// Borrow the validated rejection message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        self.message.as_str()
+    }
+}
+
+fn validate_offline_operation_rejection_message(message: &str) -> Result<(), String> {
+    let scalar_count = message
+        .chars()
+        .take(OFFLINE_OPERATION_REJECTION_MESSAGE_MAX_SCALARS + 1)
+        .count();
+    if message.is_empty()
+        || message.trim() != message
+        || scalar_count > OFFLINE_OPERATION_REJECTION_MESSAGE_MAX_SCALARS
+        || message.chars().any(char::is_control)
+    {
+        return Err(format!(
+            "Offline rejection message must contain 1..={OFFLINE_OPERATION_REJECTION_MESSAGE_MAX_SCALARS} trimmed, non-control Unicode scalars"
+        ));
+    }
+    Ok(())
+}
+
 /// Decode one exact first-release wallet payment request.
 ///
 /// This is the public Torii/API decoding boundary for wallet-to-wallet request
@@ -48,13 +267,18 @@ pub fn decode_offline_cash_payment_request_v1(
 ///
 /// The caller-retained request is mandatory context; the boundary does not
 /// infer it from transport state. The clean-slate V1 decoder caps the payment
-/// bytes before Norito can allocate and then verifies every request binding.
-/// Legacy Kagemusha V4/V5 values are not compatibility-decoded.
+/// bytes before Norito can allocate, validates the signed request, and
+/// reconstructs the exact request-owned proof statement. The compact payment
+/// intentionally does not echo a second unauthenticated request digest, so
+/// semantic request binding is decided by Core's paired-proof verification;
+/// the derived payment digest remains context-specific. Legacy Kagemusha V4/V5
+/// values are not compatibility-decoded.
 ///
 /// # Errors
 ///
 /// Returns an error when the body is oversized, malformed, non-canonical,
-/// invalid, or is not bound to `request` under the exact Offline Cash V1 contract.
+/// invalid, or cannot be structurally contextualized by `request` under the
+/// exact Offline Cash V1 contract.
 pub fn decode_offline_cash_payment_v1(
     bytes: &[u8],
     request: &OfflineCashPaymentRequestV1,
@@ -582,8 +806,8 @@ pub enum OfflineOperationStatus {
         kind: OfflineOperationKind,
         /// Canonical signed transaction hash.
         transaction_hash: String,
-        /// Stable typed Torii error.
-        error: ErrorEnvelope,
+        /// Exact code-and-message rejection; no details extension exists.
+        error: OfflineOperationRejectionError,
     },
 }
 #[cfg(test)]
@@ -623,10 +847,10 @@ mod tests {
             r#"{"fixed":"00AB10FF","dynamic":[],"keyed":{"00FF":7,"00ff":8}}"#,
         )
         .expect_err("lexically distinct keys must not alias one typed map key");
-        assert_eq!(
-            error.to_string(),
-            "duplicate JSON object field",
-            "unexpected duplicate-key error"
+        let message = error.to_string();
+        assert!(
+            message.contains("duplicate field") && message.contains("00ff"),
+            "unexpected duplicate-key error: {message}"
         );
     }
     fn universal_capability_status() -> OfflineStatus {
@@ -671,7 +895,10 @@ mod tests {
         let unknown = canonical.replacen('{', r#"{"future_metadata":null,"#, 1);
         let error = norito::json::from_str::<OfflineStatus>(&unknown)
             .expect_err("unknown universal capability members fail closed");
-        assert_eq!(error.to_string(), "unknown JSON field");
+        assert_eq!(
+            error.to_string(),
+            "JSON error: unknown field `future_metadata`"
+        );
     }
     #[test]
     fn tagged_json_rejects_duplicate_discriminator_members() {
@@ -693,7 +920,7 @@ mod tests {
             operation_id: "11".repeat(32),
             kind: OfflineOperationKind::TopUp,
             state: OfflineOperationState::Pending,
-            transaction_hash: "22".repeat(32),
+            transaction_hash: "23".repeat(32),
             status_uri: format!("/v1/offline/operations/{}", "11".repeat(32)),
             submitted_at_ms: 1_725_000_000_123,
         };
@@ -715,7 +942,7 @@ mod tests {
             operation_id: operation_id.clone(),
             kind: OfflineOperationKind::TopUp,
             state: OfflineOperationState::Pending,
-            transaction_hash: "22".repeat(32),
+            transaction_hash: "23".repeat(32),
             status_uri: format!("/v1/offline/operations/{operation_id}"),
             submitted_at_ms: u64::MAX,
         };
@@ -729,7 +956,7 @@ mod tests {
                     r#""status_uri":"/v1/offline/operations/{operation_id}","submitted_at_ms":18446744073709551615}}"#,
                 ),
                 operation_id = operation_id,
-                transaction_hash = "22".repeat(32),
+                transaction_hash = "23".repeat(32),
             )
         );
         let decoded: OfflineOperationReference =
@@ -747,7 +974,7 @@ mod tests {
                 r#""submitted_at_ms":1}}"#,
             ),
             operation_id = operation_id,
-            transaction_hash = "22".repeat(32),
+            transaction_hash = "23".repeat(32),
         );
         let error = norito::json::from_str::<OfflineOperationReference>(&json)
             .expect_err("duplicate operation_id must be rejected");
@@ -763,12 +990,12 @@ mod tests {
     }
     #[test]
     fn operation_reference_golden_vector() {
-        const EXPECTED_ARCHIVE_HEX: &str = "4e5254300000e8e2244e45e4be2a975e34957141128b00f0000000000000001f5b5402d6dc2092024140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310400000000040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323258572f76312f6f66666c696e652f6f7065726174696f6e732f3131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313108ffffffffffffffff";
+        const EXPECTED_ARCHIVE_HEX: &str = "4e5254300000e8e2244e45e4be2a975e34957141128b00f000000000000000192c80a70843db66024140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310400000000040000000041403233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323358572f76312f6f66666c696e652f6f7065726174696f6e732f3131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313108ffffffffffffffff";
         let reference = OfflineOperationReference {
             operation_id: "11".repeat(32),
             kind: OfflineOperationKind::TopUp,
             state: OfflineOperationState::Pending,
-            transaction_hash: "22".repeat(32),
+            transaction_hash: "23".repeat(32),
             status_uri: format!("/v1/offline/operations/{}", "11".repeat(32)),
             submitted_at_ms: u64::MAX,
         };
@@ -778,26 +1005,27 @@ mod tests {
     }
     #[test]
     fn operation_status_golden_vectors() {
-        const PENDING_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a009600000000000000bdfee2508f80055702000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff";
-        const REJECTED_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a00b6000000000000009322104cda8e602a020000000000000000020000004140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310401000000414032323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232281b1a6f66666c696e655f6f7065726174696f6e5f72656a6563746564090872656a65637465640100";
-        const APPLIED_REDEEM_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a00a00000000000000092cd6b32b062b3d30200000000000000000100000041403131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313159010000005441403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff082a00000000000000";
+        const PENDING_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a0096000000000000004ebc9d97c6fd018502000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323308ffffffffffffffff";
+        const REJECTED_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a00b4000000000000003f4069b756096f62020000000000000000020000004140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310401000000414032333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233261b1a6f66666c696e655f6f7065726174696f6e5f72656a6563746564090872656a6563746564";
+        const APPLIED_REDEEM_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a00a000000000000000983fb38fbc5b1f410200000000000000000100000041403131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313159010000005441403233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323308ffffffffffffffff082a00000000000000";
         let operation_id = "11".repeat(32);
         let pending = OfflineOperationStatus::Pending {
             operation_id: operation_id.clone(),
             kind: OfflineOperationKind::TopUp,
-            transaction_hash: "22".repeat(32),
+            transaction_hash: "23".repeat(32),
             submitted_at_ms: u64::MAX,
         };
         let rejected = OfflineOperationStatus::Rejected {
             operation_id: operation_id.clone(),
             kind: OfflineOperationKind::Redeem,
-            transaction_hash: "22".repeat(32),
-            error: ErrorEnvelope::new("offline_operation_rejected", "rejected"),
+            transaction_hash: "23".repeat(32),
+            error: OfflineOperationRejectionError::try_new("rejected")
+                .expect("canonical rejection"),
         };
         let applied_redeem = OfflineOperationStatus::Applied {
             operation_id,
             result: OfflineOperationResult::Redeem(OfflineRedeemResult {
-                transaction_hash: "22".repeat(32),
+                transaction_hash: "23".repeat(32),
                 finalized_block_height: u64::MAX,
                 server_time_ms: 42,
             }),
@@ -810,6 +1038,78 @@ mod tests {
             let archive = norito::to_bytes(&status).expect("encode golden operation status");
             let archive_hex = hex::encode(archive);
             assert_eq!(archive_hex, expected);
+        }
+    }
+
+    #[test]
+    fn operation_rejection_is_invariant_safe_at_every_public_decode_boundary() {
+        const RETIRED_GENERIC_ERROR_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a00b600000000000000c0eea51f24d353d2020000000000000000020000004140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310401000000414032333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233281b1a6f66666c696e655f6f7065726174696f6e5f72656a6563746564090872656a65637465640100";
+        let operation_id = "11".repeat(32);
+        let valid = OfflineOperationStatus::Rejected {
+            operation_id,
+            kind: OfflineOperationKind::Redeem,
+            transaction_hash: "23".repeat(32),
+            error: OfflineOperationRejectionError::try_new("界".repeat(1_024))
+                .expect("1,024 Unicode scalars are canonical"),
+        };
+        let canonical_json = norito::json::to_string(&valid).expect("encode canonical rejection");
+        let decoded: OfflineOperationStatus =
+            norito::json::from_str(&canonical_json).expect("decode canonical rejection");
+        match decoded {
+            OfflineOperationStatus::Rejected { error, .. } => {
+                assert_eq!(error.code(), OFFLINE_OPERATION_REJECTION_CODE);
+                assert_eq!(error.message().chars().count(), 1_024);
+            }
+            other => panic!("wrong decoded state: {other:?}"),
+        }
+
+        for invalid_json in [
+            canonical_json.replace(
+                OFFLINE_OPERATION_REJECTION_CODE,
+                "offline_operation_rejecteD",
+            ),
+            canonical_json.replace(&"界".repeat(1_024), " rejected"),
+            canonical_json.replace(
+                &format!(r#""message":"{}""#, "界".repeat(1_024)),
+                &format!(r#""message":"{}","details":null"#, "界".repeat(1_024)),
+            ),
+            canonical_json.replace(&"界".repeat(1_024), &"界".repeat(1_025)),
+        ] {
+            norito::json::from_str::<OfflineOperationStatus>(&invalid_json)
+                .expect_err("a non-canonical rejection JSON value must fail closed");
+        }
+
+        let mut invalid_code_archive = norito::to_bytes(&OfflineOperationStatus::Rejected {
+            operation_id: "11".repeat(32),
+            kind: OfflineOperationKind::Redeem,
+            transaction_hash: "23".repeat(32),
+            error: OfflineOperationRejectionError::try_new("rejected")
+                .expect("canonical rejection"),
+        })
+        .expect("encode canonical rejection archive");
+        let code = OFFLINE_OPERATION_REJECTION_CODE.as_bytes();
+        let offset = invalid_code_archive
+            .windows(code.len())
+            .position(|window| window == code)
+            .expect("code bytes in canonical archive");
+        invalid_code_archive[offset + code.len() - 1] = b'D';
+        norito::decode_from_bytes::<OfflineOperationStatus>(&invalid_code_archive)
+            .expect_err("a non-canonical rejection code must fail Norito decoding");
+
+        let retired = hex::decode(RETIRED_GENERIC_ERROR_ARCHIVE_HEX)
+            .expect("decode retired generic-error archive");
+        norito::decode_from_bytes::<OfflineOperationStatus>(&retired)
+            .expect_err("the retired generic ErrorEnvelope wire shape must fail closed");
+
+        for invalid_message in [
+            String::new(),
+            " rejected".to_owned(),
+            "rejected\n".to_owned(),
+            "\u{85}".to_owned(),
+            "界".repeat(1_025),
+        ] {
+            OfflineOperationRejectionError::try_new(invalid_message)
+                .expect_err("a non-canonical rejection message must be unconstructible");
         }
     }
 }

@@ -892,8 +892,8 @@ internal static class ToriiAccountQueryJson
 
         try
         {
-            return AccountAddress.Parse(exact, AccountAddress.DefaultChainDiscriminant)
-                .ToI105(AccountAddress.DefaultChainDiscriminant);
+            _ = AccountAddress.Parse(exact);
+            return exact;
         }
         catch (AccountAddressException exception)
         {

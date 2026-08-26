@@ -24,7 +24,7 @@ def _account(seed: int) -> str:
     return AccountAddress.from_account(
         domain="space-directory",
         public_key=bytes([seed]) * 32,
-    ).to_i105(0x02F1)
+    ).to_i105(0x0171)
 
 
 def _draft() -> dict[str, Any]:
@@ -43,13 +43,22 @@ class _Session(requests.Session):
         super().__init__()
         self.calls: list[dict[str, Any]] = []
 
-    def request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
-        self.calls.append({"method": method, "url": url, **kwargs})
+    def send(self, request: requests.PreparedRequest, **kwargs: Any) -> requests.Response:
+        self.calls.append(
+            {
+                "method": request.method,
+                "url": request.url,
+                "headers": dict(request.headers),
+                "data": request.body,
+                **kwargs,
+            }
+        )
         response = requests.Response()
         response.status_code = 200
         response.headers["Content-Type"] = "application/json"
         response._content = json.dumps(_draft()).encode("utf-8")
         response.encoding = "utf-8"
+        response.url = request.url
         return response
 
 
@@ -57,7 +66,7 @@ NETWORK_ID = NetworkId.from_bytes(bytes([0xA5]) * 32)
 FOREIGN_NETWORK_ID = NetworkId.from_bytes(bytes([0xA7]) * 32)
 AUTHORITY = _account(0x11)
 AUTHORITY_HEADER = AccountAddress.parse_encoded(
-    AUTHORITY, expected_discriminant=0x02F1
+    AUTHORITY, expected_discriminant=0x0171
 ).canonical_hex()
 
 

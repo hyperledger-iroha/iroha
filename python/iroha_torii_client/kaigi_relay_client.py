@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import quote
+
+if TYPE_CHECKING:
+    from .client import KaigiRelayDetail, KaigiRelayHealthSnapshot, KaigiRelaySummaryList
+else:
+    KaigiRelayDetail = Any
+    KaigiRelayHealthSnapshot = Any
+    KaigiRelaySummaryList = Any
 
 
 def create_kaigi_relay_client_mixin(

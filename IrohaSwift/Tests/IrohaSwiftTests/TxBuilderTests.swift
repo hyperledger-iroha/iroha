@@ -157,6 +157,7 @@ private final class PipelineURLProtocol: URLProtocol {
         let body: [String: Any] = [
             "payload": [
                 "entrypoint_hash": "abc",
+                "signed_transaction_hash": NSNull(),
                 "submitted_at_ms": 1,
                 "submitted_at_height": 2,
                 "signer": "signer"
@@ -298,7 +299,7 @@ final class TxBuilderTests: XCTestCase {
             line: line
         )
         XCTAssertEqual(domain.remaining(), 0, file: file, line: line)
-        for _ in 0..<8 {
+        for _ in 0..<9 {
             _ = try transaction.readCompactField()
         }
         XCTAssertEqual(transaction.remaining(), 0, file: file, line: line)
@@ -2218,10 +2219,12 @@ final class TxBuilderTests: XCTestCase {
             XCTFail("Expected pipeline failure")
         } catch let error as PipelineStatusError {
             switch error {
-            case .failure:
+            case let .failure(hash, status, payload):
+                XCTAssertEqual(status, "Rejected")
+                XCTAssertEqual(hash, payload.hash)
                 XCTAssertEqual(
                     error.localizedDescription,
-                    "Pipeline transaction \(Self.pipelineHash) failed with status Rejected."
+                    "Pipeline transaction \(hash) failed with status Rejected."
                 )
             default:
                 XCTFail("Unexpected error: \(error)")
@@ -2477,6 +2480,23 @@ final class TxBuilderTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [PipelineURLProtocol.self]
         let session = URLSession(configuration: config)
-        return IrohaSDK(baseURL: URL(string: "https://example.test")!, session: session)
+        let seed = Data(repeating: 0x41, count: 32)
+        let auth = ToriiCanonicalRequestAuth(
+            accountId: try Keypair(privateKeyBytes: seed).accountId(
+                networkPrefix: AccountId.defaultNetworkPrefix
+            ),
+            privateKey: seed,
+            timestampMs: 4_102_444_801_000,
+            nonce: "tx-builder-pipeline-test"
+        )
+        let client = ToriiClient(
+            baseURL: URL(string: "https://example.test")!,
+            session: session,
+            localSigningContext: ToriiLocalSigningContext(
+                networkId: TestNetworkIds.canonical
+            ),
+            canonicalRequestAuth: auth
+        )
+        return IrohaSDK(toriiClient: client)
     }
 }

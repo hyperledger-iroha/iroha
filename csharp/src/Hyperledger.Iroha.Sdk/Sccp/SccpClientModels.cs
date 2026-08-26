@@ -242,9 +242,19 @@ public sealed record SccpBridgeSubmitResponse(
 {
     private static readonly HashSet<string> Fields =
     [
-        "submitted", "payload_kind", "message_id_hex", "backend", "counterparty_domain",
-        "counterparty_chain", "route_configuration_hash_hex", "range_start_height", "range_end_height",
-        "creation_time_ms", "tx_hash_hex", "transaction_payload_b64", "signing_message_b64",
+        "submitted",
+        "payload_kind",
+        "message_id_hex",
+        "backend",
+        "counterparty_domain",
+        "counterparty_chain",
+        "route_configuration_hash_hex",
+        "range_start_height",
+        "range_end_height",
+        "creation_time_ms",
+        "tx_hash_hex",
+        "transaction_payload_b64",
+        "signing_message_b64",
     ];
 
     public static SccpBridgeSubmitResponse Parse(
@@ -503,7 +513,7 @@ internal static class SccpSubmitValidation
         AccountAddress address;
         try
         {
-            address = AccountAddress.Parse(value, AccountAddress.TestChainDiscriminant);
+            address = AccountAddress.Parse(value, AccountAddress.TairaTestnetChainDiscriminant);
         }
         catch (Exception error) when (error is ArgumentException or FormatException)
         {
@@ -514,7 +524,7 @@ internal static class SccpSubmitValidation
         }
 
         if (!string.Equals(
-                address.ToI105(AccountAddress.TestChainDiscriminant),
+                address.ToI105(AccountAddress.TairaTestnetChainDiscriminant),
                 value,
                 StringComparison.Ordinal))
         {
@@ -554,7 +564,7 @@ internal static class SccpSubmitValidation
                 nameof(creationTimeMs));
         }
 
-        var address = AccountAddress.Parse(authority, AccountAddress.TestChainDiscriminant);
+        var address = AccountAddress.Parse(authority, AccountAddress.TairaTestnetChainDiscriminant);
         if (address.AddressClass != AddressClass.SingleKey
             || !string.Equals(address.Algorithm, "ed25519", StringComparison.Ordinal)
             || address.PublicKey.Length != Ed25519Signer.PublicKeyLength)
@@ -637,7 +647,7 @@ internal static class SccpSubmitValidation
 
         var address = AccountAddress.Parse(
             expectedAuthority,
-            AccountAddress.TestChainDiscriminant);
+            AccountAddress.TairaTestnetChainDiscriminant);
         if (address.AddressClass != AddressClass.SingleKey
             || !string.Equals(address.Algorithm, "ed25519", StringComparison.Ordinal)
             || !Ed25519Signer.Verify(IrohaHash.Hash(payload), signature, address.PublicKey))
@@ -687,7 +697,7 @@ internal static class SccpSubmitValidation
         RequireCanonicalChainId(chain);
         var controller = RequireCanonicalAuthority(authority);
         var expectedController = AccountAddress
-            .Parse(expectedAuthority, AccountAddress.TestChainDiscriminant)
+            .Parse(expectedAuthority, AccountAddress.TairaTestnetChainDiscriminant)
             .ControllerBytes();
         if (!controller.AsSpan().SequenceEqual(expectedController))
         {
@@ -1064,7 +1074,7 @@ internal static class SccpSubmitValidation
         if (expectedAuthority is not null)
         {
             var expectedController = AccountAddress
-                .Parse(expectedAuthority, AccountAddress.TestChainDiscriminant)
+                .Parse(expectedAuthority, AccountAddress.TairaTestnetChainDiscriminant)
                 .ControllerBytes();
             if (!controller.AsSpan().SequenceEqual(expectedController))
             {
@@ -1108,15 +1118,15 @@ internal static class SccpSubmitValidation
         switch (controllerTag)
         {
             case 0:
-            {
-                var publicKey = DecodeByteVector(
-                    cursor.TakeField("authority.public_key"),
-                    "authority.public_key",
-                    byte.MaxValue + 1);
-                RequireCanonicalCompactPublicKey(publicKey, byte.MaxValue, "authority.public_key");
-                canonicalController = CanonicalSingleController(publicKey);
-                break;
-            }
+                {
+                    var publicKey = DecodeByteVector(
+                        cursor.TakeField("authority.public_key"),
+                        "authority.public_key",
+                        byte.MaxValue + 1);
+                    RequireCanonicalCompactPublicKey(publicKey, byte.MaxValue, "authority.public_key");
+                    canonicalController = CanonicalSingleController(publicKey);
+                    break;
+                }
             case 1:
                 canonicalController = RequireCanonicalMultisigPolicy(
                     cursor.TakeField("authority.multisig"));
@@ -1664,39 +1674,39 @@ internal static class SccpSubmitValidation
             case 0:
                 break;
             case 1:
-            {
-                var program = new CompactTransactionCursor(
-                    value.TakeField("fee_payment.program_id"));
-                sponsorController = RequireCanonicalAuthority(
-                    program.TakeField("fee_payment.program_id.sponsor"));
-                programName = DecodeCompactString(
-                    program.TakeField("fee_payment.program_id.name"),
-                    "fee_payment.program_id.name");
-                if (!program.IsFinished
-                    || string.IsNullOrEmpty(programName)
-                    || !string.Equals(
-                        programName.Normalize(NormalizationForm.FormC),
-                        programName,
-                        StringComparison.Ordinal)
-                    || programName.Any(static character =>
-                        char.IsWhiteSpace(character)
-                        || char.IsControl(character)
-                        || character is '@' or '#' or '$' or '/'))
                 {
-                    throw new ArgumentException(
-                        "SCCP sponsor fee_payment program id is not canonical.");
-                }
+                    var program = new CompactTransactionCursor(
+                        value.TakeField("fee_payment.program_id"));
+                    sponsorController = RequireCanonicalAuthority(
+                        program.TakeField("fee_payment.program_id.sponsor"));
+                    programName = DecodeCompactString(
+                        program.TakeField("fee_payment.program_id.name"),
+                        "fee_payment.program_id.name");
+                    if (!program.IsFinished
+                        || string.IsNullOrEmpty(programName)
+                        || !string.Equals(
+                            programName.Normalize(NormalizationForm.FormC),
+                            programName,
+                            StringComparison.Ordinal)
+                        || programName.Any(static character =>
+                            char.IsWhiteSpace(character)
+                            || char.IsControl(character)
+                            || character is '@' or '#' or '$' or '/'))
+                    {
+                        throw new ArgumentException(
+                            "SCCP sponsor fee_payment program id is not canonical.");
+                    }
 
-                programRevision = DecodeFramedUInt64(
-                    ref value,
-                    "fee_payment.program_revision");
-                if (programRevision == 0)
-                {
-                    throw new ArgumentException(
-                        "SCCP sponsor fee_payment program revision must be positive.");
+                    programRevision = DecodeFramedUInt64(
+                        ref value,
+                        "fee_payment.program_revision");
+                    if (programRevision == 0)
+                    {
+                        throw new ArgumentException(
+                            "SCCP sponsor fee_payment program revision must be positive.");
+                    }
+                    break;
                 }
-                break;
-            }
             default:
                 throw new ArgumentException("SCCP transaction fee_payment payer is unknown.");
         }
@@ -1728,7 +1738,7 @@ internal static class SccpSubmitValidation
                 && sponsorController.AsSpan().SequenceEqual(
                     AccountAddress.Parse(
                         sponsor.ProgramId.Sponsor,
-                        AccountAddress.DefaultChainDiscriminant)
+                        AccountAddress.TairaTestnetChainDiscriminant)
                     .ControllerBytes()),
             _ => false,
         };
@@ -2010,9 +2020,38 @@ internal static class SccpSubmitValidation
     {
         ReadOnlySpan<byte> order =
         [
-            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
-            0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
+            0xed,
+            0xd3,
+            0xf5,
+            0x5c,
+            0x1a,
+            0x63,
+            0x12,
+            0x58,
+            0xd6,
+            0x9c,
+            0xf7,
+            0xa2,
+            0xde,
+            0xf9,
+            0xde,
+            0x14,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0x10,
         ];
         for (var index = 31; index >= 0; index--)
         {
@@ -2042,10 +2081,38 @@ internal static class SccpSubmitValidation
         y[31] &= 0x7f;
         ReadOnlySpan<byte> prime =
         [
-            0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+            0xed,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0x7f,
         ];
         var less = false;
         for (var index = 31; index >= 0; index--)

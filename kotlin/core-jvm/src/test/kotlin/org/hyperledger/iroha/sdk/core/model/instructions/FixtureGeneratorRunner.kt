@@ -3,7 +3,7 @@ package org.hyperledger.iroha.sdk.core.model.instructions
 import java.util.concurrent.Executors
 
 /**
- * Runs an explicitly supplied Rust `kotlin-fixture-gen` executable.
+ * Runs an explicitly supplied Rust fixture-generator executable.
  *
  * Set `IROHA_KOTLIN_FIXTURE_GEN_BIN` to an existing executable file. Relative
  * paths are resolved from the Iroha repository root. The parity tests never
@@ -11,10 +11,14 @@ import java.util.concurrent.Executors
  */
 internal object FixtureGeneratorRunner {
     internal const val BINARY_ENVIRONMENT_VARIABLE = "IROHA_KOTLIN_FIXTURE_GEN_BIN"
+    internal const val OFFLINE_CASH_BINARY_ENVIRONMENT_VARIABLE =
+        "IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN"
 
-    fun run(subcommand: String): List<String> {
+    fun run(subcommand: String): List<String> = run(subcommand, BINARY_ENVIRONMENT_VARIABLE)
+
+    fun run(subcommand: String, binaryEnvironmentVariable: String): List<String> {
         val repoRoot = locateRepoRoot()
-        val binary = executableFor(repoRoot, System.getenv())
+        val binary = executableFor(repoRoot, System.getenv(), binaryEnvironmentVariable)
         val process = ProcessBuilder(commandFor(binary, subcommand))
             .directory(repoRoot)
             .redirectErrorStream(false)
@@ -43,21 +47,30 @@ internal object FixtureGeneratorRunner {
     internal fun executableFor(
         repoRoot: java.io.File,
         environment: Map<String, String>,
+    ): java.io.File = executableFor(repoRoot, environment, BINARY_ENVIRONMENT_VARIABLE)
+
+    internal fun executableFor(
+        repoRoot: java.io.File,
+        environment: Map<String, String>,
+        binaryEnvironmentVariable: String,
     ): java.io.File {
-        val configuredPath = environment[BINARY_ENVIRONMENT_VARIABLE]
+        require(binaryEnvironmentVariable.isNotBlank()) {
+            "fixture-generator environment variable must not be blank"
+        }
+        val configuredPath = environment[binaryEnvironmentVariable]
             ?: throw IllegalArgumentException(
-                "$BINARY_ENVIRONMENT_VARIABLE must be set to the kotlin-fixture-gen executable",
+                "$binaryEnvironmentVariable must be set to the fixture-generator executable",
             )
         require(configuredPath.isNotBlank()) {
-            "$BINARY_ENVIRONMENT_VARIABLE must not be blank"
+            "$binaryEnvironmentVariable must not be blank"
         }
 
         val binary = resolvePathAgainstRepoRoot(repoRoot, configuredPath)
         require(binary.isFile) {
-            "$BINARY_ENVIRONMENT_VARIABLE must name an existing regular file: ${binary.absolutePath}"
+            "$binaryEnvironmentVariable must name an existing regular file: ${binary.absolutePath}"
         }
         require(binary.canExecute()) {
-            "$BINARY_ENVIRONMENT_VARIABLE is not executable: ${binary.absolutePath}"
+            "$binaryEnvironmentVariable is not executable: ${binary.absolutePath}"
         }
         return binary
     }
@@ -108,6 +121,7 @@ internal object FixtureGeneratorRunner {
         return ByteArray(clean.length / 2) { i ->
             val hi = Character.digit(clean[i * 2], 16)
             val lo = Character.digit(clean[i * 2 + 1], 16)
+            require(hi >= 0 && lo >= 0) { "Hex string must contain only hexadecimal digits" }
             ((hi shl 4) or lo).toByte()
         }
     }

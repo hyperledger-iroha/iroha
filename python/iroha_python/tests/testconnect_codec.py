@@ -63,6 +63,10 @@ def _network(fill: int = 0xA5) -> connect.NetworkId:
     return connect.NetworkId.from_bytes(bytes([fill]) * 32)
 
 
+def _marked_network(fill: int = 0xA5) -> str:
+    return connect._network_id_to_torii_json(_network(fill))
+
+
 def _key_pair() -> connect.ConnectKeyPair:
     private_key = bytes([0x44]) * 32
     return connect.ConnectKeyPair(
@@ -235,6 +239,62 @@ def test_bootstrap_connect_preview_session_registers_and_extracts_tokens() -> No
         management=_connect_token(0x63),
         relay=_connect_token(0x64),
     )
+
+
+def test_connect_torii_json_marks_network_but_public_models_remain_raw() -> None:
+    preview = connect.create_connect_session_preview(
+        network_id=_network(),
+        nonce=bytes(range(0xA0, 0xB0)),
+        app_key_pair=_key_pair(),
+    )
+    raw_request = {
+        "sid": preview.sid_base64url,
+        "network_id": _network().literal,
+        "app_pk": connect._to_base64url(preview.app_key_pair.public_key),
+        "nonce": connect._to_base64url(preview.nonce),
+    }
+    normalized = connect._normalize_connect_session_request(raw_request)
+    assert normalized["network_id"] == _marked_network()
+
+    typed = FakeToriiConnectClient().create_connect_session(raw_request)
+    assert isinstance(typed, connect.ConnectSessionInfo)
+    torii_response = typed.as_dict()
+    assert torii_response["network_id"] == _marked_network()
+
+    parsed = connect.ConnectSessionInfo.from_mapping(torii_response)
+    assert parsed.network_id == _network()
+    assert parsed.network_id.literal == _network().literal
+    assert f"network_id={_network().literal}" in parsed.wallet_uri
+
+
+def test_connect_torii_json_rejects_raw_network_and_marked_deep_link() -> None:
+    preview = connect.create_connect_session_preview(
+        network_id=_network(),
+        nonce=bytes(range(0xA0, 0xB0)),
+        app_key_pair=_key_pair(),
+    )
+    raw_request = {
+        "sid": preview.sid_base64url,
+        "network_id": _network().literal,
+        "app_pk": connect._to_base64url(preview.app_key_pair.public_key),
+        "nonce": connect._to_base64url(preview.nonce),
+    }
+    typed = FakeToriiConnectClient().create_connect_session(raw_request)
+    assert isinstance(typed, connect.ConnectSessionInfo)
+    response = typed.as_dict()
+
+    raw_response = dict(response)
+    raw_response["network_id"] = _network().literal
+    with pytest.raises(ValueError, match="canonical hash"):
+        connect.ConnectSessionInfo.from_mapping(raw_response)
+
+    marked_uri_response = dict(response)
+    marked_uri_response["wallet_uri"] = response["wallet_uri"].replace(
+        f"network_id={_network().literal}",
+        f"network_id={quote(_marked_network(), safe='')}",
+    )
+    with pytest.raises(ValueError, match="substituted Connect session identity"):
+        connect.ConnectSessionInfo.from_mapping(marked_uri_response)
 
 
 def test_bootstrap_connect_preview_session_can_skip_registration() -> None:

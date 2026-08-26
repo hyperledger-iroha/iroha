@@ -40,6 +40,22 @@ class FixtureGeneratorRunnerConfigurationTest {
     }
 
     @Test
+    fun `resolves the authoritative offline cash generator independently`() =
+        withTemporaryRepoRoot { repoRoot ->
+            val binary = executable(repoRoot, "target/debug/examples/kotlin_offline_cash_v1")
+            val resolved = FixtureGeneratorRunner.executableFor(
+                repoRoot,
+                mapOf(
+                    FixtureGeneratorRunner.OFFLINE_CASH_BINARY_ENVIRONMENT_VARIABLE to
+                        "target/debug/examples/kotlin_offline_cash_v1",
+                ),
+                FixtureGeneratorRunner.OFFLINE_CASH_BINARY_ENVIRONMENT_VARIABLE,
+            )
+
+            assertEquals(binary.absolutePath, resolved.absolutePath)
+        }
+
+    @Test
     fun `accepts an absolute executable and ignores Cargo settings`() =
         withTemporaryRepoRoot { repoRoot ->
             val binary = executable(repoRoot, "outside-target/kotlin-fixture-gen")
@@ -90,6 +106,13 @@ class FixtureGeneratorRunnerConfigurationTest {
             )
         }
         assertContains(error.message.orEmpty(), "is not executable")
+    }
+
+    @Test
+    fun `rejects malformed fixture hex`() {
+        assertFailsWith<IllegalArgumentException> {
+            FixtureGeneratorRunner.hexToBytes("0g")
+        }
     }
 
     private fun executable(repoRoot: File, relativePath: String): File {

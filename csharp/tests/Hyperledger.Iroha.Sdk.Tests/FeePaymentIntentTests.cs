@@ -6,6 +6,8 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 public sealed class FeePaymentIntentTests
 {
     private const string NetworkIdLiteral = "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
+    private const string NetworkIdJsonLiteral =
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
     private static NetworkId FixtureNetworkId => NetworkId.Parse(NetworkIdLiteral);
     private const string AccountId =
         "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
@@ -57,7 +59,7 @@ public sealed class FeePaymentIntentTests
             7,
             [new FeeChargeLimit(FeeChargeKind.Nexus, AssetDefinitionId, "3")],
             500_000);
-        var builder = new TransactionBuilder(FixtureNetworkId, AccountId, requested)
+        var builder = new TransactionBuilder(FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant, AccountId, requested)
             .TransferAsset(AssetDefinitionId, "1", AccountId);
 
         Assert.Same(builder, builder.ApplyFeeQuote(quoted));
@@ -73,7 +75,7 @@ public sealed class FeePaymentIntentTests
     {
         var intent = FeePaymentIntent.Authority(
             [new FeeChargeLimit(FeeChargeKind.Nexus, AssetDefinitionId, "4")]);
-        var builder = new TransactionBuilder(FixtureNetworkId, AccountId, intent)
+        var builder = new TransactionBuilder(FixtureNetworkId, global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant, AccountId, intent)
             .TransferAsset(AssetDefinitionId, "1", AccountId)
             .SetCreationTimeMilliseconds(1_736_000_000_000);
 
@@ -86,7 +88,8 @@ public sealed class FeePaymentIntentTests
         Assert.Equal(1_736_000_000_000UL, payload.CreationTimeMilliseconds);
         Assert.True(payload.Executable.ContainsKey("Instructions"));
         Assert.Equal("network", domain.GetProperty("kind").GetString());
-        Assert.Equal(NetworkIdLiteral, domain.GetProperty("value").GetString());
+        Assert.Equal(NetworkIdJsonLiteral, domain.GetProperty("value").GetString());
+        Assert.NotEqual(NetworkIdLiteral, domain.GetProperty("value").GetString());
         Assert.False(payloadRoot.TryGetProperty("network_id", out _));
         Assert.False(payloadRoot.TryGetProperty("chain", out _));
         Assert.Throws<ArgumentException>(() => builder.SetMetadata("fee_sponsor", null));

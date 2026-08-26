@@ -445,6 +445,17 @@ public sealed partial class ToriiClientTests
         Assert.Throws<FormatException>(() => NetworkId.Parse(""));
         Assert.Throws<FormatException>(() => NetworkId.Parse("chain/other"));
         Assert.Throws<ArgumentNullException>(() => new ToriiLocalSigningContext(null!));
+
+        var tairaContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId);
+        Assert.Equal(
+            AccountAddress.TairaTestnetChainDiscriminant,
+            tairaContext.ChainDiscriminant);
+        var explicitLegacyContext = new ToriiLocalSigningContext(
+            OnboardingFixtureNetworkId,
+            AccountAddress.DefaultChainDiscriminant);
+        Assert.Equal(
+            AccountAddress.DefaultChainDiscriminant,
+            explicitLegacyContext.ChainDiscriminant);
     }
 
     [Fact]

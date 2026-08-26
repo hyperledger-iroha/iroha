@@ -740,8 +740,9 @@ let ownership = match self.runtime.take_effect_ownership(&effects) {
         effects_path,
         consume_effects_wrapper,
         generic_executor_context,
-        "ordinary effect-consumer Decision-cleanup delegation",
+        "test-only ordinary effect-consumer Decision-cleanup delegation",
         errors,
+        expected_attributes=("#[cfg(test)]",),
     )
     _require_exact_rust_tokens(
         effects_path,
@@ -755,7 +756,7 @@ pub(crate) fn consume_effects<S: V2EffectServices>(
     self.consume_effects_with_runner_decision_cleanup(effects, services, None)
 }
 """,
-        "ordinary effect-consumer wrapper must delegate only to the Decision-cleanup-aware consumer",
+        "test-only ordinary effect-consumer wrapper must delegate only to the Decision-cleanup-aware consumer",
         errors,
     )
     _require_rust_token_sequence(
@@ -1233,8 +1234,9 @@ self.finality_completion.is_some()
         effects_path,
         consume_pacemaker_wrapper,
         generic_executor_context,
-        "pacemaker effect-consumer Decision-cleanup delegation",
+        "test-only pacemaker effect-consumer Decision-cleanup delegation",
         errors,
+        expected_attributes=("#[cfg(test)]",),
     )
     _require_exact_rust_tokens(
         effects_path,
@@ -1248,7 +1250,7 @@ fn consume_pacemaker_effects<S: V2EffectServices>(
     self.consume_pacemaker_effects_with_runner_decision_cleanup(effects, services, None)
 }
 """,
-        "pacemaker effect-consumer wrapper must delegate only to the Decision-cleanup-aware consumer",
+        "test-only pacemaker effect-consumer wrapper must delegate only to the Decision-cleanup-aware consumer",
         errors,
     )
     consume_pacemaker = _require_rust_item(
@@ -4735,11 +4737,6 @@ self.retain_effect_ownership(
                 "dispatch_one_fence_dependency",
                 "RuntimeEffectSource::Fifo",
                 "fence-completion candidate statement handoff",
-            ),
-            (
-                "step_recovery",
-                "RuntimeEffectSource::Fifo",
-                "recovery FIFO candidate statement handoff",
             ),
         ):
             dispatch = _require_rust_item(

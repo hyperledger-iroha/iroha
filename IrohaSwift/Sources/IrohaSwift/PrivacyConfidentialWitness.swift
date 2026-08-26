@@ -90,7 +90,7 @@ public struct PrivacyConfidentialWitnessV1: Equatable, Sendable {
         self.inputs = inputs
         self.transferOutputs = transferOutputs
         self.unshieldChange = unshieldChange
-        self.publicAmount = try PrivacyConfidentialWitnessCodecs.canonicalU128(
+        self.publicAmount = try PrivacyConfidentialWitnessCodecs.canonicalPublicU128(
             publicAmount,
             field: "publicAmount"
         )
@@ -212,7 +212,7 @@ public struct PrivacyConfidentialWitnessV2: Equatable, Sendable {
         self.inputs = inputs
         self.transferOutputs = transferOutputs
         self.unshieldChange = unshieldChange
-        self.publicAmount = try PrivacyConfidentialWitnessCodecs.canonicalU128(
+        self.publicAmount = try PrivacyConfidentialWitnessCodecs.canonicalPublicU128(
             publicAmount,
             field: "publicAmount"
         )
@@ -372,6 +372,16 @@ public enum PrivacyConfidentialWitnessCodecs {
         } catch {
             throw PrivacyConfidentialWitnessError.invalidField(field)
         }
+    }
+
+    /// Public-value fields use canonical `u128` text but admit the exact zero
+    /// sentinel required by confidential transfers. Note and output amounts
+    /// continue to use the strictly positive `canonicalU128` path.
+    static func canonicalPublicU128(_ value: String, field: String) throws -> String {
+        if value == "0" {
+            return value
+        }
+        return try canonicalU128(value, field: field)
     }
 
     static func fixed32(_ value: Data, field: String) throws -> Data {

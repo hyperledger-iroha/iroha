@@ -777,7 +777,7 @@ def _decode_transaction_payload_v1(
     tuple[bytes, ...],
 ]:
     fields = _decode_fields_v1(
-        payload, 9, context, PRIVACY_EXACT12_MAX_UNSIGNED_TRANSACTION_BYTES_V1
+        payload, 10, context, PRIVACY_EXACT12_MAX_UNSIGNED_TRANSACTION_BYTES_V1
     )
     envelope_fields, statement_fields, statement_context = _decode_single_submit_instruction_v1(
         fields[3],
@@ -789,7 +789,9 @@ def _decode_transaction_payload_v1(
         expected_statement_archive=expected_statement_archive,
         context=f"{context}.executable",
     )
-    transaction_network_id = _decode_network_transaction_domain_v1(fields[0], f"{context}.domain")
+    transaction_network_id = _decode_network_transaction_domain_v1(
+        fields[0], f"{context}.domain"
+    )
     if transaction_network_id != statement_context[0]:
         raise PrivacyExact12FixtureErrorV1(
             f"{context} NetworkId does not match the privacy statement context"
@@ -801,7 +803,13 @@ def _decode_transaction_payload_v1(
         raise PrivacyExact12FixtureErrorV1(f"{context} must use the fixture TTL")
     if _decode_option_v1(fields[5], 4, f"{context}.nonce") != row_index + 1:
         raise PrivacyExact12FixtureErrorV1(f"{context} carries a substituted nonce")
-    if fields[8] != b"\x00":
+    if fields[7] != struct.pack("<I", 0):
+        raise PrivacyExact12FixtureErrorV1(
+            f"{context} must use ordinary transaction admission"
+        )
+    if fields[8] != bytes(8):
+        raise PrivacyExact12FixtureErrorV1(f"{context} must use empty metadata")
+    if fields[9] != b"\x00":
         raise PrivacyExact12FixtureErrorV1(f"{context} must not carry attachments")
     return fields, envelope_fields, statement_fields, statement_context
 

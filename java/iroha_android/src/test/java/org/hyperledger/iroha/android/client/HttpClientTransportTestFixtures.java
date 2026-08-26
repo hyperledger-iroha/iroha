@@ -8,7 +8,7 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 final class HttpClientTransportTestFixtures {
   private HttpClientTransportTestFixtures() {}
 
-  static String privacyCapabilitySnapshotJson() {
+  static String legacyPrivacyCapabilityInspectionJson() {
     final StringBuilder rows = new StringBuilder();
     for (final org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1 protocol :
         org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1.values()) {

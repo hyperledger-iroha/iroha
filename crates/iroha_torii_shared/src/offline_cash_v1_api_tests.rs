@@ -18,9 +18,9 @@ const FIXTURE_ENCRYPTION_PUBLIC_KEY: [u8; 32] = [
     0x85, 0x20, 0xf0, 0x09, 0x89, 0x30, 0xa7, 0x54, 0x74, 0x8b, 0x7d, 0xdc, 0xb4, 0x3e, 0xf7, 0x5a,
     0x0d, 0xbf, 0x3a, 0x0d, 0x26, 0x38, 0x1a, 0xf4, 0xeb, 0xa4, 0xa9, 0x8e, 0xaa, 0x9b, 0x4e, 0x6a,
 ];
-const FIXTURE_REQUEST_SIGNATURE_HEX: &str = "710623ea92107972f5941bb99b4a8a0befb12a00e6c2a8c21e14fa98204dfc54042c045b5eeedfb52c9482cbafb4a44a95f8472039dbffd67658a749701848e0";
-const FIXTURE_OTHER_REQUEST_SIGNATURE_HEX: &str = "d08f44598c21854fb9bd0ad67cbbbf5be69f7e5bbdde7fc17b1912e5288c0fbc5f4b1735e1488ee5c5f704846307a8972634e2b8535a5ecd86b1dab27af6bdef";
-const FIXTURE_ACKNOWLEDGEMENT_SIGNATURE_HEX: &str = "e0aa7ce4bc306377b2a70b28e1f6fd9e269d7eefd1051f7c99d4e203c30c4d405aa182e83eefc8fe327fdc53d5c101b97e2ecdc1af5c430f9f7fe9ffab6862b5";
+const FIXTURE_REQUEST_SIGNATURE_HEX: &str = "7fe5c8b65ce4f3979d4326ae73f2a07309edbf4b4cfb27d1e072421a63ae85b0386d3687d0c77c2e6c01beb82bde9f397b167f0d176376330bbd74df83e4217b";
+const FIXTURE_OTHER_REQUEST_SIGNATURE_HEX: &str = "5f05268c021d3ca6e964f3e1cb46bb0ffefb275832a9d95156979bffffa713987a6a1b747948921a847d256d6a62adc1090a73f5ddef9f346efbb5ddfd898050";
+const FIXTURE_ACKNOWLEDGEMENT_SIGNATURE_HEX: &str = "7d48566cdf5ce8702880ec6c1e1c8c2763c3802b83b62a8fa5c26d76f2030201373b87ee3c744296292ed31ea8450a420be12209cc67e29ab75eeace712db7ee";
 
 const LEGACY_REQUEST_V2_HEX: &str = include_str!(
     "../../connect_norito_bridge/tests/fixtures/offline_recipient_payment_request_v2.hex"
@@ -210,7 +210,18 @@ fn public_boundary_roundtrips_only_the_exact_context_bound_v1_session() {
     assert_eq!(decoded_acknowledgement, acknowledgement);
 
     let other_request = request_with_id([0x31; 32]);
-    assert!(decode_offline_cash_payment_v1(&payment_bytes, &other_request).is_err());
+    let recontextualized_payment = decode_offline_cash_payment_v1(&payment_bytes, &other_request)
+        .expect("compact payment remains structurally decodable against a valid request");
+    assert_eq!(recontextualized_payment, payment);
+    assert_ne!(
+        payment
+            .canonical_digest_against(&request)
+            .expect("original context digest"),
+        payment
+            .canonical_digest_against(&other_request)
+            .expect("alternate context digest"),
+        "the compact carrier must derive a distinct proof statement and payment digest per request"
+    );
     assert!(
         decode_offline_cash_acknowledgement_v1(&acknowledgement_bytes, &other_request, &payment,)
             .is_err()
@@ -327,8 +338,8 @@ fn source_contract_has_no_generic_or_legacy_decode_fallback() {
         .split_once("pub fn decode_offline_cash_acknowledgement_v1")
         .expect("acknowledgement delegate")
         .1
-        .split_once("/// Stable public Norito schema name")
-        .expect("legacy API declarations follow acknowledgement")
+        .split_once("/// Current portable proof-bearing receiver-lineage layout")
+        .expect("recipient-lineage declarations follow acknowledgement")
         .0;
     assert!(
         request_delegate.contains("OfflineCashPaymentRequestV1::decode_canonical_exact(bytes)")

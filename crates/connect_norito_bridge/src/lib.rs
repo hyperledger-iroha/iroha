@@ -152,6 +152,7 @@ const CANONICAL_NETWORK_ID_TEXT_BYTES: usize = Hash::LENGTH * 2;
 #[cfg(test)]
 const CANONICAL_NETWORK_ID_JSON_LITERAL_BYTES: usize = 74;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
+const KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V4: usize = 3 * 1024 * 1024;
 const KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER: usize = 4;
 const KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE: usize = 64 * 1024;
 /// Restores Norito's 32-fold ceiling for semantically bounded nested collections whose cardinality
@@ -771,6 +772,7 @@ impl_kagemusha_canonical_decode_profile!(
     iroha_data_model::offline::KagemushaRecursiveSpendTopUpProvenanceV4,
     iroha_data_model::offline::KagemushaTopUpFinalityProofV2,
     iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2,
+    iroha_torii_shared::offline_api::OfflineOperationReference,
     iroha_torii_shared::offline_api::OfflineOperationStatus,
     iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2,
     iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage,
@@ -2193,8 +2195,11 @@ fn write_privacy_compiled_profile_catalog(
 /// Return this binary's canonical local compiled-profile catalog.
 ///
 /// The catalog contains no committed height, consensus policy, activation, or
-/// readiness state. A client must fetch an authoritative capability snapshot
-/// from live Torii before treating any protocol as ready for proof submission.
+/// readiness state. A client must authenticate Torii's canonical
+/// `PrivacyExact12CapabilityManifestV1` and match its complete ABI22 native
+/// tuple before treating any protocol as ready for proof submission. The
+/// legacy JSON capability-snapshot shape is inspection-only and cannot admit a
+/// proof.
 /// The output must be released with [`iroha_privacy_free_buffer`].
 ///
 /// # Safety
@@ -12810,6 +12815,43 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_finalize
     })();
     bridge_result_to_code(result)
 }
+/// Canonically decode and validate an Offline Cash V1 top-up submission request.
+///
+/// The fixed-width output is the exact public binding used by SDK transport:
+/// 32 raw `NetworkId` bytes, 32 operation-id bytes, then `issued_at_ms` as one
+/// unsigned big-endian 64-bit integer. The output must be released with
+/// [`connect_norito_free`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_project_top_up_submission_request_v4(
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    out_projection_ptr: *mut *mut c_uchar,
+    out_projection_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_projection_ptr, out_projection_len)?;
+        let bytes = read_kagemusha_bytes!(
+            request_norito_ptr,
+            request_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4
+        )?;
+        let request = decode_canonical_kagemusha_topup_archive::<
+            iroha_torii_shared::offline_api::OfflineTopUpRequest,
+        >(&bytes)?;
+        request
+            .validate_public_binding()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        let mut projection = Vec::with_capacity(72);
+        projection.extend_from_slice(request.current_note.network_id.as_bytes());
+        projection.extend_from_slice(&request.operation_id);
+        projection.extend_from_slice(&request.authorization.issued_at_ms.to_be_bytes());
+        debug_assert_eq!(projection.len(), 72);
+        unsafe {
+            write_kagemusha_archive_bridge(out_projection_ptr, out_projection_len, &projection)
+        }
+    })();
+    bridge_result_to_code(result)
+}
 /// Return the authorization digest for canonical unsigned redemption fields.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4(
@@ -12873,6 +12915,171 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_finaliz
             return Err(BridgeError::KagemushaProve);
         }
         unsafe { write_kagemusha_archive_bridge(out_result_ptr, out_result_len, &archive) }
+    })();
+    bridge_result_to_code(result)
+}
+/// Canonically decode and validate an Offline Cash V1 redemption submission request.
+///
+/// The fixed-width output is the exact public binding used by SDK transport:
+/// 32 raw `NetworkId` bytes, 32 operation-id bytes, then `issued_at_ms` as one
+/// unsigned big-endian 64-bit integer. The output must be released with
+/// [`connect_norito_free`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_project_redeem_submission_request_v4(
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    out_projection_ptr: *mut *mut c_uchar,
+    out_projection_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_projection_ptr, out_projection_len)?;
+        let bytes = read_kagemusha_bytes!(
+            request_norito_ptr,
+            request_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+        )?;
+        let request = decode_canonical_kagemusha_recursive_archive::<
+            iroha_torii_shared::offline_api::OfflineRedeemRequest,
+        >(&bytes)?;
+        request
+            .validate_public_binding()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        let mut projection = Vec::with_capacity(72);
+        projection.extend_from_slice(request.bundle.statement.network_id.as_bytes());
+        projection.extend_from_slice(&request.operation_id);
+        projection.extend_from_slice(&request.authorization.issued_at_ms.to_be_bytes());
+        debug_assert_eq!(projection.len(), 72);
+        unsafe {
+            write_kagemusha_archive_bridge(out_projection_ptr, out_projection_len, &projection)
+        }
+    })();
+    bridge_result_to_code(result)
+}
+fn kagemusha_operation_status_lower_hex_32_v4(value: &str) -> BridgeResult<[u8; 32]> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let mut decoded = [0_u8; 32];
+    hex::decode_to_slice(value, &mut decoded).map_err(|_| BridgeError::KagemushaProve)?;
+    if decoded == [0; 32] {
+        return Err(BridgeError::KagemushaProve);
+    }
+    Ok(decoded)
+}
+fn kagemusha_operation_status_transaction_hash_v4(value: &str) -> BridgeResult<[u8; 32]> {
+    let decoded = kagemusha_operation_status_lower_hex_32_v4(value)?;
+    value
+        .parse::<Hash>()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    Ok(decoded)
+}
+fn validate_kagemusha_operation_status_v4(
+    status: &iroha_torii_shared::offline_api::OfflineOperationStatus,
+) -> BridgeResult<()> {
+    use iroha_torii_shared::offline_api::{OfflineOperationResult, OfflineOperationStatus};
+
+    match status {
+        OfflineOperationStatus::Pending {
+            operation_id,
+            transaction_hash,
+            submitted_at_ms,
+            ..
+        } => {
+            kagemusha_operation_status_lower_hex_32_v4(operation_id)?;
+            kagemusha_operation_status_transaction_hash_v4(transaction_hash)?;
+            if *submitted_at_ms == 0 {
+                return Err(BridgeError::KagemushaProve);
+            }
+        }
+        OfflineOperationStatus::Applied {
+            operation_id,
+            result: OfflineOperationResult::TopUp(result),
+        } => {
+            let operation_id = kagemusha_operation_status_lower_hex_32_v4(operation_id)?;
+            let transaction_hash =
+                kagemusha_operation_status_transaction_hash_v4(&result.transaction_hash)?;
+            if result.finalized_block_height == 0 || result.server_time_ms == 0 {
+                return Err(BridgeError::KagemushaProve);
+            }
+            result
+                .anchor
+                .validate_public_binding()
+                .map_err(|_| BridgeError::KagemushaProve)?;
+            result
+                .finality_proof
+                .validate_structure()
+                .map_err(|_| BridgeError::KagemushaProve)?;
+            let anchor_ref = result
+                .anchor
+                .compact_ref()
+                .map_err(|_| BridgeError::KagemushaProve)?;
+            if result.anchor.topup_operation_id != operation_id
+                || result.anchor.finalized_tx_hash != transaction_hash
+                || result.anchor.finalized_height != result.finalized_block_height
+                || result.finality_proof.anchor != anchor_ref
+                || result.finality_proof.commit_qc.height_context.height
+                    != result.finalized_block_height
+                || result.finality_proof.commit_qc.height_context.network_id
+                    != result.anchor.network_id
+            {
+                return Err(BridgeError::KagemushaProve);
+            }
+        }
+        OfflineOperationStatus::Applied {
+            operation_id,
+            result: OfflineOperationResult::Redeem(result),
+        } => {
+            kagemusha_operation_status_lower_hex_32_v4(operation_id)?;
+            kagemusha_operation_status_transaction_hash_v4(&result.transaction_hash)?;
+            if result.finalized_block_height == 0 || result.server_time_ms == 0 {
+                return Err(BridgeError::KagemushaProve);
+            }
+        }
+        OfflineOperationStatus::Rejected {
+            operation_id,
+            transaction_hash,
+            ..
+        } => {
+            kagemusha_operation_status_lower_hex_32_v4(operation_id)?;
+            kagemusha_operation_status_transaction_hash_v4(transaction_hash)?;
+        }
+    }
+    Ok(())
+}
+/// Canonically decode and semantically validate one Offline Cash V1 operation status.
+///
+/// Applied top-ups are accepted only when the returned operation, transaction,
+/// height, finality-proof anchor, height-context height, and `NetworkId` are
+/// bound to the validated finalized anchor. On success the bridge returns the
+/// byte-identical canonical status archive; release it with [`connect_norito_free`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_validate_operation_status_v4(
+    status_norito_ptr: *const c_uchar,
+    status_norito_len: c_ulong,
+    out_status_ptr: *mut *mut c_uchar,
+    out_status_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_status_ptr, out_status_len)?;
+        let bytes = read_kagemusha_bytes!(
+            status_norito_ptr,
+            status_norito_len,
+            KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V4
+        )?;
+        let status = decode_canonical_kagemusha_archive::<
+            iroha_torii_shared::offline_api::OfflineOperationStatus,
+        >(&bytes)?;
+        validate_kagemusha_operation_status_v4(&status)?;
+        let canonical =
+            norito::encode_canonical(&status).map_err(|_| BridgeError::KagemushaProve)?;
+        if canonical != bytes {
+            return Err(BridgeError::KagemushaProve);
+        }
+        unsafe { write_kagemusha_archive_bridge(out_status_ptr, out_status_len, &canonical) }
     })();
     bridge_result_to_code(result)
 }

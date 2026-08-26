@@ -31,7 +31,7 @@ import {
   normalizeKagemushaTopUpRequestV4,
   requireKagemushaJsonContentType,
 } from "./kagemushaOffline.js";
-import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
+import { legacyPrivacyCapabilityInspectionTransportV1 } from "./privacyCapabilityTransport.js";
 import {
   SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
   SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
@@ -1491,7 +1491,9 @@ export class ToriiBrowserClient {
         response.headers.get("content-type"),
         "Kagemusha operation status response",
       ),
-    }).then((payload) => normalizeKagemushaOperationStatus(payload, canonicalId));
+    }).then((payload) => normalizeKagemushaOperationStatus(payload, canonicalId, {
+      expectedNetworkId: this.networkId === null ? null : this.networkId.toString(),
+    }));
   }
 
   _submitKagemushaCommandV4(path, kind, request, options, context) {
@@ -1499,8 +1501,19 @@ export class ToriiBrowserClient {
       ? normalizeKagemushaTopUpRequestV4
       : normalizeKagemushaRedeemRequestV4;
     const normalized = normalizeRequest(request, `${context} request`);
+    if (this.networkId === null) {
+      throw new TypeError(
+        `${context} requires ToriiBrowserClient options.networkId with the exact NetworkId`,
+      );
+    }
+    if (normalized.networkId !== this.networkId.toString()) {
+      throw new TypeError(
+        `${context} signed request network does not match the configured NetworkId`,
+      );
+    }
     const opts = signalOnlyOptions(options, `${context} options`);
     let location = null;
+    let retryAfter = null;
     return this._json("POST", path, {
       rawBody: normalized.norito,
       contentType: "application/x-norito",
@@ -1516,11 +1529,14 @@ export class ToriiBrowserClient {
           "Kagemusha operation reference response",
         );
         location = response.headers.get("location");
+        retryAfter = response.headers.get("retry-after");
       },
     }).then((payload) => normalizeKagemushaOperationReference(payload, {
       expectedOperationId: normalized.operationId,
       expectedKind: kind,
+      expectedSubmittedAtMs: normalized.issuedAtMs,
       location,
+      retryAfter,
     }));
   }
 
@@ -1868,10 +1884,10 @@ export class ToriiBrowserClient {
   }
 
   /** @internal Raw bounded transport for the optional privacy-capabilities API. */
-  async [privacyCapabilityTransportV1](options) {
+  async [legacyPrivacyCapabilityInspectionTransportV1](options) {
     const opts = requireSupportedOptions(
       options,
-      "getPrivacyCapabilitiesV1 options",
+      "getLegacyPrivacyCapabilityInspectionV1 options",
       PRIVACY_CAPABILITIES_REQUEST_OPTION_KEYS,
     );
     return this._canonicalJson("GET", "/v1/privacy/capabilities", undefined, opts, [200], {

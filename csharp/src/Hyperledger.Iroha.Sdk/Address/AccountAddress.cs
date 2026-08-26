@@ -9,6 +9,9 @@ public sealed class AccountAddress
     public const ushort DevChainDiscriminant = 0x0000;
     public const ushort TestChainDiscriminant = 0x0171;
 
+    /// <summary>Public Taira testnet I105 chain discriminant.</summary>
+    public const ushort TairaTestnetChainDiscriminant = TestChainDiscriminant;
+
     private const byte DefaultHeaderVersion = 0;
     private const byte DefaultNormalizationVersion = 1;
     private const byte SingleKeyControllerTag = 0x00;
@@ -20,9 +23,53 @@ public sealed class AccountAddress
     private static readonly string[] CanonicalI105Alphabet =
     [
         .. "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz".Select(static ch => ch.ToString()),
-        "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ", "ﾚ", "ｿ",
-        "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ", "ｺ", "ｴ", "ﾃ", "ｱ",
-        "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
+        "ｲ",
+        "ﾛ",
+        "ﾊ",
+        "ﾆ",
+        "ﾎ",
+        "ﾍ",
+        "ﾄ",
+        "ﾁ",
+        "ﾘ",
+        "ﾇ",
+        "ﾙ",
+        "ｦ",
+        "ﾜ",
+        "ｶ",
+        "ﾖ",
+        "ﾀ",
+        "ﾚ",
+        "ｿ",
+        "ﾂ",
+        "ﾈ",
+        "ﾅ",
+        "ﾗ",
+        "ﾑ",
+        "ｳ",
+        "ヰ",
+        "ﾉ",
+        "ｵ",
+        "ｸ",
+        "ﾔ",
+        "ﾏ",
+        "ｹ",
+        "ﾌ",
+        "ｺ",
+        "ｴ",
+        "ﾃ",
+        "ｱ",
+        "ｻ",
+        "ｷ",
+        "ﾕ",
+        "ﾒ",
+        "ﾐ",
+        "ｼ",
+        "ヱ",
+        "ﾋ",
+        "ﾓ",
+        "ｾ",
+        "ｽ",
     ];
 
     private static readonly IReadOnlyDictionary<string, int> I105Index = BuildI105Index();

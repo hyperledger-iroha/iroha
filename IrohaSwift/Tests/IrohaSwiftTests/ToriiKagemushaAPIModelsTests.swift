@@ -126,17 +126,16 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         )
     }
 
-    func testRejectedOperationErrorDetailsDecodeEntrypointBeforeTransactionHash() throws {
-        let status = try KagemushaOperationCodec.decodeStatus(
+    func testRejectedOperationStatusRejectsGenericToriiErrorDetails() throws {
+        XCTAssertThrowsError(try KagemushaOperationCodec.decodeStatus(
             try rejectedStatusWithHashDetailsArchive(),
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-        )
-        guard case .rejected(let rejected) = status else {
-            return XCTFail("expected rejected operation status")
+        )) { error in
+            XCTAssertEqual(
+                error as? KagemushaOperationError,
+                .invalidNoritoArchive
+            )
         }
-        let details = try XCTUnwrap(rejected.error.details)
-        XCTAssertEqual(details.entrypointHash, Self.entrypointHash)
-        XCTAssertEqual(details.transactionHash, Self.transactionHash)
     }
 
     func testAppliedRedeemStatusMatchesRustNoritoGoldenVector() throws {
@@ -289,6 +288,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             String(repeating: "A", count: 64),
             String(repeating: "g", count: 64),
             String(repeating: "0", count: 64),
+            String(repeating: "22", count: 32),
             " \(Self.transactionHash)",
         ] {
             XCTAssertThrowsError(try KagemushaOperationReference(
@@ -349,7 +349,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         XCTAssertThrowsError(try KagemushaOperationStatus.Pending(
             operationId: Self.operationId,
             kind: .topUp,
-            transactionHash: String(repeating: "F", count: 64),
+            transactionHash: String(repeating: "22", count: 32),
             submittedAtMs: 1
         )) { error in
             XCTAssertEqual(error as? KagemushaOperationError, .invalidField("transaction_hash"))
@@ -368,9 +368,21 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         }
 
         XCTAssertThrowsError(try KagemushaRedeemResult(
-            transactionHash: "not-a-hash",
+            transactionHash: String(repeating: "22", count: 32),
             finalizedBlockHeight: 1,
             serverTimeMs: 2
+        )) { error in
+            XCTAssertEqual(error as? KagemushaOperationError, .invalidField("transaction_hash"))
+        }
+
+        XCTAssertThrowsError(try KagemushaOperationStatus.Rejected(
+            operationId: Self.operationId,
+            kind: .redeem,
+            transactionHash: String(repeating: "22", count: 32),
+            error: KagemushaOperationErrorEnvelope(
+                code: "offline_operation_rejected",
+                message: "rejected"
+            )
         )) { error in
             XCTAssertEqual(error as? KagemushaOperationError, .invalidField("transaction_hash"))
         }
@@ -382,6 +394,16 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         let finalityProof = try KagemushaTopUpFinalityProof(
             noritoArchive: canonicalTopUpFinalityProofArchive()
         )
+        XCTAssertThrowsError(try KagemushaTopUpResult(
+            transactionHash: String(repeating: "22", count: 32),
+            finalizedBlockHeight: anchor.finalizedBlockHeight,
+            serverTimeMs: 1,
+            anchor: anchor,
+            finalityProof: finalityProof
+        )) { error in
+            XCTAssertEqual(error as? KagemushaOperationError, .invalidField("transaction_hash"))
+        }
+
         for (finalizedBlockHeight, serverTimeMs, field) in [
             (UInt64(0), UInt64(1), "finalized_block_height"),
             (UInt64(1), UInt64(0), "server_time_ms"),
@@ -413,13 +435,14 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         XCTAssertEqual(KagemushaOperationStatus.pending(valid).operationId, Self.operationId)
     }
 
-    func testTypedErrorsRequireStableCodesAndExactText() throws {
+    func testRejectedErrorsRequireExactCodeAndBoundedScalarMessage() throws {
         for invalidCode in [
             "",
             "_leading",
             "Uppercase",
             "has-hyphen",
             "has space",
+            "1_valid_code_",
             String(repeating: "a", count: 65),
         ] {
             XCTAssertThrowsError(try KagemushaOperationErrorEnvelope(
@@ -439,58 +462,52 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             }
         }
 
+        let exactLimit = String(repeating: "😀", count: 1_024)
+        XCTAssertEqual(exactLimit.unicodeScalars.count, 1_024)
+        XCTAssertGreaterThan(exactLimit.utf8.count, 1_024)
         XCTAssertNoThrow(try KagemushaOperationErrorEnvelope(
-            code: "1_valid_code_",
-            message: "Human-readable detail."
+            code: "offline_operation_rejected",
+            message: exactLimit
         ))
+
+        let aboveLimit = String(repeating: "😀", count: 1_025)
+        XCTAssertEqual(aboveLimit.unicodeScalars.count, 1_025)
         XCTAssertThrowsError(try KagemushaOperationErrorEnvelope(
             code: "offline_operation_rejected",
-            message: String(
-                repeating: "a",
-                count: KagemushaOperationCodec.maximumTextFieldUTF8Bytes + 1
-            )
+            message: aboveLimit
         )) { error in
             XCTAssertEqual(
                 error as? KagemushaOperationError,
                 .invalidField("error.message")
             )
         }
-        let details = try KagemushaOperationErrorDetails(
-            rejectCode: "TX_QUEUE_FULL",
-            entrypointHash: Self.entrypointHash,
-            transactionHash: Self.transactionHash
-        )
-        XCTAssertEqual(details.entrypointHash, Self.entrypointHash)
-        XCTAssertEqual(details.transactionHash, Self.transactionHash)
-        XCTAssertThrowsError(try KagemushaOperationErrorDetails(
-            rejectCode: " TX_QUEUE_FULL",
-            transactionHash: Self.transactionHash
-        ))
-        XCTAssertThrowsError(try KagemushaOperationErrorDetails(
-            entrypointHash: String(repeating: "A", count: 64),
-            transactionHash: Self.transactionHash
-        ))
-        XCTAssertThrowsError(try KagemushaOperationErrorDetails(
-            rejectCode: "valid_code",
-            transactionHash: String(repeating: "A", count: 64)
-        ))
-        XCTAssertThrowsError(try KagemushaQueueErrorSnapshot(
-            state: "queue full",
-            queued: 1,
-            capacity: 1,
-            saturated: true
-        ))
     }
 
-    func testAxtErrorDetailsExposeExactActiveEraAndNextCounter() throws {
-        let details = try KagemushaAxtErrorDetails(
-            code: "handle_sequence_mismatch",
-            activeHandleEra: 9,
-            nextHandleCounter: 4
-        )
+    func testRejectedStatusWireRejectsOversizedAndMalformedMessages() throws {
+        XCTAssertThrowsError(try KagemushaOperationCodec.decodeStatus(
+            rejectedStatusArchive(code: "offline_redeem_invalid"),
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )) { error in
+            XCTAssertEqual(error as? KagemushaOperationError, .invalidField("error.code"))
+        }
 
-        XCTAssertEqual(details.activeHandleEra, 9)
-        XCTAssertEqual(details.nextHandleCounter, 4)
+        let oversized = String(repeating: "😀", count: 2_000)
+        XCTAssertThrowsError(try KagemushaOperationCodec.decodeStatus(
+            rejectedStatusArchive(message: oversized),
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )) { error in
+            XCTAssertEqual(error as? KagemushaOperationError, .invalidField("error.message"))
+        }
+
+        var invalidUTF8 = CompactNoritoWriter()
+        invalidUTF8.writeLength(1)
+        invalidUTF8.writeBytes(Data([0xff]))
+        XCTAssertThrowsError(try KagemushaOperationCodec.decodeStatus(
+            rejectedStatusArchive(encodedMessage: invalidUTF8.data),
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )) { error in
+            XCTAssertEqual(error as? KagemushaOperationError, .invalidField("string"))
+        }
     }
 
     func testOperationReferenceRejectsInvalidUtf8AndNonCanonicalFraming() throws {
@@ -712,6 +729,29 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
                 operationIdFieldIndex: operationIdFieldIndex,
                 operationId: operationId
             )
+        )
+    }
+
+    private func rejectedStatusArchive(
+        code: String = "offline_operation_rejected",
+        message: String = "rejected",
+        encodedMessage: Data? = nil
+    ) -> Data {
+        var error = CompactNoritoWriter()
+        error.writeField(CompactNorito.encodeString(code))
+        error.writeField(encodedMessage ?? CompactNorito.encodeString(message))
+
+        var status = CompactNoritoWriter()
+        status.writeUInt32LE(2)
+        status.writeField(CompactNorito.encodeString(Self.operationId))
+        status.writeField(CompactNorito.encodeUInt32(1))
+        status.writeField(CompactNorito.encodeString(Self.transactionHash))
+        status.writeField(error.data)
+        return noritoEncode(
+            typeName: "iroha_torii_shared::offline_api::OfflineOperationStatus",
+            payload: status.data,
+            flags: NoritoHeader.compactLen,
+            payloadAlignment: 16
         )
     }
 
@@ -944,13 +984,13 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
 
     private static let operationId = String(repeating: "11", count: 32)
     private static let entrypointHash = String(repeating: "33", count: 32)
-    private static let transactionHash = String(repeating: "22", count: 32)
+    private static let transactionHash = String(repeating: "23", count: 32)
     private static let rustOperationReferenceArchiveHex =
-        "4e5254300000e8e2244e45e4be2a975e34957141128b00f0000000000000001f5b5402d6dc2092024140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310400000000040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323258572f76312f6f66666c696e652f6f7065726174696f6e732f3131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313108ffffffffffffffff"
+        "4e5254300000e8e2244e45e4be2a975e34957141128b00f000000000000000192c80a70843db66024140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310400000000040000000041403233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323358572f76312f6f66666c696e652f6f7065726174696f6e732f3131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313108ffffffffffffffff"
     private static let rustPendingStatusArchiveHex =
-        "4e5254300000fb04214104df1bdcd39249bddd4db23a009600000000000000bdfee2508f80055702000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff"
+        "4e5254300000fb04214104df1bdcd39249bddd4db23a0096000000000000004ebc9d97c6fd018502000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323308ffffffffffffffff"
     private static let rustRejectedStatusArchiveHex =
-        "4e5254300000fb04214104df1bdcd39249bddd4db23a00b6000000000000009322104cda8e602a020000000000000000020000004140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310401000000414032323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232281b1a6f66666c696e655f6f7065726174696f6e5f72656a6563746564090872656a65637465640100"
+        "4e5254300000fb04214104df1bdcd39249bddd4db23a00b4000000000000003f4069b756096f62020000000000000000020000004140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310401000000414032333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233261b1a6f66666c696e655f6f7065726174696f6e5f72656a6563746564090872656a6563746564"
     private static let rustAppliedRedeemStatusArchiveHex =
-        "4e5254300000fb04214104df1bdcd39249bddd4db23a00a00000000000000092cd6b32b062b3d30200000000000000000100000041403131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313159010000005441403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff082a00000000000000"
+        "4e5254300000fb04214104df1bdcd39249bddd4db23a00a000000000000000983fb38fbc5b1f410200000000000000000100000041403131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313159010000005441403233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323308ffffffffffffffff082a00000000000000"
 }

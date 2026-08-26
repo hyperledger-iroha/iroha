@@ -45,12 +45,15 @@ public sealed partial class ToriiClient
             ?? throw new InvalidOperationException(
                 "Verifying-key draft preparation requires an immutable ToriiLocalSigningContext.");
 
-        var normalizedRequest = NormalizeVerifyingKeyRegisterRequest(request);
+        var normalizedRequest = NormalizeVerifyingKeyRegisterRequest(
+            request,
+            signingContext.ChainDiscriminant);
         return await PrepareVerifyingKeyTransactionDraftAsync(
             "/v1/zk/vk/register",
             normalizedRequest,
             "verifying key register response",
             signingContext.NetworkId,
+            signingContext.ChainDiscriminant,
             VerifyingKeyDraftOperation.Register,
             cancellationToken);
     }
@@ -64,12 +67,15 @@ public sealed partial class ToriiClient
             ?? throw new InvalidOperationException(
                 "Verifying-key draft preparation requires an immutable ToriiLocalSigningContext.");
 
-        var normalizedRequest = NormalizeVerifyingKeyUpdateRequest(request);
+        var normalizedRequest = NormalizeVerifyingKeyUpdateRequest(
+            request,
+            signingContext.ChainDiscriminant);
         return await PrepareVerifyingKeyTransactionDraftAsync(
             "/v1/zk/vk/update",
             normalizedRequest,
             "verifying key update response",
             signingContext.NetworkId,
+            signingContext.ChainDiscriminant,
             VerifyingKeyDraftOperation.Update,
             cancellationToken);
     }
@@ -79,6 +85,7 @@ public sealed partial class ToriiClient
         TRequest request,
         string context,
         NetworkId expectedNetworkId,
+        ushort expectedChainDiscriminant,
         VerifyingKeyDraftOperation operation,
         CancellationToken cancellationToken)
     {
@@ -109,11 +116,13 @@ public sealed partial class ToriiClient
             context,
             request!,
             expectedNetworkId,
+            expectedChainDiscriminant,
             operation);
     }
 
     private static ToriiVerifyingKeyRegisterRequest NormalizeVerifyingKeyRegisterRequest(
-        ToriiVerifyingKeyRegisterRequest request)
+        ToriiVerifyingKeyRegisterRequest request,
+        ushort chainDiscriminant)
     {
         var normalizedBackend = VerifierBackendRegistryLabels.RequireSupportedLabel(
             request.Backend,
@@ -135,7 +144,10 @@ public sealed partial class ToriiClient
 
         return request with
         {
-            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
+            Authority = ToriiAccountFaucetPow.RequireExactAccountId(
+                request.Authority,
+                nameof(request.Authority),
+                chainDiscriminant),
             Backend = normalizedBackend,
             Name = NormalizeVerifyingKeyName(request.Name, nameof(request.Name)),
             Version = RequirePositiveUInt32(request.Version, nameof(request.Version)),
@@ -158,7 +170,8 @@ public sealed partial class ToriiClient
     }
 
     private static ToriiVerifyingKeyUpdateRequest NormalizeVerifyingKeyUpdateRequest(
-        ToriiVerifyingKeyUpdateRequest request)
+        ToriiVerifyingKeyUpdateRequest request,
+        ushort chainDiscriminant)
     {
         var normalizedBackend = VerifierBackendRegistryLabels.RequireSupportedLabel(
             request.Backend,
@@ -180,7 +193,10 @@ public sealed partial class ToriiClient
 
         return request with
         {
-            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
+            Authority = ToriiAccountFaucetPow.RequireExactAccountId(
+                request.Authority,
+                nameof(request.Authority),
+                chainDiscriminant),
             Backend = normalizedBackend,
             Name = NormalizeVerifyingKeyName(request.Name, nameof(request.Name)),
             Version = RequirePositiveUInt32(request.Version, nameof(request.Version)),
@@ -301,6 +317,7 @@ public sealed partial class ToriiClient
         string context,
         object request,
         NetworkId expectedNetworkId,
+        ushort expectedChainDiscriminant,
         VerifyingKeyDraftOperation operation)
     {
         ArgumentNullException.ThrowIfNull(document);
@@ -341,6 +358,7 @@ public sealed partial class ToriiClient
             $"{context}.transaction_payload_b64",
             request,
             expectedNetworkId,
+            expectedChainDiscriminant,
             operation);
         var signingMessage = DecodeCanonicalVerifyingKeyDraftBase64(
             signingMessageBase64,
@@ -409,6 +427,7 @@ public sealed partial class ToriiClient
         string context,
         object request,
         NetworkId expectedNetworkId,
+        ushort expectedChainDiscriminant,
         VerifyingKeyDraftOperation operation)
     {
         try
@@ -442,7 +461,7 @@ public sealed partial class ToriiClient
 
             var decodedAuthority = SccpSubmitValidation.RequireCanonicalAuthority(authority);
             var expectedAuthority = AccountAddress
-                .Parse(authorityAccountId, AccountAddress.DefaultChainDiscriminant)
+                .Parse(authorityAccountId, expectedChainDiscriminant)
                 .ControllerBytes();
             if (!decodedAuthority.AsSpan().SequenceEqual(expectedAuthority))
             {
