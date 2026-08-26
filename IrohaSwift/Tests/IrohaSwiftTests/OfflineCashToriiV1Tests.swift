@@ -7,6 +7,59 @@ final class OfflineCashToriiV1Tests: XCTestCase {
     private static let transactionHash = String(repeating: "23", count: 32)
     private static let statusValidationSymbol =
         "connect_norito_kagemusha_validate_operation_status_v4"
+    private static let fixtureNames = [
+        "network_id",
+        "top_up_operation_id",
+        "top_up_submitted_at_ms",
+        "top_up_request",
+        "top_up_reference",
+        "top_up_pending_status",
+        "top_up_finalized_block_height",
+        "top_up_server_time_ms",
+        "top_up_applied_status",
+        "invalid_top_up_anchor_status",
+        "invalid_top_up_proof_status",
+        "wrong_top_up_operation_status",
+        "wrong_top_up_transaction_status",
+        "wrong_top_up_height_status",
+        "wrong_top_up_proof_network_status",
+        "foreign_network_top_up_status",
+        "wrong_top_up_proof_anchor_status",
+        "wrong_top_up_proof_height_status",
+        "redeem_operation_id",
+        "redeem_submitted_at_ms",
+        "redeem_request",
+        "redeem_reference",
+        "redeem_pending_status",
+        "redeem_applied_status",
+        "rejected_status",
+        "invalid_binding_top_up_request",
+        "wrong_id_reference",
+        "wrong_kind_reference",
+        "wrong_time_reference",
+        "zero_time_reference",
+        "wrong_uri_reference",
+        "invalid_transaction_hash_reference",
+        "wrong_id_status",
+        "zero_submitted_pending_status",
+        "zero_height_status",
+        "zero_time_status",
+        "invalid_transaction_hash_status",
+        "wrong_rejection_code_status",
+        "rejection_details_status",
+        "oversized_rejection_message_status",
+    ]
+    private static let fixtureDigestNames: Set<String> = [
+        "network_id",
+        "top_up_operation_id",
+        "redeem_operation_id",
+    ]
+    private static let fixturePositiveDecimalNames: Set<String> = [
+        "top_up_submitted_at_ms",
+        "top_up_finalized_block_height",
+        "top_up_server_time_ms",
+        "redeem_submitted_at_ms",
+    ]
 
     func testNativeSubmissionProjectionUsesExactFixedWidthLayout() throws {
         let operationId = Data(repeating: 0x11, count: 32)
@@ -150,6 +203,46 @@ final class OfflineCashToriiV1Tests: XCTestCase {
         }
     }
 
+    func testOfflineCashFixtureInventoryRejectsDrift() throws {
+        let fixtures = try Self.offlineCashFixtureRows()
+        let canonicalRows = try Self.fixtureNames.map { name in
+            "\(name)=\(try XCTUnwrap(fixtures[name]))"
+        }
+        let canonical = canonicalRows.joined(separator: "\n") + "\n"
+        XCTAssertEqual(try Self.parseOfflineCashFixtureRows(canonical), fixtures)
+
+        var reorderedRows = canonicalRows
+        reorderedRows.swapAt(0, 1)
+        var duplicateRows = canonicalRows
+        duplicateRows[1] = canonicalRows[0]
+        var malformedValueRows = canonicalRows
+        malformedValueRows[3] = "top_up_request=0G"
+        let invalidInventories = [
+            ("missing", canonicalRows.dropLast().joined(separator: "\n") + "\n"),
+            ("additional", (canonicalRows + ["unexpected=00"]).joined(separator: "\n") + "\n"),
+            ("reordered", reorderedRows.joined(separator: "\n") + "\n"),
+            ("duplicate", duplicateRows.joined(separator: "\n") + "\n"),
+            ("malformed-row", canonical.replacingOccurrences(
+                of: "network_id=",
+                with: "network_id:",
+                options: .anchored
+            )),
+            ("malformed-value", malformedValueRows.joined(separator: "\n") + "\n"),
+            ("missing-final-lf", String(canonical.dropLast())),
+        ]
+        for (label, inventory) in invalidInventories {
+            XCTAssertThrowsError(
+                try Self.parseOfflineCashFixtureRows(inventory),
+                label
+            ) { error in
+                XCTAssertTrue(
+                    error is RequiredNativeTestCapabilityError,
+                    "\(label): \(error)"
+                )
+            }
+        }
+    }
+
     func testPublicRequestWrappersRejectBoundsBeforeNativeDispatch() {
         XCTAssertThrowsError(try OfflineCashTopUpRequestV1(canonicalNorito: Data())) {
             XCTAssertEqual(
@@ -221,18 +314,19 @@ final class OfflineCashToriiV1Tests: XCTestCase {
     }
 
     private func requireNativeStatusValidation() throws {
-        guard NoritoNativeBridge.shared.hasKagemushaRecursiveSpendV4Symbols([
-            Self.statusValidationSymbol,
-        ]) else {
-            throw XCTSkip("ABI22 Offline Cash status validation bridge is unavailable")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.hasKagemushaRecursiveSpendV4Symbols([
+                Self.statusValidationSymbol,
+            ]),
+            "ABI22 Offline Cash status validation bridge is unavailable"
+        )
     }
 
     private static func offlineCashFixtureRows() throws -> [String: String] {
         let environmentName = "IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN"
         guard let configured = ProcessInfo.processInfo.environment[environmentName],
               !configured.isEmpty else {
-            throw XCTSkip("\(environmentName) is not configured")
+            try failRequiredNativeTestCapability("\(environmentName) is not configured")
         }
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -243,7 +337,9 @@ final class OfflineCashToriiV1Tests: XCTestCase {
             ? URL(fileURLWithPath: configured)
             : repositoryRoot.appendingPathComponent(configured)
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
-            throw XCTSkip("\(environmentName) does not name an executable fixture generator")
+            try failRequiredNativeTestCapability(
+                "\(environmentName) does not name an executable fixture generator"
+            )
         }
 
         let process = Process()
@@ -258,20 +354,102 @@ final class OfflineCashToriiV1Tests: XCTestCase {
         process.waitUntilExit()
         guard process.terminationStatus == 0,
               let text = String(data: data, encoding: .utf8) else {
-            XCTFail("authoritative Offline Cash fixture generator failed")
-            return [:]
+            try failRequiredNativeTestCapability(
+                "authoritative Offline Cash fixture generator failed"
+            )
+        }
+        return try parseOfflineCashFixtureRows(text)
+    }
+
+    private static func parseOfflineCashFixtureRows(
+        _ text: String
+    ) throws -> [String: String] {
+        guard text.hasSuffix("\n") else {
+            try failRequiredNativeTestCapability(
+                "authoritative Offline Cash fixture output must end with one LF"
+            )
+        }
+        var fixtureRows = text.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        )
+        fixtureRows.removeLast()
+        guard fixtureRows.count == fixtureNames.count else {
+            try failRequiredNativeTestCapability(
+                "Offline Cash fixture output must contain exactly \(fixtureNames.count) rows"
+            )
         }
         var rows: [String: String] = [:]
-        for row in text.split(separator: "\n") {
-            guard let separator = row.firstIndex(of: "=") else { continue }
+        for (expectedName, row) in zip(fixtureNames, fixtureRows) {
+            guard let separator = row.firstIndex(of: "="),
+                  separator != row.startIndex,
+                  separator != row.index(before: row.endIndex),
+                  row.lastIndex(of: "=") == separator else {
+                try failRequiredNativeTestCapability(
+                    "invalid Offline Cash fixture row"
+                )
+            }
             let name = String(row[..<separator])
             let value = String(row[row.index(after: separator)...])
+            guard name == expectedName else {
+                try failRequiredNativeTestCapability(
+                    "unexpected Offline Cash fixture row \(name); expected \(expectedName)"
+                )
+            }
+            try validateFixtureValue(value, named: name)
             guard rows.updateValue(value, forKey: name) == nil else {
-                XCTFail("duplicate Offline Cash fixture row \(name)")
-                return [:]
+                try failRequiredNativeTestCapability(
+                    "duplicate Offline Cash fixture row \(name)"
+                )
             }
         }
         return rows
+    }
+
+    private static func validateFixtureValue(
+        _ value: String,
+        named name: String
+    ) throws {
+        let isLowercaseHexadecimal = value.allSatisfy {
+            ("0"..."9").contains($0) || ("a"..."f").contains($0)
+        }
+        if fixtureDigestNames.contains(name) {
+            guard value.count == 64,
+                  value.contains(where: { $0 != "0" }),
+                  isLowercaseHexadecimal else {
+                try failRequiredNativeTestCapability(
+                    "\(name) must be exactly 32 non-zero lowercase hexadecimal bytes"
+                )
+            }
+            if name == "network_id" {
+                guard let marker = UInt8(value.suffix(2), radix: 16),
+                      marker & 1 == 1 else {
+                    try failRequiredNativeTestCapability(
+                        "network_id must contain a canonical marked Iroha hash"
+                    )
+                }
+            }
+            return
+        }
+        if fixturePositiveDecimalNames.contains(name) {
+            guard let first = value.first,
+                  ("1"..."9").contains(first),
+                  value.dropFirst().allSatisfy({ ("0"..."9").contains($0) }),
+                  let parsed = Int64(value),
+                  parsed > 0 else {
+                try failRequiredNativeTestCapability(
+                    "\(name) must be a canonical positive signed 64-bit decimal"
+                )
+            }
+            return
+        }
+        guard !value.isEmpty,
+              value.count.isMultiple(of: 2),
+              isLowercaseHexadecimal else {
+            try failRequiredNativeTestCapability(
+                "\(name) must be non-empty even-length lowercase hexadecimal"
+            )
+        }
     }
 
     private static func fixtureArchive(
@@ -281,16 +459,18 @@ final class OfflineCashToriiV1Tests: XCTestCase {
         guard let hexadecimal = fixtures[name],
               !hexadecimal.isEmpty,
               hexadecimal.count.isMultiple(of: 2) else {
-            XCTFail("missing canonical Offline Cash fixture \(name)")
-            return Data()
+            try failRequiredNativeTestCapability(
+                "missing canonical Offline Cash fixture \(name)"
+            )
         }
         var archive = Data(capacity: hexadecimal.count / 2)
         var index = hexadecimal.startIndex
         while index < hexadecimal.endIndex {
             let next = hexadecimal.index(index, offsetBy: 2)
             guard let byte = UInt8(hexadecimal[index..<next], radix: 16) else {
-                XCTFail("Offline Cash fixture \(name) is not hexadecimal")
-                return Data()
+                try failRequiredNativeTestCapability(
+                    "Offline Cash fixture \(name) is not hexadecimal"
+                )
             }
             archive.append(byte)
             index = next

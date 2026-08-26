@@ -22,7 +22,10 @@ on:
       - "scripts/check_mobile_sdk_artifact_pin_commit.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
+      - "ci/build_offline_cash_swift_fixture.sh"
       - "ci/check_swift_pod_bridge.sh"
+      - "ci/xcode-swift-parity"
+      - "scripts/dev_workflow.sh"
       - "scripts/check_swift_pod_bridge.sh"
       - "scripts/tests/mobile_sdk_python312_contract.sh"
       - "scripts/check_android_app_native_archive.py"
@@ -175,7 +178,7 @@ jobs:
   apple-mobile-sdk:
     needs: checker-self-test
     runs-on: macos-14
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
     steps:
@@ -296,6 +299,11 @@ jobs:
           fi
       - name: Validate Apple mobile SDK artifact
         run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
+      - name: Build authoritative Offline Cash Swift fixture
+        shell: bash
+        run: |
+          fixture="$(bash ci/build_offline_cash_swift_fixture.sh --locked --offline)"
+          echo "IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN=$fixture" >> "$GITHUB_ENV"
       - name: Test Swift SDK
         working-directory: IrohaSwift
         run: >-

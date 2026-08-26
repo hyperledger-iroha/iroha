@@ -151,7 +151,17 @@ document = json.load(open(sys.argv[1], encoding="utf-8"))
 full = sys.argv[2] == "true"
 changed = document["changed_paths"]
 required = full or any(
-    path.startswith(("IrohaSwift/", "fixtures/")) for path in changed
+    path.startswith((
+        "IrohaSwift/",
+        "fixtures/",
+        "crates/connect_norito_bridge/",
+    ))
+    or path in {
+        "ci/build_offline_cash_swift_fixture.sh",
+        "ci/xcode-swift-parity",
+        "scripts/dev_workflow.sh",
+    }
+    for path in changed
 )
 print("true" if required else "false")
 PY
@@ -163,11 +173,15 @@ elif [[ "${swift_required}" != true ]]; then
 	echo "[4/4] swift test (not affected)"
 elif command -v swift >/dev/null 2>&1; then
 	echo "[4/4] swift test (IrohaSwift)"
+	IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN="$(
+		bash "${REPO_ROOT}/ci/build_offline_cash_swift_fixture.sh" --locked
+	)"
+	export IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN
 	(
 		cd -- "${SWIFT_DIR}"
 		swift test
 	)
 else
-	echo "[4/4] swift test (swift not found; skipped)"
-	echo "Install Swift and rerun from ${SWIFT_DIR} to exercise the Swift SDK suite."
+	echo "error: Swift is required for the affected full SDK suite; install Swift or pass --skip-swift explicitly" >&2
+	exit 1
 fi

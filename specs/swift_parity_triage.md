@@ -60,8 +60,16 @@ Fallback procedure:
    cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
    make swift-fixtures-check
    ```
-3. Execute `swift test --package-path IrohaSwift` (or `make swift-ci` if the
-   `/v1/pipeline` helpers changed) to ensure fixtures and builders stay in sync.
+3. Build/export the same-revision Offline Cash authority, then execute the full
+   Swift suite (or `make swift-ci` as well if `/v1/pipeline` helpers changed):
+   ```bash
+   export IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN="$(
+     bash ci/build_offline_cash_swift_fixture.sh --locked
+   )"
+   swift test --package-path IrohaSwift
+   ```
+   This keeps the cross-language fixtures and builders in sync without a
+   capability skip.
 4. Regenerate the parity metrics:
    ```bash
    ci/swift_status_export.sh \
@@ -115,6 +123,9 @@ and close any incident tickets tied to the fallback window.
    identity-relative patch from either sealed root.
 2. Confirm you can run Swift package tests locally:
    ```bash
+   export IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN="$(
+     bash ci/build_offline_cash_swift_fixture.sh --locked
+   )"
    swift test --package-path IrohaSwift
    ```
 3. Confirm the Swift descriptor mirror in the sealed owner publication exactly
@@ -160,8 +171,10 @@ and close any incident tickets tied to the fallback window.
      `SWIFT_FIXTURE_EXPECTED_CADENCE=weekly-wed-1700utc,fallback-mon-thu-utc`
      before running `ci/check_swift_fixtures.sh`.
 4. **Re-run Swift tests**
-   - Execute `swift test --package-path IrohaSwift` to ensure the new fixtures
-     still pass the fallback encoders.
+   - Build/export the path from `ci/build_offline_cash_swift_fixture.sh --locked`
+     as `IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN`, then execute
+     `swift test --package-path IrohaSwift` to ensure the new fixtures still
+     pass the fallback encoders.
    - When `/v1/pipeline` changes are involved, also run `make swift-ci` to confirm the
      regen SLA block turns green and telemetry metadata stays intact.
 5. **Communicate**
@@ -233,6 +246,9 @@ make swift-fixtures-check
 make swift-dashboards
 
 # End-to-end Swift tests
+export IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN="$(
+  bash ci/build_offline_cash_swift_fixture.sh --locked
+)"
 swift test --package-path IrohaSwift
 ```
 

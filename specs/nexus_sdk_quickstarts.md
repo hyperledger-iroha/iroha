@@ -137,7 +137,9 @@ let status = try client.getNetworkStatus().get()
 print("Latest block \(status.latestBlock.height)")
 ```
 
-- Build/tests: `swift test`
+- Build/tests: from the repository root, export
+  `IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN="$(bash ci/build_offline_cash_swift_fixture.sh --locked)"`,
+  then run `swift test --package-path IrohaSwift`
 - Demo harness: `make swift-nexus-demo`
 - Docs: `specs/sdk/swift/index.md`
 

@@ -1182,6 +1182,18 @@ fn parse_account_id(value: String) -> BridgeResult<AccountId> {
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|_| BridgeError::Authority)
 }
+#[cfg(any(
+    test,
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows,
+    all(
+        feature = "kagemusha-candidate-evidence-lab",
+        target_os = "ios",
+        not(target_abi = "sim")
+    )
+))]
 fn parse_account_id_for_chain(value: String, chain_discriminant: u16) -> BridgeResult<AccountId> {
     let _chain_discriminant = ChainDiscriminantGuard::enter(chain_discriminant);
     parse_account_id(value)

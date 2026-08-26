@@ -41,6 +41,11 @@ if [[ -n "${SWIFT_PARITY_TEST_ARGS:-}" ]]; then
 fi
 
 if [[ "${SWIFT_PARITY_SKIP_SWIFT_TEST:-0}" != "1" ]]; then
+  echo "[swift-parity] building authoritative Offline Cash fixture"
+  IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN="$(
+    bash ci/build_offline_cash_swift_fixture.sh --locked
+  )"
+  export IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN
   echo "[swift-parity] running swift tests: ${swift_cmd[*]}"
   {
     "${swift_cmd[@]}"

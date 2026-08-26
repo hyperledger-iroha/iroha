@@ -24,7 +24,7 @@ touching `roadmap.md` items or replying to behaviour questions.
 | Format Rust code | `cargo fmt --all` *(edition 2024)* |
 | Test a single crate | `cargo test -p <crate>` |
 | Run one test | `cargo test -p <crate> <test_name> -- --nocapture` |
-| Swift SDK tests | From `IrohaSwift/`, run `swift test` |
+| Swift SDK tests | From the repository root, export `IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN="$(bash ci/build_offline_cash_swift_fixture.sh --locked)"`, then run `swift test --package-path IrohaSwift` |
 
 ## Workflow Fundamentals
 
@@ -85,7 +85,7 @@ touching `roadmap.md` items or replying to behaviour questions.
   in cuneiform rather than phonetic transliterations.
 
 ### Testing & Tooling Expectations
-- Run the relevant test suites locally (`cargo test`, `swift test`,
+- Run the relevant test suites locally (`cargo test`, fixture-provisioned `swift test`,
   integration harnesses) and document the commands in the PR testing section.
 - Keep CI guard scripts (`ci/*.sh`) and dashboards in sync with new telemetry.
 - For proc-macros, pair unit tests with `trybuild` UI tests to lock diagnostics.

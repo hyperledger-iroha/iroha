@@ -29,7 +29,10 @@ on:
       - "ci/check_privacy_python_sdk.sh"
       - "ci/check_privacy_sdk_guard.sh"
       - "ci/check_privacy_swift_sdk.sh"
+      - "ci/build_offline_cash_swift_fixture.sh"
       - "ci/check_swift_pod_bridge.sh"
+      - "ci/xcode-swift-parity"
+      - "scripts/dev_workflow.sh"
       - "ci/README.md"
       - "ci/privacy_sdk_cargo_lockfile.sh"
       - "ci/privacy_sdk_cargo_lockfile_test_cleanup.sh"
@@ -299,7 +302,7 @@ jobs:
   privacy_swift_sdk_parse:
     needs: privacy_jvm_sdk_tests
     runs-on: macos-14
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - id: privacy-swift-python
@@ -376,6 +379,15 @@ jobs:
         run: python3 -I -B scripts/tests/check_privacy_swift_native_contract_test.py
       - name: Rebuild exact ABI22 XCFramework under full Xcode
         run: scripts/build_norito_xcframework.sh
+      - name: Build authoritative Offline Cash Swift fixture
+        shell: bash
+        run: |
+          fixture="$(bash ci/build_offline_cash_swift_fixture.sh \
+            -Z unstable-options \
+            --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH" \
+            --locked \
+            --offline)"
+          echo "IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN=$fixture" >> "$GITHUB_ENV"
       - name: Privacy Swift SDK parse and native ABI22 tests
         run: ci/check_privacy_swift_sdk.sh
       - name: Revalidate frozen Swift inputs and ABI22 artifacts

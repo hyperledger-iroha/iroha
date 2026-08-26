@@ -910,7 +910,7 @@ def _check_cargo_workflow(
         ),
     }
     native_lane_job_digests = {
-        "privacy_swift_sdk_parse": "54be4bbfb520af36bc109353e62a702a909b84a6b03ad2f9e42168f8f1948be9",
+        "privacy_swift_sdk_parse": "2503e4f9423147a7673cd8a1d35f9b68e0ac5b914997f183b37033ad716ef28f",
         "privacy_jvm_sdk_tests": "1f430f2e88d3c455e8ed0a5182308627d6657099093d6c6021c308bbf12aedcb",
         "privacy_csharp_sdk_tests": "3ba46c1d0cc8f20fed30bcfac3db06f36583eff0aa9eae5930cdb28fb792ade4",
         "privacy_javascript_sdk_tests": "81709f95b24685e6f4d7e2b73e65f89cc20e8926d2d39a3a8765c14d0da299b8",
@@ -2065,6 +2065,9 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "ci/check_privacy_js_sdk.sh",
         "ci/check_privacy_jvm_sdk.sh",
         "ci/check_privacy_swift_sdk.sh",
+        "ci/build_offline_cash_swift_fixture.sh",
+        "ci/xcode-swift-parity",
+        "scripts/dev_workflow.sh",
         "scripts/check_native_sdk_abi22_artifact.py",
         "scripts/check_privacy_python_witness_boundary.py",
         "scripts/compute_workspace_source_manifest.py",

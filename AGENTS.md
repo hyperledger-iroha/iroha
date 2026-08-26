@@ -12,7 +12,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Format code: `cargo fmt --all` (edition 2024)
 - Test one crate: `cargo test -p <crate>`
 - Run one test: `cargo test -p <crate> <test_name> -- --nocapture`
-- Swift SDK: from the `IrohaSwift` directory run `swift test` to execute the Swift package tests.
+- Swift SDK: from the repository root, export the path printed by `bash ci/build_offline_cash_swift_fixture.sh --locked` as `IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN`, then run `swift test --package-path IrohaSwift`.
 - Kotlin SDK: from the `kotlin` directory run `./gradlew :core-jvm:test --console=plain`; build Android artifacts with `./gradlew :client-android:assembleRelease :offline-wallet-android:assembleRelease --quiet`.
 - Android SDK: from `java/iroha_android` run `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test`.
 - Scripts dependencies (Python 3.10+): `python3 -m pip install -r scripts/requirements.txt`.
@@ -43,7 +43,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
     - `ivm` – the Iroha Virtual Machine.
     - `iroha_cli` – command-line interface for interacting with a node.
     - `iroha_core`, `iroha_data_model`, `iroha_crypto`, and other supporting crates.
-- `IrohaSwift/` – Swift Package for the client/mobile SDK. Its sources live under `Sources/IrohaSwift/` and its unit tests under `Tests/IrohaSwiftTests/`. Run `swift test` from this directory to exercise the Swift suite.
+- `IrohaSwift/` – Swift Package for the client/mobile SDK. Its sources live under `Sources/IrohaSwift/` and its unit tests under `Tests/IrohaSwiftTests/`. From the repository root, build/export the authoritative Offline Cash fixture with `ci/build_offline_cash_swift_fixture.sh`, then run `swift test --package-path IrohaSwift` to exercise the full suite.
 - `kotlin/` – default JVM/Android SDK for new mobile work. `core-jvm` contains the pure Kotlin/JVM Norito + client/model stack, `client-android` adds Android-only client/keystore integration, and `offline-wallet-android` contains Android-only offline wallet code and JNI libraries.
 - `java/` – Java SDKs kept in sync with the Kotlin SDK during the migration period. `java/norito_java` mirrors the Kotlin Norito implementation and `java/iroha_android` mirrors the Android/client surface until the Kotlin SDK fully replaces it.
 - `integration_tests/` – Cargo crate hosting cross-component tests under `tests/`.

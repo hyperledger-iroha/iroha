@@ -608,8 +608,10 @@ export IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN="$(pwd)/target/debug/examples/kotli
 (cd kotlin && ./gradlew :core-jvm:test --console=plain)
 ```
 
-The Offline Cash generator emits a closed 40-row inventory. Both JVM fixture
-loaders reject missing, duplicate, additional, or malformed rows eagerly. The
+The Offline Cash generator emits a closed 40-row inventory. The Kotlin, Java,
+and Swift fixture loaders reject missing, duplicate, additional, or malformed
+rows eagerly; the Swift release lane also binds the generator's canonical row
+order. The
 inventory includes valid pending, applied top-up, applied redeem, and rejected
 statuses plus independent invalid-marker, terminal-binding, coherent
 foreign-network, and rejection-envelope controls.

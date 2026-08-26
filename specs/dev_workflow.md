@@ -10,10 +10,14 @@ new patches follow the same default gates.
   2. `cargo clippy --workspace --all-targets --locked -- -D warnings`
   3. `cargo build --workspace --locked`
   4. `cargo test --workspace --locked`
-  5. `swift test` from `IrohaSwift/`
+  5. build/export the same-revision Offline Cash fixture and run `swift test`
+     from `IrohaSwift/`
 - `cargo test --workspace` is long-running (often hours). For quick iterations,
   use `scripts/dev_workflow.sh --skip-tests` or `--skip-swift`, then run the full
   sequence before shipping.
+- A required Swift lane fails when the Swift toolchain is unavailable. Only an
+  explicit `--skip-swift` opts out; the runner never converts missing native
+  fixture coverage or a missing Swift toolchain into a successful skip.
 - If `cargo test --workspace` stalls on build directory locks, rerun with
   `scripts/dev_workflow.sh --target-dir target/codex-tests` (or set
   `CARGO_TARGET_DIR` to an isolated path) to avoid contention.

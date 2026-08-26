@@ -159,14 +159,20 @@ that workflow for local release verification.
 6. Run the Swift validation suite before tagging:
 
    ```bash
+   export IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN="$(
+     bash ci/build_offline_cash_swift_fixture.sh --locked
+   )"
    swift test --package-path IrohaSwift --disable-automatic-resolution
    make swift-ci
    ```
 
-   The first command ensures the Swift package (including `AccelerationSettings`) stays
-   green; the second validates fixture parity, renders the parity/CI dashboards, and
-   exercises the same telemetry checks enforced in Buildkite (including the
-   `ci/xcframework-smoke:<lane>:device_tag` metadata requirement).
+   The built executable is the same-revision authority for the closed Offline Cash
+   40-row parity inventory; the Swift suite fails instead of skipping if it is absent
+   or invalid. The `swift test` command ensures the package (including
+   `AccelerationSettings`) stays green; `make swift-ci` validates fixture parity,
+   renders the parity/CI dashboards, and exercises the same telemetry checks enforced
+   in Buildkite (including the `ci/xcframework-smoke:<lane>:device_tag` metadata
+   requirement).
 
 7. Record the signed publication evidence and tag the reviewed source commit.
    Generated `dist/*` outputs remain untracked; only `dist/.gitkeep` belongs in Git.

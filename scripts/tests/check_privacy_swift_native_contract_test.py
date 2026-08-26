@@ -68,6 +68,12 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             "MOBILE_SDK_APPLE_ARTIFACT_DIR",
             "MOBILE_SDK_SWIFT_SCRATCH_DIR",
             "MOBILE_SDK_PYTHON_BINARY",
+            "IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN",
+            "authoritative Offline Cash fixture must be an absolute regular executable",
+            "authoritative Offline Cash fixture must remain outside the source tree",
+            "authoritative Offline Cash fixture cannot be identity-sealed",
+            "privacy_sdk_executable_seal",
+            "privacy_sdk_assert_executable_seal",
             "scripts/check_mobile_sdk_artifacts.sh",
             '--apple-only',
             "SorafsOrchestratorParityTests.swift",
@@ -109,17 +115,26 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             for directory in (root / "scripts", root / "ci", artifact, scratch, tools):
                 directory.mkdir(parents=True)
             (artifact / "NoritoBridge.xcframework").mkdir()
-            tracked, release, log = root / "Cargo.lock", base / "Cargo.lock", base / "calls"
+            tracked, release, fixture, log = (
+                root / "Cargo.lock",
+                base / "Cargo.lock",
+                base / "kotlin_offline_cash_v1",
+                base / "calls",
+            )
             tracked.write_text("tracked\n", encoding="utf-8")
             release.write_text("release\n", encoding="utf-8")
+            fixture.write_text("fixture\n", encoding="utf-8")
             fake_python = tools / "python"
             fake_python.write_text(
                 "#!/usr/bin/env bash\n"
                 "last=${!#}\n"
                 "if [[ \" $* \" != *\" -S \"* ]]; then\n"
                 f'  if [[ "$last" == "{tracked}" ]]; then echo tracked-seal; '
-                f'elif grep -qx release "{release}"; then echo release-seal; '
-                "else echo changed-release-seal; fi\n"
+                f'elif [[ "$last" == "{release}" ]]; then '
+                f'grep -qx release "{release}" && echo release-seal || echo changed-release-seal; '
+                f'elif [[ "$last" == "{fixture}" ]]; then '
+                f'grep -qx fixture "{fixture}" && echo fixture-seal || echo changed-fixture-seal; '
+                "else echo unknown-seal; fi\n"
                 f'elif [[ "$last" == "{tracked}" ]]; then\n'
                 f'  [[ "${{PRIVACY_TEST_BAD_DIGEST:-}}" == tracked ]] && echo "{'0' * 64}" || echo "{tracked_digest.group(1)}"\n'
                 "else\n"
@@ -134,6 +149,9 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
                 'if [[ "${0##*/}" == swift && "${PRIVACY_TEST_MUTATE_RELEASE:-0}" == 1 ]]; then\n'
                 '  printf "mutated\\n" >"$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"\n'
                 "fi\n"
+                'if [[ "${0##*/}" == swift && "${PRIVACY_TEST_MUTATE_FIXTURE:-0}" == 1 ]]; then\n'
+                '  printf "mutated\\n" >"$IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN"\n'
+                "fi\n"
                 "exit 0\n"
             )
             for name in ("xcode-select", "xcodebuild", "swiftc", "swift"):
@@ -144,6 +162,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             )
             for executable in (*tools.iterdir(), root / "scripts/check_mobile_sdk_artifacts.sh"):
                 executable.chmod(0o700)
+            fixture.chmod(0o700)
             environment = {
                 **os.environ,
                 "PATH": f"{tools}:{os.environ['PATH']}",
@@ -156,6 +175,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
                 "MOBILE_SDK_SWIFT_SCRATCH_DIR": str(scratch),
                 "MOBILE_SDK_PYTHON_BINARY": str(fake_python),
                 "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH": str(release),
+                "IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN": str(fixture),
             }
             shutil.copy2(
                 REPO_ROOT / "ci/privacy_sdk_cargo_lockfile.sh",
@@ -170,6 +190,24 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             calls = log.read_text(encoding="utf-8")
             for invocation in ("xcode-select", "xcodebuild", "artifact-checker", "swiftc", "swift"):
                 self.assertIn(invocation, calls)
+
+            log.unlink(missing_ok=True)
+            missing_fixture_environment = dict(environment)
+            missing_fixture_environment.pop(
+                "IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN"
+            )
+            rejected = subprocess.run(
+                ["bash", str(gate)],
+                env=missing_fixture_environment,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(rejected.returncode, 1)
+            self.assertIn(
+                "Offline Cash fixture paths are required",
+                rejected.stderr,
+            )
+            self.assertFalse(log.exists(), "missing fixture allowed tool execution")
 
             for bad_digest, expected_error in (
                 ("tracked", "tracked root Cargo.lock authority changed"),
@@ -197,6 +235,23 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             self.assertEqual(rejected.returncode, 1)
             self.assertIn(
                 "privacy Swift external Cargo.lock changed",
+                rejected.stderr,
+            )
+            self.assertIn("swift", log.read_text(encoding="utf-8"))
+
+            release.write_text("release\n", encoding="utf-8")
+            fixture.write_text("fixture\n", encoding="utf-8")
+            fixture.chmod(0o700)
+            log.unlink(missing_ok=True)
+            rejected = subprocess.run(
+                ["bash", str(gate)],
+                env={**environment, "PRIVACY_TEST_MUTATE_FIXTURE": "1"},
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(rejected.returncode, 1)
+            self.assertIn(
+                "authoritative Offline Cash fixture changed",
                 rejected.stderr,
             )
             self.assertIn("swift", log.read_text(encoding="utf-8"))
@@ -310,6 +365,19 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         android_job = workflow_job(workflow, "android-mobile-sdk")
         self.assertIn('APPLE_PRIVACY_PRODUCTION_ENABLED: "false"', workflow)
         self.assertIn('ANDROID_PRIVACY_PRODUCTION_ENABLED: "false"', workflow)
+        self.assertIn("Build authoritative Offline Cash Swift fixture", workflow)
+        self.assertIn('- "ci/build_offline_cash_swift_fixture.sh"', workflow)
+        self.assertIn('- "ci/xcode-swift-parity"', workflow)
+        self.assertIn('- "scripts/dev_workflow.sh"', workflow)
+        self.assertIn("build_offline_cash_swift_fixture.sh --locked --offline", workflow)
+        self.assertIn(
+            'echo "IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN=$fixture" >> "$GITHUB_ENV"',
+            workflow,
+        )
+        self.assertLess(
+            apple_job.index("build_offline_cash_swift_fixture.sh"),
+            apple_job.index("swift test"),
+        )
         self.assertIn(
             "Bind reviewed Apple privacy mode",
             apple_job,
@@ -432,8 +500,18 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
     def test_workflow_builds_authenticates_and_tests_exact_apple_artifact(self) -> None:
         source = read(".github/workflows/pr_privacy_sdk_guard.yml")
         job = workflow_job(source, "privacy_swift_sdk_parse")
+        self.assertIn("Build authoritative Offline Cash Swift fixture", job)
+        self.assertIn("build_offline_cash_swift_fixture.sh", job)
+        self.assertIn("--lockfile-path", job)
+        self.assertIn("IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN=$fixture", job)
+        self.assertLess(
+            job.index("build_offline_cash_swift_fixture.sh"),
+            job.index("ci/check_privacy_swift_sdk.sh"),
+        )
         for trigger in (
             ".github/workflows/mobile_sdk_artifacts.yml",
+            "ci/build_offline_cash_swift_fixture.sh",
+            "ci/xcode-swift-parity",
             "ci/README.md",
             "ci/check_swift_pod_bridge.sh",
             "IrohaSwift/IrohaSwift.podspec",
@@ -450,6 +528,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             "scripts/norito_bridge_source_seal.py",
             "scripts/package_mobile_sdk_artifacts.sh",
             "scripts/run_mobile_hermetic_command.py",
+            "scripts/dev_workflow.sh",
             "scripts/render_norito_bridge_podspec.py",
             "scripts/tests/package_mobile_sdk_artifacts_test.py",
             "scripts/tests/render_norito_bridge_podspec_test.py",

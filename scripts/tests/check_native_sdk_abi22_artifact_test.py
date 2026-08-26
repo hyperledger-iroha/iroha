@@ -17,6 +17,95 @@ from scripts import check_native_sdk_abi22_artifact as checker
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+
+def _write_fake_cargo(path: Path, source: str) -> None:
+    path.write_text("#!/usr/bin/env python3\n" + source, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def test_offline_cash_swift_fixture_builder_uses_current_cargo_artifact(
+    tmp_path: Path,
+) -> None:
+    """The helper must consume Cargo's artifact path, not guess debug layout."""
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fixture = (
+        tmp_path
+        / "cargo target with space"
+        / "aarch64-apple-darwin"
+        / "custom-release"
+        / "examples"
+        / "kotlin_offline_cash_v1"
+    )
+    _write_fake_cargo(
+        fake_bin / "cargo",
+        f"""import json
+from pathlib import Path
+
+fixture = Path({str(fixture)!r})
+fixture.parent.mkdir(parents=True)
+fixture.write_bytes(b"fixture executable\\n")
+fixture.chmod(0o755)
+print(json.dumps({{
+    "reason": "compiler-artifact",
+    "target": {{"name": "kotlin_offline_cash_v1", "kind": ["example"]}},
+    "executable": str(fixture),
+}}))
+print(json.dumps({{"reason": "build-finished", "success": True}}))
+""",
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            str(REPO_ROOT / "ci/build_offline_cash_swift_fixture.sh"),
+            "--locked",
+            "--release",
+            "--target",
+            "aarch64-apple-darwin",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "MOBILE_SDK_PYTHON_BINARY": sys.executable,
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"{fixture.resolve()}\n"
+    assert "building same-revision generator" in result.stderr
+
+
+def test_offline_cash_swift_fixture_builder_rejects_missing_artifact_record(
+    tmp_path: Path,
+) -> None:
+    """A successful Cargo exit without this invocation's artifact must fail."""
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_cargo(
+        fake_bin / "cargo",
+        "import json\nprint(json.dumps({'reason': 'build-finished', 'success': True}))\n",
+    )
+    result = subprocess.run(
+        ["bash", str(REPO_ROOT / "ci/build_offline_cash_swift_fixture.sh"), "--locked"],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "MOBILE_SDK_PYTHON_BINARY": sys.executable,
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "did not emit exactly one" in result.stderr
+
+
 NATIVE_ESCROW_SHARED_TRIGGER_PATHS = {
     "Cargo.lock",
     "Cargo.toml",
@@ -55,7 +144,9 @@ NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS = {
     "mobile_sdk_artifacts.yml": {
         ".github/workflows/mobile_sdk_artifacts.yml",
         "IrohaSwift/**",
+        "ci/build_offline_cash_swift_fixture.sh",
         "ci/check_kagemusha_jvm_native_bridge.sh",
+        "ci/xcode-swift-parity",
         "crates/iroha_cli/**",
         "crates/iroha_config/**",
         "crates/iroha_core/**",
@@ -74,6 +165,7 @@ NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS = {
         "scripts/package_mobile_sdk_artifacts.sh",
         "scripts/render_norito_bridge_podspec.py",
         "scripts/deploy_localnet.sh",
+        "scripts/dev_workflow.sh",
         "scripts/run_mobile_hermetic_command.py",
         "scripts/tests/deploy_localnet_test.py",
         "scripts/tests/mobile_sdk_python312_contract.sh",
@@ -1560,6 +1652,7 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
         )
 
     all_swift_tests = read_test_tree("IrohaSwift/Tests", ".swift")
+    assert "XCTSkip" not in all_swift_tests
     assert "XCTSkipIf(" not in all_swift_tests
     assert "XCTSkipUnless(" not in all_swift_tests
     native_swift_skip = re.compile(
@@ -1571,6 +1664,30 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     assert native_swift_skip.search(all_swift_tests) is None
     assert "func requireNativeTestCapability(" in all_swift_tests
     assert "RequiredNativeTestCapabilityError.unavailable" in all_swift_tests
+    offline_cash_swift_tests = read(
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineCashToriiV1Tests.swift"
+    )
+    assert "private static let fixtureNames = [" in offline_cash_swift_tests
+    assert "fixtureRows.count == fixtureNames.count" in offline_cash_swift_tests
+    assert "for (expectedName, row) in zip(fixtureNames, fixtureRows)" in (
+        offline_cash_swift_tests
+    )
+    assert "try validateFixtureValue(value, named: name)" in offline_cash_swift_tests
+    assert "func testOfflineCashFixtureInventoryRejectsDrift()" in (
+        offline_cash_swift_tests
+    )
+    for adversarial_inventory in (
+        '"missing"',
+        '"additional"',
+        '"reordered"',
+        '"duplicate"',
+        '"malformed-row"',
+        '"malformed-value"',
+        '"missing-final-lf"',
+    ):
+        assert adversarial_inventory in offline_cash_swift_tests
+    assert "guard let separator = row.firstIndex" in offline_cash_swift_tests
+    assert "else { continue }" not in offline_cash_swift_tests
 
     all_kotlin_tests = read_test_tree("kotlin/core-jvm/src/test", ".kt")
     assert "assumeTrue(" not in all_kotlin_tests
@@ -1635,6 +1752,57 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     assert '"native_bridge_abi_version"] != 22' in mobile_checker
     assert "check_mobile_sdk_artifacts.sh --apple-only" in mobile_workflow
     assert "check_kagemusha_jvm_native_bridge.sh" in mobile_workflow
+    assert "Build authoritative Offline Cash Swift fixture" in mobile_workflow
+    assert '- "ci/build_offline_cash_swift_fixture.sh"' in mobile_workflow
+    assert '- "ci/xcode-swift-parity"' in mobile_workflow
+    assert '- "scripts/dev_workflow.sh"' in mobile_workflow
+    assert "build_offline_cash_swift_fixture.sh --locked --offline" in mobile_workflow
+    assert "IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN=$fixture" in mobile_workflow
+    apple_job_start = mobile_workflow.index("  apple-mobile-sdk:")
+    android_job_start = mobile_workflow.index("  android-mobile-sdk:")
+    apple_job = mobile_workflow[apple_job_start:android_job_start]
+    assert apple_job.index("build_offline_cash_swift_fixture.sh") < apple_job.index(
+        "swift test"
+    )
+    fixture_builder = read("ci/build_offline_cash_swift_fixture.sh")
+    assert "--example kotlin_offline_cash_v1" in fixture_builder
+    assert 'record.get("reason") == "compiler-artifact"' in fixture_builder
+    assert "build_success is not True" in fixture_builder
+    assert "len(executables) != 1" in fixture_builder
+    swift_parity = read("ci/xcode-swift-parity")
+    dev_workflow = read("scripts/dev_workflow.sh")
+    for full_swift_runner in (swift_parity, dev_workflow):
+        assert "build_offline_cash_swift_fixture.sh" in full_swift_runner
+        assert "export IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN" in full_swift_runner
+        fixture_build = full_swift_runner.index(
+            "build_offline_cash_swift_fixture.sh"
+        )
+        assert "--locked" in full_swift_runner[fixture_build:]
+        assert "swift test" in full_swift_runner[fixture_build:]
+    for swift_trigger in (
+        '"crates/connect_norito_bridge/"',
+        '"ci/build_offline_cash_swift_fixture.sh"',
+        '"ci/xcode-swift-parity"',
+        '"scripts/dev_workflow.sh"',
+    ):
+        assert swift_trigger in dev_workflow
+    assert "Swift is required for the affected full SDK suite" in dev_workflow
+    assert "swift not found; skipped" not in dev_workflow
+    for full_swift_guide in (
+        "README.md",
+        "AGENTS.md",
+        "specs/agents.md",
+        "specs/sdk/swift/reproducibility_checklist.md",
+        "specs/nexus_sdk_quickstarts.md",
+        "specs/sorafs/developer/orchestrator.md",
+        "specs/swift_parity_triage.md",
+    ):
+        guide = read(full_swift_guide)
+        assert "build_offline_cash_swift_fixture.sh" in guide
+        assert "IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN" in guide
+    dev_guide = read("specs/dev_workflow.md")
+    assert "same-revision Offline Cash fixture" in dev_guide
+    assert "explicit `--skip-swift`" in dev_guide
     jni_lane = read("ci/check_kagemusha_jvm_native_bridge.sh")
     assert 'ABI22_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi22_artifact.py"' in jni_lane
     assert "resolve_trusted_python312()" in jni_lane

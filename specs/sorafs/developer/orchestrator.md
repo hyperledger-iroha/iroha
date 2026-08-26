@@ -558,8 +558,11 @@ share the identical stage pinning behaviour.
 Cross-SDK fixtures live under `fixtures/sorafs_gateway/policy_override/`. The
 CLI, Rust client, JavaScript bindings, and Swift harness decode
 `override.json` in their parity suites so any change to the override payloads
-must update that fixture and re-run `cargo test -p iroha`, `npm test`, and
-`swift test` to keep the SDKs aligned. Always attach the regenerated fixture to
+must update that fixture and re-run `cargo test -p iroha`, `npm test`, and the
+fixture-provisioned `swift test --package-path IrohaSwift` suite to keep the SDKs
+aligned. Build/export the authoritative Offline Cash fixture with
+`IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN="$(bash ci/build_offline_cash_swift_fixture.sh --locked)"`
+first. Always attach the regenerated fixture to
 change review so downstream consumers can diff the override contract.
 
 Governance requires a runbook entry for every override. Record the reason,

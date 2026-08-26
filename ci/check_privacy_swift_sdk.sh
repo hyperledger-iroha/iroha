@@ -9,6 +9,7 @@ FROZEN_CARGO_LOCK_SHA256="ccf4acebfe63ad981193b87afd559c195d8a67642d9536b8082f77
 TRACKED_ROOT_CARGO_LOCK_SHA256="ad0d209abaa51d4c77a9e67ccbb0c7660a0f8b7b5dbe3e3fbe4a70e142711bf7"
 PYTHON_BIN="${MOBILE_SDK_PYTHON_BINARY:-${PRIVACY_SWIFT_SDK_PYTHON_BIN:-}}"
 APPLE_ARTIFACT_CHECKER="${ROOT_DIR}/scripts/check_mobile_sdk_artifacts.sh"
+OFFLINE_CASH_FIXTURE_INPUT="${IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN:-}"
 
 # shellcheck source=ci/privacy_sdk_cargo_lockfile.sh
 source "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
@@ -24,8 +25,9 @@ fi
 if [[ -z "${MOBILE_SDK_APPLE_ARTIFACT_DIR:-}" || \
   -z "${MOBILE_SDK_SWIFT_SCRATCH_DIR:-}" || \
   -z "${MOBILE_SDK_PYTHON_BINARY:-}" || \
-  -z "${PYTHON_BIN}" ]]; then
-  echo "error: authenticated external Apple artifact, Swift scratch, and Python paths are required" >&2
+  -z "${PYTHON_BIN}" || \
+  -z "${OFFLINE_CASH_FIXTURE_INPUT}" ]]; then
+  echo "error: authenticated external Apple artifact, Swift scratch, Python, and Offline Cash fixture paths are required" >&2
   exit 1
 fi
 if ! APPLE_ARTIFACT_DIRECTORY="$(cd "${MOBILE_SDK_APPLE_ARTIFACT_DIR}" && pwd -P)"; then
@@ -41,6 +43,19 @@ if [[ "${MOBILE_SDK_APPLE_ARTIFACT_DIR}" != "${APPLE_ARTIFACT_DIRECTORY}" || \
   echo "error: privacy Swift artifact and scratch paths must already be canonical" >&2
   exit 1
 fi
+if [[ "${OFFLINE_CASH_FIXTURE_INPUT}" != /* || \
+  ! -f "${OFFLINE_CASH_FIXTURE_INPUT}" || \
+  ! -x "${OFFLINE_CASH_FIXTURE_INPUT}" || \
+  -L "${OFFLINE_CASH_FIXTURE_INPUT}" ]]; then
+  echo "error: authoritative Offline Cash fixture must be an absolute regular executable" >&2
+  exit 1
+fi
+OFFLINE_CASH_FIXTURE_DIRECTORY="$(cd "$(dirname "${OFFLINE_CASH_FIXTURE_INPUT}")" && pwd -P)"
+OFFLINE_CASH_FIXTURE_BIN="${OFFLINE_CASH_FIXTURE_DIRECTORY}/$(basename "${OFFLINE_CASH_FIXTURE_INPUT}")"
+if [[ "${OFFLINE_CASH_FIXTURE_INPUT}" != "${OFFLINE_CASH_FIXTURE_BIN}" ]]; then
+  echo "error: authoritative Offline Cash fixture path must already be canonical" >&2
+  exit 1
+fi
 case "${APPLE_ARTIFACT_DIRECTORY}/" in
   "${ROOT_DIR}/"*)
     echo "error: privacy Swift Apple artifact directory must be outside the source tree" >&2
@@ -50,6 +65,12 @@ esac
 case "${SWIFT_SCRATCH_DIRECTORY}/" in
   "${ROOT_DIR}/"*)
     echo "error: privacy Swift scratch output must remain outside the source tree" >&2
+    exit 1
+    ;;
+esac
+case "${OFFLINE_CASH_FIXTURE_BIN}/" in
+  "${ROOT_DIR}/"*)
+    echo "error: authoritative Offline Cash fixture must remain outside the source tree" >&2
     exit 1
     ;;
 esac
@@ -90,6 +111,12 @@ PRIVACY_RELEASE_CARGO_LOCK_SEAL="$(
   echo "error: privacy Swift external Cargo.lock cannot be identity-sealed" >&2
   exit 1
 }
+OFFLINE_CASH_FIXTURE_SEAL="$(
+  privacy_sdk_executable_seal "${OFFLINE_CASH_FIXTURE_BIN}" "${PYTHON_BIN}"
+)" || {
+  echo "error: authoritative Offline Cash fixture cannot be identity-sealed" >&2
+  exit 1
+}
 
 assert_privacy_swift_lock_state() {
   local status=0
@@ -102,6 +129,11 @@ assert_privacy_swift_lock_state() {
     "${PRIVACY_RELEASE_CARGO_LOCK}" \
     "${PRIVACY_RELEASE_CARGO_LOCK_SEAL}" \
     "privacy Swift external Cargo.lock" \
+    "${PYTHON_BIN}" || status=1
+  privacy_sdk_assert_executable_seal \
+    "${OFFLINE_CASH_FIXTURE_BIN}" \
+    "${OFFLINE_CASH_FIXTURE_SEAL}" \
+    "authoritative Offline Cash fixture" \
     "${PYTHON_BIN}" || status=1
   return "${status}"
 }

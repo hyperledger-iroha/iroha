@@ -118,8 +118,10 @@ cargo test -p <crate> <test_name> -- --nocapture
 ### SDK Test Commands
 
 ```bash
-cd IrohaSwift
-swift test
+export IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN="$(
+  bash ci/build_offline_cash_swift_fixture.sh --locked
+)"
+swift test --package-path IrohaSwift
 ```
 
 ```bash

@@ -2161,7 +2161,8 @@ from that exact archive.
 - Broken bridge symbols surface `bridgeUnavailable`/`nativeBridgeUnavailable` errors
   that include the expected xcframework location.
 - Example: `swift test --package-path IrohaSwift --disable-automatic-resolution`
-  requires the bridge artifact and reviewed `Package.resolved` to be materialized first.
+  requires the bridge artifact, reviewed `Package.resolved`, and the authoritative
+  Offline Cash fixture executable described below to be materialized first.
 
 ## SwiftUI demo and CI
 
@@ -2226,8 +2227,16 @@ pairs, including the compact `ChainId` and `TransactionSignature` wrappers.
 - Run the package tests:
 
   ```bash
+  export IROHA_KOTLIN_OFFLINE_CASH_FIXTURE_BIN="$(
+    bash ci/build_offline_cash_swift_fixture.sh --locked
+  )"
   swift test --package-path IrohaSwift --disable-automatic-resolution
   ```
+
+  The Offline Cash cross-language parity tests require that freshly built
+  executable from the same checkout. A missing, non-executable, malformed,
+  incomplete, or noncanonical 40-row fixture fails the suite; it is never
+  converted into an XCTest capability skip.
 
 - Render/validate the parity + CI dashboards (uses sample feeds by default):
 
