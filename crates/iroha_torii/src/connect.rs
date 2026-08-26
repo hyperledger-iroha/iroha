@@ -839,7 +839,6 @@ impl Bus {
         entry.clone()
     }
     /// Register one-time tokens for a new session.
-    #[allow(dead_code)]
     pub async fn register_tokens(
         &self,
         sid: Sid,

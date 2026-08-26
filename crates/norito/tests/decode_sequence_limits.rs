@@ -69,7 +69,7 @@ fn bounded_decode_rejects_one_element_over_the_limit() {
     assert_sequence_limit(error, 4, 3);
     let error =
         norito::core::decode_from_bytes_with_limits::<Vec<u32>>(&bytes, limits(value.len() - 1))
-            .expect_err("strict-safe bounded API must enforce the same limit");
+            .expect_err("bounded API must enforce the same limit");
     assert_sequence_limit(error, 4, 3);
 }
 #[test]
@@ -191,7 +191,14 @@ fn explicit_limits_support_trusted_high_compression_without_default_recursion() 
         norito::decode_from_bytes::<Vec<u8>>(&bytes).is_err(),
         "payload-derived default must reject excessive decompression amplification"
     );
-    let limits = DecodeLimits::new(value.len(), value.len(), value.len(), value.len() * 8, 64);
+    let encoded_field_len = value.len() + core::mem::size_of::<u64>();
+    let limits = DecodeLimits::new(
+        value.len(),
+        encoded_field_len,
+        value.len(),
+        value.len() * 8,
+        64,
+    );
     let decoded = norito::decode_from_bytes_with_limits::<Vec<u8>>(&bytes, limits)
         .expect("an explicit finite budget must support trusted compressed data");
     assert_eq!(decoded, value);
@@ -246,11 +253,11 @@ fn scoped_limit_covers_streaming_and_bare_sequence_decoders() {
     })
     .expect_err("streaming vector must honor scoped limit");
     assert_sequence_limit(error, 3, 2);
-    let bare = norito::sequential::serialize_vec(&value).expect("encode bare vector");
+    let bare = norito::codec::encode_adaptive(&value);
     let error = norito::with_decode_limits(limits(2), || {
-        norito::sequential::deserialize_vec::<u32>(&bare)
+        norito::codec::decode_adaptive::<Vec<u32>>(&bare)
     })
-    .expect_err("feature-independent vector must honor scoped limit");
+    .expect_err("bare vector must honor scoped limit");
     assert_sequence_limit(error, 3, 2);
 }
 #[test]
@@ -635,43 +642,4 @@ fn concurrent_scopes_keep_independent_budgets() {
             .expect("permissive worker must decode"),
         value
     );
-}
-#[cfg(feature = "parallel-decode")]
-#[test]
-fn parallel_workers_inherit_the_active_limit_for_nested_sequences() {
-    use norito::{NoritoSerialize as _, SequencePlan, SequenceSpan};
-    let mut encoded_element = Vec::new();
-    norito::core::serialize_to_buffer(&vec![0xA5_u8; 1025], &mut encoded_element)
-        .expect("encode nested byte sequence");
-    let mut bytes = Vec::new();
-    let mut spans = Vec::new();
-    for _ in 0..256 {
-        let start = bytes.len();
-        bytes.extend_from_slice(&encoded_element);
-        spans.push(SequenceSpan {
-            start,
-            end: bytes.len(),
-        });
-    }
-    let plan = SequencePlan {
-        spans,
-        used: bytes.len(),
-    };
-    let error = norito::with_decode_limits(limits(1024), || {
-        norito::decode_planned_sequence_parallel::<Vec<u8>>(
-            &bytes,
-            norito::default_encode_flags(),
-            &plan,
-        )
-    })
-    .expect_err("nested sequence on worker must inherit limit");
-    assert_sequence_limit(error, 1025, 1024);
-    let decoded = norito::decode_planned_sequence_parallel::<Vec<u8>>(
-        &bytes,
-        norito::default_encode_flags(),
-        &plan,
-    )
-    .expect("worker-local budget guards must be restored after failure");
-    assert_eq!(decoded.len(), 256);
-    assert!(decoded.iter().all(|value| value.len() == 1025));
 }

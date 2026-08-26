@@ -2323,7 +2323,7 @@ no environment variables need to be exported.
 - Re-export the maintained Norito codec (`iroha-norito`) so payload encoding and
   decoding stay consistent with Rust fixtures.
 - Provide a convenient constructor for the Torii HTTP client used to manage
-  attachments and prover reports.
+  attachments.
 - Expose generic `CryptoKeyPair` helpers over every signature algorithm compiled
   into `iroha_crypto`: Ed25519, secp256k1, ML-DSA-65, the TC26 GOST R
   34.10-2012 parameter sets, BLS normal/small, and SM2. The helpers cover

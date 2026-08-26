@@ -1224,9 +1224,7 @@ mod tests {
                 },
             },
             soracloud_runtime: iroha_config::parameters::actual::SoracloudRuntime::default(),
-            kura: Kura {
-                init_mode: iroha_config::kura::InitMode::Strict,
-                store_dir: WithOrigin::inline(std::env::temp_dir()),
+            kura: Kura { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(std::env::temp_dir()),
                 max_disk_usage_bytes:
                     iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: NonZeroUsize::new(10).unwrap(),

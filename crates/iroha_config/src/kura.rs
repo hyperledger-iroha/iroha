@@ -5,14 +5,20 @@ use norito::{
     json::{self, JsonDeserialize, JsonSerialize},
 };
 use std::str::FromStr;
+
 /// Kura initialization mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
 #[strum(serialize_all = "snake_case")]
 pub enum InitMode {
-    /// Strict validation of all blocks.
+    /// Validate every canonical block body and parent link before startup completes.
     #[default]
     Strict,
-    /// Fast initialization with basic checks.
+    /// Trust the durable local journal and skip historical body and sidecar audits.
+    ///
+    /// This emergency mode admits only a stable, structurally readable commit boundary and a
+    /// bounded active-tip recovery check. It does not support provisional snapshot import or
+    /// pending storage recovery. Operators should return to [`Self::Strict`] after service is
+    /// restored so the complete chain is audited on the next restart.
     Fast,
 }
 impl JsonSerialize for InitMode {
@@ -50,6 +56,7 @@ impl<'de> NoritoDeserialize<'de> for InitMode {
         InitMode::from_str(&text).map_err(|err| ncore::Error::Message(err.to_string()))
     }
 }
+
 /// Fsync policy for Kura block storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
 #[strum(serialize_all = "snake_case")]
@@ -98,6 +105,7 @@ impl<'de> NoritoDeserialize<'de> for FsyncMode {
 #[cfg(test)]
 mod tests {
     use crate::kura::{FsyncMode, InitMode};
+
     #[test]
     fn init_mode_display_reprs() {
         assert_eq!(format!("{}", InitMode::Strict), "strict");

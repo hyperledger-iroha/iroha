@@ -1245,7 +1245,7 @@ fn bounded_pending_merge_selection_skips_committed_prefix_without_underfill() {
         .persist_pending_certified_merge_entry(&pending)
         .expect("persist uncommitted sidecar that sorts second");
     assert!(committed_hash < pending_hash);
-    kura.append_merge_entry(&committed)
+    kura.append_merge_entry_for_test(&committed)
         .expect("commit the lexicographic sidecar prefix");
     assert_eq!(
         kura.pending_certified_merge_entries_bounded(1)
@@ -2279,7 +2279,7 @@ fn merge_log_reopen_rejects_zero_length_or_complete_oversized_frame() {
 fn pending_selection_performs_indexed_checks_only_for_pending_entries() {
     let kura = Kura::blank_kura_for_testing();
     for epoch in 1..=128 {
-        kura.append_merge_entry(&sample_merge_entry(epoch))
+        kura.append_merge_entry_for_test(&sample_merge_entry(epoch))
             .expect("seed committed merge history");
     }
     for salt in 0_u8..8 {

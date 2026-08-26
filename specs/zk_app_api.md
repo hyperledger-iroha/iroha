@@ -1,6 +1,9 @@
-# ZK App API: Attachments and Prover Reports (Operator Guide)
+# ZK App API: Attachments and Proof Tooling
 
-This document describes the app‑facing ZK endpoints exposed by Torii for handling proof attachments and background prover reports. These facilities are non‑consensus: they do not affect validation, execution, or block formation. They are intended for operator tooling and UI/UX flows.
+This document describes the app-facing ZK endpoints exposed by Torii for
+handling proof attachments and proof tooling. These facilities are
+non-consensus: they do not affect validation, execution, or block formation.
+They are intended for operator tooling and UI/UX flows.
 
 Key properties:
 - Deterministic, non‑forking behavior. Disabling the worker does not change consensus results.
@@ -212,25 +215,9 @@ Verification rules:
 - Backends and circuits are allowlisted via `torii.zk_prover_allowed_backends` and `torii.zk_prover_allowed_circuits` (prefix match).
 - Supported backends currently include `halo2/ipa` and other `halo2/…` variants built into the node. The `stark/fri` family is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`). `groth16/…` remains unsupported.
 
-Endpoints:
-- `GET /v1/zk/prover/reports` — list reports as a JSON array.
-  - Supports optional query parameters for server-side filtering:
-    - `ok_only=true|false` and `failed_only=true|false` (mutually exclusive)
-    - `errors_only=true` (alias for `failed_only=true`)
-    - `id=<hex>` (exact match)
-    - `content_type=<substring>` (substring match)
-    - `has_tag=<TAG>` (ZK1 TLV tag present, e.g., `PROF`, `IPAK`)
-    - `errors_only=true` (alias for `failed_only=true`)
-    - `limit=<N>` (cap results; max 1000)
-    - `since_ms=<u64>` (return only reports with `processed_ms >= since_ms`)
-    - `before_ms=<u64>` (return only reports with `processed_ms <= before_ms`)
-    - `order=asc|desc` (default `asc`), `offset=<u32>` (apply after ordering and filtering)
-    - `latest=true` (return only the most recent report after filters)
-    - `ids_only=true` (return only ids as an array of strings)
-    - `messages_only=true` (return only `{ id, error }` objects for failed reports)
-- `GET /v1/zk/prover/reports/:id` — fetch a single report.
-- `DELETE /v1/zk/prover/reports` — bulk delete reports matching filters (same query parameters as list). Returns `{ deleted, ids }`.
-- `DELETE /v1/zk/prover/reports/:id` — delete a report by id.
+Background reports are bounded node-local worker diagnostics. Torii does not
+mount a report HTTP API, and first-release clients do not expose report
+list/count/get/delete adapters.
 
 Report schema (JSON):
 ```json
@@ -253,18 +240,18 @@ When an attachment carries multiple proofs, the report includes a `proofs` array
 
 Storage layout:
 - Reports: `storage/torii/zk_prover/reports/<id>.json`
-- Bounded report query summaries:
+- Bounded report retention summaries:
   `storage/torii/zk_prover/report_index/<id>.json`. Each report owns one
   atomically replaced summary shard, so report creation has constant index
   write amplification and never rewrites a global index. Summary shards are
   capped at 64 KiB; projected errors are capped at 4 KiB, content types at 256
   bytes, and tag metadata at 64 unique bounded strings. Full report bodies
-  remain available from the report endpoint.
+  remain local to the node.
 - Prover key store: `storage/torii/zk_prover/keys/<backend>__<name>.vk` (sanitized components; override via `torii.zk_prover_keys_dir`).
 
 Retention:
 - Attachments are subject to TTL GC (see above).
-- Prover reports are also subject to TTL GC controlled by `torii.zk_prover_reports_ttl_secs` (default: 7 days). The prover worker deletes reports older than the TTL on each scan cycle. Operators may still delete reports explicitly via the API.
+- Prover reports are also subject to TTL GC controlled by `torii.zk_prover_reports_ttl_secs` (default: 7 days). The prover worker deletes reports older than the TTL on each scan cycle.
 
 ## Configuration
 

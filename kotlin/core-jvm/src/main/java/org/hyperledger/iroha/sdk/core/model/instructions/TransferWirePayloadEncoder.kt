@@ -120,10 +120,9 @@ object TransferWirePayloadEncoder {
         payload: ByteArray,
         chainDiscriminant: Int,
         flags: Int = NoritoCodec.DEFAULT_FLAGS,
-        flagsHint: Int = NoritoHeader.MINOR_VERSION,
     ): String {
         requireChainDiscriminant(chainDiscriminant)
-        val decoder = NoritoDecoder(payload, flags, flagsHint)
+        val decoder = NoritoDecoder(payload, flags)
         val accountId = AccountIdAdapter().decode(decoder)
         require(decoder.remaining() == 0) { "Trailing bytes after AccountId payload" }
         return accountId.renderI105(chainDiscriminant)
@@ -305,7 +304,6 @@ object TransferWirePayloadEncoder {
                     _encodedAccountPayload!!,
                     chainDiscriminant,
                     NoritoCodec.DEFAULT_FLAGS,
-                    NoritoHeader.MINOR_VERSION,
                 )
             val definitionAddress = AssetDefinitionIdEncoder.encodeFromBytes(definition.definitionBytes())
             val scope = decodeAssetBalanceScopePayload(_scopePayload)
@@ -381,7 +379,7 @@ object TransferWirePayloadEncoder {
                 "TransferBox::Asset payload",
             )
             val payload = decoder.readBytes(payloadLength)
-            val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+            val child = NoritoDecoder(payload, decoder.flags)
             val transfer = decodeTransferStruct(child)
             require(child.remaining() == 0) { "Trailing bytes after TransferBox::Asset payload" }
             return transfer
@@ -492,7 +490,7 @@ object TransferWirePayloadEncoder {
                 "multisig policy payload",
             )
             val payload = decoder.readBytes(payloadLength)
-            val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+            val child = NoritoDecoder(payload, decoder.flags)
             val version = Math.toIntExact(decodeSizedTypedField(child, UINT8_ADAPTER, "multisig version"))
             val threshold = Math.toIntExact(decodeSizedTypedField(child, UINT16_ADAPTER, "multisig threshold"))
             val members = decodeSizedMultisigMembers(child)
@@ -507,7 +505,7 @@ object TransferWirePayloadEncoder {
                 "multisig members payload",
             )
             val payload = decoder.readBytes(payloadLength)
-            val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+            val child = NoritoDecoder(payload, decoder.flags)
             val count = checkedLength(child.readUInt(64), "multisig member count")
             val members = ArrayList<MultisigMemberPayload>(count)
             for (index in 0 until count) {
@@ -516,7 +514,7 @@ object TransferWirePayloadEncoder {
                     "multisig member $index payload",
                 )
                 val memberPayload = child.readBytes(memberLength)
-                val memberDecoder = NoritoDecoder(memberPayload, child.flags, child.flagsHint)
+                val memberDecoder = NoritoDecoder(memberPayload, child.flags)
                 val publicKeyPayload = decodeSizedTypedField(
                     memberDecoder,
                     BYTE_VECTOR_ADAPTER,
@@ -607,7 +605,7 @@ object TransferWirePayloadEncoder {
 
         private fun decodeFieldBigInt(decoder: NoritoDecoder): BigInteger {
             val payload = decodeSizedRawField(decoder, "quantity mantissa")
-            val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+            val child = NoritoDecoder(payload, decoder.flags)
             val byteLength = checkedLength(child.readUInt(32), "quantity mantissa byte length")
             val twosComplement = child.readBytes(byteLength)
             require(child.remaining() == 0) { "Trailing bytes after quantity mantissa payload" }
@@ -624,7 +622,7 @@ object TransferWirePayloadEncoder {
         private fun decodeFieldU32(decoder: NoritoDecoder): Long {
             val payload = decodeSizedRawField(decoder, "quantity scale")
             require(payload.size == 4) { "quantity scale payload must be 4 bytes" }
-            val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+            val child = NoritoDecoder(payload, decoder.flags)
             val value = UINT32_ADAPTER.decode(child)
             require(child.remaining() == 0) { "Trailing bytes after quantity scale payload" }
             return value
@@ -740,7 +738,7 @@ object TransferWirePayloadEncoder {
     }
 
     private fun decodeAssetBalanceScopePayload(payload: ByteArray): AssetBalanceScopePayload {
-        val decoder = NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val decoder = NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS)
         val tag = UINT32_ADAPTER.decode(decoder)
         return when (tag) {
             0L -> {
@@ -749,10 +747,10 @@ object TransferWirePayloadEncoder {
             }
             1L -> {
                 val field = decodeSizedRawField(decoder, "dataspace asset scope")
-                val child = NoritoDecoder(field, decoder.flags, decoder.flagsHint)
+                val child = NoritoDecoder(field, decoder.flags)
                 val idPayload = decodeSizedRawField(child, "dataspace asset scope id")
                 require(idPayload.size == 8) { "dataspace asset scope must contain a u64" }
-                val idDecoder = NoritoDecoder(idPayload, child.flags, child.flagsHint)
+                val idDecoder = NoritoDecoder(idPayload, child.flags)
                 val dataspaceId = idDecoder.readUInt(64)
                 require(idDecoder.remaining() == 0) { "Trailing bytes after dataspace asset scope id payload" }
                 require(child.remaining() == 0) { "Trailing bytes after dataspace asset scope id" }
@@ -767,7 +765,7 @@ object TransferWirePayloadEncoder {
         val payloadLength = checkedLength(
             decoder.readLength((decoder.flags and NoritoHeader.COMPACT_LEN) != 0), "$fieldName payload")
         val payload = decoder.readBytes(payloadLength)
-        val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+        val child = NoritoDecoder(payload, decoder.flags)
         val value = adapter.decode(child)
         require(child.remaining() == 0) { "Trailing bytes after $fieldName payload" }
         return value

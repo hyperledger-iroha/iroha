@@ -204,8 +204,7 @@ final class OfflineDeviceAttestationCodec {
           readField(decoder, child -> TransferWirePayloadEncoder.decodeAccountIdPayload(
               child.readBytes(child.remaining()),
               requiredDecodeChainDiscriminant(),
-              child.flags(),
-              child.flagsHint())),
+              child.flags())),
           readField(decoder, OfflineDeviceAttestationCodec::readOptionAssetDefinitionId),
           readField(decoder, OfflineDeviceAttestationCodec::readOptionString),
           readField(decoder, OfflineDeviceAttestationCodec::readOptionString),
@@ -412,7 +411,7 @@ final class OfflineDeviceAttestationCodec {
   private static <T> T readField(final NoritoDecoder parent, final Reader<T> reader) {
     final int length = checkedLength(parent.readLength(compact(parent)), "field");
     final NoritoDecoder child =
-        new NoritoDecoder(parent.readBytes(length), parent.flags(), parent.flagsHint());
+        new NoritoDecoder(parent.readBytes(length), parent.flags());
     final T value = reader.read(child);
     if (child.remaining() != 0) {
       throw new IllegalArgumentException("field has trailing bytes");

@@ -474,7 +474,7 @@ public final class NoritoCodecAdapterTests {
     }
     final NoritoCodec.ArchiveView view =
         NoritoCodec.fromBytesView(encoded, "iroha_torii::routing::MultisigProposeDto");
-    final NoritoDecoder decoder = new NoritoDecoder(view.asBytes(), view.flags(), view.flagsHint());
+    final NoritoDecoder decoder = new NoritoDecoder(view.asBytes(), view.flags());
 
     final byte[] multisigAccountField = readField(decoder, "request.multisig_account_id");
     final byte[] multisigAccountPayload =
@@ -1270,7 +1270,7 @@ public final class NoritoCodecAdapterTests {
   }
 
   private static NoritoDecoder canonicalDecoder(final byte[] payload) {
-    return new NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+    return new NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS);
   }
 
   private static long readU64(final byte[] payload, final int offset, final String field) {

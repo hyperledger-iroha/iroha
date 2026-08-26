@@ -44105,11 +44105,7 @@ pub struct Torii {
     p2p: Option<iroha_core::IrohaNetwork>,
     #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     local_peer_id: Option<PeerId>,
-    // Query and transaction rate limits (operator-local)
-    #[allow(dead_code)]
-    query_rate_per_authority_per_sec: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    query_burst_per_authority: Option<std::num::NonZeroU32>,
+    // Query and transaction admission (operator-local)
     query_max_inflight: usize,
     query_heavy_max_inflight: usize,
     query_fanout_max_retained_bytes: usize,
@@ -44117,24 +44113,8 @@ pub struct Torii {
     app_api_routed_read_body_read_timeout: Duration,
     app_query_limits: routing::AppQueryLimits,
     query_queue_timeout: Duration,
-    #[allow(dead_code)]
-    tx_rate_per_authority_per_sec: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    tx_burst_per_authority: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    deploy_rate_per_origin_per_sec: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    deploy_burst_per_origin: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    soracloud_public_rate_per_ip_per_sec: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    soracloud_public_burst_per_ip: Option<std::num::NonZeroU32>,
     soracloud_public_max_inflight: usize,
     soracloud_public_max_response_bytes: usize,
-    #[allow(dead_code)]
-    soracloud_mutation_rate_per_account_origin_per_sec: Option<std::num::NonZeroU32>,
-    #[allow(dead_code)]
-    soracloud_mutation_burst_per_account_origin: Option<std::num::NonZeroU32>,
     soracloud_mutation_max_inflight: usize,
     soracloud_mutation_max_body_bytes: usize,
     soracloud_upload_max_body_bytes: usize,
@@ -49214,8 +49194,6 @@ impl Torii {
             p2p: None,
             #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             local_peer_id: None,
-            query_rate_per_authority_per_sec: config.query_rate_per_authority_per_sec,
-            query_burst_per_authority: config.query_burst_per_authority,
             query_max_inflight: config.query_max_inflight.get(),
             query_heavy_max_inflight: config.query_heavy_max_inflight.get(),
             query_fanout_max_retained_bytes: usize::try_from(
@@ -49226,21 +49204,11 @@ impl Torii {
             app_api_routed_read_body_read_timeout: config.app_api_routed_read_body_read_timeout,
             app_query_limits,
             query_queue_timeout: config.query_queue_timeout,
-            tx_rate_per_authority_per_sec: config.tx_rate_per_authority_per_sec,
-            tx_burst_per_authority: config.tx_burst_per_authority,
-            deploy_rate_per_origin_per_sec: config.deploy_rate_per_origin_per_sec,
-            deploy_burst_per_origin: config.deploy_burst_per_origin,
-            soracloud_public_rate_per_ip_per_sec: config.soracloud_public_rate_per_ip_per_sec,
-            soracloud_public_burst_per_ip: config.soracloud_public_burst_per_ip,
             soracloud_public_max_inflight: config.soracloud_public_max_inflight.get(),
             soracloud_public_max_response_bytes: usize::try_from(
                 config.soracloud_public_max_response_bytes.get(),
             )
             .unwrap_or(usize::MAX),
-            soracloud_mutation_rate_per_account_origin_per_sec: config
-                .soracloud_mutation_rate_per_account_origin_per_sec,
-            soracloud_mutation_burst_per_account_origin: config
-                .soracloud_mutation_burst_per_account_origin,
             soracloud_mutation_max_inflight: config.soracloud_mutation_max_inflight.get(),
             soracloud_mutation_max_body_bytes: usize::try_from(
                 config.soracloud_mutation_max_body_bytes.get(),

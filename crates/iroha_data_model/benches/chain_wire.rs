@@ -140,7 +140,7 @@ where
 }
 fn decode_framed_with_layout<T>(bytes: &[u8]) -> T
 where
-    T: for<'de> norito::NoritoDeserialize<'de>,
+    T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
 {
     norito::decode_from_bytes::<T>(bytes).expect("decode framed benchmark payload")
 }

@@ -3,7 +3,7 @@
 Swift SDK for the first Hyperledger Iroha 3 release on Apple platforms.
 
 Features:
-- Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, prover reports, contracts)
+- Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, contracts)
 - Kagemusha cash models, transaction builders, proof binding helpers, and universal capability discovery through `/v1/offline/readiness`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)

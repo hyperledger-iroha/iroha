@@ -1891,7 +1891,7 @@ mod tests {
     use axum::response::IntoResponse as _;
     use iroha_config::{
         base::WithOrigin,
-        kura::{FsyncMode, InitMode},
+        kura::FsyncMode,
         parameters::{
             actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
             defaults::kura,
@@ -2286,7 +2286,7 @@ mod tests {
     }
     fn persistent_kura_config(directory: &TempDir) -> KuraConfig {
         KuraConfig {
-            init_mode: InitMode::Strict,
+            init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(
                 directory
                     .path()

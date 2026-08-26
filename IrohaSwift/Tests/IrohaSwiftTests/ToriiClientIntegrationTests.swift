@@ -98,63 +98,6 @@ final class ToriiClientIntegrationTests: XCTestCase {
         wait(for: [listAfterExpectation], timeout: 5)
     }
 
-    func testProverReportsFlowAgainstMock() throws {
-        guard let mock else { return }
-        let client = ToriiClient(baseURL: mock.baseURL, session: URLSession(configuration: .ephemeral))
-
-        var initialReports: [ToriiProverReport] = []
-        let listExpectation = expectation(description: "prover list")
-        client.listProverReports { result in
-            switch result {
-            case .success(let reports):
-                initialReports = reports
-                XCTAssertFalse(reports.isEmpty)
-            case .failure(let error):
-                XCTFail("list failed: \(error)")
-            }
-            listExpectation.fulfill()
-        }
-        wait(for: [listExpectation], timeout: 5)
-
-        guard let first = initialReports.first else {
-            XCTFail("no prover reports available")
-            return
-        }
-
-        let getExpectation = expectation(description: "prover get")
-        client.getProverReport(id: first.id) { result in
-            switch result {
-            case .success(let report):
-                XCTAssertEqual(report.id, first.id)
-            case .failure(let error):
-                XCTFail("get failed: \(error)")
-            }
-            getExpectation.fulfill()
-        }
-        wait(for: [getExpectation], timeout: 5)
-
-        let deleteExpectation = expectation(description: "prover delete")
-        client.deleteProverReport(id: first.id) { result in
-            if case let .failure(error) = result {
-                XCTFail("delete failed: \(error)")
-            }
-            deleteExpectation.fulfill()
-        }
-        wait(for: [deleteExpectation], timeout: 5)
-
-        let countExpectation = expectation(description: "prover count")
-        client.countProverReports { result in
-            switch result {
-            case .success(let count):
-                XCTAssertEqual(count, UInt64(max(initialReports.count - 1, 0)))
-            case .failure(let error):
-                XCTFail("count failed: \(error)")
-            }
-            countExpectation.fulfill()
-        }
-        wait(for: [countExpectation], timeout: 5)
-    }
-
     @available(iOS 15.0, macOS 12.0, *)
     func testPipelineSubmitAndWaitSuccessAgainstMock() async throws {
         let scenarioHash = "feedfacecafebeefcafedeadbeef000100000000000000000000000000000000"

@@ -40,7 +40,7 @@ fn restart_rolls_back_uncommitted_merge_publication_suffixes() {
         .expect("initialize Kura");
         let (carrier, entry) = store_genesis_and_build_merge_carrier(&kura, 1);
         let record = MergeLedgerCarrierRecord::new(&entry, &carrier);
-        kura.append_merge_entry(&entry)
+        kura.append_merge_entry_for_test(&entry)
             .expect("stage merge log frame");
         if boundary == "carrier" {
             let _guard = kura.merge_carrier_lock.lock();
@@ -90,7 +90,7 @@ fn restart_rejects_torn_or_noncanonical_carrier_temporary() {
         )
         .expect("initialize Kura");
         let (_carrier, entry) = store_genesis_and_build_merge_carrier(&kura, 1);
-        kura.append_merge_entry(&entry)
+        kura.append_merge_entry_for_test(&entry)
             .expect("stage merge log frame");
         let directory = kura.merge_carrier_dir();
         fs::create_dir_all(&directory).expect("create carrier directory");

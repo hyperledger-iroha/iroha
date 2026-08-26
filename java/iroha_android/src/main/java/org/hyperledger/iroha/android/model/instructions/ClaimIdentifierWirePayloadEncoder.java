@@ -198,7 +198,7 @@ public final class ClaimIdentifierWirePayloadEncoder {
     final byte[] payload = decoder.readBytes((int) length);
     final org.hyperledger.iroha.norito.NoritoDecoder child =
         new org.hyperledger.iroha.norito.NoritoDecoder(
-            payload, decoder.flags(), decoder.flagsHint());
+            payload, decoder.flags());
     final T value = adapter.decode(child);
     if (child.remaining() != 0) {
       throw new IllegalArgumentException("Trailing bytes after " + fieldName + " payload");

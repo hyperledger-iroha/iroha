@@ -1794,7 +1794,7 @@ fn late_startup_inventory_install_hydrates_attached_telemetry() {
     kura.attach_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
     assert_eq!(metrics.sumeragi_commit_qc_height.get(), 0);
     let inventory = kura
-        .validate_v2_finality_inventory_on_startup()
+        .validate_v2_finality_inventory_on_startup(true)
         .expect("authenticate late startup finality inventory");
     kura.install_v2_startup_finality_verification_inventory(inventory);
     assert_v2_finality_telemetry(&metrics, &artifact);
@@ -2308,7 +2308,7 @@ fn startup_finality_inventory_reuses_more_than_the_runtime_lru_without_reverific
     kura.clear_v2_finality_verification_cache_for_test();
     kura.reset_v2_finality_crypto_verifications_for_test();
     let inventory = kura
-        .validate_v2_finality_inventory_on_startup()
+        .validate_v2_finality_inventory_on_startup(true)
         .expect("audit complete startup finality inventory");
     assert_eq!(
         kura.v2_finality_crypto_verifications_for_test(),
@@ -2383,7 +2383,7 @@ fn startup_lane_geometry_refresh_reuses_authenticated_replay_inventory() {
     kura.clear_v2_finality_verification_cache_for_test();
     kura.reset_v2_finality_crypto_verifications_for_test();
     let inventory = kura
-        .validate_v2_finality_inventory_on_startup()
+        .validate_v2_finality_inventory_on_startup(true)
         .expect("audit startup lane-geometry fixture");
     assert_eq!(
         kura.v2_finality_crypto_verifications_for_test(),
@@ -2448,7 +2448,7 @@ fn startup_lane_geometry_refresh_replaces_contracted_lane_auxiliary_identities()
         .expect("publish configured secondary lane artifact directory");
     kura.replace_lane_storage_entries_for_test(&configured);
     let verified = kura
-        .validate_v2_finality_inventory_on_startup()
+        .validate_v2_finality_inventory_on_startup(true)
         .expect("audit configured startup topology");
     kura.install_v2_startup_finality_verification_inventory(verified);
     kura.refresh_v2_startup_replay_auxiliary_binding()
@@ -2574,7 +2574,7 @@ fn startup_lane_geometry_refresh_replaces_relabelled_lane_auxiliary_identities()
     .expect("publish pre-relabel lane evidence");
     kura.replace_lane_storage_entries_for_test(&configured);
     let verified = kura
-        .validate_v2_finality_inventory_on_startup()
+        .validate_v2_finality_inventory_on_startup(true)
         .expect("audit configured startup topology");
     kura.install_v2_startup_finality_verification_inventory(verified);
     kura.refresh_v2_startup_replay_auxiliary_binding()
@@ -2721,7 +2721,7 @@ fn startup_replay_binding_covers_the_recognized_historical_recovery_namespace() 
     let record_bytes = b"startup replay historical recovery identity";
     fs::write(&record_path, record_bytes).expect("write bounded historical recovery fixture");
     let verified = kura
-        .validate_v2_finality_inventory_on_startup()
+        .validate_v2_finality_inventory_on_startup(true)
         .expect("audit empty canonical chain");
     kura.install_v2_startup_finality_verification_inventory(verified);
     kura.refresh_v2_startup_replay_auxiliary_binding()
@@ -2844,7 +2844,7 @@ fn startup_finality_parallel_batch_reports_the_lowest_corrupt_height() {
         std::fs::write(path, record.encode()).expect("write canonical corrupt record");
     }
     assert!(matches!(
-        kura.validate_v2_finality_inventory_on_startup(),
+        kura.validate_v2_finality_inventory_on_startup(true),
         Err(Error::IO(error, path))
             if error.kind() == ErrorKind::InvalidData && path == lower_path
     ));
@@ -2861,7 +2861,7 @@ fn startup_finality_mismatch_retains_the_original_binding_until_refresh() {
         .expect("store startup-mismatch fixture finality");
     kura.clear_v2_finality_verification_cache_for_test();
     let inventory = kura
-        .validate_v2_finality_inventory_on_startup()
+        .validate_v2_finality_inventory_on_startup(true)
         .expect("audit startup-mismatch fixture");
     kura.install_v2_startup_finality_verification_inventory(inventory);
     let path = kura.v2_finality_artifact_path(artifact.height);

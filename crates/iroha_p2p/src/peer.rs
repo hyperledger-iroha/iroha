@@ -3733,7 +3733,7 @@ mod run {
         max_frame_bytes: usize,
     ) -> Result<usize, Error> {
         let flags = ncore::default_encode_flags();
-        let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let _guard = ncore::DecodeFlagsGuard::enter(flags);
         let encoded_len = ncore::encoded_frame_len(message)?;
         if encoded_len > frame_plaintext_cap_for::<E>(max_frame_bytes) {
             return Err(Error::FrameTooLarge);
@@ -8043,7 +8043,7 @@ mod run {
         payload: &T,
     ) -> Result<usize, ncore::Error> {
         let flags = ncore::default_encode_flags();
-        let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let _guard = ncore::DecodeFlagsGuard::enter(flags);
         let payload_frame_len = ncore::encoded_frame_len(payload)?;
         let payload_len = payload_frame_len
             .checked_sub(norito_frame_prefix_len::<T>().ok_or(ncore::Error::LengthMismatch)?)
@@ -8088,7 +8088,7 @@ mod run {
     }
     fn encode_wire_message<T: Pload>(msg: &T, out: &mut Vec<u8>) -> Result<(), ncore::Error> {
         let flags = ncore::default_encode_flags();
-        let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let _guard = ncore::DecodeFlagsGuard::enter(flags);
         ncore::to_bytes_in(msg, out)
     }
     fn inbound_frame_decode_limits<T: Pload + ClassifyTopic>(

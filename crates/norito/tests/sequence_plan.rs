@@ -1,5 +1,20 @@
 //! Binary sequence span-planner coverage.
 use norito::core::{self, BinarySequenceLayout, SequenceSpan, header_flags, plan_binary_sequence};
+
+#[test]
+fn sequence_span_empty_matches_its_saturating_length() {
+    for span in [
+        SequenceSpan { start: 3, end: 3 },
+        SequenceSpan { start: 4, end: 3 },
+    ] {
+        assert!(span.is_empty());
+        assert_eq!(span.len(), 0);
+    }
+
+    let span = SequenceSpan { start: 3, end: 4 };
+    assert!(!span.is_empty());
+    assert_eq!(span.len(), 1);
+}
 fn fixed_seq_header(count: u64) -> Vec<u8> {
     count.to_le_bytes().to_vec()
 }
@@ -144,34 +159,4 @@ fn packed_offsets_reject_truncated_data() {
     )
     .expect_err("truncated packed payload must fail");
     assert!(matches!(err, core::Error::LengthMismatch));
-}
-#[cfg(feature = "parallel-decode")]
-#[test]
-fn planned_sequence_parallel_decode_preserves_order() {
-    let values = [10u32, 20, 30, 40];
-    let mut bytes = fixed_seq_header(values.len() as u64);
-    for value in values {
-        bytes.extend_from_slice(&4u64.to_le_bytes());
-        bytes.extend_from_slice(&value.to_le_bytes());
-    }
-    let plan = plan_binary_sequence(&bytes, 0, BinarySequenceLayout::LengthPrefixed)
-        .expect("plan fixed-width u32 sequence");
-    let decoded: Vec<u32> = core::decode_planned_sequence_parallel(&bytes, 0, &plan)
-        .expect("parallel decode planned sequence");
-    assert_eq!(decoded, values);
-}
-#[cfg(feature = "parallel-decode")]
-#[test]
-fn vec_decode_large_sequence_uses_parallel_capable_plan() {
-    let values: Vec<u64> = (0..16_384).map(|idx| idx as u64).collect();
-    let mut bytes = fixed_seq_header(values.len() as u64);
-    let flags = core::default_encode_flags();
-    for value in &values {
-        core::write_len_with_flags(&mut bytes, 8, flags).expect("write element length");
-        bytes.extend_from_slice(&value.to_le_bytes());
-    }
-    let (decoded, used) = <Vec<u64> as core::DecodeFromSlice>::decode_from_slice(&bytes)
-        .expect("decode large planned sequence");
-    assert_eq!(used, bytes.len());
-    assert_eq!(decoded, values);
 }

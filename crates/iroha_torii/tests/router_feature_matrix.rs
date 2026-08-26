@@ -236,6 +236,30 @@ async fn router_builds_under_current_features() {
             "retired Sumeragi route {method} {path} must remain absent"
         );
     }
+    for (method, path) in [
+        ("GET", "/v1/zk/prover/reports"),
+        ("GET", "/v1/zk/prover/reports/count"),
+        ("GET", "/v1/zk/prover/reports/00"),
+        ("DELETE", "/v1/zk/prover/reports"),
+        ("DELETE", "/v1/zk/prover/reports/00"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(Uri::from_static(path))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "unmounted ZK prover report adapter {method} {path} must remain absent"
+        );
+    }
     let resp2 = app
         .clone()
         .oneshot(fixtures::operator_signed_request(

@@ -27,10 +27,11 @@ fn framed_decode_limits(frame_len: usize, uncompressed_payload_len: usize) -> De
 /// explicit budget.
 pub fn decode_from_bytes<T>(bytes: &[u8]) -> Result<T, Error>
 where
+    T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     let header = core::Header::read(std::io::Cursor::new(bytes))?;
-    if header.schema != T::schema_hash() {
+    if header.schema != <T as NoritoSerialize>::schema_hash() {
         return Err(Error::SchemaMismatch);
     }
     let payload_len = core::payload_len_to_usize(header.length)?;

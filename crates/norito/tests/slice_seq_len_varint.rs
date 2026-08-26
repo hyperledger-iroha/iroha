@@ -1,5 +1,4 @@
 //! Tests for slice-based decoders with fixed u64 sequence headers.
-#![cfg(feature = "compact-len")]
 use norito::core::{self, DecodeFlagsGuard};
 use std::collections::{BinaryHeap, LinkedList, VecDeque};
 fn build_packed_seq(payloads: &[Vec<u8>]) -> Vec<u8> {

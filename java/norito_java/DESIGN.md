@@ -21,9 +21,9 @@
   raises an `UnsupportedOperationException`, keeping the pure-Java build dependency-free.
 - Flag support: `PACKED_SEQ`, `COMPACT_LEN`, `PACKED_STRUCT`, and `FIELD_BITSET`
   mirroring the Rust flag byte values. Reserved layout bits are rejected. The
-  Java defaults now mirror Rust by keeping all optional flags disabled
-  (`DEFAULT_FLAGS = 0`) so sequential layouts are emitted unless a caller opts
-  in explicitly.
+  Java defaults mirror Rust by enabling compact per-value lengths
+  (`DEFAULT_FLAGS = COMPACT_LEN`, `0x02`); callers may explicitly select the
+  fixed-width V1 layout with flags `0x00`.
 - CRC64 implementation: table-driven CRC64-XZ (reflected ECMA polynomial) matching Rust/Python.
 - Varint helpers: 7-bit LEB128 encoding/decoding for compact length prefixes.
 - Type adapters: generic interface `TypeAdapter<T>` with concrete adapters for

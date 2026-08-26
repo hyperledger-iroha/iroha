@@ -530,7 +530,7 @@ class NoritoJavaCodecAdapterParityTest {
     }
 
     private fun canonicalDecoder(payload: ByteArray): NoritoDecoder =
-        NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS)
 
     private fun readU64(payload: ByteArray, offset: Int, field: String): Long {
         require(offset >= 0 && payload.size - offset >= 8) { "$field missing u64 payload" }

@@ -2781,28 +2781,11 @@ fn derive_enum_deserialize(
                                     }
                                 }
                             } else {
-                                let is_opt_res = is_option_or_result(ty);
-                                if is_opt_res {
-                                    quote! {
-                                        norito::core::decode_context_field_canonical::<#ty>(
-                                            ptr,
-                                            &mut offset,
-                                        )
-                                    }
-                                } else if is_vec_type(ty) {
-                                    quote! {
-                                        norito::core::decode_context_field_canonical::<#ty>(
-                                            ptr,
-                                            &mut offset,
-                                        )
-                                    }
-                                } else {
-                                    quote! {
-                                        norito::core::decode_context_field_canonical::<#ty>(
-                                            ptr,
-                                            &mut offset,
-                                        )
-                                    }
+                                quote! {
+                                    norito::core::decode_context_field_canonical::<#ty>(
+                                        ptr,
+                                        &mut offset,
+                                    )
                                 }
                             };
                             let value = quote! { (#decode)? };

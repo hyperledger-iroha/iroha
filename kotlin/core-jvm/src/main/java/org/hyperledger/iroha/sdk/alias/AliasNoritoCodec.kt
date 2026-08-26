@@ -165,7 +165,6 @@ object AliasNoritoCodec {
                 decoder.readBytes(decoder.remaining()),
                 requiredDecodeChainDiscriminant(),
                 decoder.flags,
-                decoder.flagsHint,
             )
     }
 
@@ -789,7 +788,7 @@ object AliasNoritoCodec {
     private fun <T> decodeField(decoder: NoritoDecoder, adapter: TypeAdapter<T>): T {
         val length = decoder.readLength(decoder.compactLenActive())
         require(length in 0..Int.MAX_VALUE.toLong()) { "Field payload too large" }
-        val child = NoritoDecoder(decoder.readBytes(length.toInt()), decoder.flags, decoder.flagsHint)
+        val child = NoritoDecoder(decoder.readBytes(length.toInt()), decoder.flags)
         val value = adapter.decode(child)
         require(child.remaining() == 0) { "Trailing bytes after field payload" }
         return value
@@ -838,7 +837,7 @@ object AliasNoritoCodec {
     private fun decodeBigIntegerField(decoder: NoritoDecoder): BigInteger {
         val length = decoder.readLength(decoder.compactLenActive())
         require(length in 4..Int.MAX_VALUE.toLong()) { "BigInteger field length is invalid" }
-        val child = NoritoDecoder(decoder.readBytes(length.toInt()), decoder.flags, decoder.flagsHint)
+        val child = NoritoDecoder(decoder.readBytes(length.toInt()), decoder.flags)
         val byteLength = child.readUInt(32)
         require(byteLength in 0..Int.MAX_VALUE.toLong()) { "BigInteger payload is too large" }
         val bytes = child.readBytes(byteLength.toInt())

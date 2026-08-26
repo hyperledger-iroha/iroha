@@ -10,14 +10,10 @@ import java.nio.ByteOrder
 class NoritoDecoder(
     private val buffer: ByteBuffer,
     @JvmField val flags: Int,
-    @JvmField val flagsHint: Int = NoritoHeader.MINOR_VERSION,
 ) {
-    constructor(data: ByteArray, flags: Int) : this(data, flags, NoritoHeader.MINOR_VERSION)
-
-    constructor(data: ByteArray, flags: Int, flagsHint: Int) : this(
+    constructor(data: ByteArray, flags: Int) : this(
         buffer = ByteBuffer.wrap(data.copyOf()).order(ByteOrder.LITTLE_ENDIAN),
         flags = flags,
-        flagsHint = flagsHint,
     )
 
     fun compactLenActive(): Boolean = (flags and NoritoHeader.COMPACT_LEN) != 0

@@ -18,7 +18,7 @@ use iroha_data_model_derive::{IdEqOrdHash, RegistrableBuilder, model};
 use iroha_primitives::numeric::{NumericSpec, Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
+#[cfg(all(test, feature = "json"))]
 use norito::json::Value;
 /// Maximum accepted asset human-name length.
 pub const MAX_ASSET_NAME_LEN: usize = 128;
@@ -769,67 +769,8 @@ impl norito::json::JsonDeserialize for Mintable {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
-        use norito::json::MapVisitor;
-        parser.skip_ws();
-        let next = match parser.peek() {
-            Some(byte) => byte,
-            None => {
-                return Err(norito::json::Error::InvalidField {
-                    field: String::from("Mintable"),
-                    message: String::from("unexpected end of input"),
-                });
-            }
-        };
-        if next == b'"' {
-            let label = parser.parse_string()?;
-            return parse_mintable_label(label.as_str());
-        }
-        if next != b'{' {
-            return Err(norito::json::Error::InvalidField {
-                field: String::from("Mintable"),
-                message: String::from("expected string variant or object"),
-            });
-        }
-        let mut visitor = MapVisitor::new(parser)?;
-        let mut kind: Option<String> = None;
-        let mut tokens: Option<MintabilityTokens> = None;
-        while let Some(key) = visitor.next_key()? {
-            match key.as_str() {
-                "kind" => {
-                    if kind.is_some() {
-                        return Err(norito::json::Error::duplicate_field("kind"));
-                    }
-                    kind = Some(visitor.parse_value::<String>()?);
-                }
-                "tokens" | "value" => {
-                    if tokens.is_some() {
-                        return Err(norito::json::Error::duplicate_field(key.as_str()));
-                    }
-                    let raw = visitor.parse_value::<Value>()?;
-                    tokens = Some(parse_limited_tokens_value(raw)?);
-                }
-                _ => {
-                    visitor.skip_value()?;
-                }
-            }
-        }
-        visitor.finish()?;
-        let kind = kind.ok_or_else(|| norito::json::Error::missing_field("kind"))?;
-        match kind.as_str() {
-            "Infinitely" => Ok(Mintable::Infinitely),
-            "Once" => Ok(Mintable::Once),
-            "Not" => Ok(Mintable::Not),
-            "Limited" => {
-                let tokens = tokens.ok_or_else(|| {
-                    norito::json::Error::missing_field("tokens or value for Limited mintable")
-                })?;
-                Ok(Mintable::Limited(tokens))
-            }
-            other => Err(norito::json::Error::InvalidField {
-                field: String::from("Mintable"),
-                message: format!("unknown variant '{other}'"),
-            }),
-        }
+        let label = parser.parse_string()?;
+        parse_mintable_label(label.as_str())
     }
 }
 #[cfg(feature = "json")]
@@ -856,40 +797,6 @@ fn parse_mintable_label(label: &str) -> Result<Mintable, norito::json::Error> {
             message: format!("unknown variant '{other}'"),
         }),
     }
-}
-#[cfg(feature = "json")]
-fn parse_limited_tokens_value(value: Value) -> Result<MintabilityTokens, norito::json::Error> {
-    let raw = match value {
-        Value::Number(number) => {
-            number
-                .as_u64()
-                .ok_or_else(|| norito::json::Error::InvalidField {
-                    field: String::from("Mintable"),
-                    message: String::from("tokens number must be non-negative"),
-                })?
-        }
-        Value::String(raw) => {
-            raw.parse::<u64>()
-                .map_err(|_| norito::json::Error::InvalidField {
-                    field: String::from("Mintable"),
-                    message: String::from("tokens string must parse as unsigned integer"),
-                })?
-        }
-        other => {
-            return Err(norito::json::Error::InvalidField {
-                field: String::from("Mintable"),
-                message: format!("tokens must be string or number, got {other:?}"),
-            });
-        }
-    };
-    let raw = u32::try_from(raw).map_err(|_| norito::json::Error::InvalidField {
-        field: String::from("Mintable"),
-        message: String::from("tokens exceed u32 range"),
-    })?;
-    MintabilityTokens::try_new(raw).map_err(|err| norito::json::Error::InvalidField {
-        field: String::from("Mintable"),
-        message: err.to_string(),
-    })
 }
 impl HasMetadata for NewAssetDefinition {
     fn metadata(&self) -> &Metadata {

@@ -4,6 +4,10 @@ This document is the source of truth for Norito's on-wire encoding in the
 Iroha workspace. It defines the header, flags, and the canonical length and
 string layouts used across components.
 
+Norito's first-release Rust implementation targets `std` only. There is no
+WASM/no-`std` codec branch, panic containment is always active at fallible
+decode boundaries, and build features do not weaken those safety rules.
+
 ## Header
 
 The Norito header is always present on wire and on disk. It frames the payload
@@ -161,14 +165,14 @@ budget specifies a per-sequence element count, a per-field/blob byte length,
 cumulative element and allocation-byte totals, and a maximum nesting depth.
 Norito validates declared bodies against the bytes remaining before allocating
 temporary storage and returns typed resource-limit errors on violation.
-Compatibility layout fallbacks treat every resource-limit and allocation error
-as terminal: they never retry the same field through an alternate decoder after
-a budget has rejected it.
+Resource-limit and allocation errors are terminal. The V1 decoder never retries
+the same bytes through an alternate layout after a budget has rejected them;
+the header flags select the only layout used for that frame.
 
-Nested decode scopes may tighten but never relax an outer budget. Counters are
-shared with Norito-managed Rayon workers. They are not implicitly copied to
-arbitrary threads created by application-defined deserializers; such code must
-pass a bounded decode operation explicitly. Lazy callers must use
+Nested decode scopes may tighten but never relax an outer budget. Binary value
+decoding is sequential in V1, so its budget counters stay in the calling decode
+scope. Application-defined deserializers that create threads must pass a
+bounded decode operation explicitly. Lazy callers must use
 `stream_seq_iter_with_limits`, `StreamSeqIter::new_with_limits`, or the bounded
 `StreamMapIter` constructors so the iterator owns a cloneable budget context
 and reapplies it for every `next`/`finish` call. No thread-local guard is moved
@@ -181,6 +185,13 @@ complete frame slice, so untrusted readers must use the explicit-limit reader
 API. A host must choose cumulative budgets with enough headroom for temporary
 alignment copies and container metadata; accounting is intentionally
 conservative and may charge both a declared field body and a temporary copy.
+
+All public framed, reader, compressed, and bare-value decoders converge on the
+same exact payload boundary. A decoded value must consume the complete
+checksummed payload; a Rust type's in-memory size is never used as evidence of
+wire consumption. Instrumented decoders report consumption directly, while a
+custom decoder that does not report complete access uses an allocation-free
+canonical byte comparison. Equal-length but byte-different payloads are rejected.
 
 ## Bounded data-model text leaves
 

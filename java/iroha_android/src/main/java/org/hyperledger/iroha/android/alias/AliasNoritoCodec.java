@@ -190,8 +190,7 @@ public final class AliasNoritoCodec {
           return TransferWirePayloadEncoder.decodeAccountIdPayload(
               decoder.readBytes(decoder.remaining()),
               requiredDecodeChainDiscriminant(),
-              decoder.flags(),
-              decoder.flagsHint());
+              decoder.flags());
         }
       };
 
@@ -1104,7 +1103,7 @@ public final class AliasNoritoCodec {
     }
     final NoritoDecoder child =
         new NoritoDecoder(
-            decoder.readBytes((int) length), decoder.flags(), decoder.flagsHint());
+            decoder.readBytes((int) length), decoder.flags());
     final T value = adapter.decode(child);
     if (child.remaining() != 0) {
       throw new IllegalArgumentException("Trailing bytes after field payload");
@@ -1174,7 +1173,7 @@ public final class AliasNoritoCodec {
     }
     final NoritoDecoder child =
         new NoritoDecoder(
-            decoder.readBytes((int) length), decoder.flags(), decoder.flagsHint());
+            decoder.readBytes((int) length), decoder.flags());
     final long byteLength = child.readUInt(32);
     if (byteLength < 0 || byteLength > Integer.MAX_VALUE) {
       throw new IllegalArgumentException("BigInteger payload is too large");

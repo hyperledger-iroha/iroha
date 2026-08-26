@@ -35,10 +35,9 @@ FOUNDATIONAL_DEPENDENCIES = frozenset(
 EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
     "norito": {
         "default": ("node-codec",),
-        "base-codec": ("json", "strict-safe"),
+        "base-codec": ("json",),
         "node-codec": (
             "base-codec",
-            "derive",
             "compression",
             "columnar",
             "json-std-io",

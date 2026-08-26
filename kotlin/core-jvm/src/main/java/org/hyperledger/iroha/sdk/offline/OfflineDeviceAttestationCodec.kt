@@ -190,7 +190,6 @@ internal object OfflineDeviceAttestationCodec {
                         it.readBytes(it.remaining()),
                         requiredDecodeChainDiscriminant(),
                         it.flags,
-                        it.flagsHint,
                     )
                 },
                 assetDefinitionId = readField(decoder, ::readOptionAssetDefinitionId),
@@ -353,7 +352,7 @@ internal object OfflineDeviceAttestationCodec {
 
     private fun <T> readField(parent: NoritoDecoder, reader: (NoritoDecoder) -> T): T {
         val length = checkedLength(parent.readLength(compact(parent)), "field")
-        val child = NoritoDecoder(parent.readBytes(length), parent.flags, parent.flagsHint)
+        val child = NoritoDecoder(parent.readBytes(length), parent.flags)
         val value = reader(child)
         require(child.remaining() == 0) { "field has trailing bytes" }
         return value

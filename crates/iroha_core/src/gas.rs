@@ -15,10 +15,7 @@
 //!   monotonic with payload sizes and relative complexity.
 use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
 use iroha_data_model::{
-    isi as dm_isi,
-    isi::{Instruction as _, InstructionBox},
-    proof::ProofAttachment,
-    zk::OpenVerifyEnvelope,
+    isi as dm_isi, isi::InstructionBox, proof::ProofAttachment, zk::OpenVerifyEnvelope,
 };
 use norito::decode_canonical;
 #[cfg(test)]

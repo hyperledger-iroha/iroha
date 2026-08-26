@@ -41,7 +41,7 @@ object IdentifierReceiptCanonicalEncoder {
         encoded: ByteArray,
         chainDiscriminant: Int,
     ): IdentifierResolutionPayload {
-        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS)
         val policyId = decodePolicyId(decodeSizedField(decoder, PassthroughBytesAdapter, "payload.policy_id"))
         val execution = decodeExecution(decodeSizedField(decoder, PassthroughBytesAdapter, "payload.execution"))
         val opening = decodeOutputOpening(decodeSizedField(decoder, PassthroughBytesAdapter, "payload.opening"))
@@ -60,7 +60,6 @@ object IdentifierReceiptCanonicalEncoder {
             decodeSizedField(decoder, PassthroughBytesAdapter, "payload.account_id"),
             chainDiscriminant,
             decoder.flags,
-            decoder.flagsHint,
         )
         require(decoder.remaining() == 0) { "Trailing bytes after identifier receipt payload" }
         return IdentifierResolutionPayload(policyId, execution, opening, opaqueId, receiptHash, uaid, accountId)
@@ -104,7 +103,7 @@ object IdentifierReceiptCanonicalEncoder {
 
     @JvmStatic
     internal fun decodeAttestation(encoded: ByteArray): IdentifierReceiptAttestation {
-        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS)
         val tag = decoder.readUInt(32)
         val attestation = when (tag) {
             0L -> {
@@ -141,7 +140,7 @@ object IdentifierReceiptCanonicalEncoder {
     }
 
     private fun decodePolicyId(encoded: ByteArray): String {
-        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS)
         val kind = decodeSizedField(decoder, STRING_ADAPTER, "payload.policy_id.kind")
         val rule = decodeSizedField(decoder, STRING_ADAPTER, "payload.policy_id.rule")
         require(decoder.remaining() == 0) { "Trailing bytes after payload.policy_id" }
@@ -174,7 +173,7 @@ object IdentifierReceiptCanonicalEncoder {
     }
 
     private fun decodeExecution(encoded: ByteArray): IdentifierResolutionExecutionPayload {
-        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS)
         val programId = decodeProgramId(
             decodeSizedField(decoder, PassthroughBytesAdapter, "payload.execution.program_id")
         )
@@ -232,7 +231,7 @@ object IdentifierReceiptCanonicalEncoder {
     }
 
     private fun decodeOutputOpening(encoded: ByteArray): RamLfeOutputOpening {
-        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS)
         val payload = decodeOutputOpeningPayload(
             decodeSizedField(decoder, PassthroughBytesAdapter, "payload.opening.payload")
         )
@@ -263,7 +262,7 @@ object IdentifierReceiptCanonicalEncoder {
     }
 
     private fun decodeOutputOpeningPayload(encoded: ByteArray): RamLfeOutputOpeningPayload {
-        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS)
         val programId = decodeProgramId(
             decodeSizedField(decoder, PassthroughBytesAdapter, "payload.opening.payload.program_id")
         )
@@ -304,7 +303,7 @@ object IdentifierReceiptCanonicalEncoder {
     }
 
     private fun decodeProgramId(encoded: ByteArray): String {
-        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS)
         val programId = decodeSizedField(decoder, STRING_ADAPTER, "program_id")
         require(decoder.remaining() == 0) { "Trailing bytes after program_id" }
         return programId
@@ -356,7 +355,7 @@ object IdentifierReceiptCanonicalEncoder {
     }
 
     private fun decodeOpaqueHash(encoded: ByteArray, prefix: String, field: String): String {
-        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS)
         val length = decoder.readLength((decoder.flags and NoritoHeader.COMPACT_LEN) != 0)
         require(length == 32L) { "$field must contain 32 bytes" }
         val hash = decoder.readBytes(32)
@@ -419,7 +418,7 @@ object IdentifierReceiptCanonicalEncoder {
         val length = decoder.readLength((decoder.flags and NoritoHeader.COMPACT_LEN) != 0)
         require(length <= Int.MAX_VALUE) { "$fieldName payload too large" }
         val payload = decoder.readBytes(length.toInt())
-        val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+        val child = NoritoDecoder(payload, decoder.flags)
         val value = adapter.decode(child)
         require(child.remaining() == 0) { "Trailing bytes after $fieldName payload" }
         return value

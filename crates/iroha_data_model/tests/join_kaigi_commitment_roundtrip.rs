@@ -3,7 +3,7 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
     domain::DomainId,
-    isi::{Instruction as _, InstructionBox, kaigi::JoinKaigi},
+    isi::{InstructionBox, kaigi::JoinKaigi},
     kaigi::{KaigiId, KaigiParticipantCommitment},
     name::Name,
 };

@@ -1489,33 +1489,6 @@ mod tests {
         ));
         Ok(())
     }
-    #[test]
-    async fn default_executor_rejects_opaque_instruction_even_with_registered_wire_id() -> Result<()>
-    {
-        let state = State::new(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
-        let mut state_block = state.block(valid_block.as_ref().header().clone());
-        let mut state_transaction = state_block.transaction();
-        let log = Log::new(Level::INFO, "opaque default executor".to_owned());
-        let (payload, flags) = norito::codec::encode_with_header_flags(&log);
-        let framed = norito::core::frame_bare_with_header_flags::<Log>(&payload, flags)
-            .expect("frame log payload");
-        let opaque = iroha_data_model::isi::OpaqueInstruction::from_framed(Log::WIRE_ID, &framed)
-            .expect("opaque payload");
-        let instruction = InstructionBox::from(opaque);
-        let err = execute_borrowed_instruction(&instruction, &ALICE_ID, &mut state_transaction)
-            .expect_err("opaque instructions must not execute through the default dispatcher");
-        assert!(matches!(
-            err,
-            InstructionExecutionError::Conversion(message)
-                if message.contains("Unknown instruction type")
-        ));
-        Ok(())
-    }
     #[derive(Clone, Copy)]
     enum LaneRelayRejectionCase {
         UnknownLaneId,

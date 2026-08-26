@@ -88,77 +88,6 @@ impl PartialEq for InstructionBox {
     }
 }
 impl Eq for InstructionBox {}
-/// Client-side wrapper preserving an instruction wire-id plus already encoded payload bytes.
-///
-/// This is intended for compatibility flows where a remote node returns a draft
-/// instruction in framed wire form and the local client needs to resubmit that
-/// exact payload without understanding its full semantic schema.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct OpaqueInstruction {
-    wire_id: &'static str,
-    bare_payload: Vec<u8>,
-    framed_payload: Vec<u8>,
-}
-impl OpaqueInstruction {
-    /// Build an opaque instruction from a framed wire payload returned by Torii.
-    ///
-    /// # Errors
-    /// Returns [`norito::core::Error`] when the framed payload is malformed.
-    pub fn from_framed(
-        wire_id: impl Into<String>,
-        framed_payload: &[u8],
-    ) -> Result<Self, norito::core::Error> {
-        let view = norito::core::from_bytes_view(framed_payload)?;
-        Ok(Self {
-            wire_id: Box::leak(wire_id.into().into_boxed_str()),
-            bare_payload: view.as_bytes().to_vec(),
-            framed_payload: framed_payload.to_vec(),
-        })
-    }
-    /// Return the stable wire identifier carried by this opaque instruction.
-    #[must_use]
-    pub const fn wire_id(&self) -> &'static str {
-        self.wire_id
-    }
-    /// Return the exact framed payload carried by this opaque instruction.
-    #[must_use]
-    pub fn framed_payload(&self) -> &[u8] {
-        &self.framed_payload
-    }
-}
-impl crate::seal::Instruction for OpaqueInstruction {}
-impl Instruction for OpaqueInstruction {
-    fn dyn_encode(&self) -> Vec<u8> {
-        self.bare_payload.clone()
-    }
-    fn dyn_encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.bare_payload);
-    }
-    fn dyn_encode_capacity_hint(&self) -> Option<usize> {
-        Some(self.bare_payload.len())
-    }
-    fn dyn_encoded_len(&self) -> Option<usize> {
-        Some(self.bare_payload.len())
-    }
-    fn dyn_write_frame(&self, writer: &mut dyn std::io::Write) -> Result<(), norito::core::Error> {
-        std::io::Write::write_all(writer, &self.framed_payload)?;
-        Ok(())
-    }
-    fn dyn_frame_len(&self) -> Result<usize, norito::core::Error> {
-        Ok(self.framed_payload.len())
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn id(&self) -> &'static str {
-        self.wire_id
-    }
-}
-impl From<OpaqueInstruction> for InstructionBox {
-    fn from(i: OpaqueInstruction) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
 impl PartialOrd for InstructionBox {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -173,10 +102,6 @@ impl Ord for InstructionBox {
         self.dyn_encode().cmp(&other.dyn_encode())
     }
 }
-// Implement the sealing marker for the wrapper so it participates in generic APIs
-// (e.g., `Executable: From<Vec<InstructionBox>>`). Special handling in the
-// blanket `Instruction` impl ensures `as_any` exposes the inner type.
-impl crate::seal::Instruction for InstructionBox {}
 
 macro_rules! impl_direct_instruction_box {
     ($($instruction:ty),+ $(,)?) => {
@@ -672,13 +597,7 @@ where
         norito::core::encoded_frame_len(self)
     }
     fn as_any(&self) -> &dyn Any {
-        // Special-case: if `self` is `InstructionBox`, expose its inner instruction
-        // to preserve downcasting behavior used by the visitor helpers.
-        let any: &dyn Any = self;
-        any.downcast_ref::<InstructionBox>().map_or(any, |wrapper| {
-            let inner: &dyn Instruction = &*wrapper.0;
-            inner.as_any()
-        })
+        self
     }
 }
 // Provide an object-safe cloning path for any `T` that implements `Instruction` + `Clone`.
@@ -688,15 +607,6 @@ where
 {
     fn dyn_box_clone(&self) -> InstructionBox {
         InstructionBox(Box::new(self.clone()))
-    }
-}
-fn peel_instruction_box(mut instr: &dyn Instruction) -> &dyn Instruction {
-    loop {
-        if let Some(nested) = instr.as_any().downcast_ref::<InstructionBox>() {
-            instr = &**nested;
-        } else {
-            break instr;
-        }
     }
 }
 fn instruction_tuple_flags() -> u8 {
@@ -814,10 +724,7 @@ impl<W: std::io::Write + ?Sized> std::io::Write for ExactInstructionFrameWriter<
 /// Return the stable registry wire identifier used to frame an instruction.
 #[must_use]
 pub fn instruction_wire_id(instr: &InstructionBox) -> Option<&'static str> {
-    let inner = peel_instruction_box(&**instr);
-    if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
-        return Some(opaque.wire_id);
-    }
+    let inner = &**instr;
     let type_name = Instruction::id(inner);
     let registry = instruction_registry();
     registry
@@ -831,15 +738,7 @@ pub fn instruction_wire_id(instr: &InstructionBox) -> Option<&'static str> {
 /// responses that clients must verify and submit without altering instruction bytes.
 #[must_use]
 pub fn framed_instruction_payload(instr: &InstructionBox) -> Option<(&'static str, Vec<u8>)> {
-    let inner = peel_instruction_box(&**instr);
-    if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
-        let mut payload = Vec::new();
-        payload
-            .try_reserve_exact(opaque.framed_payload.len())
-            .ok()?;
-        payload.extend_from_slice(&opaque.framed_payload);
-        return Some((opaque.wire_id, payload));
-    }
+    let inner = &**instr;
     let type_name = Instruction::id(inner);
     let entry = {
         let registry = instruction_registry();
@@ -861,10 +760,7 @@ fn encoded_instruction_pair_payload(instr: &InstructionBox) -> Option<(&'static 
     framed_instruction_payload(instr)
 }
 fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
-    let inner = peel_instruction_box(&**instr);
-    if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
-        return encoded_instruction_tuple_len(opaque.wire_id, opaque.framed_payload.len());
-    }
+    let inner = &**instr;
     let type_name = Instruction::id(inner);
     let entry = {
         let registry = instruction_registry();
@@ -874,10 +770,7 @@ fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
     encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
 }
 fn encoded_instruction_pair_hint(instr: &InstructionBox) -> Option<usize> {
-    let inner = peel_instruction_box(&**instr);
-    if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
-        return encoded_instruction_tuple_len(opaque.wire_id, opaque.framed_payload.len());
-    }
+    let inner = &**instr;
     let type_name = Instruction::id(inner);
     let entry = {
         let registry = instruction_registry();
@@ -923,16 +816,7 @@ impl norito::core::NoritoSerialize for InstructionBox {
         norito::core::type_name_schema_hash::<(String, Vec<u8>)>()
     }
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let inner = peel_instruction_box(&**self);
-        if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
-            write_instruction_pair_prefix(
-                &mut *writer,
-                opaque.wire_id,
-                opaque.framed_payload.len(),
-            )?;
-            std::io::Write::write_all(writer, &opaque.framed_payload)?;
-            return Ok(());
-        }
+        let inner = &**self;
         let type_name = Instruction::id(inner);
         let entry = {
             let registry = instruction_registry();
@@ -1415,9 +1299,7 @@ pub fn frame_instruction_payload(
         registry.entry_for_key(type_name).copied()
     };
     if let Some(entry) = entry {
-        let header_flags = norito::codec::take_last_encode_flags()
-            .unwrap_or_else(norito::core::default_encode_flags);
-        return (entry.frame)(payload, header_flags);
+        return (entry.frame)(payload, norito::core::default_encode_flags());
     }
     Err(norito::Error::Message(format!(
         "unknown instruction `{type_name}` (not registered)"
@@ -1663,8 +1545,7 @@ impl InstructionRegistry {
     /// Decode an [`crate::isi::Instruction`] providing explicit Norito layout flags.
     ///
     /// The `header_flags` argument mirrors the values produced by
-    /// [`norito::codec::encode_with_header_flags`] and ensures the decoder reconstructs
-    /// packed-struct layouts consistently for instructions that rely on adaptive encoding.
+    /// [`norito::codec::encode_with_header_flags`] and selects the payload layout explicitly.
     pub fn decode_with_flags(
         &self,
         name: &str,

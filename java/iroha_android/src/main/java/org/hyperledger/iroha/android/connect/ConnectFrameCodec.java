@@ -394,7 +394,7 @@ public final class ConnectFrameCodec {
           final long algorithmLength = decoder.readLength(compactLen);
           final byte[] algorithmBytes = decoder.readBytes((int) algorithmLength);
           final NoritoDecoder algorithmDecoder =
-              new NoritoDecoder(algorithmBytes, decoder.flags(), decoder.flagsHint());
+              new NoritoDecoder(algorithmBytes, decoder.flags());
           final int algorithm = UINT32.decode(algorithmDecoder).intValue();
           if (algorithmDecoder.remaining() != 0) {
             throw new IllegalArgumentException(
@@ -404,7 +404,7 @@ public final class ConnectFrameCodec {
           final long signatureLength = decoder.readLength(compactLen);
           final byte[] signatureBytes = decoder.readBytes((int) signatureLength);
           final NoritoDecoder signatureDecoder =
-              new NoritoDecoder(signatureBytes, decoder.flags(), decoder.flagsHint());
+              new NoritoDecoder(signatureBytes, decoder.flags());
           final byte[] signature = BYTE_VECTOR.decode(signatureDecoder);
           if (signatureDecoder.remaining() != 0) {
             throw new IllegalArgumentException(
@@ -445,7 +445,7 @@ public final class ConnectFrameCodec {
           final long directionLength = decoder.readLength(compactLen);
           final byte[] directionBytes = decoder.readBytes((int) directionLength);
           final NoritoDecoder directionDecoder =
-              new NoritoDecoder(directionBytes, decoder.flags(), decoder.flagsHint());
+              new NoritoDecoder(directionBytes, decoder.flags());
           final ConnectDirection direction = DIRECTION_ADAPTER.decode(directionDecoder);
           if (directionDecoder.remaining() != 0) {
             throw new IllegalArgumentException(
@@ -455,7 +455,7 @@ public final class ConnectFrameCodec {
           final long aeadLength = decoder.readLength(compactLen);
           final byte[] aeadBytes = decoder.readBytes((int) aeadLength);
           final NoritoDecoder aeadDecoder =
-              new NoritoDecoder(aeadBytes, decoder.flags(), decoder.flagsHint());
+              new NoritoDecoder(aeadBytes, decoder.flags());
           final byte[] aead = RAW_BYTES.decode(aeadDecoder);
           if (aeadDecoder.remaining() != 0) {
             throw new IllegalArgumentException(
@@ -677,8 +677,8 @@ public final class ConnectFrameCodec {
       final byte[] fieldBytes, final TypeAdapter<T> adapter, final String label)
       throws ConnectProtocolException {
     try (NoritoCodec.DecodeFlagsGuard ignored =
-        NoritoCodec.DecodeFlagsGuard.enterWithHint(CONNECT_LAYOUT_FLAGS, CONNECT_LAYOUT_FLAGS)) {
-      final NoritoDecoder decoder = new NoritoDecoder(fieldBytes, CONNECT_LAYOUT_FLAGS, CONNECT_LAYOUT_FLAGS);
+        NoritoCodec.DecodeFlagsGuard.enter(CONNECT_LAYOUT_FLAGS)) {
+      final NoritoDecoder decoder = new NoritoDecoder(fieldBytes, CONNECT_LAYOUT_FLAGS);
       final T value = adapter.decode(decoder);
       if (decoder.remaining() != 0) {
         throw new ConnectProtocolException(

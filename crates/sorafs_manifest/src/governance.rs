@@ -5182,13 +5182,13 @@ mod tests {
         }
     }
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
-        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
         norito::core::serialize_to_buffer(value, &mut bytes).expect("serialize explicit layout");
         bytes
     }
     fn encode_frame_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
-        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         norito::to_bytes(value).unwrap_or_else(|error| {
             panic!("serialize explicit canonical frame with flags 0x{flags:02x}: {error}")
         })
@@ -5228,7 +5228,7 @@ mod tests {
                 borrowed_bytes, owned_bytes,
                 "{label} canonical bytes changed for flags 0x{flags:02x}"
             );
-            let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
             assert_eq!(
                 borrowed.encoded_len_exact(),
                 owned.encoded_len_exact(),
@@ -5730,7 +5730,7 @@ mod tests {
                 let owned_block_signature_frame =
                     encode_frame_with_flags(&owned_block_signature, flags);
                 let owned_block_frame = encode_frame_with_flags(block, flags);
-                let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+                let _guard = norito::core::DecodeFlagsGuard::enter(flags);
                 assert_eq!(
                     node.recompute_node_cid()
                         .expect("recompute explicit-layout node CID"),
@@ -5802,7 +5802,7 @@ mod tests {
             );
             for flags in supported_layouts() {
                 let owned_frame = encode_frame_with_flags(&owned, flags);
-                let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+                let _guard = norito::core::DecodeFlagsGuard::enter(flags);
                 assert_eq!(
                     head.signature_payload_bytes()
                         .expect("encode explicit-layout head signature frame"),

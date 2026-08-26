@@ -75,6 +75,8 @@ use iroha_crypto::{
 use iroha_data_model::soracloud::SoraNetworkAllowlistEntryV1;
 #[cfg(test)]
 use iroha_data_model::soracloud::derive_hf_placement_id_v1;
+#[cfg(test)]
+use iroha_data_model::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1;
 use iroha_data_model::{
     Decode, Encode, NetworkId,
     account::AccountId,
@@ -141,8 +143,6 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_primitives::json::Json;
-#[cfg(test)]
-use iroha_data_model::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1;
 #[cfg(test)]
 use iroha_torii::sorafs::api::StorageStoredFileDto;
 #[cfg(any(test, target_os = "linux"))]
@@ -4307,8 +4307,7 @@ fn private_execution_transaction_instruction<'a>(
         !transaction
             .fee_payment_intent()
             .has_same_payer_and_gas_bound(configured_fee_payment)
-    })
-    {
+    }) {
         return Err(private_model_invalid(
             "private execution journal transaction fee payer does not match runtime configuration",
         ));
@@ -8554,20 +8553,17 @@ impl SoracloudRuntimeManager {
         let consensus_epoch = view
             .latest_block()
             .map_or(0, |block| block.header().creation_time_ms / 1_000);
-        let next_minimum_receipt_epoch = consensus_epoch
-            .checked_add(1)
-            .and_then(|epoch| {
-                epoch.checked_add(
-                    iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1,
-                )
-            });
+        let next_minimum_receipt_epoch = consensus_epoch.checked_add(1).and_then(|epoch| {
+            epoch.checked_add(
+                iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1,
+            )
+        });
         if let Some(committed) = world
             .soracloud_private_uploaded_model_execution_receipts()
             .get(&entry.receipt.receipt_id)
         {
             let mut expected = entry.receipt.clone();
-            expected.authorization_claim_block_height =
-                committed.authorization_claim_block_height;
+            expected.authorization_claim_block_height = committed.authorization_claim_block_height;
             expected.authorization_claim_epoch = committed.authorization_claim_epoch;
             expected.emitted_sequence = committed.emitted_sequence;
             expected.emitted_block_height = committed.emitted_block_height;
@@ -8612,8 +8608,7 @@ impl SoracloudRuntimeManager {
             if output_pin.digest != entry.receipt.output_artifact.sorafs_manifest_digest
                 || output_pin.root_cid != entry.receipt.output_artifact.sorafs_root_cid
                 || output_pin.content_length != entry.receipt.output_artifact.ciphertext_bytes
-                || output_pin.submitted_by
-                    != entry.receipt.attesting_validator.validator_account_id
+                || output_pin.submitted_by != entry.receipt.attesting_validator.validator_account_id
             {
                 eyre::bail!(
                     "claimed private execution outbox does not exactly match its retained output pin"
@@ -8634,13 +8629,12 @@ impl SoracloudRuntimeManager {
             // retain a poisoned local outbox forever.
             return Ok(PrivateExecutionJournalLedgerDisposition::Active);
         }
-        let output_manifest =
-            sorafs_manifest::decode_manifest_v1_canonical(&entry.output_manifest_payload)
-                .map_err(|error| {
-                    eyre::eyre!(
-                        "private execution outbox has an invalid output manifest: {error}"
-                    )
-                })?;
+        let output_manifest = sorafs_manifest::decode_manifest_v1_canonical(
+            &entry.output_manifest_payload,
+        )
+        .map_err(|error| {
+            eyre::eyre!("private execution outbox has an invalid output manifest: {error}")
+        })?;
         if next_minimum_receipt_epoch
             .is_none_or(|epoch| output_manifest.pin_policy.retention_epoch < epoch)
         {
@@ -8803,9 +8797,7 @@ impl SoracloudRuntimeManager {
                     PrivateExecutionJournalLedgerDisposition::Active => {}
                 }
                 let sorafs_node = self.sorafs_node.as_ref().ok_or_else(|| {
-                    eyre::eyre!(
-                        "private execution durable outbox requires embedded SoraFS storage"
-                    )
+                    eyre::eyre!("private execution durable outbox requires embedded SoraFS storage")
                 })?;
                 verify_private_execution_output_is_durable(
                     sorafs_node,
@@ -8821,7 +8813,7 @@ impl SoracloudRuntimeManager {
                             "recover private execution durable outbox submission: {}",
                             error.message
                         )
-                })?;
+                    })?;
                 Ok(())
             },
             |entry, error| {
@@ -30514,11 +30506,8 @@ mod tests {
         let state = private_execution_fault_state();
         let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf())
             .with_local_host_identity(ALICE_ID.clone(), canonical_inrou_test_peer_id());
-        let initial = resolve_private_execution_journal_deployment_binding(
-            state.as_ref(),
-            &config,
-        )
-        .map_err(|error| eyre::eyre!(error.message))?;
+        let initial = resolve_private_execution_journal_deployment_binding(state.as_ref(), &config)
+            .map_err(|error| eyre::eyre!(error.message))?;
 
         let signer = config
             .submission
@@ -30527,11 +30516,8 @@ mod tests {
             .expect("private execution fixture signer");
         signer.revision = 2;
         signer.policy_digest = [0xB8; 32];
-        let rotated = resolve_private_execution_journal_deployment_binding(
-            state.as_ref(),
-            &config,
-        )
-        .map_err(|error| eyre::eyre!(error.message))?;
+        let rotated = resolve_private_execution_journal_deployment_binding(state.as_ref(), &config)
+            .map_err(|error| eyre::eyre!(error.message))?;
 
         assert_eq!(rotated, initial);
         assert!(
@@ -30590,9 +30576,8 @@ mod tests {
     #[test]
     fn unclaimed_private_execution_with_closed_output_window_is_reexecution_safe() -> Result<()> {
         let (_binding, mut prepared) = private_execution_journal_test_fixture(0x61)?;
-        let mut manifest = sorafs_manifest::decode_manifest_v1_canonical(
-            &prepared.output_manifest_payload,
-        )?;
+        let mut manifest =
+            sorafs_manifest::decode_manifest_v1_canonical(&prepared.output_manifest_payload)?;
         manifest.pin_policy.retention_epoch = 1;
         prepared.output_manifest_payload = norito::encode_canonical(&manifest)?;
         let digest = ManifestDigest::from_manifest(&manifest)?;
@@ -30600,9 +30585,7 @@ mod tests {
         prepared.receipt.output_replication_order_id =
             derive_sorafs_auto_replication_order_id_v1(&digest);
         private_execution_journal_test_reseal_receipt(&mut prepared.receipt);
-        prepared
-            .validate()
-            .map_err(|error| eyre::eyre!(error))?;
+        prepared.validate().map_err(|error| eyre::eyre!(error))?;
 
         let state = private_execution_fault_state();
         assert_eq!(
@@ -31096,7 +31079,10 @@ mod tests {
                 .get(&digest)
                 .cloned()
                 .expect("claimed output pin");
-            expired_pin.retire(2, Some("private execution recovery window elapsed".to_owned()));
+            expired_pin.retire(
+                2,
+                Some("private execution recovery window elapsed".to_owned()),
+            );
             let world = &mut Arc::get_mut(&mut replicated_state)
                 .expect("unique expired-output state")
                 .world;
@@ -31196,8 +31182,8 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn private_execution_journal_enforces_monotonic_replacement_without_liveness_cap()
-    -> Result<()> {
+    fn private_execution_journal_enforces_monotonic_replacement_without_liveness_cap() -> Result<()>
+    {
         let temp_dir = tempfile::tempdir()?;
         let (binding, prepared) = private_execution_journal_test_fixture(0x43)?;
         store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
@@ -35268,7 +35254,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::ApplySoracloudOrderedMailboxResult,
                         >()
@@ -35284,7 +35270,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<iroha_data_model::isi::soracloud::SetSoracloudRuntimeState>(
                         )
                         .cloned()
@@ -35299,7 +35285,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<iroha_data_model::isi::soracloud::AdvertiseSoracloudInrouHost>()
                         .cloned()
                 })
@@ -35312,7 +35298,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::SetSoracloudInrouReplicaRuntimeState,
                         >()
@@ -35328,7 +35314,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState,
                         >()
@@ -35343,7 +35329,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::ReportSoracloudServiceLeaseUsage,
                         >()
@@ -35358,7 +35344,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::ReportSoracloudModelHostViolation,
                         >()
@@ -35373,7 +35359,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::HeartbeatSoracloudModelHost,
                         >()
@@ -35386,7 +35372,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(*instruction)
+                    iroha_data_model::isi::Instruction::as_any(&***instruction)
                         .downcast_ref::<iroha_data_model::isi::soracloud::ReconcileSoracloudModelHosts>()
                         .is_some()
                 })
@@ -35398,7 +35384,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(*instruction)
+                    iroha_data_model::isi::Instruction::as_any(&***instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::ReconcileSoracloudInrouPlacements,
                         >()
@@ -35411,7 +35397,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(*instruction)
+                    iroha_data_model::isi::Instruction::as_any(&***instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::WithdrawSoracloudInrouHost,
                         >()

@@ -86,14 +86,7 @@ pub unsafe fn encode_and_execute<T: NoritoSerialize, O>(
 register_getrandom_err_callback!();
 #[cfg(test)]
 mod tests {
-    // The Norito derive macros may reference cfg(feature = "packed-struct")
-    // internally. Our workspace enables strict check-cfg, so allow the
-    // unexpected-cfgs lint in this test module only.
-    #![allow(unexpected_cfgs)]
     use core::{convert::TryInto, ptr};
-    // Silence unexpected-cfgs emitted from norito derives inside tests where
-    // the workspace enables strict cfg checking for feature names.
-    #[allow(unexpected_cfgs)]
     #[derive(Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
     #[norito(decode_from_slice)]
     struct Dummy {

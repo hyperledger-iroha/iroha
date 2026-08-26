@@ -10752,11 +10752,10 @@ fn load_state_journals(
     // Loading a valid temp journal can replace and remove files. Dropping an unpublished
     // mutation invalidates both caches before the synchronous stable scan republishes them.
     drop(accounting_mutation);
-    if let Err(err) = kura.refresh_disk_usage_bytes() {
-        warn!(
-            ?err,
-            "failed to reconcile Kura disk usage after state journal recovery"
-        );
+    if !kura.emergency_fast_startup_enabled()
+        && let Err(err) = kura.refresh_disk_usage_bytes()
+    {
+        warn!(?err, "failed to reconcile Kura disk usage after state journal recovery");
     }
     LoadedStateJournals {
         query_index,
@@ -37809,27 +37808,12 @@ impl State {
             state_block.stage_queue_plan_admissions_for_carrier(admission_bytes)
         })
     }
-    /// Append a merge-ledger entry to the in-memory cache and persist it via Kura.
+    /// Append a merge-ledger entry directly for legacy-path unit tests.
     ///
-    /// # Errors
-    /// Production callers always receive [`MergeLedgerCommitError::ExecutionRequiresGlobalBlock`];
-    /// every merge entry must be carried by global block consensus.
-    pub fn commit_merge_entry(
-        &self,
-        entry: MergeLedgerEntry,
-    ) -> core::result::Result<Arc<MergeLedgerEntry>, MergeLedgerCommitError> {
-        #[cfg(test)]
-        {
-            return self.commit_merge_entry_legacy_for_test(entry);
-        }
-        #[cfg(not(test))]
-        {
-            let _ = entry;
-            Err(MergeLedgerCommitError::ExecutionRequiresGlobalBlock)
-        }
-    }
+    /// Production code has no direct append surface: every merge entry must be
+    /// carried by global block consensus.
     #[cfg(test)]
-    fn commit_merge_entry_legacy_for_test(
+    pub fn commit_merge_entry(
         &self,
         entry: MergeLedgerEntry,
     ) -> core::result::Result<Arc<MergeLedgerEntry>, MergeLedgerCommitError> {
@@ -37865,7 +37849,7 @@ impl State {
         )?;
         let settlement_plan = self.prepare_nexus_fee_settlement_for_merge(&entry)?;
         let event_entry = entry.clone();
-        self.kura.append_merge_entry(&entry)?;
+        self.kura.append_merge_entry_for_test(&entry)?;
         self.apply_nexus_fee_settlement_plan(settlement_plan)?;
         let stored_entry = {
             let state_write_lock_wait_start = Instant::now();
@@ -40701,6 +40685,9 @@ impl State {
     }
     #[allow(clippy::too_many_lines)]
     fn enforce_nexus_storage_budget(&self, block_height: u64) {
+        if self.kura.emergency_fast_startup_enabled() {
+            return;
+        }
         let nexus = self.nexus.read();
         let Some(max_disk) = nexus
             .storage

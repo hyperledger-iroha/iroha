@@ -487,48 +487,50 @@ fn prune_sidecars_remove_temps_and_fail_closed_on_non_file_suffix() {
     );
 }
 #[test]
-fn fast_init_rewrites_tampered_hash_file() {
+fn fast_init_defers_body_validation_without_rewriting_hashes() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 3);
     let hash_path = primary_blocks_dir(&temp_dir).join(HASHES_FILE_NAME);
+    let forged = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
     {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .open(&hash_path)
             .unwrap();
-        // Overwrite the second hash with garbage to simulate tampering.
+        // Keep the marker-bound tip intact while corrupting an interior journal identity.
         file.seek(SeekFrom::Start(SIZE_OF_BLOCK_HASH)).unwrap();
         file.write_all(&[0xAA; Hash::LENGTH]).unwrap();
         file.flush().unwrap();
     }
+    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    config.init_mode = InitMode::Fast;
     let (kura, BlockCount(count)) = Kura::open_test_kura_with_configured_lane_config(
-        &Config {
-            init_mode: InitMode::Fast,
-            store_dir: iroha_config::base::WithOrigin::inline(temp_dir.path().to_path_buf()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            lane_history_retention:
-                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
+        &config,
         &RuntimeLaneConfig::default(),
     )
-    .expect("re-init kura");
+    .expect("fast init trusts the stable committed journal");
     assert_eq!(count, 3);
-    let block_hash = kura.get_block_hash(nonzero!(2_usize)).unwrap();
-    let block = kura.get_block(nonzero!(2_usize)).unwrap();
-    assert_eq!(block_hash, block.hash());
+    assert_eq!(kura.canonical_body_bytes_read_for_test(), 0);
+    let replay_plan = crate::sumeragi::plan_v2_startup_replay(kura.as_ref())
+        .expect("Fast replay planning trusts historical journal metadata");
+    assert_eq!(replay_plan.durable_height(), 3);
+    assert_eq!(replay_plan.complete_prefix_height(), 2);
+    assert_eq!(replay_plan.pending_tip_height(), Some(3));
+    assert_eq!(kura.canonical_body_bytes_read_for_test(), 0);
+    assert_eq!(kura.startup_replay_historical_payload_reads_for_test(), 0);
+    assert_eq!(kura.v2_finality_crypto_verifications_for_test(), 0);
+    assert_eq!(kura.get_block_hash(nonzero!(2_usize)), Some(forged));
+    assert!(kura.get_block(nonzero!(2_usize)).is_none());
+    assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
+    let mut store = new_block_store(&temp_dir);
+    assert_eq!(store.read_block_hashes(1, 1).unwrap(), vec![forged]);
 }
 #[test]
-fn fast_init_prunes_truncated_block_data() {
+fn fast_init_rejects_truncated_committed_body_without_mutation() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 3);
-    let data_path = primary_blocks_dir(&temp_dir).join(DATA_FILE_NAME);
+    let blocks_dir = primary_blocks_dir(&temp_dir);
+    let data_path = blocks_dir.join(DATA_FILE_NAME);
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -536,29 +538,33 @@ fn fast_init_prunes_truncated_block_data() {
         .unwrap();
     let len = file.metadata().unwrap().len();
     file.set_len(len.saturating_sub(4)).unwrap();
-    let (kura, BlockCount(count)) = Kura::open_test_kura_with_configured_lane_config(
-        &Config {
-            init_mode: InitMode::Fast,
-            store_dir: iroha_config::base::WithOrigin::inline(temp_dir.path().to_path_buf()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            lane_history_retention:
-                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .expect("re-init kura");
-    assert_eq!(count, 2);
-    assert!(kura.get_block(nonzero!(3_usize)).is_none());
-    let mut store = new_block_store(&temp_dir);
-    assert_eq!(store.read_index_count().unwrap(), 2);
-    assert_eq!(store.read_hashes_count().unwrap(), 2);
+    drop(file);
+    let paths = [
+        blocks_dir.join(DATA_FILE_NAME),
+        blocks_dir.join(INDEX_FILE_NAME),
+        blocks_dir.join(HASHES_FILE_NAME),
+        blocks_dir.join(COUNT_FILE_NAME),
+    ];
+    let before = paths
+        .iter()
+        .map(std::fs::read)
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap();
+    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    config.init_mode = InitMode::Fast;
+    assert!(
+        Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .is_err()
+    );
+    let after = paths
+        .iter()
+        .map(std::fs::read)
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(after, before, "Fast preflight must not lower the marker or prune committed bytes");
 }
 #[test]
 fn commit_marker_prunes_excess_entries_on_init() {

@@ -2,7 +2,7 @@
 //! Multi-lane routing and storage provisioning integration.
 use eyre::Result;
 use iroha_config::{
-    kura::{FsyncMode, InitMode},
+    kura::FsyncMode,
     parameters::{
         actual::{
             Crypto, Kura as KuraConfig, LaneConfig as LaneDerivedConfig, LaneRoutingMatcher,
@@ -158,7 +158,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
     .expect("static multi-dataspace catalog");
     let temp = tempdir()?;
     let kura_cfg = KuraConfig {
-        init_mode: InitMode::Strict,
+        init_mode: iroha_config::kura::InitMode::Strict,
         store_dir: WithOrigin::inline(temp.path().to_path_buf()),
         max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,

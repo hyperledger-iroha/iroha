@@ -1487,7 +1487,7 @@ state_test! { sync restart_rejects_orphan_merge_sidecar_without_burning_or_trunc
     // authenticated history and must never be replayed or deleted.
     state
         .kura
-        .append_merge_entry(&entry)
+        .append_merge_entry_for_test(&entry)
         .expect("persist merge entry without settlement");
     let_row! { recovery = state .recover_merge_ledger_from_kura() .expect_err("orphan sidecar recovery must fail closed") };
     assert!(

@@ -231,7 +231,7 @@ impl norito::core::NoritoSerialize for UploadedModelBundleRootPayload<'_> {
             };
             current_dynamic | effective_static
         };
-        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(merged, merged);
+        let _guard = norito::core::DecodeFlagsGuard::enter(merged);
         serialize_tuple_field(writer, &self.service_name)?;
         serialize_tuple_field(writer, &self.model_id)?;
         serialize_tuple_field(writer, &self.weight_version)?;

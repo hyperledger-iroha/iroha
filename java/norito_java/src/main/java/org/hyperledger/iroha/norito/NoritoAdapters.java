@@ -293,7 +293,7 @@ public final class NoritoAdapters {
           continue;
         }
         byte[] payload = decoder.readBytes(elemSize);
-        NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+        NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
         int value = child.readByte();
         if (child.remaining() != 0) {
           throw new IllegalArgumentException("Byte vector element did not consume all bytes");
@@ -357,7 +357,7 @@ public final class NoritoAdapters {
       for (int i = 0; i < count; i++) {
         int size = sizes.get(i);
         byte[] payload = decoder.readBytes(size);
-        NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+        NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
         int value = child.readByte();
         if (child.remaining() != 0) {
           throw new IllegalArgumentException("Packed byte element did not consume all bytes");
@@ -523,7 +523,7 @@ public final class NoritoAdapters {
         throw new IllegalArgumentException("Option payload too large");
       }
       byte[] payload = decoder.readBytes((int) length);
-      NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+      NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
       T value = inner.decode(child);
       if (child.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after Option payload");
@@ -580,7 +580,7 @@ public final class NoritoAdapters {
         throw new IllegalArgumentException("Result payload too large");
       }
       byte[] payload = decoder.readBytes((int) length);
-      NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+      NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
       Object value = tag == 0 ? ok.decode(child) : err.decode(child);
       if (child.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after Result payload");
@@ -661,7 +661,7 @@ public final class NoritoAdapters {
           throw new IllegalArgumentException("Sequence element too large");
         }
         byte[] payload = decoder.readBytes((int) elemLen);
-        NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+        NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
         T value = element.decode(child);
         if (child.remaining() != 0) {
           throw new IllegalArgumentException("Sequence element did not consume all bytes");
@@ -714,7 +714,7 @@ public final class NoritoAdapters {
       List<T> values = new ArrayList<>(count);
       for (int size : sizes) {
         byte[] chunk = decoder.readBytes(size);
-        NoritoDecoder child = new NoritoDecoder(chunk, decoder.flags(), decoder.flagsHint());
+        NoritoDecoder child = new NoritoDecoder(chunk, decoder.flags());
         T value = element.decode(child);
         if (child.remaining() != 0) {
           throw new IllegalArgumentException("Packed element did not consume all bytes");
@@ -885,7 +885,7 @@ public final class NoritoAdapters {
     private <T> T decodeSizedField(
         final TypeAdapter<T> adapter, final NoritoDecoder decoder, final int size) {
       byte[] chunk = decoder.readBytes(size);
-      NoritoDecoder child = new NoritoDecoder(chunk, decoder.flags(), decoder.flagsHint());
+      NoritoDecoder child = new NoritoDecoder(chunk, decoder.flags());
       T value = adapter.decode(child);
       if (child.remaining() != 0) {
         throw new IllegalArgumentException("Map entry did not consume all bytes");
@@ -1114,7 +1114,7 @@ public final class NoritoAdapters {
         Object value;
         if (size != null) {
           byte[] chunk = decoder.readBytes(size);
-          NoritoDecoder child = new NoritoDecoder(chunk, decoder.flags(), decoder.flagsHint());
+          NoritoDecoder child = new NoritoDecoder(chunk, decoder.flags());
           value = decodeAdapter(adapter, child);
           if (child.remaining() != 0) {
             throw new IllegalArgumentException("Packed field did not consume all bytes");

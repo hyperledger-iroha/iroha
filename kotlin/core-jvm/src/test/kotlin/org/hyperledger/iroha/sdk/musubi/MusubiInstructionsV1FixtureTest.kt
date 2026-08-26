@@ -1739,7 +1739,7 @@ class MusubiInstructionsV1FixtureTest {
     }
 
     private fun canonicalDecoder(payload: ByteArray): NoritoDecoder =
-        NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS)
 
     private fun readField(decoder: NoritoDecoder, field: String): ByteArray {
         val length = decoder.readLength(decoder.compactLenActive())

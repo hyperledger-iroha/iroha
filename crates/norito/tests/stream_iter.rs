@@ -9,7 +9,6 @@ use std::{
     collections::{BTreeMap, HashMap},
     io::Cursor,
 };
-#[cfg(feature = "packed-struct")]
 #[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct PackedRow {
@@ -96,7 +95,6 @@ fn stream_seq_iter_compact_len_roundtrip() {
     assert_eq!(collected, values);
     norito_core::reset_decode_state();
 }
-#[cfg(feature = "packed-struct")]
 #[test]
 fn stream_seq_iter_packed_struct_roundtrip() {
     let values = vec![

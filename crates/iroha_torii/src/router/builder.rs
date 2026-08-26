@@ -702,9 +702,9 @@ pub(crate) struct RouterBuilder<S = SharedAppState> {
     router: Router<S>,
     app_state: S,
     catalog: RouteCatalog<'static>,
+    catalog_by_id: BTreeMap<&'static str, RouteDescriptor>,
     enabled_features: EnabledFeatures<'static>,
-    registered_ids: BTreeMap<&'static str, RouteDescriptor>,
-    registered_method_paths: BTreeMap<(HttpMethod, &'static str), &'static str>,
+    registered_ids: BTreeSet<&'static str>,
     errors: Vec<RouterAssemblyError>,
 }
 impl<S> RouterBuilder<S>
@@ -725,13 +725,18 @@ where
         catalog
             .validate()
             .map_err(RouterAssemblyError::InvalidCatalog)?;
+        let catalog_by_id = catalog
+            .routes()
+            .iter()
+            .map(|descriptor| (descriptor.stable_route_id(), *descriptor))
+            .collect();
         Ok(Self {
             router: Router::new().without_v07_checks(),
             app_state,
             catalog,
+            catalog_by_id,
             enabled_features,
-            registered_ids: BTreeMap::new(),
-            registered_method_paths: BTreeMap::new(),
+            registered_ids: BTreeSet::new(),
             errors: Vec::new(),
         })
     }
@@ -764,7 +769,7 @@ where
                 });
             return;
         }
-        if !self.register_group(std::slice::from_ref(descriptor)) {
+        if !self.register_route(descriptor) {
             return;
         }
         self.router =
@@ -785,57 +790,29 @@ where
     ) -> Result<(Router<S>, MountedRouteManifest), Vec<RouterAssemblyError>> {
         self.finish_inner()
     }
-    fn register_group(&mut self, descriptors: &'static [RouteDescriptor]) -> bool {
-        let mut ids = self.registered_ids.clone();
-        let mut method_paths = self.registered_method_paths.clone();
-        let mut group_errors = Vec::new();
-        for descriptor in descriptors {
-            let Some(expected) = self
-                .catalog
-                .routes()
-                .iter()
-                .find(|route| route.stable_route_id() == descriptor.stable_route_id())
-            else {
-                group_errors.push(RouterAssemblyError::UnexpectedRegistration {
-                    stable_route_id: descriptor.stable_route_id(),
-                });
-                continue;
-            };
-            if expected != descriptor {
-                group_errors.push(RouterAssemblyError::DescriptorMismatch {
-                    stable_route_id: descriptor.stable_route_id(),
-                });
-                continue;
-            }
-            if !descriptor.feature_gate().is_enabled(self.enabled_features) {
-                group_errors.push(RouterAssemblyError::DisabledRegistration {
-                    stable_route_id: descriptor.stable_route_id(),
-                });
-                continue;
-            }
-            if ids
-                .insert(descriptor.stable_route_id(), *descriptor)
-                .is_some()
-                || method_paths
-                    .insert(
-                        (descriptor.method(), descriptor.path()),
-                        descriptor.stable_route_id(),
-                    )
-                    .is_some()
-            {
-                group_errors.push(RouterAssemblyError::DuplicateRegistration {
-                    stable_route_id: descriptor.stable_route_id(),
-                });
-            }
+    fn register_route(&mut self, descriptor: &'static RouteDescriptor) -> bool {
+        let stable_route_id = descriptor.stable_route_id();
+        let Some(expected) = self.catalog_by_id.get(stable_route_id) else {
+            self.errors
+                .push(RouterAssemblyError::UnexpectedRegistration { stable_route_id });
+            return false;
+        };
+        if expected != descriptor {
+            self.errors
+                .push(RouterAssemblyError::DescriptorMismatch { stable_route_id });
+            return false;
         }
-        if group_errors.is_empty() {
-            self.registered_ids = ids;
-            self.registered_method_paths = method_paths;
-            true
-        } else {
-            self.errors.extend(group_errors);
-            false
+        if !descriptor.feature_gate().is_enabled(self.enabled_features) {
+            self.errors
+                .push(RouterAssemblyError::DisabledRegistration { stable_route_id });
+            return false;
         }
+        if !self.registered_ids.insert(stable_route_id) {
+            self.errors
+                .push(RouterAssemblyError::DuplicateRegistration { stable_route_id });
+            return false;
+        }
+        true
     }
     fn finish_inner(self) -> Result<(Router<S>, MountedRouteManifest), Vec<RouterAssemblyError>> {
         let enabled = self
@@ -844,7 +821,7 @@ where
         let missing: Vec<_> = enabled
             .iter()
             .filter_map(|route| {
-                (!self.registered_ids.contains_key(route.stable_route_id()))
+                (!self.registered_ids.contains(route.stable_route_id()))
                     .then_some(route.stable_route_id())
             })
             .collect();
@@ -1052,6 +1029,7 @@ mod tests {
         let mut builder =
             RouterBuilder::new((), RouteCatalog::new(ROUTES), EnabledFeatures::none())
                 .expect("valid catalog");
+        assert_eq!(builder.catalog_by_id.len(), ROUTES.len());
         builder.route(&READ, catalog_get(|| async { "read" }));
         builder.route(&WRITE, catalog_post(|| async { StatusCode::NO_CONTENT }));
         let (router, manifest) = builder.finish().expect("complete registration");
@@ -1105,6 +1083,7 @@ mod tests {
                 .expect("valid catalog");
         builder.route(&READ, catalog_get(|| async {}));
         builder.route(&READ, catalog_get(|| async {}));
+        assert_eq!(builder.registered_ids.len(), 1);
         let errors = builder.finish().expect_err("duplicate must fail");
         assert!(errors.iter().any(|error| {
             matches!(

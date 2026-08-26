@@ -1,9 +1,57 @@
 # Roadmap
 
-Last updated: 2026-08-25
+Last updated: 2026-08-26
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## Norito archive API closure
+
+- Replace the stateful `from_bytes`/`ArchivedBox` marker workflow with an
+  owning or borrowed archive view that carries its payload context explicitly,
+  then migrate remaining callers to exact value decode. Remove the global
+  payload-context setters once no caller can deserialize a marker after the
+  validating function returns.
+- Audit the experimental columnar and broad streaming helper surfaces against
+  first-release production call sites. Retain only layouts with an explicit V1
+  wire contract and focused consumers; remove benchmark-only public adapters
+  instead of preserving dormant APIs.
+
+## Torii first-release closure
+
+- Remove Torii's crate-wide `dead_code`, `unused_imports`, and `unused_async`
+  allowances. Delete or feature-gate every resulting production-only finding,
+  and replace trait-check helper functions with compile-time assertions that do
+  not need dead-code exemptions.
+- Bound operator-auth sessions, challenges, and lockout identities with one
+  expiry-aware capacity policy. Admission must fail closed at capacity without
+  a full-map scan, and focused tests must cover expiry, concurrency, and many
+  distinct source identities.
+- Retire the explicitly legacy `POST /v1/sorafs/storage/fetch` diagnostic and
+  its JavaScript adapter in favor of authenticated CAR/chunk reads, then
+  regenerate the OpenAPI provenance bundle and update the SoraFS operator
+  runbooks in the same change.
+- Collapse permanent operator bearer-token modes to one bootstrap-before-first-
+  credential flow, remove duplicate MCP Connect tool aliases and response
+  fields, and retain only `/openapi.json` as the OpenAPI discovery endpoint.
+- Audit wildcard diagnostic and configuration-alias surfaces (`/status/{*tail}`
+  and one-way parser spellings) against first-release callers, deleting each
+  surface that has no production owner instead of carrying compatibility
+  branches.
+
+## Data-model first-release closure
+
+- Remove the always-rejected `RegisterProviderOwner` and
+  `UnregisterProviderOwner` instruction surfaces from the registry, executor,
+  fixtures, and SDKs instead of retaining inert pre-release operations.
+- Remove the domain-selector state that canonical `AccountAddress` no longer
+  serializes, then retire `AccountRekeyTransitionProvenance::LegacyUnspecified`
+  and its startup normalization. Regenerate cross-SDK fixtures in the same
+  change so there is one account model from the first release onward.
+- Replace the boxed repository-initiation compatibility codec with its direct
+  enum payload, plan committed-transaction indexes from the typed predicate
+  tree instead of the legacy flat filter carrier, and validate DA proof-policy
+  hashes through borrowed bundles without temporary vectors.
 
 ## Generated HF isolated execution
 

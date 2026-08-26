@@ -1025,7 +1025,7 @@ mod model {
                 let mut counter = norito::core::Encoder::new(&mut sink);
                 query.encode_payload_to(&mut counter)?
             };
-            let _flags = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let _flags = norito::core::DecodeFlagsGuard::enter(flags);
             let name_len = name
                 .len()
                 .checked_add(norito::core::len_prefix_len_with_flags(name.len(), flags))

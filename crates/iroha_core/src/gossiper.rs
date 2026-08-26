@@ -3737,7 +3737,7 @@ mod tests {
         state::{State, World},
     };
     use iroha_config::{
-        kura::{FsyncMode, InitMode},
+        kura::FsyncMode,
         parameters::{
             actual::{
                 DataspaceGossipFallback, Kura as KuraConfig, LaneConfig as LaneGeometry,
@@ -4228,7 +4228,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     fn closed_test_gossiper(resend_ticks: NonZeroU32) -> TransactionGossiper {
         let temp_dir = tempdir().expect("temp dir");
         let kura_cfg = KuraConfig {
-            init_mode: InitMode::Strict,
+            init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
@@ -4597,7 +4597,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     async fn gossiper_tx_frame_cap_respects_encrypted_frame_limit() {
         let temp_dir = tempdir().expect("temp dir");
         let kura_cfg = KuraConfig {
-            init_mode: InitMode::Strict,
+            init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
@@ -4649,7 +4649,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     fn gossip_defers_requeue_until_resend_tick() {
         let temp_dir = tempdir().expect("temp dir");
         let kura_cfg = KuraConfig {
-            init_mode: InitMode::Strict,
+            init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
@@ -4763,7 +4763,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     fn gossip_backpressure_cooldown_respects_last_drop() {
         let temp_dir = tempdir().expect("temp dir");
         let kura_cfg = KuraConfig {
-            init_mode: InitMode::Strict,
+            init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
@@ -5381,7 +5381,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     async fn gossip_accepts_valid_entries_with_invalid_routes_present() {
         let temp_dir = tempdir().expect("temp dir");
         let kura_cfg = KuraConfig {
-            init_mode: InitMode::Strict,
+            init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
@@ -6050,7 +6050,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     async fn gossip_skips_already_known_transaction_hashes() {
         let temp_dir = tempdir().expect("temp dir");
         let kura_cfg = KuraConfig {
-            init_mode: InitMode::Strict,
+            init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
@@ -6133,7 +6133,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         }
         let temp_dir = tempdir().expect("temp dir");
         let kura_cfg = KuraConfig {
-            init_mode: InitMode::Strict,
+            init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
@@ -6234,7 +6234,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     async fn gossip_drops_stale_native_amx_participant_plan_but_keeps_valid_entry() {
         let temp_dir = tempdir().expect("temp dir");
         let kura_cfg = KuraConfig {
-            init_mode: InitMode::Strict,
+            init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,

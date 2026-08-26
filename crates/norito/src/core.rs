@@ -11,7 +11,6 @@ use crate::json;
 use crate::{ArchiveSlice, guarded_try_deserialize};
 pub use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use core::convert::TryFrom;
-#[cfg(feature = "derive")]
 pub use norito_derive::{NoritoDeserialize, NoritoSerialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -33,6 +32,7 @@ use std::{
 mod encoder;
 pub use encoder::Encoder;
 mod encode_writers;
+pub(crate) use encode_writers::ExactSliceWriter;
 use encode_writers::{CountingWriter, ExactLengthWriter, LengthCountingWriter};
 pub mod heuristics;
 pub mod hw;
@@ -42,7 +42,7 @@ pub use simd_crc64::crc64_neon;
 #[cfg(all(target_arch = "x86_64", target_feature = "sse4.2"))]
 pub use simd_crc64::crc64_sse42;
 pub use simd_crc64::{crc64_fallback, hardware_crc64};
-#[cfg(all(feature = "gpu-compression", not(target_arch = "wasm32")))]
+#[cfg(feature = "gpu-compression")]
 pub mod gpu_zstd;
 /// Default upper bound on Norito archive length (bytes) when hosts do not
 /// provide an explicit configuration.
@@ -383,11 +383,6 @@ pub fn varint_len_prefix_len(value: usize) -> usize {
     varint_encoded_len(value as u64)
 }
 #[inline]
-pub const fn should_emit_varint_tail(_len: usize) -> bool {
-    let _ = _len;
-    false
-}
-#[inline]
 /// Return the set of Norito header layout flags supported by this build.
 pub const fn supported_header_flags() -> u8 {
     // Mask of known header flag bits allowed in v1 headers.
@@ -422,7 +417,7 @@ fn sanitize_layout_flags(flags: u8) -> u8 {
 /// without changing collection offsets or sequence length headers.
 #[inline]
 pub const fn default_encode_flags() -> u8 {
-    V1_DECODE_FLAGS | header_flags::COMPACT_LEN
+    header_flags::COMPACT_LEN
 }
 #[derive(Clone)]
 struct PayloadCtxState {
@@ -431,7 +426,6 @@ struct PayloadCtxState {
     schema: Option<[u8; 16]>,
     max_access: usize,
     flags: u8,
-    flags_hint: u8,
     flags_active: bool,
 }
 // Decode context managed per-thread; set based on header flags.
@@ -440,9 +434,6 @@ thread_local! {
 }
 thread_local! {
     static DECODE_FLAGS_ACTIVE: Cell<bool> = const { Cell::new(false) };
-}
-thread_local! {
-    static DECODE_FLAGS_HINT: Cell<u8> = const { Cell::new(0) };
 }
 thread_local! {
     static ENCODE_CONTEXT_ACTIVE: Cell<bool> = const { Cell::new(false) };
@@ -455,9 +446,6 @@ thread_local! {
 }
 thread_local! {
     static ENCODE_COMPACT_LEN_USED: Cell<bool> = const { Cell::new(false) };
-}
-thread_local! {
-    static LAST_HEADER_FLAGS: Cell<Option<u8>> = const { Cell::new(None) };
 }
 thread_local! {
     static FORCE_SEQUENTIAL: Cell<bool> = const { Cell::new(false) };
@@ -544,18 +532,6 @@ impl Drop for DecodeLimitsGuard {
     fn drop(&mut self) {
         DECODE_BUDGET_LAYERS.with(|slot| slot.borrow_mut().truncate(self.previous_layer_count));
         DECODE_NESTING_DEPTH.with(|slot| slot.set(self.previous_depth));
-    }
-}
-#[cfg(feature = "parallel-decode")]
-pub(crate) fn active_decode_budget_context() -> Option<DecodeBudgetContext> {
-    let layers = DECODE_BUDGET_LAYERS.with(|slot| slot.borrow().clone());
-    if layers.is_empty() {
-        None
-    } else {
-        Some(DecodeBudgetContext {
-            layers,
-            depth: DECODE_NESTING_DEPTH.with(Cell::get),
-        })
     }
 }
 /// Return whether the current thread is inside at least one decode-limit scope.
@@ -833,13 +809,6 @@ pub(crate) fn field_bitset_used() -> bool {
 pub(crate) fn compact_len_used() -> bool {
     ENCODE_COMPACT_LEN_USED.with(|flag| flag.get())
 }
-pub(crate) fn record_last_header_flags(flags: u8) {
-    let sanitized = flags & supported_header_flags();
-    LAST_HEADER_FLAGS.with(|cell| cell.set(Some(sanitized)));
-}
-pub(crate) fn take_last_header_flags() -> Option<u8> {
-    LAST_HEADER_FLAGS.with(|cell| cell.replace(None))
-}
 #[inline]
 pub(crate) fn finalized_encode_flags(
     base_flags: u8,
@@ -911,43 +880,31 @@ pub fn payload_root_span() -> Option<(usize, usize)> {
     DECODE_ROOT_SPAN.with(|slot| *slot.borrow())
 }
 // Per-thread payload context (base pointer, length, and optional schema hash).
-fn set_payload_ctx_state(
-    bytes: &[u8],
-    schema: Option<[u8; 16]>,
-    flags: Option<u8>,
-    hint: Option<u8>,
-) {
-    set_payload_ctx_state_with_len(bytes, bytes.len(), schema, flags, hint);
+fn set_payload_ctx_state(bytes: &[u8], schema: Option<[u8; 16]>, flags: Option<u8>) {
+    set_payload_ctx_state_with_len(bytes, bytes.len(), schema, flags);
 }
 fn set_payload_ctx_state_with_len(
     bytes: &[u8],
     len: usize,
     schema: Option<[u8; 16]>,
     flags: Option<u8>,
-    hint: Option<u8>,
 ) {
     let len = len.min(bytes.len());
     DECODE_PAYLOAD_CTX.with(|c| {
         let flags_value = flags.unwrap_or(0);
-        let hint_value = hint.unwrap_or(flags_value);
         *c.borrow_mut() = Some(PayloadCtxState {
             base: bytes.as_ptr() as usize,
             len,
             schema,
             max_access: 0,
             flags: flags_value,
-            flags_hint: hint_value,
-            flags_active: flags.is_some() || hint.is_some(),
+            flags_active: flags.is_some(),
         });
     });
 }
 /// Set the current payload context for slice-based decoders.
 pub fn set_payload_ctx(bytes: &[u8]) {
-    set_payload_ctx_state(bytes, None, None, None);
-}
-/// Set the payload context and record negotiated decode flags.
-pub fn set_payload_ctx_with_flags(bytes: &[u8], flags: u8) {
-    set_payload_ctx_state(bytes, None, Some(flags), Some(flags));
+    set_payload_ctx_state(bytes, None, None);
 }
 /// Clear the payload context.
 pub fn clear_payload_ctx() {
@@ -956,10 +913,10 @@ pub fn clear_payload_ctx() {
 pub fn payload_ctx() -> Option<(usize, usize)> {
     payload_ctx_state().map(|state| (state.base, state.len))
 }
-fn payload_ctx_flags() -> Option<(u8, u8)> {
+fn payload_ctx_flags() -> Option<u8> {
     payload_ctx_state().and_then(|state| {
         if state.flags_active {
-            Some((state.flags, state.flags_hint))
+            Some(state.flags)
         } else {
             None
         }
@@ -970,11 +927,8 @@ fn enter_field_codec_flags() -> Option<DecodeFlagsGuard> {
     if decode_flags_active() {
         return None;
     }
-    let (flags, hint) = payload_ctx_flags().unwrap_or_else(|| {
-        let flags = default_encode_flags();
-        (flags, flags)
-    });
-    Some(DecodeFlagsGuard::enter_with_hint(flags, hint))
+    let flags = payload_ctx_flags().unwrap_or_else(default_encode_flags);
+    Some(DecodeFlagsGuard::enter(flags))
 }
 
 fn payload_ctx_state() -> Option<PayloadCtxState> {
@@ -988,7 +942,6 @@ fn payload_ctx_state_mut<R>(f: impl FnOnce(&mut PayloadCtxState) -> R) -> Option
 }
 struct DecodeStateSnapshot {
     flags: u8,
-    flags_hint: u8,
     flags_active: bool,
     field_boundary: FieldDecodeBoundary,
     payload_ctx: Option<PayloadCtxState>,
@@ -998,7 +951,6 @@ impl DecodeStateSnapshot {
     fn capture() -> Self {
         Self {
             flags: get_decode_flags(),
-            flags_hint: decode_flags_hint(),
             flags_active: decode_flags_active(),
             field_boundary: FIELD_DECODE_BOUNDARY.with(Cell::get),
             payload_ctx: payload_ctx_state(),
@@ -1007,7 +959,6 @@ impl DecodeStateSnapshot {
     }
     fn restore(self) {
         set_decode_flags_raw(self.flags);
-        set_decode_flags_hint(self.flags_hint);
         set_decode_flags_active(self.flags_active);
         FIELD_DECODE_BOUNDARY.with(|slot| slot.set(self.field_boundary));
         DECODE_PAYLOAD_CTX.with(|slot| *slot.borrow_mut() = self.payload_ctx);
@@ -1069,8 +1020,8 @@ fn record_slice_access(bytes: &[u8], len: usize) {
 /// context.
 ///
 /// This is intended for custom `NoritoDeserialize` implementations that can validate full
-/// consumption without re-encoding, allowing `decode_field_canonical` to skip canonical-length
-/// recomputation.
+/// consumption without re-encoding, allowing `decode_field_canonical` to skip its canonical byte
+/// comparison fallback.
 pub fn note_payload_access(bytes: &[u8], len: usize) {
     record_slice_access(bytes, len);
 }
@@ -1150,13 +1101,6 @@ fn btreemap_entry_slices<'a>(
     record_slice_access(key_slice, key_slice.len());
     record_slice_access(value_slice, value_slice.len());
     Ok((key_slice, value_slice))
-}
-pub fn set_payload_ctx_with_schema(bytes: &[u8], schema: [u8; 16]) {
-    set_payload_ctx_state(bytes, Some(schema), None, None);
-}
-/// Set payload context with both schema and negotiated decode flags.
-pub fn set_payload_ctx_with_schema_and_flags(bytes: &[u8], schema: [u8; 16], flags: u8) {
-    set_payload_ctx_state(bytes, Some(schema), Some(flags), Some(flags));
 }
 #[inline]
 #[allow(dead_code)]
@@ -1259,170 +1203,52 @@ pub struct PayloadCtxGuard {
     flags_guard: Option<DecodeFlagsGuard>,
 }
 impl PayloadCtxGuard {
+    fn install(
+        bytes: &[u8],
+        logical_len: usize,
+        schema: Option<[u8; 16]>,
+        flags: Option<u8>,
+    ) -> Self {
+        let prev = payload_ctx_state();
+        set_payload_ctx_state_with_len(bytes, logical_len, schema, flags);
+        let flags_guard = flags
+            .filter(|flags| !decode_flags_active() || get_decode_flags() != *flags)
+            .map(DecodeFlagsGuard::enter);
+        PayloadCtxGuard { prev, flags_guard }
+    }
+
+    fn inherited_flags(prev: Option<&PayloadCtxState>) -> Option<u8> {
+        prev.and_then(|state| state.flags_active.then_some(state.flags))
+            .or_else(current_decode_flags_effective)
+    }
+
     pub fn enter(bytes: &[u8]) -> Self {
         let prev = payload_ctx_state();
         let schema = prev.as_ref().and_then(|state| state.schema);
-        let (flags_opt, hint_opt) = if let Some(ref state) = prev {
-            if state.flags_active {
-                (Some(state.flags), Some(state.flags_hint))
-            } else if let Some(effective) = current_decode_flags_effective() {
-                (Some(effective), Some(effective))
-            } else {
-                (None, None)
-            }
-        } else if let Some(effective) = current_decode_flags_effective() {
-            (Some(effective), Some(effective))
-        } else {
-            (None, None)
-        };
-        set_payload_ctx_state(bytes, schema, flags_opt, hint_opt);
-        let flags_guard = if !decode_flags_active() {
-            match (flags_opt, hint_opt) {
-                (Some(flags), Some(hint)) => Some(DecodeFlagsGuard::enter_with_hint(flags, hint)),
-                (Some(flags), None) => Some(DecodeFlagsGuard::enter_with_hint(flags, flags)),
-                (None, Some(hint)) => Some(DecodeFlagsGuard::enter_with_hint(hint, hint)),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        PayloadCtxGuard { prev, flags_guard }
+        let flags = Self::inherited_flags(prev.as_ref());
+        Self::install(bytes, bytes.len(), schema, flags)
     }
     /// Install a payload context with an explicit logical length while preserving
     /// any active schema/flag state from the current decode context.
     pub fn enter_with_len(bytes: &[u8], logical_len: usize) -> Self {
         let prev = payload_ctx_state();
         let schema = prev.as_ref().and_then(|state| state.schema);
-        let (flags_opt, hint_opt) = if let Some(ref state) = prev {
-            if state.flags_active {
-                (Some(state.flags), Some(state.flags_hint))
-            } else if let Some(effective) = current_decode_flags_effective() {
-                (Some(effective), Some(effective))
-            } else {
-                (None, None)
-            }
-        } else if let Some(effective) = current_decode_flags_effective() {
-            (Some(effective), Some(effective))
-        } else {
-            (None, None)
-        };
-        set_payload_ctx_state_with_len(bytes, logical_len, schema, flags_opt, hint_opt);
-        let flags_guard = if !decode_flags_active() {
-            match (flags_opt, hint_opt) {
-                (Some(flags), Some(hint)) => Some(DecodeFlagsGuard::enter_with_hint(flags, hint)),
-                (Some(flags), None) => Some(DecodeFlagsGuard::enter_with_hint(flags, flags)),
-                (None, Some(hint)) => Some(DecodeFlagsGuard::enter_with_hint(hint, hint)),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        PayloadCtxGuard { prev, flags_guard }
+        let flags = Self::inherited_flags(prev.as_ref());
+        Self::install(bytes, logical_len, schema, flags)
     }
     pub fn enter_with_schema(bytes: &[u8], schema: [u8; 16]) -> Self {
-        let prev = payload_ctx_state();
-        set_payload_ctx_with_schema(bytes, schema);
-        PayloadCtxGuard {
-            prev,
-            flags_guard: None,
-        }
+        Self::install(bytes, bytes.len(), Some(schema), None)
     }
     pub fn enter_with_flags(bytes: &[u8], flags: u8) -> Self {
-        let prev = payload_ctx_state();
-        let prev_active = decode_flags_active();
-        let prev_flags = get_decode_flags();
-        let prev_hint = DECODE_FLAGS_HINT.with(|c| c.get());
-        set_payload_ctx_with_flags(bytes, flags);
-        let needs_guard = !prev_active || prev_flags != flags || prev_hint != flags;
-        let flags_guard = if needs_guard {
-            Some(DecodeFlagsGuard::enter_with_hint(flags, flags))
-        } else {
-            None
-        };
-        PayloadCtxGuard { prev, flags_guard }
-    }
-    pub fn enter_with_flags_hint(bytes: &[u8], flags: u8, hint: u8) -> Self {
-        let prev = payload_ctx_state();
-        let prev_active = decode_flags_active();
-        let prev_flags = get_decode_flags();
-        let prev_hint = DECODE_FLAGS_HINT.with(|c| c.get());
-        set_payload_ctx_state(bytes, None, Some(flags), Some(hint));
-        let needs_guard = !prev_active || prev_flags != flags || prev_hint != hint;
-        let flags_guard = if needs_guard {
-            Some(DecodeFlagsGuard::enter_with_hint(flags, hint))
-        } else {
-            None
-        };
-        PayloadCtxGuard { prev, flags_guard }
+        Self::install(bytes, bytes.len(), None, Some(flags))
     }
     pub fn enter_with_schema_and_flags(bytes: &[u8], schema: [u8; 16], flags: u8) -> Self {
-        let prev = payload_ctx_state();
-        let prev_active = decode_flags_active();
-        let prev_flags = get_decode_flags();
-        let prev_hint = DECODE_FLAGS_HINT.with(|c| c.get());
-        set_payload_ctx_with_schema_and_flags(bytes, schema, flags);
-        let needs_guard = !prev_active || prev_flags != flags || prev_hint != flags;
-        let flags_guard = if needs_guard {
-            Some(DecodeFlagsGuard::enter_with_hint(flags, flags))
-        } else {
-            None
-        };
-        PayloadCtxGuard { prev, flags_guard }
-    }
-    pub fn enter_with_schema_flags_hint(
-        bytes: &[u8],
-        schema: [u8; 16],
-        flags: u8,
-        hint: u8,
-    ) -> Self {
-        let prev = payload_ctx_state();
-        let prev_active = decode_flags_active();
-        let prev_flags = get_decode_flags();
-        let prev_hint = DECODE_FLAGS_HINT.with(|c| c.get());
-        set_payload_ctx_state(bytes, Some(schema), Some(flags), Some(hint));
-        let needs_guard = !prev_active || prev_flags != flags || prev_hint != hint;
-        let flags_guard = if needs_guard {
-            Some(DecodeFlagsGuard::enter_with_hint(flags, hint))
-        } else {
-            None
-        };
-        PayloadCtxGuard { prev, flags_guard }
+        Self::install(bytes, bytes.len(), Some(schema), Some(flags))
     }
     /// Install a payload context using `logical_len` bytes from `bytes` while tracking
     /// decode flags.
     pub fn enter_with_flags_len(bytes: &[u8], logical_len: usize, flags: u8) -> Self {
-        let prev = payload_ctx_state();
-        let prev_active = decode_flags_active();
-        let prev_flags = get_decode_flags();
-        let prev_hint = DECODE_FLAGS_HINT.with(|c| c.get());
-        set_payload_ctx_state_with_len(bytes, logical_len, None, Some(flags), Some(flags));
-        let needs_guard = !prev_active || prev_flags != flags || prev_hint != flags;
-        let flags_guard = if needs_guard {
-            Some(DecodeFlagsGuard::enter_with_hint(flags, flags))
-        } else {
-            None
-        };
-        PayloadCtxGuard { prev, flags_guard }
-    }
-    /// Install a payload context using `logical_len` bytes and explicit flags + hint.
-    pub fn enter_with_flags_hint_len(
-        bytes: &[u8],
-        logical_len: usize,
-        flags: u8,
-        hint: u8,
-    ) -> Self {
-        let prev = payload_ctx_state();
-        let prev_active = decode_flags_active();
-        let prev_flags = get_decode_flags();
-        let prev_hint = DECODE_FLAGS_HINT.with(|c| c.get());
-        set_payload_ctx_state_with_len(bytes, logical_len, None, Some(flags), Some(hint));
-        let needs_guard = !prev_active || prev_flags != flags || prev_hint != hint;
-        let flags_guard = if needs_guard {
-            Some(DecodeFlagsGuard::enter_with_hint(flags, hint))
-        } else {
-            None
-        };
-        PayloadCtxGuard { prev, flags_guard }
+        Self::install(bytes, logical_len, None, Some(flags))
     }
 }
 impl Drop for PayloadCtxGuard {
@@ -1469,7 +1295,6 @@ fn set_decode_flags_active(active: bool) {
 pub fn set_decode_flags(flags: u8) {
     set_decode_flags_raw(flags);
     set_decode_flags_active(true);
-    set_decode_flags_hint(flags);
 }
 /// Get decode flags for the current thread.
 pub fn get_decode_flags() -> u8 {
@@ -1478,40 +1303,23 @@ pub fn get_decode_flags() -> u8 {
 pub(crate) fn decode_flags_active() -> bool {
     DECODE_FLAGS_ACTIVE.with(|c| c.get())
 }
-fn set_decode_flags_hint(flags: u8) {
-    DECODE_FLAGS_HINT.with(|c| c.set(sanitize_layout_flags(flags)));
-}
-// Effective flags for encode/decode: if none were set explicitly for the
-// current thread, fall back to compile-time defaults so that bare encoders
-// produce compact layouts when the crate is compiled with `compact-len`.
-// Note: removed — encoding uses explicit defaults via Encode guard; decoders
-// rely on flags set by header or caller.
 /// RAII guard to restore previous decode flags.
 pub struct DecodeFlagsGuard {
     prev_flags: u8,
-    prev_hint: u8,
     prev_active: bool,
 }
 impl DecodeFlagsGuard {
     pub fn enter(flags: u8) -> Self {
-        Self::enter_with_hint(flags, flags)
-    }
-    pub fn enter_with_hint(flags: u8, hint: u8) -> Self {
         let prev_flags = get_decode_flags();
-        let prev_hint = DECODE_FLAGS_HINT.with(|c| c.get());
         let prev_active = decode_flags_active();
         #[cfg(debug_assertions)]
         if crate::debug_trace_enabled() {
-            eprintln!("DecodeFlagsGuard::enter_with_hint flags=0x{flags:02x} hint=0x{hint:02x}");
+            eprintln!("DecodeFlagsGuard::enter flags=0x{flags:02x}");
         }
-        DECODE_FLAGS_HINT.with(|c| {
-            c.set(hint);
-        });
         set_decode_flags_raw(flags);
         set_decode_flags_active(true);
         Self {
             prev_flags,
-            prev_hint,
             prev_active,
         }
     }
@@ -1520,7 +1328,6 @@ impl Drop for DecodeFlagsGuard {
     fn drop(&mut self) {
         set_decode_flags_raw(self.prev_flags);
         set_decode_flags_active(self.prev_active);
-        set_decode_flags_hint(self.prev_hint);
     }
 }
 /// Convenience: reset both decode flags and payload context.
@@ -1532,22 +1339,14 @@ pub fn reset_decode_state() {
     set_decode_flags_raw(0);
     set_decode_flags_active(false);
     clear_payload_ctx();
-    set_decode_flags_hint(0);
 }
-#[inline]
-fn decode_flags_hint() -> u8 {
-    DECODE_FLAGS_HINT.with(|c| c.get())
-}
-pub(crate) fn prepare_header_decode(flags: u8, hint: u8, require_match: bool) -> Result<(), Error> {
+pub(crate) fn prepare_header_decode(flags: u8, require_match: bool) -> Result<(), Error> {
     if decode_flags_active() {
         let active_flags = get_decode_flags();
-        let active_hint = decode_flags_hint();
         if require_match && active_flags != flags {
             return Err(Error::DecodeFlagsMismatch {
                 header_flags: flags,
-                header_hint: hint,
                 active_flags,
-                active_hint,
             });
         }
         clear_payload_ctx();
@@ -1556,19 +1355,11 @@ pub(crate) fn prepare_header_decode(flags: u8, hint: u8, require_match: bool) ->
     reset_decode_state();
     Ok(())
 }
-#[inline]
-fn combine_flags(flags: u8, _hint: u8) -> u8 {
-    flags
-}
 fn current_decode_flags_effective() -> Option<u8> {
     if decode_flags_active() {
-        let flags = get_decode_flags();
-        let hint = DECODE_FLAGS_HINT.with(|c| c.get());
-        Some(combine_flags(flags, hint))
-    } else if let Some((ctx_flags, ctx_hint)) = payload_ctx_flags() {
-        Some(combine_flags(ctx_flags, ctx_hint))
+        Some(get_decode_flags())
     } else {
-        None
+        payload_ctx_flags()
     }
 }
 /// Return the currently effective decode flags, if any.
@@ -1702,6 +1493,12 @@ impl SequenceSpan {
     pub fn len(&self) -> usize {
         self.end.saturating_sub(self.start)
     }
+    /// Return whether this span contains no bytes.
+    #[doc(hidden)]
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 /// Planned element spans and total bytes consumed by a binary sequence.
 #[doc(hidden)]
@@ -1743,10 +1540,6 @@ impl BinarySequenceLayout {
 const SEQUENCE_GPU_MIN_BYTES: usize = 1 << 20;
 #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
 const SEQUENCE_GPU_MIN_ELEMENTS: usize = 4096;
-#[cfg(feature = "parallel-decode")]
-const PARALLEL_DECODE_MIN_BYTES: usize = 256 * 1024;
-#[cfg(feature = "parallel-decode")]
-const PARALLEL_DECODE_MIN_ELEMENTS: usize = 4096;
 /// Plan element byte spans for a Norito binary sequence without materializing values.
 ///
 /// The input starts at the sequence count header. Returned spans are byte offsets into the same
@@ -1780,64 +1573,6 @@ fn plan_binary_sequence_with_count(
     let plan = plan_binary_sequence_scalar_with_count(bytes, flags, layout, count)?;
     note_payload_access(bytes, plan.used);
     Ok(plan)
-}
-/// Decode a pre-planned sequence in parallel at typed call sites that can prove `T: Send`.
-///
-/// Values preserve the original span order. If any element fails, this returns
-/// the first error in original sequence order after in-flight work finishes.
-#[cfg(feature = "parallel-decode")]
-#[doc(hidden)]
-pub fn decode_planned_sequence_parallel<T>(
-    bytes: &[u8],
-    flags: u8,
-    plan: &SequencePlan,
-) -> Result<Vec<T>, Error>
-where
-    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize + Send,
-{
-    use rayon::prelude::*;
-    validate_header_flags(flags)?;
-    check_decode_sequence_length(
-        u64::try_from(plan.spans.len()).map_err(|_| Error::LengthMismatch)?,
-    )?;
-    let staging_bytes = plan
-        .spans
-        .len()
-        .checked_mul(core::mem::size_of::<Result<T, Error>>())
-        .ok_or(Error::LengthMismatch)?;
-    reserve_decode_allocation(staging_bytes)?;
-    let inherited_budget = active_decode_budget_context();
-    let decoded: Vec<Result<T, Error>> = plan
-        .spans
-        .par_iter()
-        .map(|span| {
-            // Rayon workers have independent thread-local state. Propagate the
-            // caller's trust boundary so nested sequences decoded on a worker
-            // cannot escape the root decode scope.
-            let _limits = inherited_budget
-                .as_ref()
-                .map(DecodeLimitsGuard::enter_context);
-            let element_slice = span.get(bytes)?;
-            let _guard = DecodeFlagsGuard::enter_with_hint(flags, flags);
-            let (value, used) = decode_field_canonical::<T>(element_slice)?;
-            if used != span.len() {
-                return Err(Error::LengthMismatch);
-            }
-            Ok(value)
-        })
-        .collect();
-    let mut out = try_decode_vec_with_capacity(decoded.len())?;
-    for value in decoded {
-        out.push(value?);
-    }
-    Ok(out)
-}
-#[cfg(feature = "parallel-decode")]
-#[inline]
-fn should_decode_sequence_parallel(plan: &SequencePlan) -> bool {
-    !sequential_override_active()
-        && plan.used >= PARALLEL_DECODE_MIN_BYTES
-        && plan.spans.len() >= PARALLEL_DECODE_MIN_ELEMENTS
 }
 #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
 fn plan_binary_sequence_scalar(
@@ -2291,7 +2026,7 @@ mod sequence_gpu {
         true
     }
     fn make_unpacked_case(flags: u8) -> Vec<u8> {
-        let _guard = super::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let _guard = super::DecodeFlagsGuard::enter(flags);
         let mut out = Vec::new();
         super::write_seq_len(&mut out, 3).expect("write sequence length");
         for payload in [&b"a"[..], &[0x55; 130][..], b"tail"] {
@@ -3015,7 +2750,7 @@ pub unsafe fn read_seq_len_ptr(ptr: *const u8) -> Result<(usize, usize), Error> 
 pub unsafe fn read_len_dyn(ptr: *const u8) -> Result<(usize, usize), Error> {
     read_len_dyn_at_ptr(ptr)
 }
-/// Safe decode-from-slice trait used by the strict-safe path.
+/// Safe decode-from-slice trait used by bounded decoders.
 pub trait DecodeFromSlice<'a>: Sized {
     /// Decode from the front of `bytes`, returning the value and bytes consumed.
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error>;
@@ -3212,27 +2947,12 @@ where
 {
     decode_vec_from_slice_with::<T, _>(bytes, |_, _, _| Ok(None))
 }
-#[cfg(not(feature = "parallel-decode"))]
 impl<'a, T> DecodeFromSlice<'a> for Vec<T>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         decode_vec_from_slice_serial::<T>(bytes)
-    }
-}
-#[cfg(feature = "parallel-decode")]
-impl<'a, T> DecodeFromSlice<'a> for Vec<T>
-where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Send,
-{
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        decode_vec_from_slice_with::<T, _>(bytes, |bytes, flags, plan| {
-            if should_decode_sequence_parallel(plan) {
-                return decode_planned_sequence_parallel::<T>(bytes, flags, plan).map(Some);
-            }
-            Ok(None)
-        })
     }
 }
 fn decode_sequence_elements<'a, T, F>(bytes: &'a [u8], mut on_value: F) -> Result<usize, Error>
@@ -3877,7 +3597,7 @@ where
                 let archive = ArchiveSlice::new(&bytes[start..end], align)?;
                 let slice = archive.as_slice();
                 let payload_guard =
-                    PayloadCtxGuard::enter_with_schema_flags_hint(slice, schema, flags, flags);
+                    PayloadCtxGuard::enter_with_schema_and_flags(slice, schema, flags);
                 let archived_ptr = if slice.is_empty() {
                     empty_archived_ptr::<T>()
                 } else {
@@ -4033,15 +3753,14 @@ pub type DeriveSmallBuf = SmallBuf<{ DERIVE_SMALLBUF_SIZE }>;
 pub const MAGIC: [u8; 4] = *b"NRT0";
 /// Current major version of the format.
 pub const VERSION_MAJOR: u8 = 0;
-/// Fixed v1 minor-version layout hint.
+/// Empty V1 layout-flag set, used by fixtures that intentionally disable all
+/// optional layouts.
 pub const V1_LAYOUT_FLAGS: u8 = 0;
-/// Fixed v1 decode hint recorded in the header minor version.
-pub const V1_DECODE_FLAGS: u8 = V1_LAYOUT_FLAGS;
 /// Current minor version of the format.
 ///
 /// This stays `0` for v1. Header flags carry all active layout selections for a
 /// payload, including the compact-length default.
-pub const VERSION_MINOR: u8 = V1_DECODE_FLAGS;
+pub const VERSION_MINOR: u8 = 0;
 /// Compression algorithm used for the payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compression {
@@ -4150,15 +3869,8 @@ pub enum Error {
     #[error("missing layout flags")]
     MissingLayoutFlags,
     /// Header layout flags conflict with an active decode-flag guard.
-    #[error(
-        "decode flags mismatch (header={header_flags:#04x}/{header_hint:#04x}, active={active_flags:#04x}/{active_hint:#04x})"
-    )]
-    DecodeFlagsMismatch {
-        header_flags: u8,
-        header_hint: u8,
-        active_flags: u8,
-        active_hint: u8,
-    },
+    #[error("decode flags mismatch (header={header_flags:#04x}, active={active_flags:#04x})")]
+    DecodeFlagsMismatch { header_flags: u8, active_flags: u8 },
     /// The frame is not the one canonical V1 representation accepted by an exact-encoding boundary.
     #[error("non-canonical encoding")]
     NonCanonicalEncoding,
@@ -4209,8 +3921,8 @@ pub enum BoundedEncodeError {
 impl Error {
     /// Return whether this error represents a terminal decode resource boundary.
     ///
-    /// Compatibility decoders may retry layout mismatches, but must never retry
-    /// after a caller-provided resource budget or the allocator rejects work.
+    /// A caller must treat these failures as terminal rather than attempting
+    /// more allocation or structural work after a budget rejected the input.
     #[doc(hidden)]
     #[must_use]
     pub const fn is_decode_resource_limit(&self) -> bool {
@@ -4264,12 +3976,12 @@ impl Error {
         }
     }
     fn supported_compressions() -> &'static [Compression] {
-        #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+        #[cfg(feature = "compression")]
         {
             const SUPPORTED: &[Compression] = &[Compression::None, Compression::Zstd];
             SUPPORTED
         }
-        #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
+        #[cfg(not(feature = "compression"))]
         {
             const SUPPORTED: &[Compression] = &[Compression::None];
             SUPPORTED
@@ -5323,7 +5035,7 @@ impl<'a> NoritoDeserialize<'a> for &'a str {
         std::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)
     }
 }
-// Strict-safe implementations for decoding from slices (no raw pointers)
+// Bounded implementations for decoding from slices (no raw pointers)
 impl<'a> DecodeFromSlice<'a> for String {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, hdr) = read_len_dyn_slice(bytes)?;
@@ -5825,7 +5537,7 @@ pub mod stream {
     };
     use crate::guarded_try_deserialize;
     use crc64fast::Digest;
-    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+    #[cfg(feature = "compression")]
     use std::io::BufReader;
     use std::{
         alloc::{Layout, alloc, dealloc},
@@ -5841,7 +5553,7 @@ pub mod stream {
         R: Read,
     {
         let header = Header::read(&mut reader)?;
-        super::prepare_header_decode(header.flags, header.minor, false)?;
+        super::prepare_header_decode(header.flags, false)?;
         if header.schema != expected_schema {
             return Err(Error::SchemaMismatch);
         }
@@ -5881,7 +5593,7 @@ pub mod stream {
         F: FnMut(Acc, T) -> Acc,
     {
         let header = Header::read(&mut reader)?;
-        super::prepare_header_decode(header.flags, header.minor, false)?;
+        super::prepare_header_decode(header.flags, false)?;
         if header.schema != expected_schema {
             return Err(Error::SchemaMismatch);
         }
@@ -6018,7 +5730,7 @@ pub mod stream {
     }
     pub(super) enum PayloadStream<R: Read> {
         Plain(R),
-        #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+        #[cfg(feature = "compression")]
         Zstd(zstd::Decoder<'static, BufReader<R>>),
     }
     impl<R: Read> PayloadStream<R> {
@@ -6026,11 +5738,11 @@ pub mod stream {
             match compression {
                 Compression::None => Ok(Self::Plain(reader)),
                 Compression::Zstd => {
-                    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+                    #[cfg(feature = "compression")]
                     {
                         Ok(Self::Zstd(zstd::Decoder::new(reader)?))
                     }
-                    #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
+                    #[cfg(not(feature = "compression"))]
                     {
                         let _ = reader;
                         Err(io::Error::other("compression support disabled").into())
@@ -6043,7 +5755,7 @@ pub mod stream {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             match self {
                 PayloadStream::Plain(inner) => inner.read(buf),
-                #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+                #[cfg(feature = "compression")]
                 PayloadStream::Zstd(decoder) => decoder.read(buf),
             }
         }
@@ -6553,7 +6265,7 @@ macro_rules! impl_tuple {
                 // compact lengths when enabled). This keeps nested encodings
                 // like `Vec<u8>` consistent with the decoder's expectations.
                 let __merged = tuple_serialization_flags();
-                let __guard = DecodeFlagsGuard::enter_with_hint(__merged, __merged);
+                let __guard = DecodeFlagsGuard::enter(__merged);
                 // The shared count-first helper emits each field directly;
                 // its compatibility scratch parameter never retains payloads.
                 let mut __buf = DeriveSmallBuf::new();
@@ -6576,7 +6288,7 @@ macro_rules! impl_tuple {
             fn encoded_len_hint(&self) -> Option<usize> {
                 let mut total = 0usize;
                 let flags = tuple_serialization_flags();
-                let _guard = DecodeFlagsGuard::enter_with_hint(flags, flags);
+                let _guard = DecodeFlagsGuard::enter(flags);
                 $(
                     let elem_len = self.$idx
                         .encoded_len_exact()
@@ -6590,7 +6302,7 @@ macro_rules! impl_tuple {
             fn encoded_len_exact(&self) -> Option<usize> {
                 let mut total = 0usize;
                 let flags = tuple_serialization_flags();
-                let _guard = DecodeFlagsGuard::enter_with_hint(flags, flags);
+                let _guard = DecodeFlagsGuard::enter(flags);
                 $(
                     let elem_len = self.$idx.encoded_len_exact()?;
                     total = total
@@ -6750,7 +6462,7 @@ impl ByteSink {
         buf[idx] = v as u8;
         self.write_bytes(&buf[..=idx]);
     }
-    /// Write a compact varint (7-bit) length when `compact-len` is enabled.
+    /// Write a compact varint (7-bit) length when `COMPACT_LEN` is selected.
     /// Align the payload to `align` bytes by writing zero padding.
     #[inline]
     #[allow(dead_code)]
@@ -6785,16 +6497,23 @@ impl Write for ByteSink {
         Ok(())
     }
 }
+const MAX_INITIAL_PAYLOAD_CAPACITY: usize = 1024 * 1024;
+
+fn initial_payload_capacity<T: NoritoSerialize>(value: &T) -> usize {
+    value
+        .encoded_len_exact()
+        .or_else(|| value.encoded_len_hint())
+        .unwrap_or(0)
+        .min(MAX_INITIAL_PAYLOAD_CAPACITY)
+}
+
 pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
     value: &T,
 ) -> Result<(Vec<u8>, u8), Error> {
     let encode_guard = EncodeContextGuard::enter();
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
     validate_header_flags(base_flags)?;
-    let estimated = value
-        .encoded_len_exact()
-        .or_else(|| value.encoded_len_hint())
-        .unwrap_or(0);
+    let estimated = initial_payload_capacity(value);
     let flags = base_flags;
     let mut sink = ByteSink::with_headroom(estimated, 0);
     {
@@ -6813,7 +6532,6 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
         field_bitset_used,
         compact_len_used,
     );
-    record_last_header_flags(final_flags);
     Ok((payload, final_flags))
 }
 /// Return the exact canonical payload length without allocating an output buffer.
@@ -6941,7 +6659,6 @@ pub fn to_bytes_bounded<T: NoritoSerialize>(
         let mut header_slice = &mut out[..Header::SIZE];
         header.write(&mut header_slice)?;
     }
-    record_last_header_flags(final_flags);
     Ok(out)
 }
 /// Serialize an object to a new byte vector.
@@ -6950,15 +6667,8 @@ pub fn to_bytes_bounded<T: NoritoSerialize>(
 /// by the archived payload. The header is populated after serialization so that the checksum and
 /// length fields reflect the final payload.
 pub fn to_bytes<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
-    let (payload, flags) = encode_bare_with_flags(value)?;
-    let len = payload.len() as u64;
-    let checksum = crc64(&payload);
-    let mut header = Header::new(T::schema_hash(), len, checksum);
-    header.flags |= flags;
-    let padding = payload_alignment_padding_for::<T>();
-    let mut out = Vec::with_capacity(Header::SIZE + padding + payload.len());
-    header.write(&mut out)?;
-    append_payload_with_padding::<T>(&mut out, &payload);
+    let mut out = Vec::new();
+    to_bytes_in(value, &mut out)?;
     Ok(out)
 }
 /// Serialize an object into the provided byte buffer.
@@ -6969,10 +6679,7 @@ pub fn to_bytes_in<T: NoritoSerialize>(value: &T, out: &mut Vec<u8>) -> Result<(
     let encode_guard = EncodeContextGuard::enter();
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
     validate_header_flags(base_flags)?;
-    let estimated = value
-        .encoded_len_exact()
-        .or_else(|| value.encoded_len_hint())
-        .unwrap_or(0);
+    let estimated = initial_payload_capacity(value);
     let flags = base_flags;
     let padding = payload_alignment_padding_for::<T>();
     let headroom = Header::SIZE + padding;
@@ -6994,7 +6701,6 @@ pub fn to_bytes_in<T: NoritoSerialize>(value: &T, out: &mut Vec<u8>) -> Result<(
         field_bitset_used,
         compact_len_used,
     );
-    record_last_header_flags(final_flags);
     let mut header = Header::new(T::schema_hash(), payload_len, checksum);
     header.flags |= final_flags;
     {
@@ -7052,7 +6758,6 @@ where
         field_bitset_used,
         compact_len_used,
     );
-    record_last_header_flags(final_flags);
     let end = payload_writer.inner.stream_position()?;
     let mut header = Header::new(T::schema_hash(), payload_len, checksum);
     header.flags |= final_flags;
@@ -7184,7 +6889,6 @@ where
     if second_flags != first_flags {
         return Err(Error::NonCanonicalEncoding);
     }
-    record_last_header_flags(first_flags);
     Ok(())
 }
 #[cfg(test)]
@@ -7303,18 +7007,6 @@ where
     writer.write_all(payload)?;
     Ok(())
 }
-#[cfg(test)]
-pub(crate) fn frame_bare_with_default_header<T: NoritoSerialize>(
-    payload: &[u8],
-) -> Result<Vec<u8>, Error> {
-    if let Some(flags) = take_last_header_flags() {
-        return frame_bare_with_header_flags::<T>(payload, flags);
-    }
-    if let Some(flags) = current_decode_flags_effective() {
-        return frame_bare_with_header_flags::<T>(payload, flags);
-    }
-    Err(Error::MissingLayoutFlags)
-}
 /// Convenience: frame the currently-decoding bare payload (from payload context) with a Norito
 /// header using the active decode flags so it can be decoded via `from_bytes`. Returns
 /// `Error::MissingPayloadContext` when no payload context is active and `Error::MissingLayoutFlags`
@@ -7329,7 +7021,7 @@ pub fn frame_current_payload_with_default_header<T: NoritoSerialize>() -> Result
         // SAFETY: payload_ctx provides a valid slice for the active decode buffer
         let bytes = unsafe { core::slice::from_raw_parts(state.base as *const u8, state.len) };
         let header_flags = if state.flags_active {
-            combine_flags(state.flags, state.flags_hint)
+            state.flags
         } else if let Some(flags) = current_decode_flags_effective() {
             flags
         } else {
@@ -7594,24 +7286,16 @@ pub fn to_compressed_bytes<T: NoritoSerialize>(
     let (algorithm, body) = match compression {
         None => (Compression::None, payload),
         Some(cfg) => {
-            #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
+            #[cfg(not(feature = "compression"))]
             {
                 let _ = cfg;
                 return Err(std::io::Error::other("compression support disabled").into());
             }
-            #[cfg(all(
-                feature = "compression",
-                feature = "gpu-compression",
-                not(target_arch = "wasm32")
-            ))]
+            #[cfg(all(feature = "compression", feature = "gpu-compression"))]
             {
                 (Compression::Zstd, gpu_zstd::encode_all(payload, cfg.level)?)
             }
-            #[cfg(all(
-                feature = "compression",
-                not(feature = "gpu-compression"),
-                not(target_arch = "wasm32")
-            ))]
+            #[cfg(all(feature = "compression", not(feature = "gpu-compression")))]
             {
                 (
                     Compression::Zstd,
@@ -7647,7 +7331,7 @@ pub fn to_compressed_bytes<T: NoritoSerialize>(
     out.extend_from_slice(&body);
     Ok(out)
 }
-#[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+#[cfg(feature = "compression")]
 fn validate_zstd_stream(compressed: &[u8]) -> Result<(), Error> {
     if compressed.is_empty() {
         return Err(Error::LengthMismatch);
@@ -7671,7 +7355,7 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
 ) -> Result<ArchivedBox<T>, Error> {
     let mut cursor = std::io::Cursor::new(bytes);
     let header = Header::read(&mut cursor)?;
-    prepare_header_decode(header.flags, header.minor, true)?;
+    prepare_header_decode(header.flags, true)?;
     if header.schema != T::schema_hash() {
         return Err(Error::SchemaMismatch);
     }
@@ -7684,21 +7368,13 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
             trimmed.to_vec()
         }
         Compression::Zstd => {
-            #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+            #[cfg(feature = "compression")]
             validate_zstd_stream(compressed)?;
-            #[cfg(all(
-                feature = "compression",
-                feature = "gpu-compression",
-                not(target_arch = "wasm32")
-            ))]
+            #[cfg(all(feature = "compression", feature = "gpu-compression"))]
             {
                 gpu_zstd::decode_all(compressed, header.length)?
             }
-            #[cfg(all(
-                feature = "compression",
-                not(feature = "gpu-compression"),
-                not(target_arch = "wasm32")
-            ))]
+            #[cfg(all(feature = "compression", not(feature = "gpu-compression")))]
             {
                 let decoder = zstd::Decoder::new(compressed)?;
                 // Bound output to the declared payload length (+1 to detect overflow).
@@ -7707,7 +7383,7 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
                 decoder.take(max_len as u64).read_to_end(&mut out)?;
                 out
             }
-            #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
+            #[cfg(not(feature = "compression"))]
             {
                 return Err(std::io::Error::other("compression support disabled").into());
             }
@@ -7721,12 +7397,7 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
     }
     let archived = ArchivedBox::from_payload(payload);
     // Provide payload ctx so pointer-based decoders can read lengths/offsets.
-    set_payload_ctx_state(
-        archived.bytes(),
-        Some(header.schema),
-        Some(header.flags),
-        Some(header.minor),
-    );
+    set_payload_ctx_state(archived.bytes(), Some(header.schema), Some(header.flags));
     Ok(archived)
 }
 /// Obtain a reference to an archived value from bytes.
@@ -7738,7 +7409,7 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
 pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a Archived<T>, Error> {
     let mut cursor = std::io::Cursor::new(bytes);
     let header = Header::read(&mut cursor)?;
-    prepare_header_decode(header.flags, header.minor, true)?;
+    prepare_header_decode(header.flags, true)?;
     if header.compression != Compression::None {
         return Err(Error::unsupported_compression_with(
             header.compression as u8,
@@ -7761,12 +7432,7 @@ pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a A
         return Err(Error::misaligned(align, payload.as_ptr()));
     }
     // Provide payload ctx for any subsequent decoders that rely on it.
-    set_payload_ctx_state(
-        payload,
-        Some(header.schema),
-        Some(header.flags),
-        Some(header.minor),
-    );
+    set_payload_ctx_state(payload, Some(header.schema), Some(header.flags));
     let ptr = if payload.is_empty() {
         empty_archived_ptr::<T>()
     } else {
@@ -7787,7 +7453,6 @@ pub struct ArchiveView<'a> {
     bytes: &'a [u8],
     padding_len: usize,
     flags: u8,
-    flags_hint: u8,
     schema: [u8; 16],
 }
 impl<'a> ArchiveView<'a> {
@@ -7799,10 +7464,6 @@ impl<'a> ArchiveView<'a> {
     pub fn flags(&self) -> u8 {
         self.flags
     }
-    /// Expose header minor flags (hint).
-    pub fn flags_hint(&self) -> u8 {
-        self.flags_hint
-    }
     /// Expose the schema hash stored in the header.
     pub fn schema(&self) -> [u8; 16] {
         self.schema
@@ -7811,12 +7472,8 @@ impl<'a> ArchiveView<'a> {
     where
         F: FnOnce(&'a [u8]) -> Result<(T, usize), Error>,
     {
-        let _ctx = PayloadCtxGuard::enter_with_schema_flags_hint(
-            self.bytes,
-            self.schema,
-            self.flags,
-            self.flags_hint,
-        );
+        let _ctx =
+            PayloadCtxGuard::enter_with_schema_and_flags(self.bytes, self.schema, self.flags);
         let (value, used) = decode(self.bytes)?;
         validate_decode_consumption(self.bytes, used)?;
         Ok(value)
@@ -7824,7 +7481,7 @@ impl<'a> ArchiveView<'a> {
     fn decode_inner<T: DecodeFromSlice<'a>>(&self) -> Result<T, Error> {
         self.decode_with(T::decode_from_slice)
     }
-    /// Decode a value from the payload using the strict-safe slice-based path,
+    /// Decode a value from the payload using the bounded slice-based path,
     /// enforcing the header schema hash and payload-derived resource limits.
     pub fn decode<T>(&self) -> Result<T, Error>
     where
@@ -7914,7 +7571,6 @@ pub fn from_bytes_view<'a>(bytes: &'a [u8]) -> Result<ArchiveView<'a>, Error> {
         bytes: payload,
         padding_len,
         flags: header.flags,
-        flags_hint: header.minor,
         schema: header.schema,
     })
 }
@@ -7942,35 +7598,14 @@ where
     }
     let payload_src = view.as_bytes();
     let flags = view.flags;
-    let flags_hint = view.flags_hint;
-    let align = archived_payload_align::<T>();
-    let header_len = archived_payload_size::<T>();
-    let ptr_us = payload_src.as_ptr() as usize;
-    let needs_realign = align > 1 && !ptr_us.is_multiple_of(align);
-    let needs_slice = needs_realign || (header_len > 0 && payload_src.len() < header_len);
-    if needs_slice {
-        return crate::guarded_try_deserialize(|| {
-            let _guard = PayloadCtxGuard::enter_with_flags_hint(payload_src, flags, flags_hint);
-            let (value, used) = <T as DecodeFromSlice>::decode_from_slice(payload_src)?;
-            validate_decode_consumption(payload_src, used)?;
-            Ok(value)
-        });
-    }
-    let archived_ptr: *const Archived<T> = if header_len == 0 {
-        empty_archived_ptr::<T>()
-    } else {
-        payload_src.as_ptr() as *const Archived<T>
-    };
     crate::guarded_try_deserialize(|| {
-        let _guard = PayloadCtxGuard::enter_with_flags_hint(payload_src, flags, flags_hint);
-        let archived = unsafe { &*archived_ptr };
-        let value = T::try_deserialize(archived)?;
-        let used = header_len.max(payload_ctx_max_access().unwrap_or(0));
+        let _guard = PayloadCtxGuard::enter_with_flags(payload_src, flags);
+        let (value, used) = <T as DecodeFromSlice>::decode_from_slice(payload_src)?;
         validate_decode_consumption(payload_src, used)?;
         Ok(value)
     })
 }
-/// Strict-safe slice decode with an explicit resource budget.
+/// Bounded slice decode with an explicit resource budget.
 ///
 /// This enters the private decoder directly, allowing a caller to select a larger, still-finite
 /// budget without inheriting the payload-derived default. Nested calls cannot relax a limit already
@@ -8017,7 +7652,7 @@ trait ErasedFieldSlot {
     fn dangling_archived(&self) -> *const u8;
     fn type_name(&self) -> &'static str;
     unsafe fn try_decode(&mut self, archived: *const u8) -> Result<(), Error>;
-    fn canonical_len(&self) -> Result<usize, Error>;
+    fn canonical_match(&self, expected: &[u8], require_complete: bool) -> Result<usize, Error>;
 }
 struct TypedFieldSlot<T> {
     value: Option<T>,
@@ -8052,9 +7687,18 @@ where
         self.value = Some(value);
         Ok(())
     }
-    fn canonical_len(&self) -> Result<usize, Error> {
+    fn canonical_match(&self, expected: &[u8], require_complete: bool) -> Result<usize, Error> {
         let value = self.value.as_ref().ok_or(Error::LengthMismatch)?;
-        recompute_canonical_len(value)
+        let mut exact = ExactSliceWriter::new(expected);
+        let encode_result = serialize_to_writer(value, &mut exact);
+        if exact.mismatched() {
+            return Err(Error::LengthMismatch);
+        }
+        encode_result?;
+        if require_complete && !exact.is_complete() {
+            return Err(Error::LengthMismatch);
+        }
+        Ok(exact.matched_len())
     }
 }
 fn invoke_erased_field_decoder(
@@ -8068,9 +7712,10 @@ fn invoke_erased_field_decoder(
 fn resolve_erased_field_used(
     boundary: FieldDecodeBoundary,
     slot: &dyn ErasedFieldSlot,
-    payload_len: usize,
+    payload: &[u8],
     used_ctx: Option<usize>,
 ) -> Result<usize, Error> {
+    let payload_len = payload.len();
     match boundary {
         FieldDecodeBoundary::Canonical => match used_ctx {
             Some(used) if used != 0 => {
@@ -8079,42 +7724,25 @@ fn resolve_erased_field_used(
                 } else if used > payload_len {
                     Err(Error::LengthMismatch)
                 } else {
-                    let recomputed = slot.canonical_len()?;
-                    if recomputed == payload_len {
-                        Ok(recomputed)
-                    } else {
-                        Err(Error::LengthMismatch)
-                    }
+                    slot.canonical_match(payload, true)
                 }
             }
-            _ => {
-                let recomputed = slot.canonical_len()?;
-                if recomputed == payload_len {
-                    Ok(recomputed)
-                } else {
-                    Err(Error::LengthMismatch)
-                }
-            }
+            _ => slot.canonical_match(payload, true),
         },
-        FieldDecodeBoundary::Prefix => match used_ctx {
-            Some(used) if used != 0 => {
+        FieldDecodeBoundary::Prefix => {
+            if let Some(used) = used_ctx.filter(|used| *used != 0) {
                 if used > payload_len {
                     return Err(Error::LengthMismatch);
                 }
-                let recomputed = slot.canonical_len()?;
-                if recomputed > payload_len || used > recomputed {
+                let canonical = slot.canonical_match(payload, false)?;
+                if used > canonical {
                     return Err(Error::LengthMismatch);
                 }
-                Ok(recomputed)
+                Ok(canonical)
+            } else {
+                slot.canonical_match(payload, false)
             }
-            _ => {
-                let recomputed = slot.canonical_len()?;
-                if recomputed > payload_len {
-                    return Err(Error::LengthMismatch);
-                }
-                Ok(recomputed)
-            }
-        },
+        }
     }
 }
 #[inline(never)]
@@ -8183,7 +7811,7 @@ fn decode_field_erased(
     invoke_erased_field_decoder(slot, payload.as_ptr())?;
     let used_ctx = payload_ctx_max_access();
     drop(payload_guard);
-    let used = resolve_erased_field_used(boundary, slot, bytes.len(), used_ctx)?;
+    let used = resolve_erased_field_used(boundary, slot, bytes, used_ctx)?;
     // A realigned copy cannot merge its child context into the caller, and
     // scalar decoders may not record an access at all. Record the resolved
     // canonical consumption against the original field in both cases.
@@ -8350,7 +7978,7 @@ pub fn finish_context_fields(ptr: *const u8, offset: usize) -> Result<(), Error>
     Ok(())
 }
 /// Decode a field using its `DecodeFromSlice` implementation, ensuring full
-/// consumption without re-encoding for canonical length checks.
+/// consumption without re-encoding for canonical byte checks.
 ///
 /// This is intended for hot paths where re-serializing is too costly and the
 /// slice-based decoder already guarantees canonical consumption.
@@ -8402,7 +8030,7 @@ where
     decode_field_with_slice_decoder(bytes, true)
 }
 /// Decode a field using its `DecodeFromSlice` implementation, ensuring full
-/// consumption without re-encoding for canonical length checks.
+/// consumption without re-encoding for canonical byte checks.
 ///
 /// This is intended for hot paths where re-serializing is too costly and the
 /// slice-based decoder already guarantees canonical consumption.
@@ -8412,6 +8040,5 @@ where
 {
     decode_field_canonical_slice(bytes)
 }
-include!("core/recompute_canonical_len.rs");
 #[cfg(test)]
 mod tests;

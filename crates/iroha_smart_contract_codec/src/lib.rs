@@ -30,6 +30,7 @@ pub fn encode_with_length_prefix<T: NoritoSerialize>(value: &T) -> Box<[u8]> {
 /// - The caller must not use `ptr` after calling this function.
 pub unsafe fn decode_with_length_prefix_from_raw<T>(ptr: *const u8) -> T
 where
+    T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de> + norito::core::DecodeFromSlice<'de>,
 {
     let len_size_bytes = mem::size_of::<usize>();
@@ -43,6 +44,7 @@ where
 }
 unsafe fn decode_from_raw_in_range<T>(ptr: *const u8, len: usize, range: RangeFrom<usize>) -> T
 where
+    T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de> + norito::core::DecodeFromSlice<'de>,
 {
     let bytes = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr.cast_mut(), len)) };

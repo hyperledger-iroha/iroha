@@ -20413,86 +20413,6 @@ public struct ToriiLaneMerkleCommitmentSnapshot: Decodable, Sendable, Equatable 
 }
 
 
-public struct ToriiProverReport: Decodable, Sendable {
-    public let id: String
-    public let ok: Bool
-    public let error: String?
-    public let content_type: String
-    public let size: UInt64
-    public let created_ms: UInt64
-    public let processed_ms: UInt64
-    public let latency_ms: UInt64?
-    public let zk1_tags: [String]?
-}
-
-public struct ToriiProverReportsFilter: Sendable {
-    public var okOnly: Bool?
-    public var failedOnly: Bool?
-    public var errorsOnly: Bool?
-    public var id: String?
-    public var contentType: String?
-    public var hasTag: String?
-    public var limit: UInt32?
-    public var sinceMs: UInt64?
-    public var beforeMs: UInt64?
-    public var idsOnly: Bool?
-    public var order: String?
-    public var offset: UInt32?
-    public var latest: Bool?
-    public var messagesOnly: Bool?
-
-    public init(
-        okOnly: Bool? = nil,
-        failedOnly: Bool? = nil,
-        errorsOnly: Bool? = nil,
-        id: String? = nil,
-        contentType: String? = nil,
-        hasTag: String? = nil,
-        limit: UInt32? = nil,
-        sinceMs: UInt64? = nil,
-        beforeMs: UInt64? = nil,
-        idsOnly: Bool? = nil,
-        order: String? = nil,
-        offset: UInt32? = nil,
-        latest: Bool? = nil,
-        messagesOnly: Bool? = nil
-    ) {
-        self.okOnly = okOnly
-        self.failedOnly = failedOnly
-        self.errorsOnly = errorsOnly
-        self.id = id
-        self.contentType = contentType
-        self.hasTag = hasTag
-        self.limit = limit
-        self.sinceMs = sinceMs
-        self.beforeMs = beforeMs
-        self.idsOnly = idsOnly
-        self.order = order
-        self.offset = offset
-        self.latest = latest
-        self.messagesOnly = messagesOnly
-    }
-
-    public func queryItems() -> [URLQueryItem] {
-        var items: [URLQueryItem] = []
-        if okOnly == true { items.append(URLQueryItem(name: "ok_only", value: "true")) }
-        if failedOnly == true { items.append(URLQueryItem(name: "failed_only", value: "true")) }
-        if errorsOnly == true { items.append(URLQueryItem(name: "errors_only", value: "true")) }
-        if let id { items.append(URLQueryItem(name: "id", value: id)) }
-        if let contentType { items.append(URLQueryItem(name: "content_type", value: contentType)) }
-        if let hasTag { items.append(URLQueryItem(name: "has_tag", value: hasTag)) }
-        if let limit { items.append(URLQueryItem(name: "limit", value: String(limit))) }
-        if let sinceMs { items.append(URLQueryItem(name: "since_ms", value: String(sinceMs))) }
-        if let beforeMs { items.append(URLQueryItem(name: "before_ms", value: String(beforeMs))) }
-        if idsOnly == true { items.append(URLQueryItem(name: "ids_only", value: "true")) }
-        if let order { items.append(URLQueryItem(name: "order", value: order)) }
-        if let offset { items.append(URLQueryItem(name: "offset", value: String(offset))) }
-        if latest == true { items.append(URLQueryItem(name: "latest", value: "true")) }
-        if messagesOnly == true { items.append(URLQueryItem(name: "messages_only", value: "true")) }
-        return items
-    }
-}
-
 /// A terminal error emitted after a Torii server-sent event stream has started.
 public struct ToriiStreamError: Error, Sendable, Equatable {
     /// Stable machine-readable stream error code.
@@ -23801,41 +23721,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                            queryItems: queryItems,
                                            canonicalAuth: canonicalAuth,
                                            responseType: ToriiGovernanceUnlockStatsResponse.self)
-    }
-
-    public func listProverReports(filter: ToriiProverReportsFilter? = nil) async throws -> [ToriiProverReport] {
-        let request = try makeRequest(path: "/v1/zk/prover/reports", queryItems: filter?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON([ToriiProverReport].self, from: data)
-    }
-
-    public func getProverReport(id: String) async throws -> ToriiProverReport {
-        let normalizedId = try ToriiRequestValidation.normalizedNonEmpty(id, field: "id")
-        let encodedId = encodePathComponent(normalizedId)
-        let request = try makeRequest(path: "/v1/zk/prover/reports/\(encodedId)")
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiProverReport.self, from: data)
-    }
-
-    public func deleteProverReport(id: String) async throws {
-        let normalizedId = try ToriiRequestValidation.normalizedNonEmpty(id, field: "id")
-        let encodedId = encodePathComponent(normalizedId)
-        let request = try makeRequest(path: "/v1/zk/prover/reports/\(encodedId)", method: .delete)
-        let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 204, responseBody: data)
-    }
-
-    public func countProverReports(filter: ToriiProverReportsFilter? = nil) async throws -> UInt64 {
-        let request = try makeRequest(path: "/v1/zk/prover/reports/count", queryItems: filter?.queryItems())
-        let data = try await data(for: request)
-        if let decoded = try? decodeJSON(CountEnvelope.self, from: data) {
-            return decoded.count
-        }
-        if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let count = StrictJSONNumber.uint64(from: object["count"]) {
-            return count
-        }
-        throw ToriiClientError.invalidPayload("Expected \"count\" field in response.")
     }
 
     @discardableResult

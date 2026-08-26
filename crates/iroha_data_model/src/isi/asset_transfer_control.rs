@@ -398,7 +398,7 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn structured_json_availability_decodes_exact_cas_instruction() {
-        use crate::isi::{Instruction as _, InstructionBox};
+        use crate::isi::InstructionBox;
         let account_id = account(0x96);
         let asset_definition_id = asset_definition();
         let payload = format!(
@@ -431,7 +431,7 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn structured_json_holding_limit_decodes_to_native_instruction() {
-        use crate::isi::{Instruction as _, InstructionBox};
+        use crate::isi::InstructionBox;
         let account_id = account(0x95);
         let asset_definition_id = asset_definition();
         let payload = format!(

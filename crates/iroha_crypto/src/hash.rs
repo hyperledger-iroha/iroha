@@ -487,8 +487,8 @@ impl<T: IntoSchema> IntoSchema for HashOf<T> {
         }
     }
 }
-// Provide slice-based decoding for HashOf<T> so it can be used inside
-// packed sequences and option fields with Norito's strict-safe path.
+// Provide slice-based decoding for HashOf<T> so it can be used inside packed
+// sequences and option fields on Norito's bounded decode path.
 impl<'a, T> norito::core::DecodeFromSlice<'a> for HashOf<T> {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (hash, used) = <Hash as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;

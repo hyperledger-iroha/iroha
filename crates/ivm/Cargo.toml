@@ -13,9 +13,7 @@ build = "build.rs"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(feature, values("compact-len"))',
     'cfg(feature, values("iroha_telemetry"))',
-    'cfg(feature, values("packed-struct"))',
     'cfg(feature, values("schema-structural"))',
 ] }
 

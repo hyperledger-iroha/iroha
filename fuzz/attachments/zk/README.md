@@ -42,7 +42,7 @@ iroha zk attachments get --id <ID> --out downloaded.bin
 iroha zk attachments delete --id <ID>
 ```
 
-3) Norito (ZK1) envelope upload and prover reports
+3) Norito (ZK1) envelope upload
 
 The prover classifies Norito uploads by checking for the ZK1 magic prefix (`ZK1\0`). Use `zk1_min.b64` to create a binary payload:
 
@@ -55,16 +55,6 @@ base64 -D zk1_min.b64 > zk1_min.bin
 
 # Upload the minimal ZK1 envelope (4 bytes)
 iroha zk attachments upload --file zk1_min.bin --content-type application/x-norito
-
-# List prover reports (non-consensus)
-iroha zk prover reports list
-
-# Fetch a single report (replace <ID> with attachment id)
-iroha zk prover reports get --id <ID>
-
-# Count reports (server-side filters)
-iroha zk prover reports count
-iroha zk prover reports count --content-type application/x-norito --has-tag PROF
 ```
 
 4) Vote tally helper

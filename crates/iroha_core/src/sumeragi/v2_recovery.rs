@@ -24,12 +24,16 @@ use super::{
         production_durable_predecessor_identity_kernel,
     },
     v2_first_release_recovery::{LifecycleContext, LifecycleDigest},
-    v2_lane_work::durable_lane_completion_matches_finality_during_startup,
+    v2_lane_work::{
+        durable_lane_completion_matches_finality_emergency_fast,
+        durable_lane_completion_matches_finality_during_startup,
+    },
 };
 use crate::{
     kura::{
         CommitManifestBindingState, ExactReplayBoundary, Kura, KuraInstanceIdentity,
-        KuraV2CommitReceipt, V2StartupFinalityVerificationSession, V2StartupReplayStorageBinding,
+        KuraV2CommitReceipt, V2StartupFinalityProjection, V2StartupFinalityVerificationSession,
+        V2StartupReplayStorageBinding,
     },
     state::{
         State, WorldReadOnly, live_consensus_key_pop_for_peer,
@@ -75,6 +79,8 @@ impl PartialEq for V2StartupReplayPlan {
 impl Eq for V2StartupReplayPlan {}
 const V2_STARTUP_REPLAY_BOUNDARY_HASH_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:startup-replay-boundary:v1\0";
+const V2_EMERGENCY_FAST_REPLAY_BOUNDARY_HASH_DOMAIN: &[u8] =
+    b"iroha:sumeragi:v2:emergency-fast-replay-boundary:v1\0";
 fn v2_startup_replay_boundary_hash(boundary: &ExactReplayBoundary) -> Hash {
     let count = boundary.count.to_le_bytes();
     let mut chunks = Vec::with_capacity(boundary.hashes.len().saturating_add(2));
@@ -82,6 +88,19 @@ fn v2_startup_replay_boundary_hash(boundary: &ExactReplayBoundary) -> Hash {
     chunks.push(count.as_slice());
     chunks.extend(boundary.hashes.iter().map(|hash| hash.as_ref().as_slice()));
     Hash::new_from_chunks(&chunks)
+}
+fn v2_emergency_fast_replay_boundary_hash(
+    count: u64,
+    tip_hash: Option<HashOf<BlockHeader>>,
+) -> Hash {
+    let count = count.to_le_bytes();
+    Hash::new_from_chunks(&[
+        V2_EMERGENCY_FAST_REPLAY_BOUNDARY_HASH_DOMAIN,
+        count.as_slice(),
+        tip_hash
+            .as_ref()
+            .map_or(&[][..], |hash| hash.as_ref().as_slice()),
+    ])
 }
 /// Non-forgeable startup authorization for one exact imported snapshot lineage.
 ///
@@ -159,10 +178,17 @@ impl V2StartupReplayPlan {
                     height: u64::try_from(self.durable_height)?,
                     reason: "startup replay plan has no Kura-minted storage identity binding",
                 })?;
-        let boundary = binding.replay_boundary();
-        if usize::try_from(boundary.count)? != self.durable_height
-            || v2_startup_replay_boundary_hash(boundary) != self.durable_boundary_hash
-        {
+        let binding_matches = if let Some(boundary) = binding.strict_replay_boundary() {
+            usize::try_from(boundary.count)? == self.durable_height
+                && v2_startup_replay_boundary_hash(boundary) == self.durable_boundary_hash
+        } else if let Some((count, tip_hash)) = binding.emergency_fast_boundary() {
+            usize::try_from(count)? == self.durable_height
+                && v2_emergency_fast_replay_boundary_hash(count, tip_hash)
+                    == self.durable_boundary_hash
+        } else {
+            false
+        };
+        if !binding_matches {
             return Err(V2StartupReplayError::InvalidReplayMetadata {
                 height: u64::try_from(self.durable_height)?,
                 reason: "startup replay plan disagrees with its Kura-minted storage binding",
@@ -214,6 +240,9 @@ impl V2StartupReplayPlan {
 ///
 /// Returns [`V2StartupReplayError`] for malformed Kura metadata or a non-tip recovery gap.
 pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2StartupReplayError> {
+    if kura.emergency_fast_startup_enabled() {
+        return plan_emergency_fast_v2_startup_replay(kura);
+    }
     let planned = (|| {
         let mut startup_verification = kura.begin_v2_startup_finality_verification()?;
         if startup_verification.is_none() {
@@ -233,6 +262,82 @@ pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2Star
         kura.finish_v2_startup_finality_verification();
     }
     planned
+}
+/// Build a bounded emergency replay plan without scanning historical finality or replay sidecars.
+///
+/// Fast mode trusts the durable canonical journal. A published immutable finality path makes the
+/// tip complete; otherwise only that tip is resumed through normal crash recovery. Blocks needed
+/// to advance an older State are still decoded and hash/lineage checked lazily during replay.
+fn plan_emergency_fast_v2_startup_replay(
+    kura: &Kura,
+) -> Result<V2StartupReplayPlan, V2StartupReplayError> {
+    let storage_binding = kura.emergency_fast_startup_replay_binding()?;
+    let (count, tip_hash) = storage_binding.emergency_fast_boundary().ok_or(
+        V2StartupReplayError::InvalidReplayMetadata {
+            height: 0,
+            reason: "Kura returned a Strict binding for emergency Fast startup",
+        },
+    )?;
+    let durable_height = usize::try_from(count)?;
+    let durable_boundary_hash = v2_emergency_fast_replay_boundary_hash(count, tip_hash);
+    let tip_height = u64::try_from(durable_height)?;
+    let tip_is_complete = tip_height == 0 || emergency_fast_tip_is_complete(kura, tip_height)?;
+    let pending_tip_height = (!tip_is_complete).then_some(tip_height);
+    let complete_prefix_height = if tip_is_complete {
+        durable_height
+    } else {
+        durable_height.saturating_sub(1)
+    };
+    iroha_logger::warn!(
+        durable_height,
+        complete_prefix_height,
+        pending_tip_height = ?pending_tip_height,
+        "Sumeragi emergency Fast startup skipped historical finality, checkpoint, and manifest audits"
+    );
+    Ok(V2StartupReplayPlan {
+        durable_height,
+        durable_boundary_hash,
+        storage_binding: Some(storage_binding),
+        audited_bootstrap_prefix_height: 0,
+        complete_prefix_height,
+        pending_tip_height,
+    })
+}
+fn emergency_fast_tip_is_complete(
+    kura: &Kura,
+    tip_height: u64,
+) -> Result<bool, V2StartupReplayError> {
+    if !kura.emergency_fast_tip_finality_is_published(tip_height)? {
+        return Ok(false);
+    }
+    let Some((artifact, _receipt)) = kura.v2_finality_artifact_with_receipt(tip_height)? else {
+        return Ok(false);
+    };
+    let Some(manifest) = kura.commit_manifest(tip_height)? else {
+        return Ok(false);
+    };
+    match kura.commit_manifest_binding_state(&manifest)? {
+        CommitManifestBindingState::Bound => {}
+        CommitManifestBindingState::Unbound => return Ok(false),
+        CommitManifestBindingState::Mismatched => {
+            return Err(V2StartupReplayError::InvalidReplayMetadata {
+                height: tip_height,
+                reason: "emergency Fast tip checkpoint binds a different commit manifest",
+            });
+        }
+    }
+    if !V2StartupFinalityProjection::from_artifact(&artifact).binds_manifest(&manifest) {
+        return Err(V2StartupReplayError::InvalidReplayMetadata {
+            height: tip_height,
+            reason: "emergency Fast tip manifest differs from finality",
+        });
+    }
+    durable_lane_completion_matches_finality_emergency_fast(kura, &artifact).map_err(|_| {
+        V2StartupReplayError::InvalidReplayMetadata {
+            height: tip_height,
+            reason: "emergency Fast tip lane evidence conflicts with finality",
+        }
+    })
 }
 fn plan_v2_startup_replay_inner(
     kura: &Kura,

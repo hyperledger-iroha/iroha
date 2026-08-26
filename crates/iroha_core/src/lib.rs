@@ -1369,7 +1369,7 @@ mod tests {
                 | ncore::header_flags::FIELD_BITSET,
         ] {
             let (bare, flags) = {
-                let _guard = ncore::DecodeFlagsGuard::enter_with_hint(requested, requested);
+                let _guard = ncore::DecodeFlagsGuard::enter(requested);
                 norito::codec::encode_with_header_flags(&fixture)
             };
             assert_eq!(

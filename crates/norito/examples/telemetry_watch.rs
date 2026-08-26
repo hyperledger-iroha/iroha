@@ -63,7 +63,6 @@ struct CliConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct BucketSelection {
     columnar: bool,
-    codec: bool,
     compression: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,16 +121,16 @@ impl CliConfig {
         }
         if !config.buckets.any_selected() {
             return Err(CliConfigError::Message(String::from(
-                "--buckets must include at least one of columnar, codec, compression",
+                "--buckets must include at least one of columnar or compression",
             )));
         }
         Ok(config)
     }
     fn usage() -> String {
         let bucket_options = if cfg!(feature = "columnar") {
-            "columnar, codec, compression"
+            "columnar, compression"
         } else {
-            "codec, compression"
+            "compression"
         };
         format!(
             "Usage: telemetry_watch [OPTIONS]\n\nOPTIONS:\n  --interval-ms <ms>    Set sampling interval in milliseconds (default 1000)\n  --warmup <count>      Run warmup touches this many times (default 1)\n  --buckets <list>      Comma-separated subset of {{{bucket_options}}}\n  --json-lines          Emit raw JSON lines without labels\n  -h, --help            Show this message\n"
@@ -152,14 +151,12 @@ impl BucketSelection {
     fn default() -> Self {
         Self {
             columnar: cfg!(feature = "columnar"),
-            codec: true,
             compression: true,
         }
     }
     fn none() -> Self {
         Self {
             columnar: false,
-            codec: false,
             compression: false,
         }
     }
@@ -187,15 +184,12 @@ impl BucketSelection {
                         )));
                     }
                 }
-                "codec" => {
-                    selection.codec = true;
-                }
                 "compression" => {
                     selection.compression = true;
                 }
                 other => {
                     return Err(CliConfigError::Message(format!(
-                        "unknown bucket '{other}'; expected columnar, codec, or compression"
+                        "unknown bucket '{other}'; expected columnar or compression"
                     )));
                 }
             }
@@ -203,7 +197,7 @@ impl BucketSelection {
         Ok(selection)
     }
     fn any_selected(&self) -> bool {
-        self.columnar || self.codec || self.compression
+        self.columnar || self.compression
     }
     fn columnar_enabled(&self) -> bool {
         cfg!(feature = "columnar") && self.columnar
@@ -228,9 +222,6 @@ fn touch_buckets(selection: &BucketSelection) {
         let rows: Vec<(u64, &str, bool)> = vec![(1, "warmup", true), (2, "steady", false)];
         let _ = norito::columnar::encode_rows_u64_str_bool_adaptive(&rows);
     }
-    if selection.codec {
-        let _ = norito::codec::encode_adaptive(&vec![1u32, 2, 3]);
-    }
     if selection.compression {
         let _ = norito::core::to_bytes_auto(&vec![0u8; 256]);
     }
@@ -240,9 +231,6 @@ fn filter_buckets(value: &mut norito::json::Value, selection: &BucketSelection) 
     if let Some(obj) = value.as_object_mut() {
         if !selection.columnar_enabled() {
             obj.remove("columnar");
-        }
-        if !selection.codec {
-            obj.remove("codec");
         }
         if !selection.compression {
             obj.remove("compression");
@@ -271,7 +259,6 @@ mod tests {
         let cfg = parse(&["telemetry_watch"]).unwrap();
         assert_eq!(cfg.interval, Duration::from_millis(1000));
         assert_eq!(cfg.warmup_rounds, 1);
-        assert!(cfg.buckets.codec);
         assert!(cfg.buckets.compression);
         assert!(!cfg.json_lines);
     }
@@ -293,15 +280,13 @@ mod tests {
     }
     #[test]
     fn parses_bucket_subset() {
-        let cfg = parse(&["telemetry_watch", "--buckets", "codec"]).unwrap();
-        assert!(cfg.buckets.codec);
-        assert!(!cfg.buckets.compression);
+        let cfg = parse(&["telemetry_watch", "--buckets", "compression"]).unwrap();
+        assert!(cfg.buckets.compression);
         assert!(!cfg.buckets.columnar);
     }
     #[test]
     fn parses_all_alias() {
         let cfg = parse(&["telemetry_watch", "--buckets", "all"]).unwrap();
-        assert!(cfg.buckets.codec);
         assert!(cfg.buckets.compression);
         if cfg!(feature = "columnar") {
             assert!(cfg.buckets.columnar);

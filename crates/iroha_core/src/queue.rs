@@ -19793,7 +19793,6 @@ pub mod tests {
     };
     use iroha_config::{
         base::WithOrigin,
-        kura::InitMode,
         parameters::actual::{Kura as KuraConfig, LaneRoutingMatcher, LaneRoutingRule},
     };
     use iroha_crypto::{

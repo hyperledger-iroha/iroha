@@ -99,3 +99,58 @@ impl<W: Write> Write for ExactLengthWriter<'_, W> {
         self.inner.flush()
     }
 }
+
+/// Writer that compares serialized bytes directly with an expected slice.
+///
+/// Mismatches are sticky while writes report full consumption, allowing the
+/// serializer to finish without allocating a comparison buffer.
+pub(crate) struct ExactSliceWriter<'a> {
+    expected: &'a [u8],
+    offset: usize,
+    mismatched: bool,
+}
+
+impl<'a> ExactSliceWriter<'a> {
+    pub(crate) const fn new(expected: &'a [u8]) -> Self {
+        Self {
+            expected,
+            offset: 0,
+            mismatched: false,
+        }
+    }
+
+    pub(crate) const fn matched_len(&self) -> usize {
+        self.offset
+    }
+
+    pub(crate) const fn mismatched(&self) -> bool {
+        self.mismatched
+    }
+
+    pub(crate) const fn is_complete(&self) -> bool {
+        !self.mismatched && self.offset == self.expected.len()
+    }
+}
+
+impl Write for ExactSliceWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let Some(end) = self.offset.checked_add(bytes.len()) else {
+            self.mismatched = true;
+            return Ok(bytes.len());
+        };
+        let Some(expected) = self.expected.get(self.offset..end) else {
+            self.mismatched = true;
+            self.offset = self.expected.len();
+            return Ok(bytes.len());
+        };
+        if expected != bytes {
+            self.mismatched = true;
+        }
+        self.offset = end;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}

@@ -37,9 +37,8 @@ T = TypeVar("T")
 E = TypeVar("E")
 
 _decode_flags_stack: List[int] = []
-_decode_flags_hint_stack: List[int] = []
 _decode_root_stack: List[bytes] = []
-_decode_context_stack: List[Tuple[int, int]] = []
+_decode_context_stack: List[int] = []
 
 _DYNAMIC_FLAGS_MASK = 0
 
@@ -63,13 +62,12 @@ class TypeAdapter(Protocol[T]):
 
 
 class _RootGuard:
-    __slots__ = ("_owned", "_context_active", "_flags", "_hint")
+    __slots__ = ("_owned", "_context_active", "_flags")
 
-    def __init__(self, payload: bytes, flags: Optional[int] = None, hint: Optional[int] = None) -> None:
+    def __init__(self, payload: bytes, flags: Optional[int] = None) -> None:
         self._owned = False
         self._context_active = False
         self._flags = flags
-        self._hint = header.MINOR_VERSION if hint is None else hint & 0xFF
         if not _decode_root_stack:
             _decode_root_stack.append(bytes(payload))
             self._owned = True
@@ -84,7 +82,7 @@ class _RootGuard:
 
     def __enter__(self) -> "_RootGuard":
         if self._flags is not None:
-            _decode_context_stack.append((self._flags & 0xFF, self._hint))
+            _decode_context_stack.append(self._flags & 0xFF)
             self._context_active = True
         return self
 
@@ -163,7 +161,6 @@ class NoritoDecoder:
 
     data: bytes
     flags: int
-    flags_hint: int = header.MINOR_VERSION
     offset: int = 0
 
     def compact_len_active(self) -> bool:
@@ -440,7 +437,7 @@ class SequenceAdapter(Generic[T], TypeAdapter[List[T]]):
         outputs: List[T] = []
         for size in element_sizes:
             chunk = decoder.read_bytes(size)
-            child = NoritoDecoder(chunk, decoder.flags, decoder.flags_hint)
+            child = NoritoDecoder(chunk, decoder.flags)
             outputs.append(self.element.decode(child))
             if child.remaining() != 0:
                 raise DecodeError("packed element decode did not consume all bytes")
@@ -580,7 +577,7 @@ class StructAdapter(TypeAdapter[Any]):
             if needs_size[idx]:
                 size = next(size_iter)
                 chunk = decoder.read_bytes(size)
-                child = NoritoDecoder(chunk, decoder.flags, decoder.flags_hint)
+                child = NoritoDecoder(chunk, decoder.flags)
                 value = field.adapter.decode(child)
                 if child.remaining() != 0:
                     raise DecodeError("packed struct field did not fully decode")
@@ -624,10 +621,6 @@ class StructAdapter(TypeAdapter[Any]):
 
 _BASE_FLAGS = header.MINOR_VERSION
 DEFAULT_FLAGS = _BASE_FLAGS | _DYNAMIC_FLAGS_MASK
-
-
-def _combine_flags(flags: int, hint: int) -> int:
-    return flags & 0xFF
 
 
 def _apply_adaptive_flags(flags: int, payload_len: int) -> int:
@@ -708,48 +701,38 @@ def encode_with_header_flags(
 
 
 class DecodeFlagsGuard:
-    __slots__ = ("_active", "_flags", "_hint")
+    __slots__ = ("_active", "_flags")
 
-    def __init__(self, flags: int, hint: Optional[int] = None) -> None:
+    def __init__(self, flags: int) -> None:
         self._flags = flags & 0xFF
-        self._hint = header.MINOR_VERSION if hint is None else hint & 0xFF
         self._active = False
 
     def __enter__(self) -> "DecodeFlagsGuard":
         _decode_flags_stack.append(self._flags)
-        _decode_flags_hint_stack.append(self._hint)
         self._active = True
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
         if self._active:
             _decode_flags_stack.pop()
-            _decode_flags_hint_stack.pop()
             self._active = False
 
     @staticmethod
     def enter(flags: int) -> "DecodeFlagsGuard":
         return DecodeFlagsGuard(flags)
 
-    @staticmethod
-    def enter_with_hint(flags: int, _hint: int) -> "DecodeFlagsGuard":
-        return DecodeFlagsGuard(flags, _hint)
-
 
 def reset_decode_state() -> None:
     _decode_flags_stack.clear()
-    _decode_flags_hint_stack.clear()
     _decode_root_stack.clear()
     _decode_context_stack.clear()
 
 
 def effective_decode_flags() -> Optional[int]:
     if _decode_context_stack:
-        flags, hint = _decode_context_stack[-1]
-        return _combine_flags(flags, hint)
+        return _decode_context_stack[-1]
     if _decode_flags_stack:
-        hint = _decode_flags_hint_stack[-1] if _decode_flags_hint_stack else header.MINOR_VERSION
-        return _combine_flags(_decode_flags_stack[-1], hint)
+        return _decode_flags_stack[-1]
     return None
 
 
@@ -759,7 +742,6 @@ class ArchiveView:
 
     _payload: bytes
     _flags: int
-    _flags_hint: int
 
     def as_bytes(self) -> bytes:
         return self._payload
@@ -768,13 +750,9 @@ class ArchiveView:
     def flags(self) -> int:
         return self._flags
 
-    @property
-    def flags_hint(self) -> int:
-        return self._flags_hint
-
     def decode(self, adapter: TypeAdapter[Any]) -> Any:
-        with _RootGuard(self._payload, self._flags, self._flags_hint):
-            decoder = NoritoDecoder(self._payload, self._flags, self._flags_hint)
+        with _RootGuard(self._payload, self._flags):
+            decoder = NoritoDecoder(self._payload, self._flags)
             value = adapter.decode(decoder)
             if decoder.remaining() != 0:
                 raise DecodeError("trailing bytes after Norito decode")
@@ -795,7 +773,7 @@ def from_bytes_view(
     if norito_header.compression != header.COMPRESSION_NONE:
         raise UnsupportedCompressionError(norito_header.compression)
     norito_header.validate_checksum(payload)
-    return ArchiveView(payload, norito_header.flags, norito_header.minor)
+    return ArchiveView(payload, norito_header.flags)
 
 
 def decode_adaptive(data: bytes, adapter: TypeAdapter[Any]) -> Any:
@@ -803,8 +781,8 @@ def decode_adaptive(data: bytes, adapter: TypeAdapter[Any]) -> Any:
         flags = _decode_flags_stack[-1]
     else:
         flags = _apply_adaptive_flags(DEFAULT_FLAGS, len(data))
-    with _RootGuard(data, flags, header.MINOR_VERSION):
-        decoder = NoritoDecoder(data, flags, header.MINOR_VERSION)
+    with _RootGuard(data, flags):
+        decoder = NoritoDecoder(data, flags)
         value = adapter.decode(decoder)
         if decoder.remaining() != 0:
             raise DecodeError("trailing bytes after decode")
@@ -829,8 +807,8 @@ def decode(
     else:
         payload_bytes = payload
     norito_header.validate_checksum(payload_bytes)
-    with _RootGuard(payload_bytes, norito_header.flags, norito_header.minor):
-        decoder = NoritoDecoder(payload_bytes, norito_header.flags, norito_header.minor)
+    with _RootGuard(payload_bytes, norito_header.flags):
+        decoder = NoritoDecoder(payload_bytes, norito_header.flags)
         value = adapter.decode(decoder)
         if decoder.remaining() != 0:
             raise DecodeError("trailing bytes after decode")

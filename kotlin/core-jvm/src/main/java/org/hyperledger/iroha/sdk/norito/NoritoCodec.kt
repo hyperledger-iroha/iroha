@@ -16,9 +16,7 @@ object NoritoCodec {
 
     private val DECODE_FLAGS_STACK: ThreadLocal<Deque<Int>> =
         ThreadLocal.withInitial { ArrayDeque() }
-    private val DECODE_FLAGS_HINT_STACK: ThreadLocal<Deque<Int>> =
-        ThreadLocal.withInitial { ArrayDeque() }
-    private val ACTIVE_DECODE_CONTEXTS: ThreadLocal<Deque<ContextFlags>> =
+    private val ACTIVE_DECODE_CONTEXTS: ThreadLocal<Deque<Int>> =
         ThreadLocal.withInitial { ArrayDeque() }
 
     private val DECODE_ROOT_PAYLOAD: ThreadLocal<ByteArray?> = ThreadLocal()
@@ -91,8 +89,6 @@ object NoritoCodec {
     fun <T> encodeWithHeaderFlags(value: T, adapter: TypeAdapter<T>): AdaptiveEncoding =
         encodeAdaptive(value, adapter, DEFAULT_FLAGS)
 
-    private fun combineFlags(flags: Int, hint: Int): Int = flags and 0xFF
-
     @JvmStatic
     fun <T> decodeAdaptive(payload: ByteArray, adapter: TypeAdapter<T>): T {
         val stack = DECODE_FLAGS_STACK.get()
@@ -101,9 +97,9 @@ object NoritoCodec {
         } else {
             stack.peekLast()
         }
-        RootGuard(payload, flags, NoritoHeader.MINOR_VERSION).use { guard ->
+        RootGuard(payload, flags).use { guard ->
             guard.keepAlive()
-            val decoder = NoritoDecoder(payload, flags, NoritoHeader.MINOR_VERSION)
+            val decoder = NoritoDecoder(payload, flags)
             val value = adapter.decode(decoder)
             require(decoder.remaining() == 0) { "Trailing bytes after Norito decode" }
             return value
@@ -113,7 +109,6 @@ object NoritoCodec {
     @JvmStatic
     fun resetDecodeState() {
         DECODE_FLAGS_STACK.get().clear()
-        DECODE_FLAGS_HINT_STACK.get().clear()
         ACTIVE_DECODE_CONTEXTS.get().clear()
         DECODE_ROOT_PAYLOAD.remove()
     }
@@ -122,14 +117,11 @@ object NoritoCodec {
     fun effectiveDecodeFlags(): Int? {
         val contexts = ACTIVE_DECODE_CONTEXTS.get()
         if (contexts.isNotEmpty()) {
-            val ctx = contexts.peekLast()
-            return combineFlags(ctx.flags, ctx.hint)
+            return contexts.peekLast()
         }
         val stack = DECODE_FLAGS_STACK.get()
         if (stack.isNotEmpty()) {
-            val hints = DECODE_FLAGS_HINT_STACK.get()
-            val hint = if (hints.isEmpty()) NoritoHeader.MINOR_VERSION else hints.peekLast()
-            return combineFlags(stack.peekLast(), hint)
+            return stack.peekLast()
         }
         return null
     }
@@ -145,7 +137,7 @@ object NoritoCodec {
         }
         val payload = result.payload
         header.validateChecksum(payload)
-        return ArchiveView(payload, header.flags, header.minor)
+        return ArchiveView(payload, header.flags)
     }
 
     @JvmStatic
@@ -163,9 +155,9 @@ object NoritoCodec {
             )
         }
         header.validateChecksum(decodedPayload)
-        RootGuard(decodedPayload, header.flags, header.minor).use { guard ->
+        RootGuard(decodedPayload, header.flags).use { guard ->
             guard.keepAlive()
-            val decoder = NoritoDecoder(decodedPayload, header.flags, header.minor)
+            val decoder = NoritoDecoder(decodedPayload, header.flags)
             val value = adapter.decode(decoder)
             require(decoder.remaining() == 0) { "Trailing bytes after Norito decode" }
             return value
@@ -184,9 +176,9 @@ object NoritoCodec {
             val decodedPayload =
                 NoritoCompression.decompressZstd(compressed, header.payloadLength)
             header.validateChecksum(decodedPayload)
-            RootGuard(decodedPayload, header.flags, header.minor).use { guard ->
+            RootGuard(decodedPayload, header.flags).use { guard ->
                 guard.keepAlive()
-                val decoder = NoritoDecoder(decodedPayload, header.flags, header.minor)
+                val decoder = NoritoDecoder(decodedPayload, header.flags)
                 val value = adapter.decode(decoder)
                 require(decoder.remaining() == 0) { "Trailing bytes after Norito decode" }
                 return value
@@ -196,9 +188,9 @@ object NoritoCodec {
             "Unsupported compression tag: ${header.compression}"
         }
         header.validateChecksum(payload)
-        RootGuard(payload, header.flags, header.minor).use { guard ->
+        RootGuard(payload, header.flags).use { guard ->
             guard.keepAlive()
-            val decoder = NoritoDecoder(payload, header.flags, header.minor)
+            val decoder = NoritoDecoder(payload, header.flags)
             val value = adapter.decode(decoder)
             require(decoder.remaining() == 0) { "Trailing bytes after Norito decode" }
             return value
@@ -238,20 +230,17 @@ object NoritoCodec {
     fun payloadRootBytes(): ByteArray? =
         DECODE_ROOT_PAYLOAD.get()?.copyOf()
 
-    class DecodeFlagsGuard private constructor(flags: Int, hint: Int) : AutoCloseable {
+    class DecodeFlagsGuard private constructor(flags: Int) : AutoCloseable {
         private var active = true
 
         init {
             DECODE_FLAGS_STACK.get().addLast(flags and 0xFF)
-            DECODE_FLAGS_HINT_STACK.get().addLast(hint and 0xFF)
         }
 
         override fun close() {
             if (active) {
                 val stack = DECODE_FLAGS_STACK.get()
                 if (stack.isNotEmpty()) stack.removeLast()
-                val hints = DECODE_FLAGS_HINT_STACK.get()
-                if (hints.isNotEmpty()) hints.removeLast()
                 active = false
             }
         }
@@ -259,11 +248,7 @@ object NoritoCodec {
         companion object {
             @JvmStatic
             fun enter(flags: Int): DecodeFlagsGuard =
-                DecodeFlagsGuard(flags, NoritoHeader.MINOR_VERSION)
-
-            @JvmStatic
-            fun enterWithHint(flags: Int, hint: Int): DecodeFlagsGuard =
-                DecodeFlagsGuard(flags, hint)
+                DecodeFlagsGuard(flags)
         }
     }
 
@@ -276,21 +261,18 @@ object NoritoCodec {
         fun payload(): ByteArray = _payload.copyOf()
     }
 
-    class ArchiveView internal constructor(payload: ByteArray, flags: Int, flagsHint: Int) {
+    class ArchiveView internal constructor(payload: ByteArray, flags: Int) {
         private val _payload: ByteArray = payload.copyOf()
 
         @JvmField
         val flags: Int = flags and 0xFF
 
-        @JvmField
-        val flagsHint: Int = flagsHint and 0xFF
-
         fun asBytes(): ByteArray = _payload.copyOf()
 
         fun <T> decode(adapter: TypeAdapter<T>): T {
-            RootGuard(_payload, flags, flagsHint).use { guard ->
+            RootGuard(_payload, flags).use { guard ->
                 guard.keepAlive()
-                val decoder = NoritoDecoder(_payload, flags, flagsHint)
+                val decoder = NoritoDecoder(_payload, flags)
                 val value = adapter.decode(decoder)
                 require(decoder.remaining() == 0) { "Trailing bytes after Norito decode" }
                 return value
@@ -298,13 +280,11 @@ object NoritoCodec {
         }
     }
 
-    private data class ContextFlags(val flags: Int, val hint: Int)
-
     private class RootGuard : java.io.Closeable {
         private val installed: Boolean
         private val contextPushed: Boolean
 
-        constructor(payload: ByteArray, flags: Int? = null, hint: Int? = null) {
+        constructor(payload: ByteArray, flags: Int? = null) {
             if (DECODE_ROOT_PAYLOAD.get() == null) {
                 DECODE_ROOT_PAYLOAD.set(payload.copyOf())
                 installed = true
@@ -312,16 +292,15 @@ object NoritoCodec {
                 installed = false
             }
             if (flags != null) {
-                val normalizedHint = hint?.let { it and 0xFF } ?: NoritoHeader.MINOR_VERSION
                 ACTIVE_DECODE_CONTEXTS.get()
-                    .addLast(ContextFlags(flags and 0xFF, normalizedHint))
+                    .addLast(flags and 0xFF)
                 contextPushed = true
             } else {
                 contextPushed = false
             }
         }
 
-        constructor(payload: ByteBuffer, flags: Int? = null, hint: Int? = null) {
+        constructor(payload: ByteBuffer, flags: Int? = null) {
             if (DECODE_ROOT_PAYLOAD.get() == null) {
                 val view = payload.slice()
                 val bytes = ByteArray(view.remaining())
@@ -332,9 +311,8 @@ object NoritoCodec {
                 installed = false
             }
             if (flags != null) {
-                val normalizedHint = hint?.let { it and 0xFF } ?: NoritoHeader.MINOR_VERSION
                 ACTIVE_DECODE_CONTEXTS.get()
-                    .addLast(ContextFlags(flags and 0xFF, normalizedHint))
+                    .addLast(flags and 0xFF)
                 contextPushed = true
             } else {
                 contextPushed = false

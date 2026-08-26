@@ -7598,13 +7598,10 @@ redistributable schemas, and official trust/revocation bundles.
 
 ## ZK audit validation follow-ups
 
-- Completed 2026-06-06: Torii ZK prover report list/count/bulk-delete filters
-  now reject malformed `has_tag` filters unless they are exactly four printable
-  ASCII ZK1 TLV tag characters, with unit and router-level coverage for the
-  fail-closed query contract.
-- Completed 2026-06-06: Torii's prover-report success fixture now uses the
-  public `halo2/ipa:tiny-add-public` envelope and matching registry schema
-  hash, clearing the full `zk_prover_integration` target under `app_api`.
+- Retired 2026-08-26: the unmounted prover-report HTTP query surface and its
+  synthetic integration router were deleted for the first release. Background
+  reports remain bounded node-local worker diagnostics, so no public report
+  filter or client compatibility contract remains to validate.
 - Completed 2026-06-10: developer-only Halo2 fallback commit/Merkle fixtures now
   use a deterministic shifted Pow5 pair hash instead of additive/unshifted
   placeholders for commitment, nullifier, and Merkle2 relations. Focused
@@ -10011,10 +10008,9 @@ redistributable schemas, and official trust/revocation bundles.
   - Carry the Norito sequence span planner through the remaining acceleration
     corridor: replace the length-prefixed helper's serial device parser with a
     tuned prefix-scan/chunked planner if profiling shows it is on the hot path,
-    expand typed parallel sequence decode beyond the current hidden
-    `parallel-decode` `Vec<T: Send>` path if profiling proves narrower
-    transaction/admission/block-validation call sites need it, then rerun the
-    30s sampled 20k profile and 120s gate with the target host's acceleration
+    optimize proven transaction/admission/block-validation consumers directly
+    instead of reviving the retired generic parallel decoder, then rerun the 30s
+    sampled 20k profile and 120s gate with the target host's acceleration
     features.
   - The latest scalar release 4-peer no-fault prebuilt `20k TPS` / `120s` gate
     after the Norito span-planner pass is

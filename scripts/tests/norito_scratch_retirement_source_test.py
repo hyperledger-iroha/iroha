@@ -103,32 +103,40 @@ GROUP_BLOB = "9c5cd30984cb13ea7a280d9bc2786a9551078a31"
 GROUP_SHA256 = "32ef1238333208aa963ef6937b41b0c8a955190619d65f1a8cd4a2b3b90a4968"
 GROUP_BYTES = 2_156
 GROUP_LINES = 68
-POST_GROUP_SHA256 = "67df42e03e9155d6e21353cdd5c609299d485aa7098a3d544d073e75b37805e1"
-POST_GROUP_BYTES = 1_993
-POST_GROUP_LINES = 62
+POST_GROUP_SHA256 = "257b6c8ac3fa8532e613436a8d34fe1e355fd62cafb6a4498d3865126041233e"
+POST_GROUP_BYTES = 1_928
+POST_GROUP_LINES = 60
 
 OPENING_MANIFEST_BLOB = "c629283d5728fec9e900563c613a7a0df4d41642"
 OPENING_MANIFEST_SHA256 = "e78ebe2ef7d33c41c39419b074dfef56a59394098e1e9c7e3ac7b0d5483d1232"
 OPENING_MANIFEST_BYTES = 4_778
 OPENING_MANIFEST_LINES = 231
-MANIFEST_BLOB = "32617b52ced72537c979c749d14adb3006b238a8"
-MANIFEST_SHA256 = "001921234ba49efed859155722186f8a3b1a52d48af593becd8724cb922b6912"
-MANIFEST_BYTES = 4_618
-MANIFEST_LINES = 226
+MANIFEST_BLOB = "891b8208480e0120b39f41dc6bf3186a8f4f34ff"
+MANIFEST_SHA256 = "2a38dbe53ea64e9a19d79947af8046960c0dcbbd4af0cab4c5a5e0ba915a834b"
+MANIFEST_BYTES = 4_473
+MANIFEST_LINES = 217
 
 OPENING_LOCK_BLOB = "bf7633694c3f2fdca07de4d99743a09bad2daa12"
 OPENING_LOCK_SHA256 = "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
 OPENING_LOCK_BYTES = 315_333
 OPENING_LOCK_LINES = 13_758
-LOCK_BLOB = "5d04cef722cb695dd636110be01ff8de52ae7b45"
-LOCK_SHA256 = "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
-LOCK_BYTES = 311_172
-LOCK_LINES = 13_613
+LOCK_BLOB = "e320ffaa8af21674f079573a1aaa1a8d73185ae8"
+LOCK_SHA256 = "71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2"
+LOCK_BYTES = 311_205
+LOCK_LINES = 13_616
 
 RETIRED_MODULE_BLOCKS = (
     '#[path = "../temp_print_nested.rs"]\nmod temp_print_nested;\n',
     '#[path = "../temp_print_small3.rs"]\nmod temp_print_small3;\n',
     '#[path = "../type_debug.rs"]\nmod type_debug;\n',
+)
+
+# Later first-release cleanup removed this independent obsolete codec target.
+# Keep the original scratch-retirement ledger above intact while accepting the
+# current, smaller grouped harness postimage.
+CURRENT_REMOVED_MODULE_BLOCKS = (
+    *RETIRED_MODULE_BLOCKS,
+    '#[path = "../sequential_roundtrip.rs"]\nmod sequential_roundtrip;\n',
 )
 
 EXPECTED_TEST_TABLES = (
@@ -209,6 +217,16 @@ REPLACEMENT_SOURCE_PINS = {
         "4535283cfa1333630e62b2e27ff29036f0156d65dfb9cdf8893b41f17d6955a0",
         2_416,
         69,
+    ),
+}
+
+CURRENT_REPLACEMENT_SOURCE_PINS = {
+    **REPLACEMENT_SOURCE_PINS,
+    "crates/norito/tests/codec.rs": (
+        "a798fe5d104937d0da5c165879b3922f63413222",
+        "70178f9a4cd9dba93a7fdd2505bb1ed7b8745ac3b2ab250901c3b8eea597c9f7",
+        22_594,
+        651,
     ),
 }
 
@@ -381,7 +399,7 @@ def _authenticate_openings() -> tuple[bytes, bytes]:
 
 def _expected_group(opening: bytes) -> bytes:
     text = opening.decode("utf-8")
-    for block in RETIRED_MODULE_BLOCKS:
+    for block in CURRENT_REMOVED_MODULE_BLOCKS:
         _require(text.count(block) == 1, "retired module opening count changed")
         text = text.replace(block, "", 1)
     postimage = text.encode("utf-8")
@@ -449,7 +467,7 @@ def _validate(snapshot: Snapshot, opening_group: bytes, _opening_manifest: bytes
     _require(group is not None, "grouped test root is missing")
     _require(group == _expected_group(opening_group), "grouped test root postimage drifted")
     _require(_sha256(group) == POST_GROUP_SHA256, "grouped test root hash drifted")
-    _require(len(re.findall(rb"(?m)^mod [A-Za-z_][A-Za-z0-9_]*;$", group)) == 30, "grouped module ledger changed")
+    _require(len(re.findall(rb"(?m)^mod [A-Za-z_][A-Za-z0-9_]*;$", group)) == 29, "grouped module ledger changed")
 
     manifest = snapshot.files[MANIFEST]
     _require(manifest is not None, "Norito manifest is missing")
@@ -476,7 +494,7 @@ def _validate(snapshot: Snapshot, opening_group: bytes, _opening_manifest: bytes
     for path, markers in REPLACEMENT_MARKERS.items():
         data = snapshot.files[path]
         _require(data is not None, f"replacement source is missing: {path}")
-        blob, sha256, byte_count, line_count = REPLACEMENT_SOURCE_PINS[path]
+        blob, sha256, byte_count, line_count = CURRENT_REPLACEMENT_SOURCE_PINS[path]
         _require(len(data) == byte_count, f"replacement source byte count changed: {path}")
         _require(
             data.count(b"\n") == line_count,

@@ -977,8 +977,8 @@ impl SignedBlock {
     /// Obtain the canonical Norito wire helper for inspecting or framing this block.
     ///
     /// # Errors
-    /// Returns [`NoritoFrameError`] if the Norito header cannot be emitted with the collected
-    /// encode flags.
+    /// Returns [`NoritoFrameError`] if the Norito header cannot be emitted with the V1 layout
+    /// flags.
     pub fn canonical_wire(&self) -> Result<SignedBlockWire, NoritoFrameError> {
         let payload = encode_signed_block_payload(self);
         let version = self.version();
@@ -1331,8 +1331,8 @@ impl fmt::Display for error::BlockRejectionReason {
         }
     }
 }
-/// Prefix versioned [`SignedBlock`] bytes with a Norito header using the layout
-/// flags recorded by the encoder, falling back to the default framing flags.
+/// Prefix versioned [`SignedBlock`] bytes with a Norito header using the fixed
+/// default V1 layout flags.
 /// The returned buffer contains the original version byte followed by the
 /// framed payload.
 ///
@@ -1461,7 +1461,7 @@ fn write_signed_block_header(payload: &[u8], out: &mut Vec<u8>) -> Result<(), No
             default_encode_flags()
         );
     }
-    let encode_flags = norito::codec::take_last_encode_flags().unwrap_or_else(default_encode_flags);
+    let encode_flags = default_encode_flags();
     #[cfg(debug_assertions)]
     if norito::debug_trace_enabled() {
         eprintln!("write_signed_block_header flags=0x{encode_flags:02x}");
@@ -2672,7 +2672,6 @@ mod tests {
     fn framed_decode_borrows_payload_from_original_wire() {
         let wire_version = SignedBlock::supported_versions().start;
         let mut framed = vec![wire_version];
-        let _ = norito::codec::take_last_encode_flags();
         write_signed_block_header(&[], &mut framed).expect("write empty canonical frame header");
         let (version, payload) = borrow_framed_signed_block_payload(&framed)
             .expect("canonical frame header must be borrowable");
@@ -2840,7 +2839,7 @@ mod tests {
         assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
     }
     #[test]
-    fn framed_signed_block_preserves_recorded_layout_flags() {
+    fn framed_signed_block_uses_v1_layout_flags() {
         use nonzero_ext::nonzero;
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let block = SignedBlock {
@@ -2856,14 +2855,11 @@ mod tests {
             },
             result: None,
         };
-        let (payload, expected_flags) = norito::codec::encode_with_header_flags(&block);
-        let mut versioned = Vec::with_capacity(1 + payload.len());
-        versioned.push(block.version());
-        versioned.extend_from_slice(&payload);
+        let versioned = block.encode_versioned();
         let framed = frame_versioned_signed_block_bytes(&versioned).expect("frame payload");
         let header_size = norito::core::Header::SIZE;
         let flags = framed[1 + header_size - 1];
-        assert_eq!(flags, expected_flags);
+        assert_eq!(flags, norito::core::default_encode_flags());
     }
     #[test]
     fn signed_block_da_commitments_roundtrip() {

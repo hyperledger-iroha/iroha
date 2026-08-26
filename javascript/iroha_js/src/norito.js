@@ -7137,8 +7137,7 @@ function decodeNumericSpecValue(payload, context) {
 }
 
 function encodeMintableValue(value, context) {
-  const normalized =
-    typeof value === JS_TYPE_STRING ? parseMintableLabel(value, context) : parseMintableObject(value, context);
+  const normalized = parseMintableLabel(value, context);
   switch (normalized.kind) {
     case "Infinitely":
       return encodeEnumTagValue(0);
@@ -7187,33 +7186,11 @@ function parseMintableLabel(value, context) {
   throw new Error(`${context} must be Infinitely, Once, Not, or Limited(n)`);
 }
 
-function parseMintableObject(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be a string or object`);
-  }
-  const kind = assertNonEmptyString(value.kind, `${context}.kind`);
-  if (kind === "Infinitely" || kind === "Once" || kind === "Not") {
-    return { kind };
-  }
-  if (kind === "Limited") {
-    return {
-      kind,
-      tokens: parseMintabilityTokens(value.tokens ?? value.value, `${context}.tokens`),
-    };
-  }
-  throw new Error(`${context}.kind must be Infinitely, Once, Not, or Limited`);
-}
-
 function parseMintabilityTokens(value, context) {
-  let normalized;
-  if (typeof value === JS_TYPE_STRING) {
-    if (!/^\d+$/.test(value)) {
-      throw new TypeError(`${context} must be a positive unsigned 32-bit integer`);
-    }
-    normalized = Number(value);
-  } else {
-    normalized = Number(value);
+  if (typeof value !== JS_TYPE_STRING || !/^\d+$/.test(value)) {
+    throw new TypeError(`${context} must be a positive unsigned 32-bit integer`);
   }
+  const normalized = Number(value);
   if (!Number.isInteger(normalized) || normalized <= 0 || normalized > 0xffff_ffff) {
     throw new TypeError(`${context} must be a positive unsigned 32-bit integer`);
   }

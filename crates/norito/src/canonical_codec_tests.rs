@@ -2,6 +2,7 @@
 #[cfg(test)]
 mod canonical_codec_tests {
     use super::*;
+    use crate::core::ExactSliceWriter;
     #[test]
     fn canonical_scalar_and_unit_roundtrip() {
         let scalar = encode_canonical(&1_u8).expect("encode canonical scalar");
@@ -266,7 +267,7 @@ mod canonical_codec_tests {
             encoding_before
         );
     }
-    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+    #[cfg(feature = "compression")]
     #[test]
     fn canonical_decode_classifies_valid_compression_as_noncanonical() {
         let value = vec!["compressed".to_owned(); 64];
@@ -277,7 +278,7 @@ mod canonical_codec_tests {
             Err(Error::NonCanonicalEncoding)
         ));
     }
-    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+    #[cfg(feature = "compression")]
     #[test]
     fn canonical_decode_rejects_compression_before_decode_allocation_budget() {
         let value = vec!["compressed expansion".to_owned(); 4096];

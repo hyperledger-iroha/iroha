@@ -9306,47 +9306,6 @@ class ToriiClient(
         self._expect_status(response, {204})
 
     # ------------------------------------------------------------------
-    # Prover reports
-    # ------------------------------------------------------------------
-    def list_prover_reports(self, **filters: Any) -> List[Mapping[str, Any]]:
-        """List prover reports applying optional filters."""
-
-        response = self._request(
-            "GET",
-            "/v1/zk/prover/reports",
-            params=self._encode_prover_filters(filters),
-        )
-        self._expect_status(response, {200})
-        return response.json()
-
-    def get_prover_report(self, report_id: str) -> Mapping[str, Any]:
-        """Fetch a single prover report by id."""
-
-        response = self._request("GET", f"/v1/zk/prover/reports/{report_id}")
-        self._expect_status(response, {200})
-        return response.json()
-
-    def delete_prover_report(self, report_id: str) -> None:
-        """Delete a prover report by id."""
-
-        response = self._request("DELETE", f"/v1/zk/prover/reports/{report_id}")
-        self._expect_status(response, {204})
-
-    def count_prover_reports(self, **filters: Any) -> int:
-        """Return the count of prover reports matching filters."""
-
-        response = self._request(
-            "GET",
-            "/v1/zk/prover/reports/count",
-            params=self._encode_prover_filters(filters),
-        )
-        self._expect_status(response, {200})
-        payload = response.json()
-        if not isinstance(payload, Mapping) or "count" not in payload:
-            raise RuntimeError("invalid prover count payload")
-        return int(payload["count"])
-
-    # ------------------------------------------------------------------
     # Admin & telemetry surfaces
     # ------------------------------------------------------------------
     def list_peers(self) -> List[PeerInfo]:
@@ -12557,20 +12516,6 @@ class ToriiClient(
         raise RuntimeError(
             f"unexpected status {response.status_code}; expected {sorted(expected_set)}; body={message}"
         )
-
-    @staticmethod
-    def _encode_prover_filters(filters: Mapping[str, Any]) -> Dict[str, Any]:
-        if not filters:
-            return {}
-        params: Dict[str, Any] = {}
-        for key, value in filters.items():
-            if value in (None, False):
-                continue
-            if value is True:
-                params[_FILTER_MAPPING.get(key, key)] = "true"
-            else:
-                params[_FILTER_MAPPING.get(key, key)] = value
-        return params
 
     @staticmethod
     def _clean_params(params: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -17218,21 +17163,3 @@ def _monotonic_millis() -> float:
     """Return a monotonic timestamp in milliseconds."""
 
     return time.perf_counter() * 1000.0
-
-
-_FILTER_MAPPING: Dict[str, str] = {
-    "ok_only": "ok_only",
-    "failed_only": "failed_only",
-    "errors_only": "errors_only",
-    "content_type": "content_type",
-    "has_tag": "has_tag",
-    "limit": "limit",
-    "since_ms": "since_ms",
-    "before_ms": "before_ms",
-    "ids_only": "ids_only",
-    "order": "order",
-    "offset": "offset",
-    "latest": "latest",
-    "messages_only": "messages_only",
-    "id": "id",
-}

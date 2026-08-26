@@ -16850,14 +16850,25 @@ pub(crate) fn durable_lane_completion_matches_finality_during_startup(
         finality_artifact,
     )
 }
+/// Verify only the active tip's lane completion without repairing or scanning lane history.
+pub(crate) fn durable_lane_completion_matches_finality_emergency_fast(
+    kura: &Kura,
+    finality_artifact: &wire::finality::V2FinalityArtifact,
+) -> Result<bool, String> {
+    durable_lane_completion_matches_finality_with_readers(
+        DurableLaneCompletionReaders::EmergencyFast(kura),
+        finality_artifact,
+    )
+}
 enum DurableLaneCompletionReaders<'a, 'k> {
     Runtime(&'a Kura),
+    EmergencyFast(&'a Kura),
     Startup(&'a V2StartupFinalityVerificationSession<'k>),
 }
 impl DurableLaneCompletionReaders<'_, '_> {
     fn canonical_block(&self, height: NonZeroUsize) -> Result<Option<Arc<SignedBlock>>, String> {
         match self {
-            Self::Runtime(kura) => Ok(kura.get_block(height)),
+            Self::Runtime(kura) | Self::EmergencyFast(kura) => Ok(kura.get_block(height)),
             Self::Startup(startup) => startup
                 .canonical_block(height)
                 .map_err(|error| error.to_string()),
@@ -16875,6 +16886,14 @@ impl DurableLaneCompletionReaders<'_, '_> {
                     descriptor.lane_block_height,
                 ))
             }
+            Self::EmergencyFast(kura) => {
+                let descriptor = &proposal.descriptor;
+                kura.read_certified_lane_block_artifact_read_only(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                )
+                .map_err(|error| error.to_string())
+            }
             Self::Startup(startup) => startup
                 .certified_lane_block_artifact(proposal)
                 .map_err(|error| error.to_string()),
@@ -16888,6 +16907,13 @@ impl DurableLaneCompletionReaders<'_, '_> {
             Self::Runtime(kura) => {
                 let descriptor = &proposal.descriptor;
                 Ok(kura.read_lane_block_application_receipt(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                ))
+            }
+            Self::EmergencyFast(kura) => {
+                let descriptor = &proposal.descriptor;
+                Ok(kura.read_lane_block_application_receipt_without_sidecar_repair(
                     descriptor.lane_id,
                     descriptor.lane_block_height,
                 ))
@@ -16907,6 +16933,15 @@ impl DurableLaneCompletionReaders<'_, '_> {
             Self::Runtime(kura) => {
                 let descriptor = &proposal.descriptor;
                 Ok(kura.read_autonomous_lane_block_artifact(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                    expected_network_id,
+                    expected_epoch,
+                ))
+            }
+            Self::EmergencyFast(kura) => {
+                let descriptor = &proposal.descriptor;
+                Ok(kura.read_autonomous_lane_block_artifact_without_sidecar_repair(
                     descriptor.lane_id,
                     descriptor.lane_block_height,
                     expected_network_id,

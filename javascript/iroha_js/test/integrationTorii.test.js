@@ -25,12 +25,9 @@ import {
 } from "../src/index.js";
 import {
   assertNonNegativeInteger,
-  assertProverReportResult,
-  countFailedProverReports,
-  hasProverReportEntries,
   isNonEmptyString,
   isPlainObject,
-} from "./integrationToriiProverReportAssertions.js";
+} from "./integrationToriiAssertions.js";
 import {
   AuthenticatedIntegrationToriiClient as ToriiClient,
   INTEGRATION_OPERATOR_SIGNING_CONTEXT,
@@ -702,78 +699,6 @@ test(
     for (const entry of page.items) {
       assertEvidenceRecord(entry);
     }
-  },
-);
-
-test(
-  "zk prover report endpoints respond",
-  {
-    timeout: 60_000,
-  },
-  async (t) => {
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-
-    const fetchReports = async (filters, context) => {
-      try {
-        return await client.listProverReports(filters);
-      } catch (error) {
-        if (shouldSkipZkProverEndpoints(error)) {
-          t.diagnostic(
-            `${context} unavailable: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-          return null;
-        }
-        throw error;
-      }
-    };
-
-    const reportsResult = await fetchReports({ limit: 5 }, "prover report listing");
-    if (!reportsResult) {
-      return;
-    }
-    assertProverReportResult(reportsResult, "prover report listing");
-
-    const hasEntries = hasProverReportEntries(reportsResult);
-    if (!hasEntries) {
-      t.diagnostic("prover report list returned no entries; skipping projection checks");
-      return;
-    }
-
-    const idsResult = await fetchReports({ limit: 5, ids_only: true }, "prover id projection");
-    if (!idsResult) {
-      return;
-    }
-    assert.equal(
-      idsResult.kind,
-      "ids",
-      "ids_only projection must return identifier list when reports exist",
-    );
-    assertProverReportResult(idsResult, "prover id projection");
-
-    const failedCount = countFailedProverReports(reportsResult);
-    if (failedCount === 0) {
-      t.diagnostic("no failed prover reports; skipping messages-only projection");
-      return;
-    }
-
-    const messagesResult = await fetchReports(
-      { limit: 5, messages_only: true },
-      "prover messages projection",
-    );
-    if (!messagesResult) {
-      return;
-    }
-    assert.equal(
-      messagesResult.kind,
-      "messages",
-      "messages_only projection must return message summaries for failed reports",
-    );
-    assertProverReportResult(messagesResult, "prover messages projection");
   },
 );
 
@@ -5089,17 +5014,6 @@ function shouldSkipGovernanceBallotEndpoints(error) {
   }
   const message = error.message ?? "";
   return /ballot/i.test(message) && /disabled/i.test(message);
-}
-
-function shouldSkipZkProverEndpoints(error) {
-  if (error instanceof ToriiHttpError) {
-    return error.status === 404 || error.status === 501 || error.status === 503;
-  }
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const message = error.message ?? "";
-  return /prover/i.test(message) && /disabled/i.test(message);
 }
 
 function isUnexpectedNotFoundError(error) {

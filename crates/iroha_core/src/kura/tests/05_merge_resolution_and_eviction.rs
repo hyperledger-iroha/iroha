@@ -574,9 +574,7 @@ fn append_block_batch_at_rewrites_tail() {
 fn strict_init_kura() {
     let temp_dir = TempDir::new().unwrap();
     Kura::open_test_kura_with_configured_lane_config(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: iroha_config::base::WithOrigin::inline(
+        &Config { init_mode: iroha_config::kura::InitMode::Strict, store_dir: iroha_config::base::WithOrigin::inline(
                 temp_dir.path().to_str().unwrap().into(),
             ),
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
@@ -611,9 +609,7 @@ fn kura_not_miss_replace_block() {
     // Reinitialize kura and check that correct blocks are loaded
     {
         let (kura, block_count) = Kura::open_test_kura_with_configured_lane_config(
-            &Config {
-                init_mode: InitMode::Strict,
-                store_dir: iroha_config::base::WithOrigin::inline(
+            &Config { init_mode: iroha_config::kura::InitMode::Strict, store_dir: iroha_config::base::WithOrigin::inline(
                     temp_dir.path().to_str().unwrap().into(),
                 ),
                 max_disk_usage_bytes:
@@ -652,9 +648,7 @@ fn get_block_caches_loaded_block() {
     let block_count = 3usize;
     populate_store(&temp_dir, block_count);
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: iroha_config::base::WithOrigin::inline(
+        &Config { init_mode: iroha_config::kura::InitMode::Strict, store_dir: iroha_config::base::WithOrigin::inline(
                 temp_dir.path().to_str().unwrap().into(),
             ),
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
@@ -699,9 +693,7 @@ fn transaction_index_completes_after_lazy_loading_reopened_blocks() {
         .next()
         .expect("canonical test block has a transaction");
     let (kura, block_count) = Kura::open_test_kura_with_configured_lane_config(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: iroha_config::base::WithOrigin::inline(
+        &Config { init_mode: iroha_config::kura::InitMode::Strict, store_dir: iroha_config::base::WithOrigin::inline(
                 temp_dir.path().to_str().unwrap().into(),
             ),
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
@@ -971,9 +963,7 @@ fn get_block_returns_none_when_data_missing() {
     // file is removed, and the test never exercises its missing-disk-data path.
     populate_store(&temp_dir, 3);
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: iroha_config::base::WithOrigin::inline(
+        &Config { init_mode: iroha_config::kura::InitMode::Strict, store_dir: iroha_config::base::WithOrigin::inline(
                 temp_dir.path().to_str().unwrap().into(),
             ),
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
@@ -1002,9 +992,7 @@ fn eviction_requires_remote_replicas() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-        &KuraConfig {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+        &KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
             debug_output_new_blocks: false,

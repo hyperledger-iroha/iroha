@@ -4457,38 +4457,6 @@ fn validate_account_onboarding_token(token: &str) -> Result<&str> {
     }
     Ok(token)
 }
-/// Filters for `/v1/zk/prover/reports` listing/counting/deletion endpoints.
-#[derive(Debug, Default, Clone)]
-pub struct ZkProverReportsFilter<'a> {
-    /// Only successful reports
-    pub ok_only: Option<bool>,
-    /// Only failed reports
-    pub failed_only: Option<bool>,
-    /// Only error messages (alias for failed-only in some endpoints)
-    pub errors_only: Option<bool>,
-    /// Exact id filter
-    pub id: Option<&'a str>,
-    /// Content-type substring filter
-    pub content_type: Option<&'a str>,
-    /// Require a particular ZK1 tag (e.g., PROF, IPAK)
-    pub has_tag: Option<&'a str>,
-    /// Limit number of results
-    pub limit: Option<u32>,
-    /// Lower bound for `processed_ms`
-    pub since_ms: Option<u64>,
-    /// Upper bound for `processed_ms`
-    pub before_ms: Option<u64>,
-    /// Return only ids
-    pub ids_only: Option<bool>,
-    /// Sort order (`asc`/`desc`)
-    pub order: Option<&'a str>,
-    /// Offset for pagination
-    pub offset: Option<u32>,
-    /// Return only the latest matching report
-    pub latest: Option<bool>,
-    /// Return only messages payloads
-    pub messages_only: Option<bool>,
-}
 /// Unsigned verifying-key registry transaction returned for local signing.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -4499,53 +4467,6 @@ pub struct ZkVkTransactionDraft {
     pub transaction_payload_b64: String,
     /// Exact transaction-payload prehash encoded as padded base64.
     pub signing_message_b64: String,
-}
-impl ZkProverReportsFilter<'_> {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        if let Some(true) = self.ok_only {
-            req = req.param("ok_only", &"true");
-        }
-        if let Some(true) = self.failed_only {
-            req = req.param("failed_only", &"true");
-        }
-        if let Some(true) = self.errors_only {
-            req = req.param("errors_only", &"true");
-        }
-        if let Some(v) = self.id {
-            req = req.param("id", &v);
-        }
-        if let Some(v) = self.content_type {
-            req = req.param("content_type", &v);
-        }
-        if let Some(v) = self.has_tag {
-            req = req.param("has_tag", &v);
-        }
-        if let Some(v) = self.limit {
-            req = req.param("limit", &v);
-        }
-        if let Some(v) = self.since_ms {
-            req = req.param("since_ms", &v);
-        }
-        if let Some(v) = self.before_ms {
-            req = req.param("before_ms", &v);
-        }
-        if let Some(true) = self.ids_only {
-            req = req.param("ids_only", &"true");
-        }
-        if let Some(v) = self.order {
-            req = req.param("order", &v);
-        }
-        if let Some(v) = self.offset {
-            req = req.param("offset", &v);
-        }
-        if let Some(true) = self.latest {
-            req = req.param("latest", &"true");
-        }
-        if let Some(true) = self.messages_only {
-            req = req.param("messages_only", &"true");
-        }
-        req
-    }
 }
 /// Filters for `/v1/zk/proofs` list/count endpoints.
 #[derive(Debug, Default, Clone)]
@@ -7243,7 +7164,7 @@ impl Client {
         context: &'static str,
     ) -> Result<T>
     where
-        T: norito::json::JsonDeserializeOwned,
+        T: norito::json::JsonDeserializeOwned + norito::NoritoSerialize,
         for<'de> T: norito::NoritoDeserialize<'de>,
     {
         if response.status() != expected_status {
@@ -19252,45 +19173,6 @@ impl Client {
             "Failed to fetch proof retention status with HTTP status",
         )
     }
-    /// List prover reports via `/v1/zk/prover/reports` with optional server-side filters.
-    /// If a filter field is `None`, it is omitted.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_zk_prover_reports_list_filtered(
-        &self,
-        filter: &ZkProverReportsFilter,
-    ) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/zk/prover/reports");
-        let mut req = self.default_request(HttpMethod::GET, url);
-        req = filter.apply(req);
-        let resp = self.send_builder(req)?;
-        Self::decode_json_http_status(
-            resp,
-            StatusCode::OK,
-            "Failed to list prover reports with HTTP status",
-        )
-    }
-    /// Get count of prover reports via `/v1/zk/prover/reports/count` with optional filters.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON parse fails.
-    pub fn get_zk_prover_reports_count(&self, filter: &ZkProverReportsFilter) -> Result<u64> {
-        let url = join_torii_url(&self.torii_url, "v1/zk/prover/reports/count");
-        let mut req = self.default_request(HttpMethod::GET, url);
-        req = filter.apply(req);
-        let resp = self.send_builder(req)?;
-        Self::ensure_response_status(
-            &resp,
-            StatusCode::OK,
-            "Failed to get prover reports count with HTTP status",
-            ". ",
-        )?;
-        let v: norito::json::Value = norito::json::from_slice(resp.body())?;
-        v.get("count")
-            .and_then(norito::json::Value::as_u64)
-            .ok_or_else(|| eyre!("invalid count response"))
-    }
     /// Fetch attachment bytes by id via `/v1/zk/attachments/{id}`.
     /// Returns the raw bytes and optional content-type.
     /// # Errors
@@ -19325,67 +19207,6 @@ impl Client {
             ". ",
         )?;
         Ok(())
-    }
-    /// List prover reports via `/v1/zk/prover/reports`. Returns a JSON array of reports.
-    /// This is a non‑consensus, app‑facing helper.
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_zk_prover_reports_list(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/zk/prover/reports");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
-        Self::decode_json_http_status(
-            resp,
-            StatusCode::OK,
-            "Failed to list prover reports with HTTP status",
-        )
-    }
-    /// Fetch a single prover report JSON by id via `/v1/zk/prover/reports/{id}`.
-    /// Returns a JSON object describing the report.
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_zk_prover_report_json(&self, id: &str) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, &format!("v1/zk/prover/reports/{id}"));
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
-        Self::decode_json_http_status(
-            resp,
-            StatusCode::OK,
-            "Failed to get prover report with HTTP status",
-        )
-    }
-    /// Delete a prover report by id via `/v1/zk/prover/reports/{id}`.
-    /// # Errors
-    /// Returns an error if the HTTP request fails or the response is not `204 No Content`.
-    pub fn delete_zk_prover_report(&self, id: &str) -> Result<()> {
-        let url = join_torii_url(&self.torii_url, &format!("v1/zk/prover/reports/{id}"));
-        let resp = self.send_builder(self.default_request(HttpMethod::DELETE, url))?;
-        Self::ensure_response_status(
-            &resp,
-            StatusCode::NO_CONTENT,
-            "Failed to delete prover report with HTTP status",
-            ". ",
-        )?;
-        Ok(())
-    }
-    /// Bulk delete prover reports via `/v1/zk/prover/reports` with filters.
-    /// Returns the number of deleted reports.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON parse fails.
-    pub fn delete_zk_prover_reports_filtered(&self, filter: &ZkProverReportsFilter) -> Result<u64> {
-        let url = join_torii_url(&self.torii_url, "v1/zk/prover/reports");
-        let mut req = self.default_request(HttpMethod::DELETE, url);
-        req = filter.apply(req);
-        let resp = self.send_builder(req)?;
-        Self::ensure_response_status(
-            &resp,
-            StatusCode::OK,
-            "Failed to bulk delete prover reports with HTTP status",
-            ". ",
-        )?;
-        let v: norito::json::Value = norito::json::from_slice(resp.body())?;
-        v.get("deleted")
-            .and_then(norito::json::Value::as_u64)
-            .ok_or_else(|| eyre!("invalid delete response"))
     }
     /// Prepare a verifying-key registration transaction for local signing.
     ///

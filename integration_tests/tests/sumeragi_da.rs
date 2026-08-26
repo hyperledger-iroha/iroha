@@ -86,7 +86,7 @@ const V2_BODY_FRAME_MAX_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
 ///
 /// The integration corridor reads this only to authenticate that the exact
 /// held manifest crossed the production body-store boundary after healing.
-#[derive(Debug, norito::Decode)]
+#[derive(Debug, norito::Decode, norito::Encode)]
 struct StoredDaBodyEnvelope {
     version: u16,
     context_id: HeightContextId,
@@ -106,7 +106,7 @@ enum StoredDaBodyValidationOutcome {
 }
 
 /// Test-side mirror of the private, versioned validation marker.
-#[derive(Debug, norito::Decode)]
+#[derive(Debug, norito::Decode, norito::Encode)]
 struct StoredDaBodyValidationMarker {
     version: u16,
     context_id: HeightContextId,
