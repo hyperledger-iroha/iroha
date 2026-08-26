@@ -1016,10 +1016,12 @@ jobs:
       - name: Prove Android candidate compilation offline
         run: ci/check_kagemusha_candidate_android_lab_compile.sh
       - name: Require fresh ABI-23 JNI bridge in complete Kotlin and Java suites
-        run: >-
-          NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"
-          NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"
-          bash ci/check_kagemusha_jvm_native_bridge.sh
+        run: |
+          canonical_java_home="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$JAVA_HOME")"
+          [[ "$canonical_java_home" == /* && -d "$canonical_java_home" && ! -L "$canonical_java_home" ]]
+          NORITO_MOBILE_JAVA_HOME="$canonical_java_home" \
+          NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME" \
+            bash ci/check_kagemusha_jvm_native_bridge.sh
 
   csharp-torii:
     name: C# ABI-21/V4 Torii DTOs

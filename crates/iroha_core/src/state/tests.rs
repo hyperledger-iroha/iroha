@@ -1748,16 +1748,6 @@ fn deserialize_state_snapshot_value_with_kura(
 fn deserialize_state_snapshot_value(value: norito::json::Value) -> Result<State, json::Error> {
     deserialize_state_snapshot_value_with_kura(value, Kura::blank_kura_for_testing())
 }
-fn deserialize_state_snapshot_value_emergency_fast(state: &State) -> Result<State, json::Error> {
-    let input = norito::json::to_json(state)?;
-    deserialize::KuraSeed {
-        kura: Kura::blank_emergency_fast_kura_for_testing(),
-        query_handle: LiveQueryStore::start_test(),
-        #[cfg(feature = "telemetry")]
-        telemetry: crate::telemetry::StateTelemetry::default(),
-    }
-    .into_state_from_json_str_emergency_fast(&input)
-}
 fn install_axt_counter_for_test(state: &State, dataspace: DataSpaceId, next: u64, generation: u64) {
     let record = AxtHandleCounterRecord::try_from_parts(next, generation)
         .expect("AXT counter fixture must use a non-zero next value");
@@ -35159,19 +35149,127 @@ state_test! { sync replication_order_completion_snapshot_anchors_match_committed
         "unexpected completion-anchor height error: {error}"
     );
 }
-state_test! { sync emergency_fast_snapshot_defers_replication_order_completion_anchor_scan
-    let (world, _, order_id) = sample_snapshot_approved_pin_world();
-    let mut state = snapshot_state_from_world(world);
-    let replication_orders = state.world.replication_orders.view();
-    let mut order = replication_orders
-        .get(&order_id)
-        .cloned()
-        .expect("snapshot completed replication order");
-    drop(replication_orders);
-    order.provider_completions[0].finalized_anchor.block_hash = [0xE8; 32];
-    state.world.replication_orders.insert(order_id, order);
-    deserialize_state_snapshot_value_emergency_fast(&state)
-        .expect("emergency Fast restore must defer the completion-anchor prefix scan");
+state_test! { sync emergency_fast_manifest_constructor_binds_boundary_and_maps_hashes
+    let temp_dir = tempfile::tempdir().expect("temporary Kura root");
+    let lane_catalog = LaneCatalog::default();
+    let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
+    let mut kura_config = strict_kura_config_for_testing(temp_dir.path().join("kura"));
+    let (strict_kura, _) = Kura::new_with_configured_lane_catalog(
+        &kura_config,
+        &lane_config,
+        &lane_catalog,
+    )
+    .expect("open configured Strict Kura fixture");
+    let block = new_dummy_block_with_payload(|header| {
+        header.set_height(nonzero!(1_u64));
+    });
+    let committed_hash = block.as_ref().hash();
+    strict_kura
+        .store_block(block)
+        .expect("persist committed Fast-boundary block");
+    let lane_incarnation = derive_static_lane_incarnations(&lane_catalog)[&LaneId::SINGLE];
+    let configured_catalog_hash = strict_kura
+        .configured_lane_catalog_baseline()
+        .expect("read configured lane catalog baseline")
+        .expect("configured test catalog baseline");
+    strict_kura
+        .establish_or_verify_configured_primary_geometry_anchor(
+            lane_config.primary(),
+            lane_incarnation,
+            configured_catalog_hash,
+        )
+        .expect("authenticate the Fast-boundary lane geometry");
+    drop(strict_kura);
+
+    kura_config.init_mode = iroha_config::kura::InitMode::Fast;
+    let (fast_kura, _) = Kura::open_test_kura_with_configured_lane_config(
+        &kura_config,
+        &lane_config,
+    )
+    .expect("reopen Fast Kura fixture");
+    let seed = || deserialize::KuraSeed {
+        kura: Arc::clone(&fast_kura),
+        query_handle: LiveQueryStore::start_test(),
+        #[cfg(feature = "telemetry")]
+        telemetry: crate::telemetry::StateTelemetry::default(),
+    };
+    let chain_id = ChainId::from("fast-manifest-test");
+    let network_id = *DEFAULT_TEST_NETWORK_ID;
+    let height_error = seed()
+        .into_state_from_emergency_fast_manifest(
+            chain_id.clone(),
+            network_id,
+            0,
+            None,
+            [0xA5; 32],
+        )
+        .err()
+        .expect("a stale signed height must fail the exact Kura binding");
+    assert!(
+        height_error.to_string().contains("differs from durable Kura"),
+        "unexpected manifest height error: {height_error}"
+    );
+
+    let wrong_tip = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB6; 32]));
+    let tip_error = seed()
+        .into_state_from_emergency_fast_manifest(
+            chain_id.clone(),
+            network_id,
+            1,
+            Some(wrong_tip),
+            [0xA5; 32],
+        )
+        .err()
+        .expect("a forged signed tip must fail the exact Kura binding");
+    assert!(
+        tip_error.to_string().contains("differs from durable Kura"),
+        "unexpected manifest tip error: {tip_error}"
+    );
+
+    let signed_sccp_policy_hash = [0xC7; 32];
+    let restored = seed()
+        .into_state_from_emergency_fast_manifest(
+            chain_id.clone(),
+            network_id,
+            1,
+            Some(committed_hash),
+            signed_sccp_policy_hash,
+        )
+        .expect("the exact signed manifest boundary must restore");
+    assert_eq!(restored.chain_id, chain_id);
+    assert_eq!(restored.network_id, network_id);
+    assert_eq!(restored.committed_height(), 1);
+    assert_eq!(restored.latest_block_hash_fast(), Some(committed_hash));
+    assert_eq!(
+        restored.sccp_policy_hash_snapshot(),
+        signed_sccp_policy_hash,
+        "Fast capability matching must use the signed compact policy commitment"
+    );
+    assert_ne!(
+        restored.sccp_registry_snapshot().policy_hash(),
+        signed_sccp_policy_hash,
+        "the compact constructor must not synthesize or decode a registry preimage"
+    );
+    assert!(restored.world.accounts.view().iter().next().is_none());
+    assert!(
+        !restored.nexus_runtime_restored_from_snapshot(),
+        "the compact manifest does not authenticate dynamic Nexus runtime state"
+    );
+}
+state_test! { sync sccp_policy_hash_snapshot_uses_validated_registry_in_strict_mode
+    let state = blank_state();
+    let registry = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 {
+        version: 1,
+        lanes: vec![eth_test_lane_for_testing()],
+    })
+    .expect("valid non-empty SCCP registry fixture");
+    let expected = registry.policy_hash();
+    state.set_sccp_registry_for_testing(registry);
+    assert_eq!(
+        state.sccp_policy_hash_snapshot(),
+        expected,
+        "Strict mode must derive its policy identity from the validated registry"
+    );
 }
 state_test! { sync automatic_replication_snapshot_rejects_oversubscribed_capacity
     let (mut world, _, _) = sample_snapshot_approved_pin_world();

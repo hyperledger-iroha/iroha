@@ -6407,6 +6407,7 @@ pub struct SumeragiHandle {
     ingress_ready: Arc<AtomicBool>,
     pending_queue_plan_admission_dirty: Arc<AtomicBool>,
     output_guard: Arc<ConsensusOutputGuard>,
+    emergency_fast_disabled: bool,
 }
 impl SumeragiHandle {
     fn new(
@@ -6424,15 +6425,17 @@ impl SumeragiHandle {
             ingress_ready,
             pending_queue_plan_admission_dirty,
             output_guard,
+            emergency_fast_disabled: false,
         }
     }
     /// Construct a permanently closed consensus ingress without launching an
     /// OS thread or allocating production queue geometry.
     ///
     /// Emergency Fast mode is read-only for its entire process lifetime. The
-    /// false readiness flag makes every owned ingress retryable and prevents
-    /// queue-plan wake publication while preserving the ordinary handle type
-    /// expected by P2P and Torii wiring.
+    /// disabled marker terminally classifies every owned ingress as
+    /// [`SumeragiIngressDisposition::Obsolete`] and prevents queue-plan wake
+    /// publication while preserving the ordinary handle type expected by P2P
+    /// and Torii wiring.
     #[must_use]
     pub fn emergency_fast_disabled() -> Self {
         let block = Arc::new(
@@ -6444,14 +6447,16 @@ impl SumeragiHandle {
         let (wake, wake_rx) = mpsc::sync_channel(0);
         drop(lane_relay_rx);
         drop(wake_rx);
-        Self::new(
+        let mut handle = Self::new(
             block,
             lane_relay,
             wake,
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
             ConsensusOutputGuard::isolated(),
-        )
+        );
+        handle.emergency_fast_disabled = true;
+        handle
     }
     fn wake(&self) {
         let _ = self.wake.try_send(());
@@ -6481,6 +6486,9 @@ impl SumeragiHandle {
         &self,
         inbound: InboundBlockMessage,
     ) -> SumeragiIngressDisposition<InboundBlockMessage> {
+        if self.emergency_fast_disabled {
+            return SumeragiIngressDisposition::Obsolete;
+        }
         let Some(permit) = self.output_guard.acquire() else {
             return SumeragiIngressDisposition::FailStop(inbound);
         };
@@ -6571,6 +6579,9 @@ impl SumeragiHandle {
         &self,
         message: LaneRelayMessage,
     ) -> SumeragiIngressDisposition<LaneRelayMessage> {
+        if self.emergency_fast_disabled {
+            return SumeragiIngressDisposition::Obsolete;
+        }
         let Some(permit) = self.output_guard.acquire() else {
             return SumeragiIngressDisposition::FailStop(message);
         };
@@ -6719,6 +6730,7 @@ impl SumeragiHandle {
 #[cfg(test)]
 mod emergency_fast_handle_tests {
     use super::*;
+    use iroha_crypto::KeyPair;
 
     #[test]
     fn disabled_handle_never_opens_consensus_admission() {
@@ -6726,6 +6738,15 @@ mod emergency_fast_handle_tests {
         assert!(!handle.notify_pending_queue_plan_admission());
         assert!(!handle.ingress_ready.load(Ordering::Acquire));
         assert!(!handle.restart_required());
+        assert!(handle.emergency_fast_disabled);
+        let sender = PeerId::new(KeyPair::random().public_key().clone());
+        assert!(matches!(
+            handle.try_incoming_lane_relay_owned(LaneRelayMessage::QueuePlanAdmissionCertificate {
+                sender,
+                certificate: Arc::new(Vec::new()),
+            }),
+            SumeragiIngressDisposition::Obsolete
+        ));
     }
 }
 #[cfg(any(test, feature = "sumeragi-main-loop-tests"))]

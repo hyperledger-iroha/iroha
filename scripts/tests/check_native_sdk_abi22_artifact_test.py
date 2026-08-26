@@ -1260,6 +1260,11 @@ def test_kotlin_localnet_release_lane_is_mandatory_and_payload_free() -> None:
     assert "if: always()" in mobile
     assert "if-no-files-found: error" in mobile
     assert '"scripts/deploy_localnet.sh"' in mobile
+    assert (
+        'canonical_java_home="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c'
+        in mobile
+    )
+    assert 'NORITO_MOBILE_JAVA_HOME="$canonical_java_home"' in mobile
 
     for required in (
         'rustup_source="$(command -v rustup)"',

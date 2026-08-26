@@ -353,8 +353,15 @@ impl LiveQueryStore {
         // For tests, avoid spawning the pruning task to remove the dependency
         // on a running Tokio runtime. Tests typically exercise iterator paths
         // directly and do not rely on background pruning.
-        let store = Arc::new(Self::from_config(Config::default(), ShutdownSignal::new()));
-        LiveQueryStoreHandle::new(store)
+        Self::from_config(Config::default(), ShutdownSignal::new()).into_inert_handle()
+    }
+    /// Convert this store into a handle without starting its pruning worker.
+    ///
+    /// Use this only when every query and cursor route is unavailable, such as
+    /// emergency Fast startup. A normal query-serving runtime must use
+    /// [`Self::start`] so abandoned cursors are reclaimed.
+    pub fn into_inert_handle(self) -> LiveQueryStoreHandle {
+        LiveQueryStoreHandle::new(Arc::new(self))
     }
     /// Start [`LiveQueryStore`]. Requires a [`tokio::runtime::Runtime`] being run
     /// as it will create new [`tokio::task`] and detach it.
@@ -1005,6 +1012,16 @@ mod tests {
         },
         time::Duration,
     };
+
+    #[test]
+    fn inert_handle_can_be_created_without_a_runtime_or_pruning_worker() {
+        let handle = LiveQueryStore::from_config(Config::default(), ShutdownSignal::new())
+            .into_inert_handle();
+
+        assert!(handle.store.queries.is_empty());
+        assert_eq!(handle.store.query_slots.load(Ordering::Relaxed), 0);
+    }
+
     #[derive(Debug)]
     struct TestMemoryReservation {
         bytes: u64,

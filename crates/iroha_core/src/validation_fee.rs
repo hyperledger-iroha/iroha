@@ -64,8 +64,8 @@ pub(crate) const VALIDATION_FEE_PAYOUT_WRAPPER_ENTRYPOINT_PERMISSION: &str =
     "CanInvokeContractEntrypoint";
 pub(crate) const VALIDATION_FEE_POOL_SWAP_ENTRYPOINT: &str = "swap_exact_in_quote_public";
 
-fn retained_enacted_validation_fee_proposals<'a, 'block, 'world>(
-    state_transaction: &'a StateTransaction<'block, 'world>,
+fn retained_enacted_validation_fee_proposals<'a>(
+    state_transaction: &'a StateTransaction<'_, '_>,
 ) -> impl Iterator<Item = ([u8; 32], &'a ProposalKind)> + 'a {
     let world = &state_transaction.world;
     world

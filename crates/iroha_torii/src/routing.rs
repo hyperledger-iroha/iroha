@@ -1370,7 +1370,12 @@ where
 }
 derived_items! {
 #[cfg(feature = "telemetry")]
-(Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
+(
+    Clone,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)
 #[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/soranet/privacy/event`.
 pub struct RecordSoranetPrivacyEventDto {
@@ -1381,7 +1386,12 @@ pub struct RecordSoranetPrivacyEventDto {
     pub source: Option<String>,
 }
 #[cfg(feature = "telemetry")]
-(Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
+(
+    Clone,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)
 #[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/soranet/privacy/share`.
 pub struct RecordSoranetPrivacyShareDto {
