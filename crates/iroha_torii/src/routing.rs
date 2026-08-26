@@ -44873,7 +44873,7 @@ mod validation_fee_torii_ingress_tests {
                 let ballot_attempt_id = BallotAttemptId::derive_v1(body_instance_id, 0);
                 let release_beacon_session_id = BeaconSessionId::new(parliament_test_root(0xD0));
                 let tle_key_session_id = TleKeySessionId::new(parliament_test_root(0xD1));
-                let release_height = 40;
+                let release_height = 165;
                 let tle_session_id = TleSessionId::derive_v1(
                     ballot_attempt_id,
                     tle_key_session_id,
@@ -44891,13 +44891,13 @@ mod validation_fee_torii_ingress_tests {
                         release_beacon_session_id,
                         30,
                         ParliamentTimedOvn {
-                            registration_phase_blocks: 2,
-                            survivor_freeze_phase_blocks: 2,
+                            registration_phase_blocks: 65,
+                            survivor_freeze_phase_blocks: 64,
                             commitment_phase_blocks: 2,
                             release_delay_blocks: 4,
                             opening_phase_blocks: 2,
                             max_ballot_retries: 2,
-                            max_corpus_entries: 1_000,
+                            max_corpus_entries: 64,
                         },
                         release_height,
                     )
@@ -44914,7 +44914,7 @@ mod validation_fee_torii_ingress_tests {
                         ballot_attempt_id,
                         registration_root,
                         3,
-                        32,
+                        95,
                     )
                     .expect("close deterministic ballot registration");
                 attempt
@@ -44925,7 +44925,7 @@ mod validation_fee_torii_ingress_tests {
                         survivor_root,
                         3,
                         no_recovery_root,
-                        34,
+                        159,
                     )
                     .expect("freeze deterministic ballot survivors");
                 attempt
@@ -44936,7 +44936,7 @@ mod validation_fee_torii_ingress_tests {
                         survivor_root,
                         3,
                         timed_commitment_root,
-                        36,
+                        161,
                     )
                     .expect("freeze deterministic timed-OVN corpus");
                 attempt
@@ -44965,7 +44965,7 @@ mod validation_fee_torii_ingress_tests {
                             nay: 1,
                             abstain: 0,
                         },
-                        41,
+                        166,
                     )
                     .expect("finalize deterministic aggregate ballot");
                 assert_eq!(outcome, ParliamentAggregateOutcomeV1::Approved);

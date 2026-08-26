@@ -4245,7 +4245,11 @@ pub mod governance {
         /// Consensus block-height span allotted to proof-validated registration submissions.
         pub const REGISTRATION_PHASE_BLOCKS: u64 = 3_600;
         /// Consensus block-height span allotted to freezing pre-ballot dropouts and survivors.
-        pub const SURVIVOR_FREEZE_PHASE_BLOCKS: u64 = 300;
+        ///
+        /// The default reserves at least one block for every entry in the maximum corpus. This
+        /// remains safe under the standard genesis gas limit, where a worst-case dropout
+        /// transition may consume most of one block after replaying the bounded cache.
+        pub const SURVIVOR_FREEZE_PHASE_BLOCKS: u64 = 1_000;
         /// Consensus block-height span allotted to the exact masked-ballot commitment corpus.
         pub const COMMITMENT_PHASE_BLOCKS: u64 = 3_600;
         /// Consensus block-height span between commitment close and the earliest timed release.

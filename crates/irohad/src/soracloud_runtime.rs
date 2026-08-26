@@ -186,9 +186,9 @@ use sorafs_car::{
     CarBuildPlan, CarChunk, CarWriter, FilePlan, compute_chunk_plan_digest_sha3, compute_por_root,
 };
 use sorafs_node::store::{StorageBackend, StoredManifest};
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(target_os = "linux")]
 use std::fmt::Write as _;
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(target_os = "linux")]
 use std::io::BufRead as _;
 #[cfg(any(test, target_os = "linux"))]
 use std::net::{Shutdown, TcpListener};
@@ -30689,7 +30689,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
     fn assert_eyre_error_contains_any(error: eyre::Report, expected: &[&str]) {
         let message = format!("{error:#}");
         assert!(
@@ -39324,7 +39323,7 @@ mod tests {
                 .lock()
                 .iter()
                 .filter_map(|instruction| {
-                    iroha_data_model::isi::Instruction::as_any(instruction)
+                    iroha_data_model::isi::Instruction::as_any(&**instruction)
                         .downcast_ref::<
                             iroha_data_model::isi::soracloud::SetSoracloudInrouReplicaRuntimeState,
                         >()

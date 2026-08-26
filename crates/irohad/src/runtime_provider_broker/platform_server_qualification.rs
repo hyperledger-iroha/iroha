@@ -97,6 +97,56 @@ fn consensus_signer_qualification_matches(
         && iroha_config::parameters::is_production_runtime_handle(handle)
         && qualification_matches(binding, qualification.revision, qualification.policy_digest)
 }
+fn requalify_consensus_threshold_signer_binding(
+    state: &BrokerServerStateV1,
+    binding: &ProviderBindingWireV1,
+) -> Result<bool, BrokerError> {
+    if binding.slot == IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id() {
+        let signer = broker_backend!(state, global_beacon_partial_signer);
+        let qualification = signer.qualification().map_err(|error| match error {
+            GlobalBeaconPartialSignerBrokerBackendErrorV1::Unavailable => BrokerError::Unavailable,
+            GlobalBeaconPartialSignerBrokerBackendErrorV1::Rejected => BrokerError::StaleOrRevoked,
+        })?;
+        if !consensus_signer_qualification_matches(binding, signer.handle(), qualification) {
+            return Err(BrokerError::StaleOrRevoked);
+        }
+        let qualification_after = signer.qualification().map_err(|error| match error {
+            GlobalBeaconPartialSignerBrokerBackendErrorV1::Unavailable => BrokerError::Unavailable,
+            GlobalBeaconPartialSignerBrokerBackendErrorV1::Rejected => BrokerError::StaleOrRevoked,
+        })?;
+        if signer.handle() != binding.handle || qualification_after != qualification {
+            return Err(BrokerError::StaleOrRevoked);
+        }
+        return Ok(true);
+    }
+    if binding.slot == IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id() {
+        let signer = broker_backend!(state, parliament_tle_partial_release_signer);
+        let qualification = signer.qualification().map_err(|error| match error {
+            ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Unavailable => {
+                BrokerError::Unavailable
+            }
+            ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected => {
+                BrokerError::StaleOrRevoked
+            }
+        })?;
+        if !consensus_signer_qualification_matches(binding, signer.handle(), qualification) {
+            return Err(BrokerError::StaleOrRevoked);
+        }
+        let qualification_after = signer.qualification().map_err(|error| match error {
+            ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Unavailable => {
+                BrokerError::Unavailable
+            }
+            ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected => {
+                BrokerError::StaleOrRevoked
+            }
+        })?;
+        if signer.handle() != binding.handle || qualification_after != qualification {
+            return Err(BrokerError::StaleOrRevoked);
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
 fn qualify_native_transaction_signer_backend(
     binding: &ProviderBindingWireV1,
     backends: &RuntimeProviderBrokerBackendsV1,
@@ -1776,6 +1826,13 @@ fn qualify_server_binding(
     let configured = configured_observation(state, binding)?;
     if configured.metadata_digest != metadata_digest {
         return Err(BrokerError::BindingMismatch);
+    }
+    // These two backends expose a typed transient failure. Preserve it so the
+    // retained consensus signer proxy can reconnect instead of permanently
+    // latching a stale-provider verdict. Startup still uses the exhaustive
+    // observation path below and therefore remains fail closed.
+    if requalify_consensus_threshold_signer_binding(state, binding)? {
+        return Ok(configured.clone());
     }
     let live = make_server_observation(binding, &state.backends)
         .map_err(|_| BrokerError::StaleOrRevoked)?;

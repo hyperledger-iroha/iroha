@@ -1533,6 +1533,28 @@ fn validate_observation(
                 return Err(BrokerError::BindingMismatch);
             }
         }
+        slot if slot == IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id()
+            || slot == IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id() =>
+        {
+            if observed.signer_metadata.is_some()
+                || observed.governance_request_ingress_qualification.is_some()
+                || observed.moderation_quarantine_active_key_id.is_some()
+                || observed.provider_ingest_signer_binding.is_some()
+                || !observed.provider_ingest_source_provider_ids.is_empty()
+                || !observed.potr_signer_public_key.is_empty()
+                || observed.evidence_viewer_receipt_signer_public_key.is_some()
+                || observed.evidence_viewer_archive_id.is_some()
+                || observed.evidence_viewer_archive_public_key.is_some()
+                || observed
+                    .moderation_checkpoint_attestation_public_key
+                    .is_some()
+                || observed
+                    .moderation_panel_notification_archive_binding
+                    .is_some()
+            {
+                return Err(BrokerError::BindingMismatch);
+            }
+        }
         slot if slot == IrohaRuntimeProviderSlotV1::PotrGatewaySigner.wire_id()
             || slot == IrohaRuntimeProviderSlotV1::PotrProviderSigner.wire_id() =>
         {

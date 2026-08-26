@@ -106,13 +106,41 @@ fn dispatch_server_operation_with_session(
                 || slot == parliament_tle_partial_release_signer_slot =>
         {
             let qualification = if slot == global_beacon_partial_signer_slot {
-                broker_backend!(state, global_beacon_partial_signer)
-                    .qualification()
-                    .map_err(|_| BrokerError::StaleOrRevoked)?
+                let signer = broker_backend!(state, global_beacon_partial_signer);
+                let qualification = signer.qualification().map_err(|error| match error {
+                    GlobalBeaconPartialSignerBrokerBackendErrorV1::Unavailable => {
+                        BrokerError::Unavailable
+                    }
+                    GlobalBeaconPartialSignerBrokerBackendErrorV1::Rejected => {
+                        BrokerError::StaleOrRevoked
+                    }
+                })?;
+                if !consensus_signer_qualification_matches(
+                    &request.binding,
+                    signer.handle(),
+                    qualification,
+                ) {
+                    return Err(BrokerError::StaleOrRevoked);
+                }
+                qualification
             } else {
-                broker_backend!(state, parliament_tle_partial_release_signer)
-                    .qualification()
-                    .map_err(|_| BrokerError::StaleOrRevoked)?
+                let signer = broker_backend!(state, parliament_tle_partial_release_signer);
+                let qualification = signer.qualification().map_err(|error| match error {
+                    ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Unavailable => {
+                        BrokerError::Unavailable
+                    }
+                    ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected => {
+                        BrokerError::StaleOrRevoked
+                    }
+                })?;
+                if !consensus_signer_qualification_matches(
+                    &request.binding,
+                    signer.handle(),
+                    qualification,
+                ) {
+                    return Err(BrokerError::StaleOrRevoked);
+                }
+                qualification
             };
             if qualification.test_marked
                 || qualification.revision == 0
@@ -136,10 +164,17 @@ fn dispatch_server_operation_with_session(
             let backend = broker_backend!(state, global_beacon_partial_signer);
             let partial = backend
                 .sign_partial(aggregator.session(), aggregator.payload())
-                .map_err(|_| BrokerError::Unavailable)?;
+                .map_err(|error| match error {
+                    GlobalBeaconPartialSignerBrokerBackendErrorV1::Unavailable => {
+                        BrokerError::Unavailable
+                    }
+                    GlobalBeaconPartialSignerBrokerBackendErrorV1::Rejected => {
+                        BrokerError::Rejected
+                    }
+                })?;
             aggregator
                 .accept_partial(partial)
-                .map_err(|_| BrokerError::Rejected)?;
+                .map_err(|_| BrokerError::StaleOrRevoked)?;
             requalify()?;
             encode_canonical(
                 &GlobalBeaconPartialSignResultWireV1 { partial },
@@ -156,8 +191,16 @@ fn dispatch_server_operation_with_session(
             let backend = broker_backend!(state, parliament_tle_partial_release_signer);
             let partial = backend
                 .sign_projected_partial_release(&projection)
-                .map_err(|_| BrokerError::Unavailable)?;
-            verify_parliament_tle_partial_release_result(&projection, &partial)?;
+                .map_err(|error| match error {
+                    ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Unavailable => {
+                        BrokerError::Unavailable
+                    }
+                    ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected => {
+                        BrokerError::Rejected
+                    }
+                })?;
+            verify_parliament_tle_partial_release_result(&projection, &partial)
+                .map_err(|_| BrokerError::StaleOrRevoked)?;
             requalify()?;
             encode_canonical(
                 &ParliamentTlePartialReleaseSignResultWireV1 { partial },

@@ -691,48 +691,58 @@ impl KagemushaValidatorQualificationCatalogCaptureV1 {
             not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
         )))]
         {
+            let _ = (
+                subject,
+                reservation,
+                genesis,
+                signed_genesis_source,
+                flattened_toml_config_source,
+                runtime_effective_config,
+                validator_id,
+                validator_signer,
+            );
             return Err(
                 "Kagemusha V4 validator qualification is unsupported on this platform".to_owned(),
             );
         }
-
-        let cached = self.catalog.get(&subject.manifest_sha256).ok_or_else(|| {
-            "Kagemusha V4 validator qualification release is absent from the authenticated catalog"
-                .to_owned()
-        })?;
-        let catalog_consensus_policy_digest =
-            self.catalog.consensus_policy_digest.ok_or_else(|| {
-                "Kagemusha V4 validator qualification requires a configured catalog identity"
-                    .to_owned()
-            })?;
-        let body = build_validator_qualification_body_from_verified_release_v1(
-            &self.seal,
-            cached.resolved.release(),
-            cached.release_record(),
-            cached.qualification_receipt_sha256,
-            catalog_consensus_policy_digest,
-            subject,
-            genesis,
-            signed_genesis_source,
-            flattened_toml_config_source,
-            runtime_effective_config.projection(),
-            validator_id,
-        )?;
-        validate_validator_qualification_body_matches_reservation_v1(&body, reservation)?;
 
         #[cfg(all(
             unix,
             not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
         ))]
         {
+            let cached = self.catalog.get(&subject.manifest_sha256).ok_or_else(|| {
+                "Kagemusha V4 validator qualification release is absent from the authenticated catalog"
+                    .to_owned()
+            })?;
+            let catalog_consensus_policy_digest =
+                self.catalog.consensus_policy_digest.ok_or_else(|| {
+                    "Kagemusha V4 validator qualification requires a configured catalog identity"
+                        .to_owned()
+                })?;
+            let body = build_validator_qualification_body_from_verified_release_v1(
+                &self.seal,
+                cached.resolved.release(),
+                cached.release_record(),
+                cached.qualification_receipt_sha256,
+                catalog_consensus_policy_digest,
+                subject,
+                genesis,
+                signed_genesis_source,
+                flattened_toml_config_source,
+                runtime_effective_config.projection(),
+                validator_id,
+            )?;
+            validate_validator_qualification_body_matches_reservation_v1(&body, reservation)?;
+
             self.seal
                 .validate_for_configured_runtime(&self.policy_path, &self.artifact_dir)?;
             verify_kagemusha_catalog_sealed_paths_v1(&self.seal.paths, 0)?;
+            let current_time_ms = current_unix_time_ms_v1()?;
+            validate_validator_qualification_freshness_at_v1(subject, current_time_ms)?;
+            KagemushaV4ValidatorQualificationSealV1::try_sign(body, validator_signer)
+                .map_err(|error| error.to_string())
         }
-        let current_time_ms = current_unix_time_ms_v1()?;
-        validate_validator_qualification_freshness_at_v1(subject, current_time_ms)?;
-        KagemushaV4ValidatorQualificationSealV1::try_sign(body, validator_signer)
-            .map_err(|error| error.to_string())
     }
 
     /// Authenticate one controller-signed reservation and construct exactly

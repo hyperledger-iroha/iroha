@@ -25,34 +25,26 @@ pub(super) fn collect_configured_bindings(
 
 fn append_optional_consensus_signer_binding(
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
-    network_id: &NetworkId,
     slot: IrohaRuntimeProviderSlotV1,
     handle: Option<&str>,
     revision: Option<u64>,
-    provider_profile_digest: Option<[u8; 32]>,
+    inventory_digest: Option<[u8; 32]>,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
-    match (handle, revision, provider_profile_digest) {
+    match (handle, revision, inventory_digest) {
         (None, None, None) => Ok(()),
-        (Some(handle), Some(revision), Some(provider_profile_digest))
-            if revision != 0 && provider_profile_digest != [0; 32] =>
+        (Some(handle), Some(revision), Some(inventory_digest))
+            if revision != 0 && inventory_digest != [0; 32] =>
         {
-            let handle_len = u64::try_from(handle.len())
-                .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
-            let policy_digest: [u8; 32] = iroha_crypto::Hash::new_from_chunks(&[
-                b"iroha.runtime-provider.consensus-signing-profile.v1\0",
-                &slot.wire_id().to_be_bytes(),
-                network_id.as_bytes(),
-                &handle_len.to_be_bytes(),
-                handle.as_bytes(),
-                &revision.to_be_bytes(),
-                &provider_profile_digest,
-            ])
-            .into();
             bindings.push(IrohaRuntimeProviderBindingV1::try_new(
                 slot,
                 handle,
                 Some(revision),
-                Some(policy_digest),
+                // Threshold credentials bind this field to the canonical
+                // public session-and-seat inventory digest. The inventory
+                // already commits to the role slot and network; wrapping it
+                // here would make the configured catalog impossible for the
+                // credential decoder to satisfy.
+                Some(inventory_digest),
             )?);
             Ok(())
         }
@@ -64,10 +56,8 @@ fn collect_consensus_governance_signer_bindings(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
-    let network_id = NetworkId::from_genesis_hash(config.genesis.expected_hash);
     append_optional_consensus_signer_binding(
         bindings,
-        &network_id,
         IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
         config
             .sumeragi
@@ -82,7 +72,6 @@ fn collect_consensus_governance_signer_bindings(
     )?;
     append_optional_consensus_signer_binding(
         bindings,
-        &network_id,
         IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
         config
             .gov

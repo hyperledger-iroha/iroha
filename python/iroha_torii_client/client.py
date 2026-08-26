@@ -171,6 +171,7 @@ from .offline_models import (
     OfflineVerifyingKeyJson,
     OfflineVerifyingKeyRecordJson,
 )
+from .parliament_api import ParliamentApiV1Mixin
 from .runtime_governance_auth import RuntimeGovernanceAuthMixin
 from .sccp import (
     SccpBridgeSubmitResponse,
@@ -8938,6 +8939,7 @@ class ToriiClient(
     _ToriiClientKaigiRelayMixin,
     _ToriiClientSpaceDirectoryMixin,
     _ToriiClientGovernanceBallotMixin,
+    ParliamentApiV1Mixin,
     RuntimeGovernanceAuthMixin,
 ):
     """HTTP helper for Torii attachments, prover, and governance endpoints."""

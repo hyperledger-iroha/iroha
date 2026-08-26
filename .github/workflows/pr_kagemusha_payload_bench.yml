@@ -816,7 +816,7 @@ jobs:
           wheel_dir="$(mktemp -d)"
           (
             cd python/iroha_python
-            python -m maturin build --locked --release --interpreter python --out "${wheel_dir}"
+            IROHA_PYTHON_SKIP_RUNTIME_LINK=1 python -m maturin build --locked --release --interpreter python --out "${wheel_dir}"
           )
           python -m pip install --no-deps "${wheel_dir}"/iroha_python-*.whl
       - name: Enforce the Kagemusha Python SDK boundary

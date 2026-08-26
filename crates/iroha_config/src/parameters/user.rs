@@ -2811,6 +2811,13 @@ impl Governance {
                 "{name} must be within 1..=1_000"
             );
         }
+        let parliament_timed_ovn = self.parliament_timed_ovn.parse();
+        let maximum_hidden_body_size = self.policy_jury_size.max(self.confirmation_jury_size);
+        assert!(
+            usize::try_from(parliament_timed_ovn.max_corpus_entries)
+                .is_ok_and(|max_corpus_entries| max_corpus_entries >= maximum_hidden_body_size),
+            "governance.parliament_timed_ovn.max_corpus_entries must cover the largest hidden-ballot body (max(policy_jury_size, confirmation_jury_size)={maximum_hidden_body_size})"
+        );
         let viral_incentives = actual::ViralIncentives {
             incentive_pool_account: parse_account_id_literal(
                 &self.viral_incentive_pool_account,
@@ -2942,7 +2949,7 @@ impl Governance {
             parliament_quorum_bps: self.parliament_quorum_bps,
             parliament_invitation_phase_blocks: self.parliament_invitation_phase_blocks,
             parliament_public_finding_phase_blocks: self.parliament_public_finding_phase_blocks,
-            parliament_timed_ovn: self.parliament_timed_ovn.parse(),
+            parliament_timed_ovn,
             parliament_tle_partial_release_signer_provider_handle: self
                 .parliament_tle_partial_release_signer_provider_handle,
             parliament_tle_partial_release_signer_provider_revision: self
@@ -3024,9 +3031,12 @@ mod governance_tests {
     fn parliament_timed_ovn_file_config_parses_deterministic_height_windows() {
         let table: toml::Table = toml::from_str(
             r#"
+policy_jury_size = 16
+confirmation_jury_size = 16
+
 [parliament_timed_ovn]
-registration_phase_blocks = 11
-survivor_freeze_phase_blocks = 12
+registration_phase_blocks = 17
+survivor_freeze_phase_blocks = 16
 commitment_phase_blocks = 13
 release_delay_blocks = 14
 opening_phase_blocks = 15
@@ -3045,8 +3055,8 @@ max_corpus_entries = 16
         assert_eq!(
             parsed,
             actual::ParliamentTimedOvn {
-                registration_phase_blocks: 11,
-                survivor_freeze_phase_blocks: 12,
+                registration_phase_blocks: 17,
+                survivor_freeze_phase_blocks: 16,
                 commitment_phase_blocks: 13,
                 release_delay_blocks: 14,
                 opening_phase_blocks: 15,
@@ -3054,16 +3064,16 @@ max_corpus_entries = 16
                 max_corpus_entries: 16,
             }
         );
-        assert_eq!(parsed.checked_attempt_span_blocks(), Some(65));
-        assert_eq!(parsed.checked_max_lifecycle_span_blocks(), Some(1_040));
+        assert_eq!(parsed.checked_attempt_span_blocks(), Some(75));
+        assert_eq!(parsed.checked_max_lifecycle_span_blocks(), Some(1_200));
     }
 
     #[test]
     fn parliament_timed_ovn_defaults_are_bounded_and_valid() {
         let parsed = ParliamentTimedOvn::default().parse();
 
-        assert_eq!(parsed.checked_attempt_span_blocks(), Some(8_700));
-        assert_eq!(parsed.checked_max_lifecycle_span_blocks(), Some(34_800));
+        assert_eq!(parsed.checked_attempt_span_blocks(), Some(9_400));
+        assert_eq!(parsed.checked_max_lifecycle_span_blocks(), Some(37_600));
         assert_eq!(
             parsed.opening_phase_blocks,
             defaults::governance::parliament_timed_ovn::OPENING_PHASE_BLOCKS
@@ -3098,6 +3108,12 @@ max_corpus_entries = 16
             ..parsed
         };
         maximum_retries.assert_valid();
+        let minimum_maximum_corpus_window = actual::ParliamentTimedOvn {
+            commitment_phase_blocks: 32,
+            max_corpus_entries: 1_000,
+            ..parsed
+        };
+        minimum_maximum_corpus_window.assert_valid();
     }
 
     #[test]
@@ -3114,6 +3130,21 @@ max_corpus_entries = 16
             },
             actual::ParliamentTimedOvn {
                 commitment_phase_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                commitment_phase_blocks: 31,
+                max_corpus_entries: 1_000,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                registration_phase_blocks: 1_000,
+                max_corpus_entries: 1_000,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                survivor_freeze_phase_blocks: 999,
+                max_corpus_entries: 1_000,
                 ..valid
             },
             actual::ParliamentTimedOvn {
@@ -3156,6 +3187,21 @@ max_corpus_entries = 16
                 "invalid timed-OVN policy must fail closed: {policy:?}"
             );
         }
+    }
+
+    #[test]
+    fn parliament_timed_ovn_corpus_covers_every_hidden_body_seat() {
+        let mut governance = Governance::default();
+        governance.parliament_timed_ovn.max_corpus_entries = 499;
+        governance.parliament_timed_ovn.registration_phase_blocks = 500;
+        governance.parliament_timed_ovn.survivor_freeze_phase_blocks = 499;
+        governance.policy_jury_size = 500;
+        governance.confirmation_jury_size = 499;
+
+        assert!(
+            std::panic::catch_unwind(|| governance.parse()).is_err(),
+            "a hidden body larger than the timed-OVN corpus must fail at startup"
+        );
     }
 
     #[test]

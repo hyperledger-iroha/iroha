@@ -1128,17 +1128,28 @@ fn validate_operation_response_for_client(
     session_network_id: &NetworkId,
 ) -> Result<(), BrokerError> {
     validate_operation_response_envelope(request, response)?;
+    let threshold_typed_caller = matches!(
+        (request.binding.slot, request.operation),
+        (slot, OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1)
+            if slot == IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id()
+    ) || matches!(
+        (request.binding.slot, request.operation),
+        (slot, OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1)
+            if slot == IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id()
+    );
     if response.status == STATUS_OK_V1
-        && matches!(
+        && (matches!(
             request.operation,
             OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1
                 | OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1
-        )
+        ) || threshold_typed_caller)
     {
-        // The caller decodes and validates the full sealed record exactly
-        // once while the response-owned admission remains live. Repeating
-        // a large typed decode here would multiply the composed
-        // reservation without adding an independent validation boundary.
+        // The typed caller decodes and validates the full result exactly once
+        // while the response-owned admission remains live. Repeating a large
+        // sealed-record decode would multiply the composed reservation, while
+        // repeating a complete threshold transcript reconstruction can exhaust
+        // the daemon's ordinary thread stack. The authenticated server still
+        // performs its independent semantic validation before responding.
         return Ok(());
     }
     validate_operation_result(

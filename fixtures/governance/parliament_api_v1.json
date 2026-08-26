@@ -27,6 +27,7 @@
     "attempt_state_bytes": 16777216,
     "timed_ovn_registration_record_bytes": 3624,
     "timed_ovn_ballot_record_bytes": 2858,
+    "timed_ovn_ballot_chunk_max_records": 32,
     "timed_ovn_corpus_entries": 1000,
     "timed_ovn_casting_proof_response_bytes": 8388608,
     "timed_ovn_casting_proof_finality_entries": 64
@@ -91,11 +92,21 @@
       "public_finding_phase_blocks",
       "public_finding_deadline_height",
       "no_result_kind",
-      "no_result_height"
+      "no_result_height",
+      "timed_ovn_progress"
     ],
     "ordering": "exact required_bodies order",
     "deadline_semantics": "inclusive",
-    "hidden_ballot_projection": "lifecycle status and no-result class/height only; no registrations, records, roots, shares, or openings"
+    "hidden_ballot_projection": "active ballot id/status and aggregate-only contiguous corpus progress; no registrations, records, participant ids, roots, shares, individual openings, or secrets"
+  },
+  "timed_ovn_progress": {
+    "json_fields": ["ballot_attempt_id", "status", "frozen_survivor_count", "accepted_ballot_prefix_count"],
+    "absent": "no active hidden ballot",
+    "before_survivor_freeze": "both counts null",
+    "survivors_frozen": "frozen_survivor_count is positive and accepted_ballot_prefix_count is zero",
+    "corpus_open": "accepted_ballot_prefix_count is the proof-verified next contiguous offset and is strictly less than frozen_survivor_count",
+    "sealed_or_released": "accepted_ballot_prefix_count equals frozen_survivor_count",
+    "forbidden_fields": ["registration_records", "dropout_participant_hashes", "survivor_participant_hashes", "ballot_records", "roots", "secret_share", "partial_releases", "individual_openings"]
   },
   "tle_release_context": {
     "authorized_status": "Opening",

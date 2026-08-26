@@ -9395,6 +9395,114 @@
           }
         ]
       },
+      "GovernanceParliamentBallotAttemptStatusV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "Registration",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "SurvivorFreeze",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "TimedCommitment",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "AwaitingRelease",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "Opening",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "Finalized",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "NoResult",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "Superseded",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "GovernanceParliamentBallotAttemptPayloadV1": {
         "additionalProperties": false,
         "properties": {
@@ -9837,7 +9945,7 @@
       },
       "GovernanceParliamentBodyStateProjectionV1": {
         "additionalProperties": false,
-        "description": "Ordered bounded lifecycle/deadline facts. Hidden ballot registrations, records, roots, shares, and openings are intentionally excluded.",
+        "description": "Ordered bounded lifecycle/deadline facts and aggregate-only timed-OVN progress. Hidden ballot registrations, participant identifiers, records, roots, shares, individual openings, and secrets are intentionally excluded.",
         "properties": {
           "body": {
             "$ref": "#/components/schemas/GovernanceParliamentBodyV1"
@@ -9919,6 +10027,16 @@
                 "type": "null"
               }
             ]
+          },
+          "timed_ovn_progress": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GovernanceParliamentTimedOvnProgressV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -9929,7 +10047,8 @@
           "public_finding_phase_blocks",
           "public_finding_deadline_height",
           "no_result_kind",
-          "no_result_height"
+          "no_result_height",
+          "timed_ovn_progress"
         ],
         "type": "object"
       },
@@ -10344,10 +10463,11 @@
             "$ref": "#/components/schemas/GovernanceParliamentDigest32V1"
           },
           "ballot_records": {
+            "description": "Next contiguous nonempty timed-OVN ballot chunk; at most 32 records per transition while the complete corpus remains bounded to 1,000.",
             "items": {
               "$ref": "#/components/schemas/GovernanceParliamentBallotRecordV1"
             },
-            "maxItems": 1000,
+            "maxItems": 32,
             "minItems": 1,
             "type": "array"
           }
@@ -11690,6 +11810,51 @@
         ],
         "type": "object",
         "x-iroha-norito-schema": "iroha.torii.v1.parliament.timed_ovn_casting_proof.response"
+      },
+      "GovernanceParliamentTimedOvnProgressV1": {
+        "additionalProperties": false,
+        "description": "Aggregate-only active-ballot progress. Both counts are null before survivor freeze; once frozen, the prefix is the next contiguous corpus offset and never exceeds the survivor count. It is strictly smaller during TimedCommitment and equal after sealing or release. No participant identifiers, records, roots, shares, individual openings, or secrets are exposed.",
+        "properties": {
+          "accepted_ballot_prefix_count": {
+            "oneOf": [
+              {
+                "format": "uint32",
+                "maximum": 1000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ballot_attempt_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentIdentifier32V1"
+          },
+          "frozen_survivor_count": {
+            "oneOf": [
+              {
+                "format": "uint32",
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/GovernanceParliamentBallotAttemptStatusV1"
+          }
+        },
+        "required": [
+          "ballot_attempt_id",
+          "status",
+          "frozen_survivor_count",
+          "accepted_ballot_prefix_count"
+        ],
+        "type": "object"
       },
       "GovernanceParliamentTimedOvnRegistrationRecordHexV1": {
         "description": "Exact canonical 3,624-byte authenticated timed-OVN registration record encoded as lowercase hexadecimal.",

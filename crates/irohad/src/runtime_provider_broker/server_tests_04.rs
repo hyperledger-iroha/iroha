@@ -1,5 +1,7 @@
 use crate::external_software_signer::{
+    consensus_threshold_beacon_broker_max_committee_test_fixture_v1,
     consensus_threshold_beacon_broker_test_fixture_v1,
+    consensus_threshold_tle_broker_max_committee_test_fixture_v1,
     consensus_threshold_tle_broker_test_fixture_v1,
 };
 use crate::runtime_provider_broker::api::{
@@ -8,6 +10,30 @@ use crate::runtime_provider_broker::api::{
     ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     ParliamentTlePartialReleaseSignerBrokerBackendV1,
 };
+
+fn read_consensus_signer_operation(
+    stream: &mut UnixStream,
+    session_network_id: &NetworkId,
+) -> OperationRequestV1 {
+    // The fake broker represents a separate process, so its decode admission
+    // must not compete with the in-process client for one process-local pool.
+    let decode_pool = Arc::new(DecodeResourcePoolV1::new(MAX_BROKER_SHARED_DECODE_BYTES_V1));
+    let (announced_slot, announced_operation, frame, admission) =
+        read_operation_request_frame_inner(stream, None, Some(decode_pool))
+            .expect("read fake consensus-signer operation");
+    let _scope = admission.enter();
+    let request = decode_operation_frame::<OperationRequestV1>(
+        &frame,
+        FRAME_KIND_OPERATION_REQUEST_V1,
+        announced_operation,
+    )
+    .expect("decode fake consensus-signer operation");
+    validate_operation_request_with_session(&request, None, session_network_id)
+        .expect("validate network-bound fake consensus-signer operation");
+    assert_eq!(request.binding.slot, announced_slot);
+    assert_eq!(request.operation, announced_operation);
+    request
+}
 
 #[test]
 fn fenced_privacy_head_reader_binding_is_exact_and_drift_checked() {
@@ -2172,7 +2198,101 @@ impl GlobalBeaconPartialSignerBrokerBackendV1 for TestGlobalBeaconBrokerBackendV
         iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1,
         GlobalBeaconPartialSignerBrokerBackendErrorV1,
     > {
-        Err(GlobalBeaconPartialSignerBrokerBackendErrorV1)
+        Err(GlobalBeaconPartialSignerBrokerBackendErrorV1::Rejected)
+    }
+}
+
+struct TransientQualificationGlobalBeaconBrokerBackendV1 {
+    inner: Arc<dyn GlobalBeaconPartialSignerBrokerBackendV1>,
+    qualification_calls: AtomicU64,
+    fail_on_qualification_call: AtomicU64,
+    sign_calls: AtomicU64,
+}
+
+impl TransientQualificationGlobalBeaconBrokerBackendV1 {
+    fn fail_after_additional_qualification_calls(&self, additional_calls: u64) {
+        let current = self.qualification_calls.load(Ordering::Acquire);
+        self.fail_on_qualification_call.store(
+            current
+                .checked_add(additional_calls)
+                .expect("qualification test counter remains bounded"),
+            Ordering::Release,
+        );
+    }
+}
+
+impl GlobalBeaconPartialSignerBrokerBackendV1
+    for TransientQualificationGlobalBeaconBrokerBackendV1
+{
+    fn handle(&self) -> &str {
+        self.inner.handle()
+    }
+
+    fn qualification(
+        &self,
+    ) -> Result<ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1>
+    {
+        let call = self.qualification_calls.fetch_add(1, Ordering::AcqRel) + 1;
+        if self.fail_on_qualification_call.load(Ordering::Acquire) == call {
+            return Err(GlobalBeaconPartialSignerBrokerBackendErrorV1::Unavailable);
+        }
+        self.inner.qualification()
+    }
+
+    fn sign_partial(
+        &self,
+        session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+        payload: &[u8],
+    ) -> Result<
+        iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1,
+        GlobalBeaconPartialSignerBrokerBackendErrorV1,
+    > {
+        self.sign_calls.fetch_add(1, Ordering::AcqRel);
+        self.inner.sign_partial(session, payload)
+    }
+}
+
+struct InvalidGlobalBeaconBrokerBackendV1 {
+    handle: String,
+    qualification: ConsensusSignerProviderQualificationV1,
+    sign_calls: Arc<AtomicU64>,
+}
+
+impl GlobalBeaconPartialSignerBrokerBackendV1 for InvalidGlobalBeaconBrokerBackendV1 {
+    fn handle(&self) -> &str {
+        &self.handle
+    }
+
+    fn qualification(
+        &self,
+    ) -> Result<ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1>
+    {
+        Ok(self.qualification)
+    }
+
+    fn sign_partial(
+        &self,
+        session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+        _payload: &[u8],
+    ) -> Result<
+        iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1,
+        GlobalBeaconPartialSignerBrokerBackendErrorV1,
+    > {
+        self.sign_calls.fetch_add(1, Ordering::AcqRel);
+        Ok(
+            iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1 {
+                session_id: session.record().session_id,
+                signer_index: 1,
+                signature_share: [0; 48],
+                proof: iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureProofV1 {
+                    x: [0; 96],
+                    y: [0; 48],
+                    z_s: [0; 32],
+                    z_r: [0; 32],
+                    z_u: [0; 32],
+                },
+            },
+        )
     }
 }
 
@@ -2202,7 +2322,7 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1 for TestParliamentTleBroke
         iroha_core::tle_release::TlePartialReleaseShareV1,
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     > {
-        Err(ParliamentTlePartialReleaseSignerBrokerBackendErrorV1)
+        Err(ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected)
     }
 }
 
@@ -2220,6 +2340,13 @@ fn consensus_signer_broker_startup_is_exact_and_fail_closed() {
         revision,
         digest,
     );
+    let beacon_binding = ProviderBindingWireV1::try_from_binding(
+        beacon_catalog.iter().next().expect("beacon catalog entry"),
+    )
+    .expect("project beacon signer binding");
+    validate_wire_binding(&beacon_binding).expect("accept exact beacon signer binding");
+    validate_observation(&beacon_binding, &observation(&beacon_binding))
+        .expect("accept metadata-free beacon signer observation");
     assert!(matches!(
         prepare_server_state(&beacon_catalog, RuntimeProviderBrokerBackendsV1::new()),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
@@ -2269,6 +2396,32 @@ fn consensus_signer_broker_startup_is_exact_and_fail_closed() {
         revision,
         digest,
     );
+    let tle_binding = ProviderBindingWireV1::try_from_binding(
+        tle_catalog.iter().next().expect("TLE catalog entry"),
+    )
+    .expect("project TLE signer binding");
+    validate_wire_binding(&tle_binding).expect("accept exact TLE signer binding");
+    validate_observation(&tle_binding, &observation(&tle_binding))
+        .expect("accept metadata-free TLE signer observation");
+    for binding in [&beacon_binding, &tle_binding] {
+        let mut checkpoint_confused = observation(binding);
+        checkpoint_confused.moderation_checkpoint_attestation_public_key = Some(TEST_SIGNER_KEY);
+        metadata_digest(&mut checkpoint_confused);
+        assert_eq!(
+            validate_observation(binding, &checkpoint_confused),
+            Err(BrokerError::BindingMismatch)
+        );
+
+        let mut archive_confused = observation(binding);
+        archive_confused.moderation_panel_notification_archive_binding =
+            evidence_viewer_binding(IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive)
+                .moderation_panel_notification_archive_binding;
+        metadata_digest(&mut archive_confused);
+        assert_eq!(
+            validate_observation(binding, &archive_confused),
+            Err(BrokerError::BindingMismatch)
+        );
+    }
     assert!(matches!(
         prepare_server_state(
             &tle_catalog,
@@ -2312,6 +2465,79 @@ fn consensus_signer_broker_startup_is_exact_and_fail_closed() {
 }
 
 #[test]
+fn threshold_client_shallow_validation_is_exact_to_ok_typed_slot_pairs() {
+    let catalog = IrohaRuntimeProviderBindingsV1::qualified_for_test(
+        "threshold-client-response-test",
+        IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
+        "software://iroha/consensus-threshold/primary",
+        7,
+        [0xA7; 32],
+    );
+    let beacon_binding = ProviderBindingWireV1::try_from_binding(
+        catalog.iter().next().expect("one beacon response binding"),
+    )
+    .expect("project beacon response binding");
+    let request = make_operation_request(
+        TEST_SESSION_ID,
+        1,
+        beacon_binding.clone(),
+        observation(&beacon_binding).metadata_digest,
+        OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1,
+        vec![0xA5],
+    )
+    .expect("seal shallow beacon response request");
+    let malformed_result = vec![0x5A];
+    let correlated_ok = operation_response(&request, STATUS_OK_V1, malformed_result.clone());
+    assert_eq!(
+        validate_operation_response_for_client(&request, &correlated_ok, catalog.network_id()),
+        Ok(()),
+        "the exact typed proxy owns semantic validation for a correlated OK result"
+    );
+    let correlated_rejection =
+        operation_response(&request, STATUS_REJECTED_V1, malformed_result.clone());
+    assert_eq!(
+        validate_operation_response_for_client(
+            &request,
+            &correlated_rejection,
+            catalog.network_id(),
+        ),
+        Err(BrokerError::Protocol),
+        "error statuses must retain the exact payload-free result matrix"
+    );
+
+    let tle_catalog = IrohaRuntimeProviderBindingsV1::qualified_for_test(
+        "threshold-client-response-test",
+        IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
+        "software://iroha/consensus-threshold/primary",
+        7,
+        [0xA7; 32],
+    );
+    let tle_binding = ProviderBindingWireV1::try_from_binding(
+        tle_catalog.iter().next().expect("one TLE response binding"),
+    )
+    .expect("project TLE response binding");
+    let cross_slot = make_operation_request(
+        TEST_SESSION_ID,
+        2,
+        tle_binding.clone(),
+        observation(&tle_binding).metadata_digest,
+        OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1,
+        vec![0xA5],
+    )
+    .expect("seal cross-slot threshold response request");
+    let cross_slot_ok = operation_response(&cross_slot, STATUS_OK_V1, malformed_result);
+    assert_eq!(
+        validate_operation_response_for_client(
+            &cross_slot,
+            &cross_slot_ok,
+            tle_catalog.network_id(),
+        ),
+        Err(BrokerError::BindingMismatch),
+        "an operation number alone must never enter the shallow typed-proxy path"
+    );
+}
+
+#[test]
 fn global_beacon_partial_signer_round_trips_over_authenticated_broker() {
     let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
     let (_directory, policy, shutdown, server) =
@@ -2352,6 +2578,365 @@ fn global_beacon_partial_signer_round_trips_over_authenticated_broker() {
         .join()
         .expect("join global-beacon broker")
         .expect("global-beacon broker exits cleanly");
+}
+
+#[test]
+fn maximum_committee_global_beacon_proxy_round_trips_on_ordinary_stack() {
+    let fixture = consensus_threshold_beacon_broker_max_committee_test_fixture_v1();
+    assert_eq!(fixture.session.record().committee_size, 31);
+    assert_eq!(fixture.session.record().threshold, 11);
+    let (_directory, policy, shutdown, server) =
+        start_signer(fixture.catalog.clone(), fixture.backends);
+    let dependencies =
+        resolve(&fixture.catalog, &policy).expect("resolve maximum-committee beacon proxy");
+    let signer = dependencies
+        .sumeragi_global_beacon_partial_signer
+        .as_ref()
+        .expect("resolved maximum-committee beacon signer");
+    let anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+        height: 50,
+        block_hash:
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([0xB6; 32]),
+            ),
+    };
+    let mut verifier = iroha_core::beacon::GlobalThresholdBeaconPulseAggregatorV1::new(
+        fixture.session.clone(),
+        51,
+        anchor,
+    )
+    .expect("construct maximum-committee brokered beacon pulse");
+    let partial = iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1::sign_partial(
+        signer.as_ref(),
+        &fixture.session,
+        verifier.payload(),
+    )
+    .expect("sign maximum-committee beacon partial on the ordinary client stack");
+    assert!(
+        verifier
+            .accept_partial(partial)
+            .expect("independently verify maximum-committee beacon partial")
+    );
+
+    drop(dependencies);
+    shutdown.request_shutdown();
+    server
+        .join()
+        .expect("join maximum-committee beacon broker")
+        .expect("maximum-committee beacon broker exits cleanly");
+}
+
+#[test]
+fn transient_beacon_qualification_reconnects_without_signer_replay() {
+    for (failure_offset, block_hash_byte) in [(1_u64, 0xB4_u8), (3_u64, 0xB5_u8)] {
+        let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
+        let inner = fixture
+            .backends
+            .global_beacon_partial_signer
+            .as_ref()
+            .expect("fixture has one global-beacon signer")
+            .clone();
+        let backend = Arc::new(TransientQualificationGlobalBeaconBrokerBackendV1 {
+            inner,
+            qualification_calls: AtomicU64::new(0),
+            fail_on_qualification_call: AtomicU64::new(0),
+            sign_calls: AtomicU64::new(0),
+        });
+        let backends = fixture
+            .backends
+            .with_global_beacon_partial_signer(backend.clone());
+        let (_directory, policy, shutdown, server) =
+            start_signer(fixture.catalog.clone(), backends);
+        let dependencies =
+            resolve(&fixture.catalog, &policy).expect("resolve transient beacon broker proxy");
+        let signer = dependencies
+            .sumeragi_global_beacon_partial_signer
+            .as_ref()
+            .expect("resolved transient global-beacon partial signer");
+        backend.fail_after_additional_qualification_calls(failure_offset);
+
+        let anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+            height: 50,
+            block_hash:
+                iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                    iroha_crypto::Hash::prehashed([block_hash_byte; 32]),
+                ),
+        };
+        let mut verifier = iroha_core::beacon::GlobalThresholdBeaconPulseAggregatorV1::new(
+            fixture.session.clone(),
+            51,
+            anchor,
+        )
+        .expect("construct transient-qualification beacon pulse");
+        let partial = iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1::sign_partial(
+            signer.as_ref(),
+            &fixture.session,
+            verifier.payload(),
+        )
+        .expect("transient qualification outage reconnects and retries once");
+        assert!(
+            verifier
+                .accept_partial(partial)
+                .expect("verify partial after qualification reconnect")
+        );
+        assert_eq!(
+            backend.sign_calls.load(Ordering::Acquire),
+            1,
+            "qualification failure at offset {failure_offset} must not replay signing"
+        );
+
+        drop(dependencies);
+        shutdown.request_shutdown();
+        server
+            .join()
+            .expect("join transient-qualification beacon broker")
+            .expect("transient-qualification beacon broker exits cleanly");
+    }
+}
+
+#[test]
+fn global_beacon_partial_signer_reconnects_after_broker_restart() {
+    let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
+    let catalog = fixture.catalog.clone();
+    let session = fixture.session.clone();
+    let (_directory, policy, shutdown, server) = start_signer(fixture.catalog, fixture.backends);
+    let dependencies = resolve(&catalog, &policy).expect("resolve retained beacon broker proxy");
+    let signer = dependencies
+        .sumeragi_global_beacon_partial_signer
+        .as_ref()
+        .expect("resolved retained global-beacon partial signer");
+
+    shutdown.request_shutdown();
+    server
+        .join()
+        .expect("join predecessor global-beacon broker")
+        .expect("predecessor global-beacon broker exits cleanly");
+
+    let replacement = consensus_threshold_beacon_broker_test_fixture_v1();
+    let replacement_policy = policy.clone();
+    let replacement_lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+    let server_lifecycle = Arc::clone(&replacement_lifecycle);
+    let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+    let replacement_server = thread::spawn(move || {
+        serve_with_policy_and_lifecycle(
+            &replacement.catalog,
+            replacement.backends,
+            &replacement_policy,
+            server_lifecycle,
+            move || {
+                ready_sender
+                    .send(())
+                    .expect("publish replacement beacon broker readiness");
+            },
+        )
+    });
+    ready_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("replacement beacon broker becomes ready");
+
+    let anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+        height: 50,
+        block_hash:
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([0xB2; 32]),
+            ),
+    };
+    let mut verifier = iroha_core::beacon::GlobalThresholdBeaconPulseAggregatorV1::new(
+        session.clone(),
+        51,
+        anchor,
+    )
+    .expect("construct post-restart beacon pulse");
+    let partial = iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1::sign_partial(
+        signer.as_ref(),
+        &session,
+        verifier.payload(),
+    )
+    .expect("retained beacon proxy reconnects after broker restart");
+    assert!(
+        verifier
+            .accept_partial(partial)
+            .expect("verify post-restart brokered beacon partial")
+    );
+
+    drop(dependencies);
+    replacement_lifecycle.request_shutdown();
+    replacement_server
+        .join()
+        .expect("join replacement global-beacon broker")
+        .expect("replacement global-beacon broker exits cleanly");
+}
+
+#[test]
+fn invalid_beacon_partial_permanently_poisons_without_reconnect_or_replay() {
+    let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
+    let catalog = fixture.catalog;
+    let session = fixture.session;
+    drop(fixture.backends);
+    let configured = catalog.iter().next().expect("one beacon signer binding");
+    let sign_calls = Arc::new(AtomicU64::new(0));
+    let backends = RuntimeProviderBrokerBackendsV1::new().with_global_beacon_partial_signer(
+        Arc::new(InvalidGlobalBeaconBrokerBackendV1 {
+            handle: configured.handle().to_owned(),
+            qualification: ConsensusSignerProviderQualificationV1::new(
+                configured.revision().expect("beacon signer revision"),
+                configured
+                    .policy_digest()
+                    .expect("beacon signer policy digest"),
+                false,
+            ),
+            sign_calls: Arc::clone(&sign_calls),
+        }),
+    );
+    let (_directory, policy, shutdown, server) = start_signer(catalog.clone(), backends);
+    let dependencies = resolve(&catalog, &policy).expect("resolve invalid beacon broker proxy");
+    let signer = dependencies
+        .sumeragi_global_beacon_partial_signer
+        .as_ref()
+        .expect("resolved invalid beacon partial signer");
+    let anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+        height: 50,
+        block_hash:
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([0xB3; 32]),
+            ),
+    };
+    let verifier = iroha_core::beacon::GlobalThresholdBeaconPulseAggregatorV1::new(
+        session.clone(),
+        51,
+        anchor,
+    )
+    .expect("construct invalid-provider beacon pulse");
+    for attempt in 0..2 {
+        assert!(
+            iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1::sign_partial(
+                signer.as_ref(),
+                &session,
+                verifier.payload(),
+            )
+            .is_err(),
+            "invalid provider output must fail on attempt {attempt}"
+        );
+    }
+    assert_eq!(
+        sign_calls.load(Ordering::Acquire),
+        1,
+        "the latched stale signer failure must reject locally without reconnect or replay"
+    );
+
+    drop(dependencies);
+    shutdown.request_shutdown();
+    server
+        .join()
+        .expect("join invalid beacon broker")
+        .expect("invalid beacon broker exits cleanly");
+}
+
+#[test]
+fn correlated_malformed_beacon_response_is_rejected_by_typed_proxy() {
+    let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
+    let catalog = fixture.catalog;
+    let session = fixture.session;
+    drop(fixture.backends);
+    let binding = ProviderBindingWireV1::try_from_binding(
+        catalog.iter().next().expect("one beacon signer binding"),
+    )
+    .expect("project malformed-response beacon binding");
+    let revision = binding.revision.expect("beacon signer revision");
+    let policy_digest = binding.policy_digest.expect("beacon signer policy digest");
+    let invalid_session_id = session.record().session_id;
+    let server_network_id = *catalog.network_id();
+    let (_directory, _path, policy, listener) = bind_fake_broker();
+    let server_binding = binding.clone();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept malformed beacon client");
+        let handshake = read_handshake(&mut stream);
+        assert_eq!(handshake.requested_catalog, vec![server_binding]);
+        send_handshake(&mut stream, &handshake_response(&handshake));
+        for expected_request_id in 1_u64..=3 {
+            let qualify = read_operation(&mut stream);
+            assert_eq!(qualify.request_id, expected_request_id);
+            assert_eq!(qualify.operation, OPERATION_QUALIFY_V1);
+            let qualification = encode_canonical(
+                &QualificationResultWireV1 {
+                    revision,
+                    policy_digest,
+                },
+                MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+            )
+            .expect("encode malformed-response beacon qualification");
+            send_operation(
+                &mut stream,
+                &operation_response(&qualify, STATUS_OK_V1, qualification),
+            );
+        }
+        let sign = read_consensus_signer_operation(&mut stream, &server_network_id);
+        assert_eq!(sign.request_id, 4);
+        assert_eq!(sign.operation, OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1);
+        let malformed = encode_canonical(
+            &GlobalBeaconPartialSignResultWireV1 {
+                partial: iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1 {
+                    session_id: invalid_session_id,
+                    signer_index: 1,
+                    signature_share: [0; 48],
+                    proof:
+                        iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureProofV1 {
+                            x: [0; 96],
+                            y: [0; 48],
+                            z_s: [0; 32],
+                            z_r: [0; 32],
+                            z_u: [0; 32],
+                        },
+                },
+            },
+            MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        )
+        .expect("encode correlated malformed beacon result");
+        send_operation(
+            &mut stream,
+            &operation_response(&sign, STATUS_OK_V1, malformed),
+        );
+    });
+    let dependencies =
+        resolve(&catalog, &policy).expect("resolve proxy through correlated fake beacon broker");
+    let signer = dependencies
+        .sumeragi_global_beacon_partial_signer
+        .as_ref()
+        .expect("resolved malformed-response beacon signer");
+    let anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+        height: 50,
+        block_hash:
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([0xB7; 32]),
+            ),
+    };
+    let verifier = iroha_core::beacon::GlobalThresholdBeaconPulseAggregatorV1::new(
+        session.clone(),
+        51,
+        anchor,
+    )
+    .expect("construct malformed-response beacon pulse");
+    assert_eq!(
+        iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1::sign_partial(
+            signer.as_ref(),
+            &session,
+            verifier.payload(),
+        ),
+        Err(ERROR_REJECTED.to_owned()),
+        "an envelope-correlated OK response cannot bypass typed proof verification"
+    );
+    assert_eq!(
+        iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1::sign_partial(
+            signer.as_ref(),
+            &session,
+            verifier.payload(),
+        ),
+        Err(ERROR_UNAVAILABLE.to_owned()),
+        "semantic rejection must permanently poison the session without replay"
+    );
+    server
+        .join()
+        .expect("join malformed-response beacon broker");
 }
 
 #[test]
@@ -2404,4 +2989,271 @@ fn parliament_tle_partial_release_round_trips_over_authenticated_broker() {
         .join()
         .expect("join Parliament TLE broker")
         .expect("Parliament TLE broker exits cleanly");
+}
+
+#[test]
+fn maximum_committee_parliament_tle_proxy_round_trips_on_ordinary_stack() {
+    let fixture = consensus_threshold_tle_broker_max_committee_test_fixture_v1();
+    assert_eq!(fixture.session.public_state().committee_size, 31);
+    assert_eq!(fixture.session.public_state().threshold, 11);
+    let (_directory, policy, shutdown, server) =
+        start_signer(fixture.catalog.clone(), fixture.backends);
+    let requested_catalog = fixture
+        .catalog
+        .iter()
+        .map(ProviderBindingWireV1::try_from_binding)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("project maximum-committee TLE broker catalog");
+    let (session, observations) = BrokerSession::connect(
+        &policy,
+        fixture.catalog.chain_id(),
+        *fixture.catalog.network_id(),
+        requested_catalog.clone(),
+    )
+    .expect("authenticate maximum-committee TLE broker client session");
+    let signer = ParliamentTleBrokerPartialReleaseSigner {
+        session,
+        binding: requested_catalog[0].clone(),
+        metadata_digest: observations[0].metadata_digest,
+    };
+    let first = live_exact_qualification(
+        signer.session.as_ref(),
+        &signer.binding,
+        signer.metadata_digest,
+    )
+    .expect("first maximum-committee TLE proxy qualification");
+    let second = live_exact_qualification(
+        signer.session.as_ref(),
+        &signer.binding,
+        signer.metadata_digest,
+    )
+    .expect("second maximum-committee TLE proxy qualification");
+    assert_eq!(first, second);
+    let partial = signer
+        .sign_projected_partial_release(
+            &fixture.projection,
+            &fixture.session,
+            &fixture.identity,
+            fixture.projection.finalized_height,
+        )
+        .expect("sign maximum-committee TLE partial on the ordinary client stack");
+    fixture
+        .session
+        .verify_partial_release(
+            &fixture.identity,
+            fixture.projection.finalized_height,
+            &partial,
+        )
+        .expect("independently verify maximum-committee TLE partial");
+
+    drop(signer);
+    shutdown.request_shutdown();
+    server
+        .join()
+        .expect("join maximum-committee TLE broker")
+        .expect("maximum-committee TLE broker exits cleanly");
+}
+
+#[test]
+fn correlated_malformed_tle_response_is_rejected_by_typed_proxy() {
+    let fixture = consensus_threshold_tle_broker_test_fixture_v1();
+    let catalog = fixture.catalog;
+    let projection = fixture.projection;
+    let session = fixture.session;
+    let identity = fixture.identity;
+    drop(fixture.backends);
+    let binding = ProviderBindingWireV1::try_from_binding(
+        catalog.iter().next().expect("one TLE signer binding"),
+    )
+    .expect("project malformed-response TLE binding");
+    let revision = binding.revision.expect("TLE signer revision");
+    let policy_digest = binding.policy_digest.expect("TLE signer policy digest");
+    let key_session_id = session.public_state().key_session_id;
+    let server_network_id = *catalog.network_id();
+    let (_directory, _path, policy, listener) = bind_fake_broker();
+    let server_binding = binding.clone();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept malformed TLE client");
+        let handshake = read_handshake(&mut stream);
+        assert_eq!(handshake.requested_catalog, vec![server_binding]);
+        send_handshake(&mut stream, &handshake_response(&handshake));
+        for expected_request_id in 1_u64..=3 {
+            let qualify = read_operation(&mut stream);
+            assert_eq!(qualify.request_id, expected_request_id);
+            assert_eq!(qualify.operation, OPERATION_QUALIFY_V1);
+            let qualification = encode_canonical(
+                &QualificationResultWireV1 {
+                    revision,
+                    policy_digest,
+                },
+                MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+            )
+            .expect("encode malformed-response TLE qualification");
+            send_operation(
+                &mut stream,
+                &operation_response(&qualify, STATUS_OK_V1, qualification),
+            );
+        }
+        let sign = read_consensus_signer_operation(&mut stream, &server_network_id);
+        assert_eq!(sign.request_id, 4);
+        assert_eq!(
+            sign.operation,
+            OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1
+        );
+        let malformed = encode_canonical(
+            &ParliamentTlePartialReleaseSignResultWireV1 {
+                partial: iroha_core::tle_release::TlePartialReleaseShareV1 {
+                    key_session_id,
+                    identity_digest: [0; 32],
+                    participant_index: 1,
+                    sigma: [0; 48],
+                    proof_x: [0; 96],
+                    proof_y: [0; 48],
+                    z_s: [0; 32],
+                    z_r: [0; 32],
+                    z_u: [0; 32],
+                },
+            },
+            MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        )
+        .expect("encode correlated malformed TLE result");
+        send_operation(
+            &mut stream,
+            &operation_response(&sign, STATUS_OK_V1, malformed),
+        );
+    });
+    let requested_catalog = catalog
+        .iter()
+        .map(ProviderBindingWireV1::try_from_binding)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("project malformed-response TLE catalog");
+    let (broker_session, observations) = BrokerSession::connect(
+        &policy,
+        catalog.chain_id(),
+        *catalog.network_id(),
+        requested_catalog.clone(),
+    )
+    .expect("authenticate malformed-response TLE broker session");
+    let signer = ParliamentTleBrokerPartialReleaseSigner {
+        session: broker_session,
+        binding: requested_catalog[0].clone(),
+        metadata_digest: observations[0].metadata_digest,
+    };
+    let first = live_exact_qualification(
+        signer.session.as_ref(),
+        &signer.binding,
+        signer.metadata_digest,
+    )
+    .expect("first malformed-response TLE qualification");
+    let second = live_exact_qualification(
+        signer.session.as_ref(),
+        &signer.binding,
+        signer.metadata_digest,
+    )
+    .expect("second malformed-response TLE qualification");
+    assert_eq!(first, second);
+    assert_eq!(
+        signer.sign_projected_partial_release(
+            &projection,
+            &session,
+            &identity,
+            projection.finalized_height,
+        ),
+        Err(BrokerError::Rejected),
+        "an envelope-correlated OK response cannot bypass typed TLE proof verification"
+    );
+    assert_eq!(
+        signer.sign_projected_partial_release(
+            &projection,
+            &session,
+            &identity,
+            projection.finalized_height,
+        ),
+        Err(BrokerError::Protocol),
+        "semantic rejection must permanently poison the TLE session without replay"
+    );
+    server.join().expect("join malformed-response TLE broker");
+}
+
+#[test]
+fn parliament_tle_partial_release_reconnects_after_broker_restart() {
+    let fixture = consensus_threshold_tle_broker_test_fixture_v1();
+    let catalog = fixture.catalog.clone();
+    let projection = fixture.projection.clone();
+    let session = fixture.session.clone();
+    let identity = fixture.identity;
+    let (_directory, policy, shutdown, server) = start_signer(fixture.catalog, fixture.backends);
+    let requested_catalog = catalog
+        .iter()
+        .map(ProviderBindingWireV1::try_from_binding)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("project exact retained TLE broker catalog");
+    let (client, observations) = BrokerSession::connect(
+        &policy,
+        catalog.chain_id(),
+        *catalog.network_id(),
+        requested_catalog.clone(),
+    )
+    .expect("authenticate retained TLE broker client session");
+
+    shutdown.request_shutdown();
+    server
+        .join()
+        .expect("join predecessor TLE broker")
+        .expect("predecessor TLE broker exits cleanly");
+
+    let replacement = consensus_threshold_tle_broker_test_fixture_v1();
+    let replacement_policy = policy.clone();
+    let replacement_lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+    let server_lifecycle = Arc::clone(&replacement_lifecycle);
+    let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+    let replacement_server = thread::spawn(move || {
+        serve_with_policy_and_lifecycle(
+            &replacement.catalog,
+            replacement.backends,
+            &replacement_policy,
+            server_lifecycle,
+            move || {
+                ready_sender
+                    .send(())
+                    .expect("publish replacement TLE broker readiness");
+            },
+        )
+    });
+    ready_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("replacement TLE broker becomes ready");
+
+    let signed = retry_consensus_signer_once_after_unavailable(client.as_ref(), || {
+        let payload = encode_canonical(
+            &ParliamentTlePartialReleaseSignRequestWireV1 {
+                projection: projection.clone(),
+            },
+            MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        )?;
+        let result = client.call(
+            &requested_catalog[0],
+            observations[0].metadata_digest,
+            OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1,
+            payload,
+            false,
+        )?;
+        client
+            .decode_operation_result::<ParliamentTlePartialReleaseSignResultWireV1>(
+                &result,
+                OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1,
+            )
+            .map(|result| result.partial)
+    })
+    .expect("retained TLE proxy reconnects after broker restart");
+    session
+        .verify_partial_release(&identity, 100, &signed)
+        .expect("verify post-restart brokered TLE partial");
+
+    drop(client);
+    replacement_lifecycle.request_shutdown();
+    replacement_server
+        .join()
+        .expect("join replacement TLE broker")
+        .expect("replacement TLE broker exits cleanly");
 }

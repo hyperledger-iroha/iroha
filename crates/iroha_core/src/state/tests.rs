@@ -40219,6 +40219,29 @@ state_test! { sync block_rejects_failing_execute_trigger_and_rolls_back
         "asset definition created by a failing trigger must not persist after block application",
     );
 }
+
+#[test]
+fn parliament_timed_ovn_resource_reservations_cover_both_heavy_windows() {
+    let incumbent = [(10, 30), (50, 60)];
+
+    assert!(parliament_timed_ovn_resource_windows_overlap_v1(
+        [(30, 40), (70, 80)],
+        incumbent,
+    ));
+    assert!(parliament_timed_ovn_resource_windows_overlap_v1(
+        [(31, 49), (60, 70)],
+        incumbent,
+    ));
+    assert!(parliament_timed_ovn_resource_windows_overlap_v1(
+        [(31, 49), (40, 50)],
+        incumbent,
+    ));
+    assert!(!parliament_timed_ovn_resource_windows_overlap_v1(
+        [(31, 49), (61, 70)],
+        incumbent,
+    ));
+}
+
 include!("tests/kagemusha_runtime_effective_config_tests.rs");
 include!("tests/confidential_digest_and_queue_plan_helpers.rs");
 include!("autonomous_merge_and_queue_plan_tests.rs"); // Queue-plan and merge-ledger cases.

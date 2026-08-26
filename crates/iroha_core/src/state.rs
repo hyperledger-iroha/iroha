@@ -20752,6 +20752,23 @@ impl<'world> WorldBlock<'world> {
         parameters.commit();
     }
 }
+
+/// Return whether either closed resource window of two timed-OVN schedules intersects.
+///
+/// Each schedule carries its registration-through-commitment window and its release-through-
+/// opening window. Admission reserves both because every V1 registration, maximum ballot chunk,
+/// and aggregate opening can consume most of the standard per-block gas budget.
+fn parliament_timed_ovn_resource_windows_overlap_v1(
+    left: [(u64, u64); 2],
+    right: [(u64, u64); 2],
+) -> bool {
+    left.into_iter().any(|(left_start, left_end)| {
+        right
+            .into_iter()
+            .any(|(right_start, right_end)| left_start <= right_end && right_start <= left_end)
+    })
+}
+
 impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// Update the executor data model, purge permissions it no longer declares, and synchronize
     /// derived parameter defaults.
@@ -21748,6 +21765,103 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if self.timed_ovn_evidence.get(&ballot_attempt_id).is_none()
             && matches!(&state, TimedOvnLifecycleStateV1::Registered(_))
         {
+            let governance_attempt_id =
+                iroha_data_model::governance::types::GovernanceAttemptId::new(
+                    state.session().governance_attempt_id,
+                );
+            let candidate_attempt = self
+                .parliament_attempts
+                .get(&governance_attempt_id)
+                .filter(|attempt| {
+                    attempt.attempt().status
+                        == iroha_data_model::governance::types::GovernanceAttemptStatusV1::Active
+                })
+                .ok_or(TimedOvnEvidenceError::InvalidLifecycleTransition)?;
+            let candidate_ballot = candidate_attempt
+                .ballot(&ballot_attempt_id)
+                .filter(|ballot| {
+                    ballot.attempt().status
+                        == iroha_data_model::governance::types::BallotAttemptStatusV1::Registration
+                        && candidate_attempt
+                            .active_ballot_for_body(&ballot.attempt().body_instance_id)
+                            .is_some_and(|active| active.attempt().id == ballot_attempt_id)
+                        && candidate_attempt
+                            .body(&ballot.attempt().body_instance_id)
+                            .is_some_and(|body| {
+                                body.instance().status
+                                    == iroha_data_model::governance::types::BodyInstanceStatusV1::Balloting
+                            })
+                })
+                .ok_or(TimedOvnEvidenceError::InvalidLifecycleTransition)?;
+            let candidate_release_height = candidate_ballot
+                .release_height()
+                .ok_or(TimedOvnEvidenceError::InvalidLifecycleTransition)?;
+            let candidate_resource_windows = [
+                (
+                    candidate_ballot.registered_at_height(),
+                    candidate_ballot.commitment_close_height(),
+                ),
+                (
+                    candidate_release_height,
+                    candidate_ballot.opening_deadline_height(),
+                ),
+            ];
+            for (existing_ballot_id, lifecycle) in self.timed_ovn_evidence.iter() {
+                let existing_governance_attempt_id =
+                    iroha_data_model::governance::types::GovernanceAttemptId::new(
+                        lifecycle.session().governance_attempt_id,
+                    );
+                let Some(existing_attempt) = self
+                    .parliament_attempts
+                    .get(&existing_governance_attempt_id)
+                else {
+                    return Err(TimedOvnEvidenceError::InvalidLifecycleTransition);
+                };
+                if existing_attempt.attempt().status
+                    != iroha_data_model::governance::types::GovernanceAttemptStatusV1::Active
+                {
+                    continue;
+                }
+                let Some(existing_ballot) = existing_attempt.ballot(existing_ballot_id) else {
+                    return Err(TimedOvnEvidenceError::InvalidLifecycleTransition);
+                };
+                if matches!(
+                    existing_ballot.attempt().status,
+                    iroha_data_model::governance::types::BallotAttemptStatusV1::Finalized
+                        | iroha_data_model::governance::types::BallotAttemptStatusV1::NoResult
+                        | iroha_data_model::governance::types::BallotAttemptStatusV1::Superseded
+                ) || existing_attempt
+                    .active_ballot_for_body(&existing_ballot.attempt().body_instance_id)
+                    .is_none_or(|active| active.attempt().id != *existing_ballot_id)
+                    || existing_attempt
+                        .body(&existing_ballot.attempt().body_instance_id)
+                        .is_none_or(|body| {
+                            body.instance().status
+                                != iroha_data_model::governance::types::BodyInstanceStatusV1::Balloting
+                        })
+                {
+                    continue;
+                }
+                let existing_release_height = existing_ballot
+                    .release_height()
+                    .ok_or(TimedOvnEvidenceError::InvalidLifecycleTransition)?;
+                let existing_resource_windows = [
+                    (
+                        existing_ballot.registered_at_height(),
+                        existing_ballot.commitment_close_height(),
+                    ),
+                    (
+                        existing_release_height,
+                        existing_ballot.opening_deadline_height(),
+                    ),
+                ];
+                if parliament_timed_ovn_resource_windows_overlap_v1(
+                    candidate_resource_windows,
+                    existing_resource_windows,
+                ) {
+                    return Err(TimedOvnEvidenceError::ResourceScheduleConflict);
+                }
+            }
             let concurrent_casting_contexts = self
                 .timed_ovn_evidence
                 .iter()
@@ -21759,7 +21873,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                         TimedOvnLifecycleStateV1::RegistrationClosed(_) => {
                             iroha_data_model::governance::types::BallotAttemptStatusV1::SurvivorFreeze
                         }
-                        TimedOvnLifecycleStateV1::SurvivorsFrozen(_) => {
+                        TimedOvnLifecycleStateV1::SurvivorsFrozen(_)
+                        | TimedOvnLifecycleStateV1::CorpusOpen(_) => {
                             iroha_data_model::governance::types::BallotAttemptStatusV1::TimedCommitment
                         }
                         TimedOvnLifecycleStateV1::Sealed(_)
@@ -21806,7 +21921,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .cloned()
             .ok_or(TimedOvnEvidenceError::TleKeySessionMismatch)?
             .validate()?;
-        state.validate(&key_session)?;
+        state.validate_committed_cache(&key_session)?;
         match self.timed_ovn_evidence.get(&ballot_attempt_id) {
             Some(previous) if previous == &state => return Ok(()),
             Some(previous) if state.is_direct_successor_of(previous) => {}
@@ -57990,6 +58105,7 @@ impl StateTransaction<'_, '_> {
                         context,
                         summary.prepared_contract().artifact(),
                         &event,
+                        id,
                     )
                 });
                 let validation_outcome =
@@ -58256,6 +58372,7 @@ impl StateTransaction<'_, '_> {
                                     context,
                                     prepared_contract.artifact(),
                                     &event,
+                                    id,
                                 )
                             });
                             let validation_outcome =

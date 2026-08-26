@@ -733,6 +733,16 @@ fn compact_binding_from_world_v1(
             Some(*frozen.dropout_root()),
             Some(compact_release_binding_v1(*frozen.release_identity())),
         ),
+        TimedOvnLifecycleStateV1::CorpusOpen(open) => (
+            Some(
+                u32::try_from(open.frozen().survivor_participant_hashes().len())
+                    .map_err(|_| TimedOvnCastingAuthorizationErrorV1::BindingMismatch)?,
+            ),
+            Some(*open.frozen().dropout_root()),
+            Some(compact_release_binding_v1(
+                *open.frozen().release_identity(),
+            )),
+        ),
         TimedOvnLifecycleStateV1::Sealed(_) | TimedOvnLifecycleStateV1::Released(_) => {
             return Ok(None);
         }
@@ -899,6 +909,10 @@ pub fn authorize_parliament_timed_ovn_casting_context_v1(
         TimedOvnLifecycleStateV1::SurvivorsFrozen(frozen) => (
             Some(frozen.survivor_participant_hashes().to_vec()),
             Some(*frozen.release_identity()),
+        ),
+        TimedOvnLifecycleStateV1::CorpusOpen(open) => (
+            Some(open.frozen().survivor_participant_hashes().to_vec()),
+            Some(*open.frozen().release_identity()),
         ),
         TimedOvnLifecycleStateV1::Sealed(_) | TimedOvnLifecycleStateV1::Released(_) => {
             return Err(TimedOvnCastingAuthorizationErrorV1::PhaseNotCastable);

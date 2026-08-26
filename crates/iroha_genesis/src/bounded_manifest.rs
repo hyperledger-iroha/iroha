@@ -52,6 +52,90 @@ const GENESIS_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
     ))
 ))]
 compile_error!("genesis artifact loading requires a defined no-follow open flag on this target");
+#[cfg(windows)]
+const GENESIS_FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+#[cfg(windows)]
+const GENESIS_FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+#[cfg(windows)]
+const GENESIS_FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const GENESIS_FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+#[cfg(windows)]
+const GENESIS_FILE_SHARE_READ: u32 = 0x0000_0001;
+#[cfg(windows)]
+const GENESIS_FILE_SHARE_WRITE: u32 = 0x0000_0002;
+#[cfg(windows)]
+const GENESIS_FILE_SHARE_DELETE: u32 = 0x0000_0004;
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct GenesisFileTime {
+    low: u32,
+    high: u32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct GenesisByHandleFileInformation {
+    file_attributes: u32,
+    _creation_time: GenesisFileTime,
+    _last_access_time: GenesisFileTime,
+    last_write_time: GenesisFileTime,
+    volume_serial_number: u32,
+    file_size_high: u32,
+    file_size_low: u32,
+    _number_of_links: u32,
+    file_index_high: u32,
+    file_index_low: u32,
+}
+
+#[cfg(windows)]
+const _: () = assert!(std::mem::size_of::<GenesisByHandleFileInformation>() == 52);
+#[cfg(windows)]
+const _: () = assert!(std::mem::align_of::<GenesisByHandleFileInformation>() == 4);
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GenesisWindowsFileSnapshot {
+    file_attributes: u32,
+    last_write_time: u64,
+    volume_serial_number: u32,
+    file_size: u64,
+    file_index: u64,
+}
+
+#[cfg(windows)]
+impl GenesisWindowsFileSnapshot {
+    const fn is_direct_regular_file(self) -> bool {
+        self.file_attributes
+            & (GENESIS_FILE_ATTRIBUTE_DIRECTORY | GENESIS_FILE_ATTRIBUTE_REPARSE_POINT)
+            == 0
+    }
+
+    const fn same_identity(self, other: Self) -> bool {
+        self.volume_serial_number == other.volume_serial_number
+            && self.file_index == other.file_index
+    }
+
+    const fn same_revision(self, other: Self) -> bool {
+        self.file_attributes == other.file_attributes
+            && self.last_write_time == other.last_write_time
+            && self.file_size == other.file_size
+    }
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+#[allow(unsafe_code)]
+unsafe extern "system" {
+    #[link_name = "GetFileInformationByHandle"]
+    fn get_genesis_file_information_by_handle(
+        file: *mut std::ffi::c_void,
+        information: *mut GenesisByHandleFileInformation,
+    ) -> i32;
+}
 /// Read one stable direct genesis-manifest file under the V1 byte and lexical budgets.
 ///
 /// # Errors
@@ -208,6 +292,67 @@ pub fn read_genesis_ivm_bytecode(path: &Path, remaining_total_bytes: usize) -> i
         "genesis IVM bytecode",
     )
 }
+fn open_genesis_artifact_file(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(GENESIS_O_NOFOLLOW_FLAG);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        options
+            .share_mode(
+                GENESIS_FILE_SHARE_READ | GENESIS_FILE_SHARE_WRITE | GENESIS_FILE_SHARE_DELETE,
+            )
+            .custom_flags(
+                GENESIS_FILE_FLAG_OPEN_REPARSE_POINT | GENESIS_FILE_FLAG_BACKUP_SEMANTICS,
+            );
+    }
+    options.open(path)
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn genesis_windows_file_snapshot(file: &fs::File) -> io::Result<GenesisWindowsFileSnapshot> {
+    use std::{mem::MaybeUninit, os::windows::io::AsRawHandle as _};
+
+    let mut information = MaybeUninit::<GenesisByHandleFileInformation>::uninit();
+    // SAFETY: `file` owns a valid handle for the duration of this call, and
+    // Windows initializes `information` when the call succeeds.
+    let status = unsafe {
+        get_genesis_file_information_by_handle(
+            file.as_raw_handle().cast(),
+            information.as_mut_ptr(),
+        )
+    };
+    if status == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: a successful `GetFileInformationByHandle` call initialized the value.
+    let information = unsafe { information.assume_init() };
+    let combine = |high: u32, low: u32| (u64::from(high) << 32) | u64::from(low);
+    Ok(GenesisWindowsFileSnapshot {
+        file_attributes: information.file_attributes,
+        last_write_time: combine(
+            information.last_write_time.high,
+            information.last_write_time.low,
+        ),
+        volume_serial_number: information.volume_serial_number,
+        file_size: combine(information.file_size_high, information.file_size_low),
+        file_index: combine(information.file_index_high, information.file_index_low),
+    })
+}
+
+#[cfg(windows)]
+fn genesis_windows_path_snapshot(path: &Path) -> io::Result<GenesisWindowsFileSnapshot> {
+    let named = open_genesis_artifact_file(path)?;
+    genesis_windows_file_snapshot(&named)
+}
+
+#[cfg(not(windows))]
 fn read_bounded_regular_file(path: &Path, max_bytes: usize, label: &str) -> io::Result<Vec<u8>> {
     let max_bytes_u64 = u64::try_from(max_bytes).map_err(|_| {
         io::Error::new(
@@ -225,20 +370,7 @@ fn read_bounded_regular_file(path: &Path, max_bytes: usize, label: &str) -> io::
     if named_before.len() > max_bytes_u64 {
         return Err(genesis_artifact_too_large(label, max_bytes));
     }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(GENESIS_O_NOFOLLOW_FLAG);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    let mut file = options.open(path)?;
+    let mut file = open_genesis_artifact_file(path)?;
     let opened_before = file.metadata()?;
     if genesis_metadata_is_link(&opened_before)
         || !opened_before.is_file()
@@ -273,6 +405,69 @@ fn read_bounded_regular_file(path: &Path, max_bytes: usize, label: &str) -> io::
         || bytes.len() != capacity
         || !same_genesis_artifact_snapshot(&opened_before, &opened_after)
         || !same_genesis_artifact_snapshot(&opened_after, &named_after)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} changed while it was being read"),
+        ));
+    }
+    Ok(bytes)
+}
+
+#[cfg(windows)]
+fn read_bounded_regular_file(path: &Path, max_bytes: usize, label: &str) -> io::Result<Vec<u8>> {
+    let max_bytes_u64 = u64::try_from(max_bytes).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} byte limit is not representable on this platform"),
+        )
+    })?;
+    let mut file = open_genesis_artifact_file(path)?;
+    let opened_before = genesis_windows_file_snapshot(&file)?;
+    if !opened_before.is_direct_regular_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} must be a direct regular file"),
+        ));
+    }
+    if opened_before.file_size > max_bytes_u64 {
+        return Err(genesis_artifact_too_large(label, max_bytes));
+    }
+    let named_before = genesis_windows_path_snapshot(path)?;
+    if !named_before.is_direct_regular_file()
+        || !opened_before.same_identity(named_before)
+        || !opened_before.same_revision(named_before)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} changed identity or type while opening"),
+        ));
+    }
+    let capacity = usize::try_from(opened_before.file_size).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} length cannot be addressed on this platform"),
+        )
+    })?;
+    // Reserve the max-plus-one sentinel up front. If a max-sized file grows
+    // while open, `read_to_end` must not double the entire buffer merely to
+    // retain the one byte needed to reject it.
+    let mut bytes = Vec::with_capacity(capacity.saturating_add(1));
+    file.by_ref()
+        .take(opened_before.file_size.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > max_bytes {
+        return Err(genesis_artifact_too_large(label, max_bytes));
+    }
+    let opened_after = genesis_windows_file_snapshot(&file)?;
+    let named_after = genesis_windows_path_snapshot(path)?;
+    if !opened_after.is_direct_regular_file()
+        || !named_after.is_direct_regular_file()
+        || bytes.len() != capacity
+        || !opened_before.same_identity(opened_after)
+        || !opened_after.same_identity(named_after)
+        || !opened_before.same_revision(opened_after)
+        || !opened_after.same_revision(named_after)
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -371,18 +566,9 @@ fn count_json_token(tokens: &mut usize, max_tokens: usize) -> io::Result<()> {
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn genesis_metadata_is_link(metadata: &fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt as _;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
-    }
-    #[cfg(not(windows))]
-    false
+    metadata.file_type().is_symlink()
 }
 #[cfg(unix)]
 fn same_genesis_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
@@ -394,16 +580,6 @@ fn same_genesis_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> 
         && left.mtime_nsec() == right.mtime_nsec()
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
-}
-#[cfg(windows)]
-fn same_genesis_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-        && left.file_size() == right.file_size()
-        && left.last_write_time() == right.last_write_time()
 }
 #[cfg(not(any(unix, windows)))]
 fn same_genesis_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
@@ -441,6 +617,37 @@ mod tests {
         symlink(&target, &link).expect("create genesis-artifact symlink");
         let error = read_bounded_regular_file(&link, 32, "test genesis artifact")
             .expect_err("genesis artifact symlink must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_handle_identity_accepts_hard_links_and_distinguishes_files() {
+        let directory = tempfile::tempdir().expect("create genesis-artifact test directory");
+        let original = directory.path().join("original.bin");
+        let hard_link = directory.path().join("hard-link.bin");
+        let equal_file = directory.path().join("equal-file.bin");
+        fs::write(&original, b"same bytes").expect("write original genesis artifact");
+        fs::hard_link(&original, &hard_link).expect("create genesis-artifact hard link");
+        fs::write(&equal_file, b"same bytes").expect("write equal-content genesis artifact");
+
+        let original_snapshot =
+            genesis_windows_path_snapshot(&original).expect("snapshot original genesis artifact");
+        let hard_link_snapshot =
+            genesis_windows_path_snapshot(&hard_link).expect("snapshot hard-link genesis artifact");
+        let equal_file_snapshot = genesis_windows_path_snapshot(&equal_file)
+            .expect("snapshot equal-content genesis artifact");
+        assert!(original_snapshot.is_direct_regular_file());
+        assert!(original_snapshot.same_identity(hard_link_snapshot));
+        assert!(original_snapshot.same_revision(hard_link_snapshot));
+        assert!(!original_snapshot.same_identity(equal_file_snapshot));
+        assert_eq!(original_snapshot.file_size, b"same bytes".len() as u64);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_bounded_reader_rejects_directory_as_invalid_data() {
+        let directory = tempfile::tempdir().expect("create genesis-artifact test directory");
+        let error = read_bounded_regular_file(directory.path(), 32, "test genesis artifact")
+            .expect_err("genesis artifact directory must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
     #[test]

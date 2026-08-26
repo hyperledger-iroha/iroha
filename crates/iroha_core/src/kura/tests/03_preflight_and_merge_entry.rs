@@ -756,7 +756,7 @@ fn pending_certified_merge_sidecar_is_scoped_to_exact_carrier_round() {
         assert!(!temp_path.exists());
         assert!(target_path.is_file());
         assert!(Kura::sidecar_is_single_link(
-            &fs::symlink_metadata(&target_path)
+            &crate::secure_file_metadata::from_path(&target_path)
                 .expect("read recovered pending merge target metadata")
         ));
         let path_bytes = u64::try_from(recovery_bytes.len()).expect("fixture length fits u64");
@@ -1627,7 +1627,8 @@ fn pending_queue_plan_admission_startup_completes_hard_link_publication() {
         Some(bytes)
     );
     assert!(Kura::sidecar_is_single_link(
-        &fs::symlink_metadata(&target_path).expect("read recovered target metadata")
+        &crate::secure_file_metadata::from_path(&target_path)
+            .expect("read recovered target metadata")
     ));
     let recovered_enforced = kura
         .kura_disk_usage_bytes()

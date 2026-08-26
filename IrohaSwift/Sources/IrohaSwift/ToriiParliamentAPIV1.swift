@@ -295,9 +295,9 @@ public enum ToriiParliamentLifecycleTransitionV1: Sendable, Equatable, Encodable
         case let .freezeTimedOvnCorpus(id, records):
             _ = try ToriiParliamentAPIV1.requireIdentifier(id, field: "ballot_attempt_id")
             guard !records.isEmpty,
-                  records.count <= ToriiParliamentAPIV1.maximumCorpusEntries else {
+                  records.count <= ToriiParliamentAPIV1.maximumTimedOvnBallotChunkRecords else {
                 throw ToriiClientError.invalidPayload(
-                    "ballot_records must contain one through 1000 records."
+                    "ballot_records must contain one through 32 records."
                 )
             }
             for (index, record) in records.enumerated() {
@@ -559,6 +559,8 @@ public enum ToriiParliamentAPIV1 {
     public static let maximumTleCommitteeSize: UInt32 = 31
     public static let timedOvnRegistrationRecordBytes = 3_624
     public static let timedOvnBallotRecordBytes = 2_858
+    /// Maximum records appended by one transition; the complete corpus may contain 1,000.
+    public static let maximumTimedOvnBallotChunkRecords = 32
     public static let maximumCorpusEntries = 1_000
 
     public static let publicTransitionDigestDomain =
@@ -660,7 +662,7 @@ public enum ToriiParliamentAPIV1 {
         "quorum",
     ]
 
-    private static let bodies: Set<String> = [
+    private static let bodyOrder = [
         "rules-committee",
         "agenda-council",
         "interest-panel",
@@ -672,6 +674,7 @@ public enum ToriiParliamentAPIV1 {
         "policy-jury",
         "confirmation-jury",
     ]
+    private static let bodies = Set(bodyOrder)
     private static let privateBodies: Set<String> = ["policy-jury", "confirmation-jury"]
     private static let riskTiers: Set<String> = [
         "Routine", "Standard", "Constitutional", "Emergency",
@@ -910,6 +913,9 @@ public enum ToriiParliamentAPIV1 {
         try requireVersion(root["version"])
         let currentHeight = try unsigned(root["current_height"], field: "current_height")
         let policyVersion = try unsigned(root["policy_version"], field: "policy_version")
+        guard policyVersion > 0 else {
+            throw ToriiClientError.invalidPayload("policy_version must be positive.")
+        }
         let terminalHeight = try optionalUnsigned(root["terminal_height"], field: "terminal_height")
         let executionFailureRoot = try optionalFixedBytes(
             root["execution_failure_root"],
@@ -932,12 +938,12 @@ public enum ToriiParliamentAPIV1 {
                 "attempt.id differs from the requested canonical identifier."
             )
         }
-        _ = try requireIdentifier(
+        let proposalContentId = try requireIdentifier(
             attempt["proposal_content_id"],
             field: "attempt.proposal_content_id"
         )
-        _ = try unsigned32(attempt["sequence"], field: "attempt.sequence")
-        _ = try taggedUnit(
+        let attemptSequence = try unsigned32(attempt["sequence"], field: "attempt.sequence")
+        let riskTier = try taggedUnit(
             attempt["risk_tier"], tag: "tier", admitted: riskTiers, context: "attempt.risk_tier"
         )
         _ = try taggedUnit(
@@ -954,7 +960,12 @@ public enum ToriiParliamentAPIV1 {
         )
         let publicFindings = try validateCertificate(
             root["certificate"],
-            expectedAttemptId: attemptId
+            expectedAttemptId: attemptId,
+            expectedProposalContentId: proposalContentId,
+            expectedAttemptSequence: attemptSequence,
+            expectedRiskTier: riskTier,
+            expectedPolicyVersion: policyVersion,
+            requiredBodies: requiredBodies
         )
         if !(root["superseding_head"] is NSNull) {
             try validateExpectedHead(root["superseding_head"], context: "superseding_head")
@@ -2044,6 +2055,7 @@ fileprivate extension ToriiParliamentAPIV1 {
         var seen = Set<String>()
         var bodiesInOrder = [String]()
         bodiesInOrder.reserveCapacity(entries.count)
+        var previousBodyIndex = -1
         for (index, raw) in entries.enumerated() {
             let entry = try exactObject(
                 raw,
@@ -2056,6 +2068,12 @@ fileprivate extension ToriiParliamentAPIV1 {
                 )
             }
             try requireBody(body, field: "required_bodies[\(index)].body")
+            guard let bodyIndex = bodyOrder.firstIndex(of: body), bodyIndex > previousBodyIndex else {
+                throw ToriiClientError.invalidPayload(
+                    "required_bodies must use strict canonical body order."
+                )
+            }
+            previousBodyIndex = bodyIndex
             guard seen.insert(body).inserted else {
                 throw ToriiClientError.invalidPayload("required_bodies contains a duplicate body.")
             }
@@ -2224,7 +2242,12 @@ fileprivate extension ToriiParliamentAPIV1 {
 
     static func validateCertificate(
         _ value: Any?,
-        expectedAttemptId: String
+        expectedAttemptId: String,
+        expectedProposalContentId: String,
+        expectedAttemptSequence: UInt32,
+        expectedRiskTier: String,
+        expectedPolicyVersion: UInt64,
+        requiredBodies: [String]
     ) throws -> [ToriiParliamentPublicFindingCertificateBindingV1] {
         guard let value else {
             throw ToriiClientError.invalidPayload("certificate is missing.")
@@ -2239,10 +2262,14 @@ fileprivate extension ToriiParliamentAPIV1 {
             ],
             context: "certificate"
         )
-        _ = try requireIdentifier(
+        guard try requireIdentifier(
             certificate["proposal_content_id"],
             field: "certificate.proposal_content_id"
-        )
+        ) == expectedProposalContentId else {
+            throw ToriiClientError.invalidPayload(
+                "certificate.proposal_content_id differs from attempt.proposal_content_id."
+            )
+        }
         guard try requireIdentifier(
             certificate["governance_attempt_id"],
             field: "certificate.governance_attempt_id"
@@ -2251,17 +2278,32 @@ fileprivate extension ToriiParliamentAPIV1 {
                 "certificate.governance_attempt_id differs from attempt.id."
             )
         }
-        _ = try unsigned32(
+        guard try unsigned32(
             certificate["governance_attempt_sequence"],
             field: "certificate.governance_attempt_sequence"
-        )
-        _ = try taggedUnit(
+        ) == expectedAttemptSequence else {
+            throw ToriiClientError.invalidPayload(
+                "certificate.governance_attempt_sequence differs from attempt.sequence."
+            )
+        }
+        guard try taggedUnit(
             certificate["risk_tier"],
             tag: "tier",
             admitted: riskTiers,
             context: "certificate.risk_tier"
-        )
-        _ = try unsigned(certificate["policy_version"], field: "certificate.policy_version")
+        ) == expectedRiskTier else {
+            throw ToriiClientError.invalidPayload(
+                "certificate.risk_tier differs from attempt.risk_tier."
+            )
+        }
+        guard try unsigned(
+            certificate["policy_version"],
+            field: "certificate.policy_version"
+        ) == expectedPolicyVersion else {
+            throw ToriiClientError.invalidPayload(
+                "certificate.policy_version differs from the attempt projection."
+            )
+        }
         _ = try fixedBytes(
             certificate["effect_preimage_hash"],
             count: 32,
@@ -2269,45 +2311,117 @@ fileprivate extension ToriiParliamentAPIV1 {
             field: "certificate.effect_preimage_hash"
         )
         try validateExpectedHead(certificate["expected_head"], context: "certificate.expected_head")
-        _ = try unsigned(
+        let certifiedAtHeight = try unsigned(
             certificate["certified_at_height"],
             field: "certificate.certified_at_height"
         )
-        _ = try unsigned(
+        let enactAtHeight = try unsigned(
             certificate["enact_at_height"],
             field: "certificate.enact_at_height"
         )
+        guard certifiedAtHeight > 0, enactAtHeight > certifiedAtHeight else {
+            throw ToriiClientError.invalidPayload(
+                "certificate enact_at_height must follow certified_at_height."
+            )
+        }
         guard let bindings = certificate["body_bindings"] as? [Any],
+              bindings.count == requiredBodies.count,
               (1...10).contains(bindings.count) else {
             throw ToriiClientError.invalidPayload(
-                "certificate.body_bindings must contain one through ten entries."
+                "certificate.body_bindings must exactly match required_bodies."
             )
         }
         var findings = [ToriiParliamentPublicFindingCertificateBindingV1]()
+        var seenBodyInstanceIds = Set<String>()
+        var seenElectionAttemptIds = Set<String>()
+        var seenSortitionRequestIds = Set<String>()
+        var seenBallotAttemptIds = Set<String>()
+        var seenTleSessionIds = Set<String>()
+        var seenReleasePulseIds = Set<String>()
+        var seenReleaseSlots = Set<String>()
+        var sortitionPulseIds = Set<String>()
         for (index, binding) in bindings.enumerated() {
-            if let finding = try validateBodyBinding(binding, index: index) {
+            let facts = try validateBodyBinding(
+                binding,
+                index: index,
+                expectedBody: requiredBodies[index],
+                governanceAttemptId: expectedAttemptId,
+                certifiedAtHeight: certifiedAtHeight
+            )
+            guard seenBodyInstanceIds.insert(facts.bodyInstanceId).inserted,
+                  seenElectionAttemptIds.insert(facts.electionAttemptId).inserted,
+                  seenSortitionRequestIds.insert(facts.sortitionRequestId).inserted else {
+                throw ToriiClientError.invalidPayload(
+                    "certificate.body_bindings reuse an attempt-local identifier."
+                )
+            }
+            sortitionPulseIds.insert(facts.sortitionPulseId)
+            if let ballot = facts.ballot {
+                guard seenBallotAttemptIds.insert(ballot.ballotAttemptId).inserted,
+                      seenTleSessionIds.insert(ballot.tleSessionId).inserted,
+                      seenReleasePulseIds.insert(ballot.releasePulseId).inserted,
+                      seenReleaseSlots.insert(ballot.releaseSlot).inserted else {
+                    throw ToriiClientError.invalidPayload(
+                        "certificate.body_bindings reuse a ballot or release binding."
+                    )
+                }
+            }
+            if let finding = facts.publicFinding {
                 findings.append(finding)
             }
+        }
+        guard sortitionPulseIds.isDisjoint(with: seenReleasePulseIds) else {
+            throw ToriiClientError.invalidPayload(
+                "certificate reuses a sortition pulse for ballot release."
+            )
         }
         return findings
     }
 
+    struct CertificateBallotFacts {
+        let ballotAttemptId: String
+        let tleSessionId: String
+        let releasePulseId: String
+        let releaseSlot: String
+    }
+
+    struct CertificateBodyFacts {
+        let bodyInstanceId: String
+        let electionAttemptId: String
+        let sortitionRequestId: String
+        let sortitionPulseId: String
+        let publicFinding: ToriiParliamentPublicFindingCertificateBindingV1?
+        let ballot: CertificateBallotFacts?
+    }
+
     static func validateBodyBinding(
         _ value: Any,
-        index: Int
-    ) throws -> ToriiParliamentPublicFindingCertificateBindingV1? {
+        index: Int,
+        expectedBody: String,
+        governanceAttemptId: String,
+        certifiedAtHeight: UInt64
+    ) throws -> CertificateBodyFacts {
         let context = "certificate.body_bindings[\(index)]"
         let binding = try exactObject(
             value,
             fields: Set(certificateBodyBindingNoritoFields),
             context: context
         )
-        for field in [
-            "body_instance_id", "election_attempt_id", "sortition_request_id",
-            "beacon_session_id", "beacon_pulse_id",
-        ] {
-            _ = try requireIdentifier(binding[field], field: "\(context).\(field)")
-        }
+        let bodyInstanceId = try requireIdentifier(
+            binding["body_instance_id"], field: "\(context).body_instance_id"
+        )
+        let electionAttemptId = try requireIdentifier(
+            binding["election_attempt_id"], field: "\(context).election_attempt_id"
+        )
+        let sortitionRequestId = try requireIdentifier(
+            binding["sortition_request_id"], field: "\(context).sortition_request_id"
+        )
+        let beaconSessionId = try requireIdentifier(
+            binding["beacon_session_id"], field: "\(context).beacon_session_id"
+        )
+        let beaconPulseId = try requireIdentifier(
+            binding["beacon_pulse_id"], field: "\(context).beacon_pulse_id"
+        )
         for field in ["roster_root", "assignment_root", "result_root"] {
             _ = try fixedBytes(
                 binding[field],
@@ -2326,14 +2440,23 @@ fileprivate extension ToriiParliamentAPIV1 {
             maximum: UInt32(maximumCorpusEntries),
             field: "\(context).original_seats"
         )
-        _ = try unsigned(binding["result_height"], field: "\(context).result_height")
-        guard let body = binding["body"] as? String else {
-            throw ToriiClientError.invalidPayload("\(context).body must be a string.")
+        let resultHeight = try unsigned(
+            binding["result_height"], field: "\(context).result_height"
+        )
+        guard let body = binding["body"] as? String, body == expectedBody else {
+            throw ToriiClientError.invalidPayload(
+                "\(context).body differs from required_bodies order."
+            )
         }
-        try requireBody(body, field: "\(context).body")
         try validateSortitionRequest(
             binding["sortition_request"],
+            governanceAttemptId: governanceAttemptId,
             expectedBody: body,
+            electionAttemptId: electionAttemptId,
+            sortitionRequestId: sortitionRequestId,
+            beaconSessionId: beaconSessionId,
+            resultHeight: resultHeight,
+            certifiedAtHeight: certifiedAtHeight,
             context: "\(context).sortition_request"
         )
         let publicFinding = binding["public_finding"]
@@ -2344,24 +2467,51 @@ fileprivate extension ToriiParliamentAPIV1 {
                     "\(context) private jury must carry ballot only."
                 )
             }
-            try validateBallotBinding(ballot, originalSeats: seats, context: "\(context).ballot")
-            return nil
+            let ballotFacts = try validateBallotBinding(
+                ballot,
+                originalSeats: seats,
+                resultHeight: resultHeight,
+                context: "\(context).ballot"
+            )
+            return .init(
+                bodyInstanceId: bodyInstanceId,
+                electionAttemptId: electionAttemptId,
+                sortitionRequestId: sortitionRequestId,
+                sortitionPulseId: beaconPulseId,
+                publicFinding: nil,
+                ballot: ballotFacts
+            )
         }
         guard !(publicFinding is NSNull), let publicFinding, ballot is NSNull else {
             throw ToriiClientError.invalidPayload(
                 "\(context) public body must carry public_finding only."
             )
         }
-        return try validatePublicFinding(
+        let finding = try validatePublicFinding(
             publicFinding,
             originalSeats: seats,
             context: "\(context).public_finding"
         )
+        return .init(
+            bodyInstanceId: bodyInstanceId,
+            electionAttemptId: electionAttemptId,
+            sortitionRequestId: sortitionRequestId,
+            sortitionPulseId: beaconPulseId,
+            publicFinding: finding,
+            ballot: nil
+        )
     }
 
+    /// Direct bindings are checked here; Norito-derived content identifiers and roots stay opaque.
     static func validateSortitionRequest(
         _ value: Any?,
+        governanceAttemptId: String,
         expectedBody: String,
+        electionAttemptId: String,
+        sortitionRequestId: String,
+        beaconSessionId: String,
+        resultHeight: UInt64,
+        certifiedAtHeight: UInt64,
         context: String
     ) throws {
         let request = try exactObject(
@@ -2373,8 +2523,23 @@ fileprivate extension ToriiParliamentAPIV1 {
             ],
             context: context
         )
-        for field in ["id", "governance_attempt_id", "body_election_attempt_id", "beacon_session_id"] {
-            _ = try requireIdentifier(request[field], field: "\(context).\(field)")
+        guard try requireIdentifier(request["id"], field: "\(context).id")
+                == sortitionRequestId,
+              try requireIdentifier(
+                request["governance_attempt_id"],
+                field: "\(context).governance_attempt_id"
+              ) == governanceAttemptId,
+              try requireIdentifier(
+                request["body_election_attempt_id"],
+                field: "\(context).body_election_attempt_id"
+              ) == electionAttemptId,
+              try requireIdentifier(
+                request["beacon_session_id"],
+                field: "\(context).beacon_session_id"
+              ) == beaconSessionId else {
+            throw ToriiClientError.invalidPayload(
+                "\(context) differs from its repeated certificate bindings."
+            )
         }
         _ = try fixedBytes(
             request["candidate_root"],
@@ -2394,10 +2559,22 @@ fileprivate extension ToriiParliamentAPIV1 {
             maximum: UInt32(maximumCorpusEntries),
             field: "\(context).target_seats"
         )
-        _ = try unsigned(request["request_height"], field: "\(context).request_height")
-        _ = try unsigned(request["pulse_height"], field: "\(context).pulse_height")
+        let requestHeight = try unsigned(
+            request["request_height"], field: "\(context).request_height"
+        )
+        let pulseHeight = try unsigned(
+            request["pulse_height"], field: "\(context).pulse_height"
+        )
         guard request["body"] as? String == expectedBody else {
             throw ToriiClientError.invalidPayload("\(context).body differs from its binding.")
+        }
+        guard requestHeight > 0,
+              pulseHeight > requestHeight,
+              resultHeight > pulseHeight,
+              resultHeight <= certifiedAtHeight else {
+            throw ToriiClientError.invalidPayload(
+                "\(context) violates the sortition/result lifecycle."
+            )
         }
     }
 
@@ -2454,8 +2631,9 @@ fileprivate extension ToriiParliamentAPIV1 {
     static func validateBallotBinding(
         _ value: Any,
         originalSeats: UInt32,
+        resultHeight: UInt64,
         context: String
-    ) throws {
+    ) throws -> CertificateBallotFacts {
         let ballot = try exactObject(
             value,
             fields: [
@@ -2471,12 +2649,22 @@ fileprivate extension ToriiParliamentAPIV1 {
             ],
             context: context
         )
-        for field in [
-            "ballot_attempt_id", "tle_session_id", "tle_key_session_id",
-            "release_beacon_session_id", "release_pulse_id",
-        ] {
-            _ = try requireIdentifier(ballot[field], field: "\(context).\(field)")
-        }
+        let ballotAttemptId = try requireIdentifier(
+            ballot["ballot_attempt_id"], field: "\(context).ballot_attempt_id"
+        )
+        let tleSessionId = try requireIdentifier(
+            ballot["tle_session_id"], field: "\(context).tle_session_id"
+        )
+        _ = try requireIdentifier(
+            ballot["tle_key_session_id"], field: "\(context).tle_key_session_id"
+        )
+        let releaseBeaconSessionId = try requireIdentifier(
+            ballot["release_beacon_session_id"],
+            field: "\(context).release_beacon_session_id"
+        )
+        let releasePulseId = try requireIdentifier(
+            ballot["release_pulse_id"], field: "\(context).release_pulse_id"
+        )
         for field in [
             "registration_root", "dropout_root", "survivor_root", "corpus_root",
             "no_recovery_root", "timed_commitment_root", "opening_root",
@@ -2488,30 +2676,81 @@ fileprivate extension ToriiParliamentAPIV1 {
                 field: "\(context).\(field)"
             )
         }
-        _ = try unsigned32(
+        let ballotAttemptSequence = try unsigned32(
             ballot["ballot_attempt_sequence"],
             field: "\(context).ballot_attempt_sequence"
         )
-        for field in [
-            "registered_at_height", "registration_close_height", "survivor_freeze_height",
-            "commitment_close_height", "registration_closed_at_height",
-            "survivors_frozen_at_height", "commitment_closed_at_height", "release_height",
-            "opening_deadline_height", "opening_height",
-        ] {
-            _ = try unsigned(ballot[field], field: "\(context).\(field)")
-        }
-        _ = try boundedUInt32(
+        let maxBallotRetries = try boundedUInt32(
             ballot["max_ballot_retries"],
-            minimum: 1,
+            minimum: 0,
             maximum: 16,
             field: "\(context).max_ballot_retries"
         )
-        _ = try boundedUInt32(
+        guard ballotAttemptSequence <= maxBallotRetries else {
+            throw ToriiClientError.invalidPayload(
+                "\(context).ballot_attempt_sequence exceeds max_ballot_retries."
+            )
+        }
+        let maxCorpusEntries = try boundedUInt32(
             ballot["max_corpus_entries"],
             minimum: 1,
             maximum: UInt32(maximumCorpusEntries),
             field: "\(context).max_corpus_entries"
         )
+        let registeredAtHeight = try unsigned(
+            ballot["registered_at_height"], field: "\(context).registered_at_height"
+        )
+        let registrationCloseHeight = try unsigned(
+            ballot["registration_close_height"],
+            field: "\(context).registration_close_height"
+        )
+        let survivorFreezeHeight = try unsigned(
+            ballot["survivor_freeze_height"], field: "\(context).survivor_freeze_height"
+        )
+        let commitmentCloseHeight = try unsigned(
+            ballot["commitment_close_height"],
+            field: "\(context).commitment_close_height"
+        )
+        let registrationClosedAtHeight = try unsigned(
+            ballot["registration_closed_at_height"],
+            field: "\(context).registration_closed_at_height"
+        )
+        let survivorsFrozenAtHeight = try unsigned(
+            ballot["survivors_frozen_at_height"],
+            field: "\(context).survivors_frozen_at_height"
+        )
+        let commitmentClosedAtHeight = try unsigned(
+            ballot["commitment_closed_at_height"],
+            field: "\(context).commitment_closed_at_height"
+        )
+        let releaseHeight = try unsigned(
+            ballot["release_height"], field: "\(context).release_height"
+        )
+        let openingDeadlineHeight = try unsigned(
+            ballot["opening_deadline_height"],
+            field: "\(context).opening_deadline_height"
+        )
+        let openingHeight = try unsigned(
+            ballot["opening_height"], field: "\(context).opening_height"
+        )
+        guard registeredAtHeight > 0,
+              registrationCloseHeight > registeredAtHeight,
+              survivorFreezeHeight > registrationCloseHeight,
+              commitmentCloseHeight > survivorFreezeHeight,
+              releaseHeight > commitmentCloseHeight,
+              openingDeadlineHeight > releaseHeight,
+              registrationClosedAtHeight == registrationCloseHeight,
+              survivorsFrozenAtHeight == survivorFreezeHeight,
+              commitmentClosedAtHeight > survivorFreezeHeight,
+              commitmentClosedAtHeight <= commitmentCloseHeight,
+              openingHeight >= releaseHeight,
+              openingHeight <= openingDeadlineHeight,
+              resultHeight >= openingHeight,
+              resultHeight <= openingDeadlineHeight else {
+            throw ToriiClientError.invalidPayload(
+                "\(context) violates the frozen ballot lifecycle."
+            )
+        }
         let tally = try exactObject(
             ballot["tally"],
             fields: ["original_seats", "accepted_ballots", "aye", "nay", "abstain"],
@@ -2537,14 +2776,37 @@ fileprivate extension ToriiParliamentAPIV1 {
         let nay = try unsigned32(tally["nay"], field: "\(context).tally.nay")
         let abstain = try unsigned32(tally["abstain"], field: "\(context).tally.abstain")
         guard UInt64(aye) + UInt64(nay) + UInt64(abstain) == UInt64(accepted),
-              accepted <= originalSeats else {
-            throw ToriiClientError.invalidPayload("\(context).tally is internally inconsistent.")
+              accepted <= originalSeats,
+              accepted <= maxCorpusEntries else {
+            throw ToriiClientError.invalidPayload(
+                "\(context).tally violates immutable bounds or count conservation."
+            )
         }
-        _ = try taggedUnit(
+        let outcome = try taggedUnit(
             ballot["outcome"],
             tag: "outcome",
             admitted: ["Approved", "Rejected", "NoQuorum", "NoResult"],
             context: "\(context).outcome"
+        )
+        let quorum = (2 * originalSeats + 2) / 3
+        let expectedOutcome: String
+        if accepted < quorum {
+            expectedOutcome = "NoQuorum"
+        } else if aye > nay {
+            expectedOutcome = "Approved"
+        } else {
+            expectedOutcome = "Rejected"
+        }
+        guard outcome == expectedOutcome, outcome == "Approved" else {
+            throw ToriiClientError.invalidPayload(
+                "\(context) must contain the deterministic approving aggregate outcome."
+            )
+        }
+        return .init(
+            ballotAttemptId: ballotAttemptId,
+            tleSessionId: tleSessionId,
+            releasePulseId: releasePulseId,
+            releaseSlot: "\(releaseBeaconSessionId):\(releaseHeight)"
         )
     }
 

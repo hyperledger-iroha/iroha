@@ -1346,6 +1346,7 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
         "GovernanceParliamentTimedOvnCastingContextResponseV1",
         "GovernanceParliamentTimedOvnCastingProofRequestV1",
         "GovernanceParliamentTimedOvnCastingProofResponseV1",
+        "GovernanceParliamentTimedOvnProgressV1",
         "GovernanceParliamentTimedOvnSessionV1",
         "GovernanceParliamentTimedOvnReleaseIdentityV1",
         "GovernanceParliamentTleReleaseContextResponseV1",
@@ -1820,6 +1821,36 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             Some(exact_bytes)
         );
     }
+    let ballot_chunk = schemas
+        .get("GovernanceParliamentFreezeTimedOvnCorpusPayloadV1")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("properties"))
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get("ballot_records"))
+        .and_then(Value::as_object)
+        .expect("timed-OVN ballot chunk schema");
+    assert_eq!(
+        ballot_chunk.get("minItems").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        ballot_chunk.get("maxItems").and_then(Value::as_u64),
+        Some(
+            u64::try_from(
+                iroha_data_model::isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
+            )
+            .expect("timed-OVN ballot chunk bound fits u64"),
+        )
+    );
+    assert!(
+        ballot_chunk
+            .get("description")
+            .and_then(Value::as_str)
+            .is_some_and(|description| {
+                description.contains("contiguous") && description.contains("complete corpus")
+            }),
+        "timed-OVN ballot chunk schema must distinguish append and full-corpus bounds"
+    );
     assert_eq!(
         schemas
             .get("GovernanceParliamentFramedPayloadHexV1")
@@ -1874,6 +1905,31 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             "public_finding_deadline_height",
             "no_result_kind",
             "no_result_height",
+            "timed_ovn_progress",
+        ])
+    );
+    let progress_schema = schemas
+        .get("GovernanceParliamentTimedOvnProgressV1")
+        .and_then(Value::as_object)
+        .expect("typed timed-OVN progress projection");
+    assert_eq!(
+        progress_schema.get("additionalProperties"),
+        Some(&Value::Bool(false))
+    );
+    let progress_fields = progress_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("timed-OVN progress fields")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        progress_fields,
+        std::collections::BTreeSet::from([
+            "ballot_attempt_id",
+            "status",
+            "frozen_survivor_count",
+            "accepted_ballot_prefix_count",
         ])
     );
     assert_eq!(

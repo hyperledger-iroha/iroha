@@ -24,9 +24,22 @@ The model covers these consensus bindings:
   accepted through that height; after it, the payload-minimal permissionless
   failure trigger derives `DeadlineExpired`, sets the body to `NoResult`, and
   rejects the attempt;
-- registration, survivor freeze, and timed-commitment close only at their exact
-  derived heights, while release consumption and aggregate finalization remain
-  inside the inclusive `release_height + opening_phase_blocks` window;
+- registration and survivor freeze close only at their exact derived heights.
+  The modeled policy requires at least `max_corpus_entries + 1` registration
+  blocks, at least `max_corpus_entries` survivor blocks, and enough commitment
+  blocks for `ceil(max_corpus_entries / 32)` maximum-size chunks; the corpus
+  bound also covers every original seat.
+  During `(survivor_freeze_height, commitment_close_height]`, the concrete
+  reducer accepts contiguous chunks of 1 through 32 records and terminalizes
+  only when the rolling accepted count exactly equals the frozen survivor
+  count. `FreezeCommitmentInWindow` abstracts intermediate
+  prefixes as stuttering and represents only the terminal append; the
+  structural source contract separately pins the window, chunk cap,
+  contiguous-prefix state, capacity bound, and terminal-only reducer advance.
+  An incomplete prefix after the close remains `TimedCommitment` and is
+  objectively eligible for `CommitmentDeadlineExpired`. Release consumption
+  and aggregate finalization remain inside the inclusive
+  `release_height + opening_phase_blocks` window;
 - a missed deadline or an objectively absent finalized release pulse becomes
   `NoResult`; finalized-pulse availability is authoritative, a still-awaiting
   or opening ballot becomes eligible for deadline failure after the frozen
@@ -73,7 +86,8 @@ safety and does not prove that weak-fairness assumption.
 The small configuration uses two abstract bodies, two seated assignments, two
 competing public-finding roots, a two-block public-finding deadline, three TLE
 sessions (two with an authoritative release pulse and one with an objectively
-absent pulse), a two-block opening window, and two permitted retries. It is
+absent pulse), a two-block commitment window, a two-block opening window, and
+two permitted retries. It is
 intentionally large enough to explore self-absence, early impossible-root
 rejection, conflicting and quorum-matching endorsements, post-deadline
 non-response rejection, success, private deadline/release failure, exhausted
@@ -87,10 +101,10 @@ java -cp /path/to/tla2tools.jar tlc2.TLC \
   formal/sora_parliament/SoraParliamentV1.tla
 ```
 
-Pinned TLA2Tools v1.7.4 (TLC2 2.19) exhaustively explored the checked
-configuration on 2026-08-24: 3,992,491 states generated, 2,747,236 distinct
-states, depth 39, and no invariant violation. These bounded results are tied to
-the model/config revision, not a proof about larger deployments.
+The checked configuration must be exhaustively rerun with pinned TLA2Tools
+v1.7.4 (TLC2 2.19) whenever this refinement or its commitment-window constant
+changes. Bounded TLC results are revision-specific counterexample-search
+evidence, not a proof about larger deployments.
 
 Run the deterministic implementation/model binding check independently:
 

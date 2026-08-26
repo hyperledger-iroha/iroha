@@ -27,6 +27,24 @@ use crate::{
 pub const PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1: usize = 3_624;
 /// Exact canonical width of one timed-OVN masked-ballot record.
 pub const PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1: usize = 2_858;
+/// Maximum number of contiguous timed-OVN ballot records accepted by one lifecycle transition.
+///
+/// The complete survivor corpus may still contain up to the protocol-wide participant cap. Core
+/// derives the next survivor offset from committed lifecycle state and seals automatically after
+/// the final chunk, so callers cannot skip, overlap, or reorder records.
+pub const PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: usize = 32;
+
+/// Return the minimum number of blocks needed to admit a configured ballot corpus.
+///
+/// V1 charges enough gas that a block is only guaranteed to carry one maximum-sized chunk. A
+/// commitment window shorter than this ceiling would therefore make its configured maximum corpus
+/// objectively impossible to seal under the standard default-genesis block gas limit.
+#[must_use]
+pub fn parliament_timed_ovn_required_chunk_blocks_v1(max_corpus_entries: u32) -> u64 {
+    let chunk_records = u64::try_from(PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1)
+        .expect("the V1 Parliament ballot chunk bound fits u64");
+    u64::from(max_corpus_entries).div_ceil(chunk_records)
+}
 
 /// Create one retryable Parliament attempt for exact immutable proposal content.
 ///
@@ -356,14 +374,16 @@ pub struct ParliamentFreezeBallotSurvivorsV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct ParliamentFreezeTimedOvnCorpusV1 {
-    /// Ballot attempt whose corpus becomes immutable.
+    /// Ballot attempt whose next contiguous corpus chunk is appended.
     pub ballot_attempt_id: BallotAttemptId,
-    /// Exact canonical 2,858-byte timed-OVN ballot records in survivor order.
+    /// One nonempty chunk of exact canonical 2,858-byte timed-OVN ballot records.
     ///
-    /// An exact `CanManageParliament` authority submits this proof-heavy batch;
-    /// Core verifies every proof and exact survivor coverage, then derives all
-    /// corpus roots, counts, and aggregate commitments. The active governance
-    /// configuration must enforce the V1 cap of 1,000 records.
+    /// The chunk contains at most
+    /// [`PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1`] records. Core derives
+    /// its starting survivor offset from committed state, verifies every proof,
+    /// and advances a replay-checkable rolling aggregate. The final chunk must
+    /// complete exact survivor coverage and causes automatic corpus sealing
+    /// within the configured commitment window.
     pub ballot_records: Vec<Vec<u8>>,
 }
 
@@ -543,7 +563,7 @@ pub enum ParliamentLifecycleTransitionV1 {
     /// Freeze the nonempty survivor roster before accepting ballots.
     #[codec(index = 12)]
     FreezeBallotSurvivors(ParliamentFreezeBallotSurvivorsV1),
-    /// Freeze the complete timed-OVN ciphertext and one-hot-proof corpus.
+    /// Append the next bounded timed-OVN ciphertext and one-hot-proof corpus chunk.
     #[codec(index = 13)]
     FreezeTimedOvnCorpus(ParliamentFreezeTimedOvnCorpusV1),
     /// Consume one finalized release pulse for a complete ballot batch.
@@ -891,6 +911,15 @@ mod tests {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked Parliament instruction fixture account");
         AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn timed_ovn_required_chunk_blocks_round_up_at_the_wire_bound() {
+        assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(0), 0);
+        assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(1), 1);
+        assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(32), 1);
+        assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(33), 2);
+        assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(1_000), 32);
     }
 
     #[test]

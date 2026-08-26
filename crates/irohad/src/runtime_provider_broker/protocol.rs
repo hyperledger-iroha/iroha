@@ -1,8 +1,10 @@
 #[cfg(not(target_pointer_width = "64"))]
 compile_error!("the V1 runtime-provider broker requires a 64-bit address space");
 use crate::{
-    IrohaRuntimeDeps, RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
-    RuntimeProviderBrokerReadinessErrorV1, RuntimeProviderBrokerServerErrorV1,
+    GlobalBeaconPartialSignerBrokerBackendErrorV1, IrohaRuntimeDeps,
+    ParliamentTlePartialReleaseSignerBrokerBackendErrorV1, RuntimeProviderBrokerBackendsV1,
+    RuntimeProviderBrokerLifecycleV1, RuntimeProviderBrokerReadinessErrorV1,
+    RuntimeProviderBrokerServerErrorV1,
     runtime_provider_registry::{
         EvidenceViewerWebAuthnBindingV1, IrohaRuntimeProviderBindingV1,
         IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderRegistryErrorV1,
@@ -1538,6 +1540,9 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
         binding.slot == IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
     let soracloud_hf_credential = binding.slot
         == IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id();
+    let consensus_threshold_signer = binding.slot
+        == IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id()
+        || binding.slot == IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id();
     let moderation_transaction_signer =
         binding.slot == IrohaRuntimeProviderSlotV1::ModerationTransactionSigner.wire_id();
     let moderation_delivery_boundary = binding.slot
@@ -1656,6 +1661,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
         || billing_runtime
         || gateway_runtime
         || soracloud_hf_credential
+        || consensus_threshold_signer
     {
         if binding.native_signer_binding.is_some()
             || binding.governance_request_ingress_binding.is_some()

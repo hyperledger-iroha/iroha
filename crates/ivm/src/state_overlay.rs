@@ -475,6 +475,7 @@ impl<'a> FlatOverlayJsonCursor<'a> {
         }
     }
 }
+#[cfg(not(windows))]
 fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     let named_before = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -498,12 +499,6 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     {
         use std::os::unix::fs::OpenOptionsExt as _;
         options.custom_flags(STATE_OVERLAY_O_NOFOLLOW_FLAG);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let mut file = options.open(path)?;
     let opened_before = file.metadata()?;
@@ -553,37 +548,202 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     }
     Ok(Some(bytes))
 }
+#[cfg(windows)]
+const STATE_OVERLAY_WINDOWS_FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+#[cfg(windows)]
+const STATE_OVERLAY_WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+#[cfg(windows)]
+const STATE_OVERLAY_WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const STATE_OVERLAY_WINDOWS_FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+#[cfg(windows)]
+const STATE_OVERLAY_WINDOWS_FILE_SHARE_READ_WRITE_DELETE: u32 =
+    0x0000_0001 | 0x0000_0002 | 0x0000_0004;
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct StateOverlayWindowsFileTime {
+    low: u32,
+    high: u32,
+}
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct StateOverlayWindowsByHandleFileInformation {
+    file_attributes: u32,
+    creation_time: StateOverlayWindowsFileTime,
+    _last_access_time: StateOverlayWindowsFileTime,
+    last_write_time: StateOverlayWindowsFileTime,
+    volume_serial_number: u32,
+    file_size_high: u32,
+    file_size_low: u32,
+    _number_of_links: u32,
+    file_index_high: u32,
+    file_index_low: u32,
+}
+#[cfg(windows)]
+const _: () = assert!(std::mem::size_of::<StateOverlayWindowsByHandleFileInformation>() == 52);
+#[cfg(windows)]
+const _: () = assert!(std::mem::align_of::<StateOverlayWindowsByHandleFileInformation>() == 4);
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StateOverlayWindowsFileSnapshot {
+    file_attributes: u32,
+    creation_time: u64,
+    last_write_time: u64,
+    volume_serial_number: u32,
+    file_size: u64,
+    file_index: u64,
+}
+#[cfg(windows)]
+impl StateOverlayWindowsFileSnapshot {
+    const fn is_direct_regular_file(self) -> bool {
+        self.file_attributes
+            & (STATE_OVERLAY_WINDOWS_FILE_ATTRIBUTE_DIRECTORY
+                | STATE_OVERLAY_WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT)
+            == 0
+    }
+    const fn same_identity(self, other: Self) -> bool {
+        self.volume_serial_number == other.volume_serial_number
+            && self.file_index == other.file_index
+    }
+    const fn same_revision(self, other: Self) -> bool {
+        self.file_attributes == other.file_attributes
+            && self.creation_time == other.creation_time
+            && self.last_write_time == other.last_write_time
+            && self.file_size == other.file_size
+    }
+}
+#[cfg(windows)]
+#[link(name = "kernel32")]
+#[allow(unsafe_code)]
+unsafe extern "system" {
+    #[link_name = "GetFileInformationByHandle"]
+    fn state_overlay_get_file_information_by_handle(
+        file: *mut std::ffi::c_void,
+        information: *mut StateOverlayWindowsByHandleFileInformation,
+    ) -> i32;
+}
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn state_overlay_windows_file_snapshot(
+    file: &fs::File,
+) -> io::Result<StateOverlayWindowsFileSnapshot> {
+    use std::{mem::MaybeUninit, os::windows::io::AsRawHandle as _};
+    let mut information = MaybeUninit::<StateOverlayWindowsByHandleFileInformation>::uninit();
+    // SAFETY: `file` owns a valid kernel handle for the duration of the call,
+    // and `information` has the exact writable Win32 ABI layout expected by
+    // `GetFileInformationByHandle`.
+    let succeeded = unsafe {
+        state_overlay_get_file_information_by_handle(
+            file.as_raw_handle().cast(),
+            information.as_mut_ptr(),
+        )
+    };
+    if succeeded == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: Win32 initializes every field when the call succeeds.
+    let information = unsafe { information.assume_init() };
+    let combine = |high: u32, low: u32| u64::from(high) << 32 | u64::from(low);
+    Ok(StateOverlayWindowsFileSnapshot {
+        file_attributes: information.file_attributes,
+        creation_time: combine(
+            information.creation_time.high,
+            information.creation_time.low,
+        ),
+        last_write_time: combine(
+            information.last_write_time.high,
+            information.last_write_time.low,
+        ),
+        volume_serial_number: information.volume_serial_number,
+        file_size: combine(information.file_size_high, information.file_size_low),
+        file_index: combine(information.file_index_high, information.file_index_low),
+    })
+}
+#[cfg(windows)]
+fn open_state_overlay_windows_file(path: &Path) -> io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .share_mode(STATE_OVERLAY_WINDOWS_FILE_SHARE_READ_WRITE_DELETE)
+        .custom_flags(
+            STATE_OVERLAY_WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT
+                | STATE_OVERLAY_WINDOWS_FILE_FLAG_BACKUP_SEMANTICS,
+        );
+    options.open(path)
+}
+#[cfg(windows)]
+fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    let mut file = match open_state_overlay_windows_file(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let opened_before = state_overlay_windows_file_snapshot(&file)?;
+    if !opened_before.is_direct_regular_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "durable state overlay must be a direct regular file",
+        ));
+    }
+    let maximum =
+        u64::try_from(STATE_OVERLAY_MAX_FILE_BYTES_V1).expect("fixed state overlay limit fits u64");
+    if opened_before.file_size > maximum {
+        return Err(state_overlay_file_too_large());
+    }
+    let capacity = usize::try_from(opened_before.file_size).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "durable state overlay length cannot be addressed",
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    file.by_ref()
+        .take(maximum.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > STATE_OVERLAY_MAX_FILE_BYTES_V1 {
+        return Err(state_overlay_file_too_large());
+    }
+    let opened_after = state_overlay_windows_file_snapshot(&file)?;
+    let named_after_file = open_state_overlay_windows_file(path)?;
+    let named_after = state_overlay_windows_file_snapshot(&named_after_file)?;
+    let observed = u64::try_from(bytes.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "durable state overlay byte count cannot be represented",
+        )
+    })?;
+    if !opened_after.is_direct_regular_file()
+        || !named_after.is_direct_regular_file()
+        || !opened_before.same_identity(opened_after)
+        || !opened_after.same_identity(named_after)
+        || !opened_before.same_revision(opened_after)
+        || !opened_after.same_revision(named_after)
+        || opened_after.file_size != observed
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "durable state overlay changed while it was being read",
+        ));
+    }
+    Ok(Some(bytes))
+}
 fn state_overlay_file_too_large() -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
         "durable state overlay exceeds the first-release file limit",
     )
 }
+#[cfg(not(windows))]
 fn state_overlay_metadata_is_link(metadata: &fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt as _;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
-    }
-    #[cfg(not(windows))]
-    false
+    metadata.file_type().is_symlink()
 }
 #[cfg(unix)]
 fn state_overlay_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev() && left.ino() == right.ino()
-}
-#[cfg(windows)]
-fn state_overlay_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
 }
 #[cfg(not(any(unix, windows)))]
 fn state_overlay_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
@@ -757,6 +917,59 @@ mod tests {
         .expect("extend sparse state file");
         drop(file);
         let error = read_persisted_overlay_file(&file_path).expect_err("oversize must fail");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        fs::remove_dir_all(directory).expect("remove temporary directory");
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_handle_snapshot_distinguishes_equal_files() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let directory = std::env::temp_dir().join(format!(
+            "ivm_state_overlay_windows_identity_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).expect("create temporary directory");
+        let first_path = directory.join("first.json");
+        let second_path = directory.join("second.json");
+        fs::write(&first_path, b"same bytes").expect("write first fixture");
+        fs::write(&second_path, b"same bytes").expect("write second fixture");
+        let first = open_state_overlay_windows_file(&first_path).expect("open first fixture");
+        let first_again =
+            open_state_overlay_windows_file(&first_path).expect("reopen first fixture");
+        let second = open_state_overlay_windows_file(&second_path).expect("open second fixture");
+        let first_snapshot =
+            state_overlay_windows_file_snapshot(&first).expect("snapshot first fixture");
+        let first_again_snapshot = state_overlay_windows_file_snapshot(&first_again)
+            .expect("snapshot reopened first fixture");
+        let second_snapshot =
+            state_overlay_windows_file_snapshot(&second).expect("snapshot second fixture");
+        assert!(first_snapshot.is_direct_regular_file());
+        assert!(first_snapshot.same_identity(first_again_snapshot));
+        assert!(first_snapshot.same_revision(first_again_snapshot));
+        assert!(!first_snapshot.same_identity(second_snapshot));
+        assert_eq!(first_snapshot.file_size, b"same bytes".len() as u64);
+        drop((first, first_again, second));
+        fs::remove_dir_all(directory).expect("remove temporary directory");
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_persisted_reader_rejects_directory_as_invalid_data() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let directory = std::env::temp_dir().join(format!(
+            "ivm_state_overlay_windows_directory_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).expect("create temporary directory");
+        let error = read_persisted_overlay_file(&directory)
+            .expect_err("state overlay directory must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         fs::remove_dir_all(directory).expect("remove temporary directory");
     }

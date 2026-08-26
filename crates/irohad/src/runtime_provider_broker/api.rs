@@ -45,13 +45,27 @@ impl ConsensusSignerProviderQualificationV1 {
     }
 }
 
-/// Payload-free global-beacon broker backend failure.
+/// Payload-free global-beacon broker backend failure class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GlobalBeaconPartialSignerBrokerBackendErrorV1;
+pub enum GlobalBeaconPartialSignerBrokerBackendErrorV1 {
+    /// The provider transport is temporarily unavailable and a non-mutating
+    /// request may be retried after reconnecting.
+    Unavailable,
+    /// The provider deterministically refused or could not satisfy the exact
+    /// authenticated request; automatic replay is forbidden.
+    Rejected,
+}
 
-/// Payload-free Parliament TLE broker backend failure.
+/// Payload-free Parliament TLE broker backend failure class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ParliamentTlePartialReleaseSignerBrokerBackendErrorV1;
+pub enum ParliamentTlePartialReleaseSignerBrokerBackendErrorV1 {
+    /// The provider transport is temporarily unavailable and a non-mutating
+    /// request may be retried after reconnecting.
+    Unavailable,
+    /// The provider deterministically refused or could not satisfy the exact
+    /// authenticated request; automatic replay is forbidden.
+    Rejected,
+}
 
 /// Authenticated broker-server backend for global beacon partial signatures.
 ///

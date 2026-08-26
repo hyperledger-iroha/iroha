@@ -2179,6 +2179,29 @@ impl ParliamentTimedOvn {
             (1..=crypto_corpus_limit).contains(&self.max_corpus_entries),
             "governance.parliament_timed_ovn.max_corpus_entries must be within 1..={crypto_corpus_limit}"
         );
+        let required_single_record_blocks = u64::from(self.max_corpus_entries);
+        let required_registration_blocks = required_single_record_blocks
+            .checked_add(1)
+            .expect("bounded timed-OVN corpus plus admission slack fits u64");
+        assert!(
+            self.registration_phase_blocks >= required_registration_blocks,
+            "governance.parliament_timed_ovn.registration_phase_blocks must be at least {required_registration_blocks} for max_corpus_entries={} and one V1 admission-boundary slack block",
+            self.max_corpus_entries
+        );
+        assert!(
+            self.survivor_freeze_phase_blocks >= required_single_record_blocks,
+            "governance.parliament_timed_ovn.survivor_freeze_phase_blocks must be at least {required_single_record_blocks} for max_corpus_entries={} and the V1 authenticated-dropout transition",
+            self.max_corpus_entries
+        );
+        let required_chunk_blocks =
+            iroha_data_model::isi::governance::parliament_timed_ovn_required_chunk_blocks_v1(
+                self.max_corpus_entries,
+            );
+        assert!(
+            self.commitment_phase_blocks >= required_chunk_blocks,
+            "governance.parliament_timed_ovn.commitment_phase_blocks must be at least {required_chunk_blocks} for max_corpus_entries={} and the V1 ballot chunk bound",
+            self.max_corpus_entries
+        );
     }
 }
 impl_default!(ParliamentTimedOvn => {
