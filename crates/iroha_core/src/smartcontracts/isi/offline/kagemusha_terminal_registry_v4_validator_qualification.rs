@@ -1,5 +1,16 @@
 use super::VerifiedKagemushaV4RuntimeEffectiveConfigV1;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
+use iroha_data_model::offline::{
+    KAGEMUSHA_V4_VALIDATOR_QUALIFICATION_SEAL_BODY_SCHEMA, KagemushaV4PromotionBindingV1,
+    KagemushaV4RuntimeEffectiveConfigProjectionV1, KagemushaV4ValidatorQualificationSealBodyV1,
+};
 use iroha_data_model::{
     NetworkId,
     isi::SetParameter,
@@ -8,11 +19,9 @@ use iroha_data_model::{
         KAGEMUSHA_V4_CATALOG_REVALIDATION_MAX_CLOCK_SKEW_MS,
         KAGEMUSHA_V4_CATALOG_REVALIDATION_RECEIPT_MAX_BYTES,
         KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION, KAGEMUSHA_V4_PROMOTION_RESERVATION_MAX_BYTES,
-        KAGEMUSHA_V4_VALIDATOR_QUALIFICATION_MAX_LIFETIME_MS,
-        KAGEMUSHA_V4_VALIDATOR_QUALIFICATION_SEAL_BODY_SCHEMA, KagemushaExactBytesDigestV1,
-        KagemushaV4PromotionBindingV1, KagemushaV4PromotionReservationV1,
-        KagemushaV4RuntimeEffectiveConfigProjectionV1, KagemushaV4ValidatorQualificationSealBodyV1,
-        KagemushaV4ValidatorQualificationSealV1, OfflineDeviceAttestationPolicy,
+        KAGEMUSHA_V4_VALIDATOR_QUALIFICATION_MAX_LIFETIME_MS, KagemushaExactBytesDigestV1,
+        KagemushaV4PromotionReservationV1, KagemushaV4ValidatorQualificationSealV1,
+        OfflineDeviceAttestationPolicy,
     },
     parameter::{
         Parameter,
@@ -120,12 +129,26 @@ impl KagemushaV4ValidatorQualificationSubjectV1 {
     }
 
     /// Independently pinned promotion-controller identity.
+    #[cfg(any(
+        test,
+        all(
+            unix,
+            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+        )
+    ))]
     #[must_use]
     const fn promotion_controller(&self) -> &PublicKey {
         &self.promotion_controller
     }
 
     /// Exact canonical controller-signed reservation identity.
+    #[cfg(any(
+        test,
+        all(
+            unix,
+            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+        )
+    ))]
     #[must_use]
     const fn promotion_reservation(&self) -> KagemushaExactBytesDigestV1 {
         self.promotion_reservation
@@ -146,12 +169,26 @@ impl KagemushaV4ValidatorQualificationSubjectV1 {
     }
 
     /// Catalog-revalidation receipt issuance time.
+    #[cfg(any(
+        test,
+        all(
+            unix,
+            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+        )
+    ))]
     #[must_use]
     const fn catalog_revalidation_issued_at_unix_ms(&self) -> u64 {
         self.catalog_revalidation_issued_at_unix_ms
     }
 
     /// Signed deadline for invoking the validator signer.
+    #[cfg(any(
+        test,
+        all(
+            unix,
+            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+        )
+    ))]
     #[must_use]
     const fn validator_qualification_expires_at_unix_ms(&self) -> u64 {
         self.validator_qualification_expires_at_unix_ms
@@ -567,6 +604,13 @@ fn validate_exact_catalog_revalidation_receipt_v1(
     })
 }
 
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn validate_validator_qualification_freshness_at_v1(
     subject: &KagemushaV4ValidatorQualificationSubjectV1,
     current_time_ms: u64,
@@ -584,6 +628,13 @@ fn validate_validator_qualification_freshness_at_v1(
     Ok(())
 }
 
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn current_unix_time_ms_v1() -> Result<u64, String> {
     let elapsed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -600,7 +651,21 @@ fn current_unix_time_ms_v1() -> Result<u64, String> {
 pub struct KagemushaValidatorQualificationCatalogCaptureV1 {
     catalog: KagemushaReleaseCatalogV4,
     seal: KagemushaCatalogQualificationSealV1,
+    #[cfg(any(
+        test,
+        all(
+            unix,
+            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+        )
+    ))]
     policy_path: PathBuf,
+    #[cfg(any(
+        test,
+        all(
+            unix,
+            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+        )
+    ))]
     artifact_dir: PathBuf,
 }
 
@@ -622,7 +687,21 @@ impl KagemushaReleaseCatalogV4 {
         Ok(KagemushaValidatorQualificationCatalogCaptureV1 {
             catalog,
             seal,
+            #[cfg(any(
+                test,
+                all(
+                    unix,
+                    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+                )
+            ))]
             policy_path: policy_path.to_owned(),
+            #[cfg(any(
+                test,
+                all(
+                    unix,
+                    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+                )
+            ))]
             artifact_dir: artifact_dir.to_owned(),
         })
     }
@@ -961,6 +1040,13 @@ fn validate_validator_qualification_matches_reservation_v1(
     validate_validator_qualification_body_matches_reservation_v1(&seal.body, reservation)
 }
 
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn validate_validator_qualification_body_matches_reservation_v1(
     body: &KagemushaV4ValidatorQualificationSealBodyV1,
     reservation: &KagemushaV4PromotionReservationV1,
@@ -997,6 +1083,13 @@ fn validate_validator_qualification_body_matches_reservation_v1(
     Ok(())
 }
 
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 #[allow(clippy::too_many_arguments)]
 fn build_validator_qualification_body_from_verified_release_v1(
     seal: &KagemushaCatalogQualificationSealV1,
@@ -1251,6 +1344,13 @@ fn exact_genesis_consensus_metadata_v1(
     Ok(*metadata)
 }
 
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn validate_runtime_effective_config_against_genesis_v1(
     projection: &KagemushaV4RuntimeEffectiveConfigProjectionV1,
     genesis: &iroha_genesis::GenesisBlock,

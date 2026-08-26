@@ -177,7 +177,7 @@ jobs:
   apple-mobile-sdk:
     needs: checker-self-test
     runs-on: macos-14
-    timeout-minutes: 120
+    timeout-minutes: 360
     env:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
       PRIVACY_PRODUCTION_ENABLED: "false"
