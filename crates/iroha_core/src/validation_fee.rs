@@ -1323,6 +1323,7 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
     }
     Ok(OpaqueDeferredValidationOutcome::Apply)
 }
+#[cfg(test)]
 fn enforce_opaque_deferred_policy(
     instruction_groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
     policy: &ValidationFeePolicyV1,
