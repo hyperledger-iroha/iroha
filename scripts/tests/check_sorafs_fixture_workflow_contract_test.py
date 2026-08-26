@@ -746,7 +746,10 @@ def test_swift_native_bridge_contract_requires_universal_macos_slice() -> None:
             "x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin"
             in workflow
         )
-        assert 'rustup_path="$(command -v rustup)"' in workflow
+        assert 'rustup_source="$(command -v rustup)"' in workflow
+        assert 'rustup_path="$rustup_tools/rustup"' in workflow
+        assert '/bin/cp "$rustup_source" "$rustup_path"' in workflow
+        assert '"${rustup_path##*/}" == rustup' in workflow
         assert "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" in workflow
         assert (
             'rustc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which '
