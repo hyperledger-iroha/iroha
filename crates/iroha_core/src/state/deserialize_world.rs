@@ -9158,7 +9158,7 @@ mod decode_tests {
             encoded_hex: hex::encode(&encoded),
         };
         assert_eq!(
-            decode_snapshot_records::<u64>(vec![record], "fixture", true)
+            decode_snapshot_records::<u64>(vec![record], "fixture")
                 .expect("canonical Norito record"),
             [7]
         );
@@ -9169,24 +9169,10 @@ mod decode_tests {
                 encoded_hex: hex::encode(trailing),
             }],
             "fixture",
-            true,
         )
         .expect_err("trailing or alternate Norito bytes must fail closed");
         assert!(error.to_string().contains("fixture"));
         SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| assert_eq!(passes.get(), 1));
-    }
-    #[test]
-    fn emergency_fast_norito_records_skip_canonical_reserialization() {
-        SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(0));
-        let record = SnapshotNoritoBlob {
-            encoded_hex: hex::encode(7_u64.encode()),
-        };
-        assert_eq!(
-            decode_snapshot_records::<u64>(vec![record], "fixture", false)
-                .expect("Fast keeps exact typed Norito decoding"),
-            [7]
-        );
-        SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| assert_eq!(passes.get(), 0));
     }
     #[test]
     fn take_parameters_cell_rejects_legacy_blocks_envelope() {

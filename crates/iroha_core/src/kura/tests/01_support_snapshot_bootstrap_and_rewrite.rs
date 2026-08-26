@@ -1531,6 +1531,24 @@ fn store_root_lock_rejects_a_second_live_kura_and_releases_on_drop() {
         .expect("the OS lock must be released when the first Kura is dropped");
     drop(reopened);
 }
+#[test]
+fn emergency_fast_store_root_lock_does_not_create_a_missing_file() {
+    let temp_dir = TempDir::new().expect("create Kura store root");
+    let lock_path = temp_dir.path().join(STORE_ROOT_LOCK_FILE_NAME);
+    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    config.init_mode = InitMode::Fast;
+
+    assert!(!lock_path.exists());
+    assert!(matches!(
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
+        Err(Error::IO(error, observed_path))
+            if error.kind() == ErrorKind::NotFound && observed_path == lock_path
+    ));
+    assert!(
+        !lock_path.exists(),
+        "emergency Fast startup must not create the store-root lock file"
+    );
+}
 #[cfg(unix)]
 #[test]
 fn store_root_lock_rejects_a_symlink_without_touching_its_target() {

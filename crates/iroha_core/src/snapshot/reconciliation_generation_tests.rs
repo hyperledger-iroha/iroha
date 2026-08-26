@@ -336,7 +336,11 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         "Fast State must expose the zero-copy Kura hash mapping at its exact tip"
     );
     assert!(
-        restored.transactions.view().get(&transaction_hash).is_none(),
+        restored
+            .transactions
+            .view()
+            .get(&transaction_hash)
+            .is_none(),
         "Fast restore must discard the disabled transaction-membership history"
     );
     let state_view = restored.view();
@@ -380,6 +384,27 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
             path.display()
         );
     }
+
+    let payload_path = current_generation_artifact(&snapshot_store_dir, SNAPSHOT_FILE_NAME);
+    let payload_bytes = std::fs::read(&payload_path).expect("read deferred snapshot payload");
+    assert!(!payload_bytes.is_empty(), "snapshot fixture must be non-empty");
+    std::fs::write(&payload_path, vec![b'!'; payload_bytes.len()])
+        .expect("replace deferred snapshot payload without changing its size");
+    let restored_without_reading_payload = try_read_snapshot(
+        &snapshot_store_dir,
+        &fast_kura,
+        LiveQueryStore::start_test,
+        block_count,
+        TEST_CHUNK_SIZE,
+        signing_key.public_key(),
+        &expected_network_id,
+        &crate::state::default_zk_config(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::new(<_>::default(), true),
+    )
+    .expect("Fast restore must not consume same-size deferred snapshot.data contents");
+    assert_eq!(restored_without_reading_payload.committed_height(), 1);
+    std::fs::write(&payload_path, payload_bytes).expect("restore signed snapshot payload");
 
     let merkle_path = current_generation_artifact(&snapshot_store_dir, SNAPSHOT_MERKLE_FILE_NAME);
     let merkle_len = std::fs::metadata(&merkle_path)
@@ -426,10 +451,8 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         TryReadError::NetworkIdMismatch { .. }
     ));
 
-    let manifest_path = current_generation_artifact(
-        &snapshot_store_dir,
-        SNAPSHOT_FAST_MANIFEST_FILE_NAME,
-    );
+    let manifest_path =
+        current_generation_artifact(&snapshot_store_dir, SNAPSHOT_FAST_MANIFEST_FILE_NAME);
     let manifest_bytes = std::fs::read(&manifest_path).expect("read signed Fast manifest");
     let mut forged_manifest =
         decode_emergency_fast_manifest(&manifest_bytes, &manifest_path).expect("decode manifest");
@@ -714,8 +737,7 @@ async fn snapshot_generation_shape_is_exact_and_idempotent() {
     let payload_limit =
         u64::try_from(iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES.get())
             .expect("snapshot payload limit fits u64");
-    let manifest_path =
-        current_generation_artifact(&store_dir, SNAPSHOT_FAST_MANIFEST_FILE_NAME);
+    let manifest_path = current_generation_artifact(&store_dir, SNAPSHOT_FAST_MANIFEST_FILE_NAME);
     let manifest_bytes = std::fs::read(&manifest_path).expect("read Fast manifest");
     std::fs::remove_file(&manifest_path).expect("remove Fast manifest");
     assert!(
@@ -728,8 +750,11 @@ async fn snapshot_generation_shape_is_exact_and_idempotent() {
         "Fast must reject a legacy four-artifact generation"
     );
     std::fs::write(&manifest_path, manifest_bytes).expect("restore Fast manifest");
-    std::fs::write(current_generation_dir(&store_dir).join("unexpected"), b"extra")
-        .expect("add unexpected artifact");
+    std::fs::write(
+        current_generation_dir(&store_dir).join("unexpected"),
+        b"extra",
+    )
+    .expect("add unexpected artifact");
     assert!(
         bind_current_snapshot_generation_emergency_fast(
             &store_dir,

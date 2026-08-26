@@ -482,13 +482,12 @@ impl KuraSeed {
             },
         )?;
         let public_lane_validator_records: Vec<PublicLaneValidatorRecord> =
-            decode_snapshot_records(public_lane_validators, "public_lane_validators", true)?;
+            decode_snapshot_records(public_lane_validators, "public_lane_validators")?;
         let public_lane_stake_share_records: Vec<PublicLaneStakeShare> =
-            decode_snapshot_records(public_lane_stake_shares, "public_lane_stake_shares", true)?;
+            decode_snapshot_records(public_lane_stake_shares, "public_lane_stake_shares")?;
         let public_lane_reward_records = decode_snapshot_records::<PublicLaneRewardRecord>(
             public_lane_rewards,
             "public_lane_rewards",
-            true,
         )?;
         validate_canonical_snapshot_record_order(
             &public_lane_validator_records,
@@ -552,7 +551,7 @@ impl KuraSeed {
             })
             .collect();
         world.space_directory_manifests =
-            decode_space_directory_manifest_sets(space_directory_manifests, true)?;
+            decode_space_directory_manifest_sets(space_directory_manifests)?;
         world
             .validate_quantity_ledger_invariants()
             .map_err(|message| json::Error::InvalidField {
@@ -989,7 +988,6 @@ fn validate_snapshot_autoscale_sample_history(
 fn decode_snapshot_records<T>(
     records: Vec<SnapshotNoritoBlob>,
     field: &str,
-    validate_canonical: bool,
 ) -> Result<Vec<T>, json::Error>
 where
     T: DecodeAll + Encode,
@@ -1008,15 +1006,13 @@ where
                 field: field.to_owned(),
                 message: format!("record {index} norito decode failed: {err}"),
             })?;
-            if validate_canonical {
-                #[cfg(test)]
-                SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(passes.get() + 1));
-                if decoded.encode() != bytes {
-                    return Err(json::Error::InvalidField {
-                        field: field.to_owned(),
-                        message: format!("record {index} is not canonical Norito"),
-                    });
-                }
+            #[cfg(test)]
+            SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(passes.get() + 1));
+            if decoded.encode() != bytes {
+                return Err(json::Error::InvalidField {
+                    field: field.to_owned(),
+                    message: format!("record {index} is not canonical Norito"),
+                });
             }
             Ok(decoded)
         })
@@ -1050,7 +1046,6 @@ where
 }
 fn decode_space_directory_manifest_sets(
     records: Vec<SnapshotSpaceDirectoryManifestSet>,
-    validate_canonical: bool,
 ) -> Result<Storage<UniversalAccountId, SpaceDirectoryManifestSet>, json::Error> {
     let mut storage = Storage::default();
     for (index, record) in records.into_iter().enumerate() {
@@ -1065,15 +1060,13 @@ fn decode_space_directory_manifest_sets(
                 message: format!("record {index} norito decode failed: {err}"),
             }
         })?;
-        if validate_canonical {
-            #[cfg(test)]
-            SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(passes.get() + 1));
-            if manifest_set.encode() != bytes {
-                return Err(json::Error::InvalidField {
-                    field: "space_directory_manifests".to_owned(),
-                    message: format!("record {index} is not canonical Norito"),
-                });
-            }
+        #[cfg(test)]
+        SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(passes.get() + 1));
+        if manifest_set.encode() != bytes {
+            return Err(json::Error::InvalidField {
+                field: "space_directory_manifests".to_owned(),
+                message: format!("record {index} is not canonical Norito"),
+            });
         }
         if storage.insert(record.uaid, manifest_set).is_some() {
             return Err(json::Error::InvalidField {

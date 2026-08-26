@@ -1784,6 +1784,8 @@ impl SumeragiRelayFatalReason {
 }
 /// Maximum number of consecutive high-priority messages before yielding to an ordinary lane.
 const RELAY_HIGH_BURST: usize = 32;
+/// Bound best-effort peer/trust gossip retained by the read-only emergency runtime.
+const EMERGENCY_FAST_RELAY_SUBSCRIBER_CAP: usize = 32;
 /// Upper bound between attempts while serialized Sumeragi ingress remains temporarily unavailable.
 const SUMERAGI_RELAY_RETRY_CADENCE: Duration = Duration::from_millis(10);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3813,48 +3815,32 @@ fn high_priority_relay_filter() -> iroha_p2p::network::SubscriberFilter {
 }
 fn emergency_fast_relay_filter() -> iroha_p2p::network::SubscriberFilter {
     use iroha_p2p::network::{SubscriberFilter, message::Topic};
-    SubscriberFilter::topics([Topic::PeerGossip, Topic::TrustGossip, Topic::Health])
+    SubscriberFilter::topics([Topic::PeerGossip, Topic::TrustGossip])
 }
-async fn run_emergency_fast_network_relay(
-    shared: Arc<NetworkRelayShared>,
-    subscriber_cap: usize,
-    worker_limit: usize,
-) {
+async fn run_emergency_fast_network_relay(shared: Arc<NetworkRelayShared>) {
     let filter = emergency_fast_relay_filter();
-    let worker_sem = Arc::new(tokio::sync::Semaphore::new(worker_limit));
     loop {
-        // Fast deliberately owns one peer/health subscriber. It does not allocate
+        // Fast deliberately owns one bounded peer/trust subscriber. It does not allocate
         // consensus safety, payload, chunk, retained-dispatch, or worker queues.
-        let (sender, mut receiver) = mpsc::channel(subscriber_cap);
+        let (sender, mut receiver) = mpsc::channel(EMERGENCY_FAST_RELAY_SUBSCRIBER_CAP);
         if let Err(_returned) = shared
             .network
             .subscribe_to_peers_messages_with_filter(sender, filter.clone())
         {
-            iroha_logger::warn!("retrying emergency Fast peer/health P2P subscriber registration");
+            iroha_logger::warn!("retrying emergency Fast peer/trust P2P subscriber registration");
             tokio::time::sleep(Duration::from_millis(50)).await;
             continue;
         }
-        iroha_logger::info!("registered emergency Fast peer/health relay subscriber");
+        iroha_logger::info!("registered emergency Fast peer/trust relay subscriber");
         while let Some(msg) = receiver.recv().await {
-            let Ok(permit) = worker_sem.clone().acquire_owned().await else {
-                let _exact_unadmitted_item = msg;
-                iroha_logger::error!(
-                    "emergency Fast relay worker semaphore closed while exact work was retained"
-                );
-                std::process::exit(1);
-            };
-            let shared = Arc::clone(&shared);
-            tokio::spawn(async move {
-                let (peer, authenticated_via, payload, payload_bytes, _retention_guard) =
-                    msg.into_parts();
-                shared
-                    .handle_message(peer, authenticated_via, payload, payload_bytes)
-                    .await;
-                drop(permit);
-            });
+            let (peer, authenticated_via, payload, payload_bytes, _retention_guard) =
+                msg.into_parts();
+            shared
+                .handle_message(peer, authenticated_via, payload, payload_bytes)
+                .await;
         }
         iroha_logger::warn!(
-            "emergency Fast peer/health subscriber closed; restarting subscription"
+            "emergency Fast peer/trust subscriber closed; restarting subscription"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -3878,15 +3864,15 @@ impl NetworkRelay {
     async fn run(self, shutdown_signal: ShutdownSignal) {
         use iroha_p2p::network::{SubscriberFilter, message::Topic};
         let shared = Arc::new(self.into_shared());
+        if shared.emergency_fast {
+            run_emergency_fast_network_relay(shared).await;
+            return;
+        }
         let base_cap = shared.network.subscriber_queue_cap().get();
         let worker_limit = std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
             .unwrap_or(1)
             .clamp(1, 8);
-        if shared.emergency_fast {
-            run_emergency_fast_network_relay(shared, base_cap, worker_limit).await;
-            return;
-        }
         let network_per_lane = shared.network.authenticated_source_credit_capacity().get();
         let authenticated_source_count = shared.network.reply_route_source_capacity();
         let sumeragi_geometry = SumeragiRelayCapacityGeometry::checked(
@@ -7511,32 +7497,34 @@ impl Iroha {
                 ))
             })?
         };
-        // Log detailed backtraces if a lock-order deadlock occurs so we can
-        // diagnose stalls during long-running scenarios (e.g., integration tests).
-        std::thread::spawn(|| {
-            loop {
-                std::thread::sleep(Duration::from_secs(10));
-                let deadlocks = deadlock::check_deadlock();
-                if deadlocks.is_empty() {
-                    continue;
-                }
-                for (i, threads) in deadlocks.iter().enumerate() {
-                    iroha_logger::error!(
-                        deadlock_index = i,
-                        thread_count = threads.len(),
-                        "deadlock detected"
-                    );
-                    for thr in threads {
+        if !emergency_fast {
+            // Log detailed backtraces if a lock-order deadlock occurs so we can
+            // diagnose stalls during long-running scenarios (e.g., integration tests).
+            std::thread::spawn(|| {
+                loop {
+                    std::thread::sleep(Duration::from_secs(10));
+                    let deadlocks = deadlock::check_deadlock();
+                    if deadlocks.is_empty() {
+                        continue;
+                    }
+                    for (i, threads) in deadlocks.iter().enumerate() {
                         iroha_logger::error!(
                             deadlock_index = i,
-                            thread = ?thr.thread_id(),
-                            backtrace = ?thr.backtrace(),
-                            "deadlocked thread backtrace"
+                            thread_count = threads.len(),
+                            "deadlock detected"
                         );
+                        for thr in threads {
+                            iroha_logger::error!(
+                                deadlock_index = i,
+                                thread = ?thr.thread_id(),
+                                backtrace = ?thr.backtrace(),
+                                "deadlocked thread backtrace"
+                            );
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
         let (kura, mut block_count) =
             Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
                 &config.kura,
@@ -7572,7 +7560,7 @@ impl Iroha {
             supervisor.monitor(child);
             handle
         };
-        let telemetry_profile = if config.telemetry_enabled {
+        let telemetry_profile = if !emergency_fast && config.telemetry_enabled {
             config.telemetry_profile
         } else {
             iroha_config::parameters::actual::TelemetryProfile::Disabled
@@ -7602,10 +7590,6 @@ impl Iroha {
             .verification_public_key
             .as_ref()
             .unwrap_or_else(|| config.common.key_pair.public_key());
-        let signing_key = config.snapshot.signing_private_key.as_ref().map_or_else(
-            || config.common.key_pair.clone(),
-            |key| iroha_crypto::KeyPair::from(key.clone()),
-        );
         let genesis = load_deferred_normal_startup_genesis(
             provisional_imported_prefix,
             genesis,
@@ -7759,7 +7743,9 @@ impl Iroha {
             // snapshot boundary, so install it exactly once here before replay.
             install_zk_config_before_kura_replay(&mut state, &config)?;
         }
-        apply_state_runtime_config_before_snapshot_auth(&mut state, &config);
+        if !emergency_fast {
+            apply_state_runtime_config_before_snapshot_auth(&mut state, &config);
+        }
         if !emergency_fast && !provisional_imported_prefix {
             apply_state_geometry_config_before_kura_replay(&mut state, &config)?;
             // Kura authenticates canonical replay evidence before State exists. Geometry setup
@@ -7964,17 +7950,13 @@ impl Iroha {
         // Transaction validation during replay consults the lane registry. Freeze and install the
         // configured source set before the first replay transition; installing it only after
         // replay leaves even the default lane absent on snapshot-free restart.
-        let replay_nexus = if emergency_fast {
-            config.nexus.clone()
-        } else {
-            nexus_for_runtime_surfaces(&state)
-        };
         let frozen_startup_lane_manifests = if emergency_fast {
             iroha_logger::warn!(
                 "emergency Fast startup deferred lane-manifest directory loading and validation until a Strict restart"
             );
             Arc::new(LaneManifestRegistry::empty())
         } else {
+            let replay_nexus = nexus_for_runtime_surfaces(&state);
             freeze_lane_manifests_for_startup_replay(&replay_nexus)
                 .map_err(|error| Report::new(error).change_context(StartError::InitKura))
                 .map_err(|report| {
@@ -8009,7 +7991,12 @@ impl Iroha {
             supervisor.monitor(child);
         }
         // Delay Arc wrapping until after we tweak state with config
-        let (events_sender, _) = broadcast::channel(config.torii.events_buffer_capacity.get());
+        let events_buffer_capacity = if emergency_fast {
+            1
+        } else {
+            config.torii.events_buffer_capacity.get()
+        };
+        let (events_sender, _) = broadcast::channel(events_buffer_capacity);
         // Register pipeline events sender for ZK lane reporting
         iroha_core::pipeline::zk_lane::register_events_sender(events_sender.clone());
         // Kura replay can advance consensus-owned Nexus topology beyond the
@@ -8019,7 +8006,7 @@ impl Iroha {
         // routes with the stale startup catalog and never installs state-side
         // manifest bindings for restored lanes.
         let runtime_nexus = if emergency_fast {
-            config.nexus.clone()
+            iroha_config::parameters::actual::Nexus::default()
         } else {
             nexus_for_runtime_surfaces(&state)
         };
@@ -8059,8 +8046,16 @@ impl Iroha {
         } else {
             None
         };
+        let mut queue_config = config.queue;
+        if emergency_fast {
+            queue_config.capacity = std::num::NonZeroUsize::MIN;
+            queue_config.capacity_per_user = std::num::NonZeroUsize::MIN;
+            queue_config.max_retained_bytes = std::num::NonZeroU64::MIN;
+            queue_config.expired_cull_batch = std::num::NonZeroUsize::MIN;
+            queue_config.plan_journal_max_bytes = 0;
+        }
         let queue = Arc::new(Queue::from_config_with_router_limits_and_catalogs(
-            config.queue,
+            queue_config,
             events_sender.clone(),
             router.clone(),
             queue_limits,
@@ -8629,9 +8624,10 @@ impl Iroha {
             }));
         }
         #[cfg(feature = "telemetry")]
-        start_telemetry(&logger, &config, &mut supervisor).await?;
-        #[cfg(feature = "telemetry")]
-        log_startup_trace("irohad.telemetry.ready", startup_trace_started_at);
+        if !emergency_fast {
+            start_telemetry(&logger, &config, &mut supervisor).await?;
+            log_startup_trace("irohad.telemetry.ready", startup_trace_started_at);
+        }
         // Thread the remaining runtime preferences from config into state. ZK
         // configuration was installed once before Kura replay so hydrated SCCP
         // usage was checked against the actual configured caps at startup.
@@ -8657,20 +8653,23 @@ impl Iroha {
                 .map_err(|report| {
                     report.attach("failed to restore effective Nexus tiered lane geometry")
                 })?;
+            state.set_pipeline(pipeline_cfg);
+            state.set_sumeragi_parameters(&sumeragi_cfg);
+            state.set_oracle(oracle_cfg);
+            state.set_streaming_storage_paths(
+                streaming_soranet_spool_dir,
+                streaming_soravpn_spool_dir,
+            );
+            state.set_fraud_monitoring(fraud_cfg);
+            // Settlement runtime state was installed before Kura replay. Preserve
+            // its lazily derived escrow bindings instead of replacing the replayed snapshot after Kura has started.
+            state.set_gov(gov_cfg);
+            state.set_merge_ledger_cache_capacity(merge_cache_capacity);
+            log_startup_trace(
+                "irohad.state.runtime_config_applied",
+                startup_trace_started_at,
+            );
         }
-        state.set_pipeline(pipeline_cfg);
-        state.set_sumeragi_parameters(&sumeragi_cfg);
-        state.set_oracle(oracle_cfg);
-        state.set_streaming_storage_paths(streaming_soranet_spool_dir, streaming_soravpn_spool_dir);
-        state.set_fraud_monitoring(fraud_cfg);
-        // Settlement runtime state was installed before Kura replay. Preserve
-        // its lazily derived escrow bindings instead of replacing the replayed snapshot after Kura has started.
-        state.set_gov(gov_cfg);
-        state.set_merge_ledger_cache_capacity(merge_cache_capacity);
-        log_startup_trace(
-            "irohad.state.runtime_config_applied",
-            startup_trace_started_at,
-        );
         // Recovery: scan recent persisted pipeline sidecars and log DAG fingerprint mismatches (best-effort).
         #[cfg(feature = "dag-recovery-verify")]
         if !emergency_fast {
@@ -8813,8 +8812,10 @@ impl Iroha {
             });
         }
         #[cfg(feature = "telemetry")]
-        let telemetry = {
-            let (metrics_reporter, child) = iroha_core::telemetry::start(
+        let telemetry = if emergency_fast {
+            iroha_core::telemetry::Telemetry::from(state_telemetry.clone())
+        } else {
+            let (telemetry, child) = iroha_core::telemetry::start(
                 metrics,
                 Arc::clone(&state),
                 kura.clone(),
@@ -8822,10 +8823,10 @@ impl Iroha {
                 network.online_peers_receiver(),
                 config.common.peer.id.clone(),
                 TimeSource::new_system(),
-                !emergency_fast && telemetry_capabilities.metrics_enabled(),
+                telemetry_capabilities.metrics_enabled(),
             );
             supervisor.monitor(child);
-            metrics_reporter
+            telemetry
         };
         let (peers_gossiper, child) = PeersGossiper::start(
             config.common.peer.id.clone(),
@@ -8982,7 +8983,8 @@ impl Iroha {
             .map(|prepared| Arc::clone(prepared.runtime_query()));
         let sorafs_reputation_retention_authority =
             runtime_deps.sorafs_reputation_retention_authority.clone();
-        if config.torii.sorafs_storage.reputation_runtime.is_none()
+        if !emergency_fast
+            && config.torii.sorafs_storage.reputation_runtime.is_none()
             && sorafs_reputation_retention_authority.is_some()
         {
             return Err(Report::new(StartError::StartP2p).attach(
@@ -9188,11 +9190,16 @@ impl Iroha {
             supervisor.monitor(child);
             tx_gossiper
         };
-        if !emergency_fast
-            && let Some(snapshot_maker) =
-            SnapshotMaker::from_config(&config.snapshot, Arc::clone(&state), signing_key)
-        {
-            supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
+        if !emergency_fast {
+            let signing_key = config.snapshot.signing_private_key.as_ref().map_or_else(
+                || config.common.key_pair.clone(),
+                |key| iroha_crypto::KeyPair::from(key.clone()),
+            );
+            if let Some(snapshot_maker) =
+                SnapshotMaker::from_config(&config.snapshot, Arc::clone(&state), signing_key)
+            {
+                supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
+            }
         }
         let sorafs_storage_config = if emergency_fast {
             sorafs_node::config::StorageConfig::builder()
@@ -9955,30 +9962,34 @@ impl Iroha {
         ensure_operator_node_key_allowlisted(&mut config);
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);
-        // Subscribe before Torii exposes the configuration update endpoint.
-        // A watch update published after Kiso starts is then retained even if
-        // the relay task has not begun polling yet.
-        let config_update_receivers = ConfigUpdateReceivers {
-            log_level: kiso.subscribe_on_logger_updates().await.map_err(|error| {
-                Report::new(StartError::StartTorii)
-                    .attach(format!("failed to subscribe to logger updates: {error}"))
-            })?,
-            acl: kiso
-                .subscribe_on_network_acl_updates()
-                .await
-                .map_err(|error| {
-                    Report::new(StartError::StartTorii).attach(format!(
-                        "failed to subscribe to network ACL updates: {error}"
-                    ))
+        // Normal startup subscribes before Torii exposes the configuration
+        // update endpoint. Fast never exposes that endpoint, so it also leaves
+        // these mutable-runtime subscriptions and their relay task absent.
+        let config_update_receivers = if emergency_fast {
+            None
+        } else {
+            Some(ConfigUpdateReceivers {
+                log_level: kiso.subscribe_on_logger_updates().await.map_err(|error| {
+                    Report::new(StartError::StartTorii)
+                        .attach(format!("failed to subscribe to logger updates: {error}"))
                 })?,
-            handshake: kiso
-                .subscribe_on_soranet_handshake_updates()
-                .await
-                .map_err(|error| {
-                    Report::new(StartError::StartTorii).attach(format!(
-                        "failed to subscribe to SoraNet handshake updates: {error}"
-                    ))
-                })?,
+                acl: kiso
+                    .subscribe_on_network_acl_updates()
+                    .await
+                    .map_err(|error| {
+                        Report::new(StartError::StartTorii).attach(format!(
+                            "failed to subscribe to network ACL updates: {error}"
+                        ))
+                    })?,
+                handshake: kiso
+                    .subscribe_on_soranet_handshake_updates()
+                    .await
+                    .map_err(|error| {
+                        Report::new(StartError::StartTorii).attach(format!(
+                            "failed to subscribe to SoraNet handshake updates: {error}"
+                        ))
+                    })?,
+            })
         };
         let receipt_signer = torii_receipt_signer_or_derived(
             config.torii.receipt_signer.clone(),
@@ -10302,25 +10313,27 @@ impl Iroha {
         // Observer nodes are configured with `NodeRole::Observer`; Sumeragi suppresses
         // local consensus emissions in that case, so observers follow the chain and
         // serve queries without proposing or voting. Validators retain the full duties.
-        let net_for_relay = network.clone();
-        // The relay retains `kiso`, so its watch senders cannot close through ordinary
-        // handle loss. Any pre-shutdown return means the supervised configuration
-        // authority failed; restarting only this relay would preserve stale ACL or
-        // handshake policy and is therefore deliberately not recoverable.
-        let confidential_gas = config.confidential.gas;
-        supervisor.monitor(tokio::task::spawn(async move {
-            if let Err(err) = config_updates_relay(
-                kiso,
-                logger,
-                net_for_relay,
-                confidential_gas,
-                config_update_receivers,
-            )
-            .await
-            {
-                iroha_logger::error!(?err, "Config updates relay exited");
-            }
-        }));
+        if let Some(config_update_receivers) = config_update_receivers {
+            let net_for_relay = network.clone();
+            // The relay retains `kiso`, so its watch senders cannot close through ordinary
+            // handle loss. Any pre-shutdown return means the supervised configuration
+            // authority failed; restarting only this relay would preserve stale ACL or
+            // handshake policy and is therefore deliberately not recoverable.
+            let confidential_gas = config.confidential.gas;
+            supervisor.monitor(tokio::task::spawn(async move {
+                if let Err(err) = config_updates_relay(
+                    kiso,
+                    logger,
+                    net_for_relay,
+                    confidential_gas,
+                    config_update_receivers,
+                )
+                .await
+                {
+                    iroha_logger::error!(?err, "Config updates relay exited");
+                }
+            }));
+        }
         supervisor
             .setup_shutdown_on_os_signals()
             .change_context(StartError::ListenOsSignal)?;
@@ -11375,15 +11388,37 @@ fn read_config_and_genesis_with_kagemusha_sources(
     if config.kura.init_mode != InitMode::Fast {
         preflight_fastpq_bn254_poseidon_words(&config.zk.fastpq);
     }
-    apply_concurrency_config(&config.concurrency);
+    if config.kura.init_mode == InitMode::Fast {
+        // Fast constructs one inert State VM for structural completeness. Cap
+        // that VM at one minimum-stack worker and leave the global Rayon pool
+        // uninitialized; no contract or proof route is available in this mode.
+        let _ = ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES, ivm::MIN_STACK_BYTES);
+        ivm::set_scheduler_thread_limits(Some(1), Some(1));
+        println!("{}", scheduler_banner_line(1));
+    } else {
+        apply_concurrency_config(&config.concurrency);
+    }
     // Apply Norito settings immediately so subsequent Norito decode/encode (e.g., genesis)
     // uses the configured archive bounds and GPU offload policy.
     apply_norito_config(&config);
+    if config.kura.init_mode == InitMode::Fast {
+        norito::core::hw::set_gpu_compression_allowed(false);
+    }
     // Apply hardware acceleration configuration for IVM (Metal/CUDA). Defaults enable all
     // available hardware; config can cap GPUs or disable specific backends. This does not
     // change outputs, only performance characteristics.
-    apply_ivm_acceleration_config(&config.accel);
-    rs16::set_simd_enabled(config.accel.enable_simd);
+    if config.kura.init_mode == InitMode::Fast {
+        let mut acceleration = config.accel.clone();
+        acceleration.enable_simd = false;
+        acceleration.enable_metal = false;
+        acceleration.enable_cuda = false;
+        acceleration.max_gpus = Some(0);
+        apply_ivm_acceleration_config(&acceleration);
+        rs16::set_simd_enabled(false);
+    } else {
+        apply_ivm_acceleration_config(&config.accel);
+        rs16::set_simd_enabled(config.accel.enable_simd);
+    }
     iroha_data_model::account::address::set_chain_discriminant(
         *config.common.chain_discriminant.value(),
     );
@@ -13647,15 +13682,14 @@ fn run_main_with_config_guard(
         "Sumeragi v2 data availability is mandatory"
     );
     #[cfg(feature = "telemetry")]
-    let fastpq_device_labels = FastpqDeviceLabels::from_config(&config.zk.fastpq);
-    #[cfg(feature = "telemetry")]
-    install_fastpq_execution_mode_probe(&fastpq_device_labels);
-    #[cfg(feature = "telemetry")]
-    install_fastpq_poseidon_probe(&fastpq_device_labels);
-    #[cfg(feature = "telemetry")]
-    install_fastpq_gpu_event_probe(&fastpq_device_labels);
-    #[cfg(all(feature = "telemetry", feature = "fastpq-gpu", target_os = "macos"))]
-    install_fastpq_queue_probe(fastpq_device_labels.clone());
+    if !emergency_fast {
+        let fastpq_device_labels = FastpqDeviceLabels::from_config(&config.zk.fastpq);
+        install_fastpq_execution_mode_probe(&fastpq_device_labels);
+        install_fastpq_poseidon_probe(&fastpq_device_labels);
+        install_fastpq_gpu_event_probe(&fastpq_device_labels);
+        #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+        install_fastpq_queue_probe(fastpq_device_labels.clone());
+    }
     // Concurrency configuration: set global Rayon pool and IVM scheduler limits.
     let min = if config.concurrency.scheduler_min_threads == 0 {
         // auto (physical cores) — defer to IVM internals
@@ -13684,9 +13718,16 @@ fn run_main_with_config_guard(
         auto_budget
     };
     let tokio_workers = budget.clamp(4, 16);
+    // Fast intentionally skips the general runtime validator. Do not feed its unvalidated
+    // stack-size knob into the runtime builder; use the repository's bounded default instead.
+    let tokio_stack_bytes = if emergency_fast {
+        iroha_config::parameters::actual::Concurrency::from_defaults().tokio_stack_bytes
+    } else {
+        config.concurrency.tokio_stack_bytes
+    };
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(tokio_workers)
-        .thread_stack_size(config.concurrency.tokio_stack_bytes)
+        .thread_stack_size(tokio_stack_bytes)
         .enable_all()
         .build()
         .map_err(Report::from)
@@ -14854,7 +14895,7 @@ async fn run_node(
 fn log_norito_banner(cfg: &Config) {
     // Snapshot core settings
     let n = &cfg.norito;
-    let gpu_allowed = n.allow_gpu_compression;
+    let gpu_allowed = cfg.kura.init_mode != InitMode::Fast && n.allow_gpu_compression;
     let gpu_probe_status = if gpu_allowed { "deferred" } else { "disabled" };
     // UTF‑8 box drawing and kana render nicely in modern terminals.
     let art = r"
@@ -15017,11 +15058,11 @@ mod tests {
         );
     }
     #[test]
-    fn emergency_fast_relay_subscribes_only_to_peer_and_health_topics() {
+    fn emergency_fast_relay_subscribes_only_to_peer_and_trust_topics() {
         use iroha_p2p::network::{SubscriberFilter, message::Topic};
         assert_eq!(
             emergency_fast_relay_filter(),
-            SubscriberFilter::topics([Topic::PeerGossip, Topic::TrustGossip, Topic::Health])
+            SubscriberFilter::topics([Topic::PeerGossip, Topic::TrustGossip])
         );
     }
     #[test]
@@ -15408,9 +15449,12 @@ mod tests {
         let reconciliation = tiered_setup
             .find(".set_tiered_backend(&tiered_state_cfg)")
             .expect("Strict tiered-state reconciliation");
+        let pipeline_runtime = tiered_setup
+            .find("state.set_pipeline(pipeline_cfg)")
+            .expect("Strict pipeline runtime setup");
         assert!(
-            fast_guard < reconciliation,
-            "emergency Fast must branch before tiered storage can be preflighted or mutated"
+            fast_guard < reconciliation && reconciliation < pipeline_runtime,
+            "emergency Fast must branch before tiered storage or the pipeline worker pool can be initialized"
         );
     }
     #[test]
@@ -15508,7 +15552,11 @@ mod tests {
     }
     #[test]
     fn emergency_fast_keeps_query_telemetry_and_time_workers_inert() {
-        let compact_source: String = include_str!("main.rs")
+        let implementation = include_str!("main.rs")
+            .split_once("fn emergency_fast_keeps_query_telemetry_and_time_workers_inert")
+            .expect("emergency Fast source assertion boundary")
+            .0;
+        let compact_source: String = implementation
             .chars()
             .filter(|character| !character.is_whitespace())
             .collect();
@@ -15516,10 +15564,62 @@ mod tests {
         assert!(compact_source.contains(
             "letlive_query_store=ifemergency_fast{live_query_store.into_inert_handle()}else{let(handle,child)=live_query_store.start();supervisor.monitor(child);handle};"
         ));
-        assert!(compact_source
-            .contains("!emergency_fast&&telemetry_capabilities.metrics_enabled(),"));
+        assert!(compact_source.contains(
+            "lettelemetry_profile=if!emergency_fast&&config.telemetry_enabled{config.telemetry_profile}else{iroha_config::parameters::actual::TelemetryProfile::Disabled};"
+        ));
+        assert!(compact_source.contains(
+            "if!emergency_fast{start_telemetry(&logger,&config,&mutsupervisor).await?;"
+        ));
+        assert!(compact_source.contains(
+            "lettelemetry=ifemergency_fast{iroha_core::telemetry::Telemetry::from(state_telemetry.clone())}else{"
+        ));
+        assert!(compact_source.contains(
+            "if!emergency_fast{apply_state_runtime_config_before_snapshot_auth(&mutstate,&config);}"
+        ));
+        assert!(compact_source.contains(
+            "letevents_buffer_capacity=ifemergency_fast{1}else{config.torii.events_buffer_capacity.get()};"
+        ));
+        assert!(compact_source.contains(
+            "letruntime_nexus=ifemergency_fast{iroha_config::parameters::actual::Nexus::default()}else{nexus_for_runtime_surfaces(&state)};"
+        ));
+        assert!(compact_source.contains(
+            "letmutqueue_config=config.queue;ifemergency_fast{queue_config.capacity=std::num::NonZeroUsize::MIN;queue_config.capacity_per_user=std::num::NonZeroUsize::MIN;queue_config.max_retained_bytes=std::num::NonZeroU64::MIN;queue_config.expired_cull_batch=std::num::NonZeroUsize::MIN;queue_config.plan_journal_max_bytes=0;}"
+        ));
+        assert!(compact_source.contains(
+            "letconfig_update_receivers=ifemergency_fast{None}else{Some(ConfigUpdateReceivers{"
+        ));
+        assert!(compact_source.contains(
+            "if!emergency_fast&&config.torii.sorafs_storage.reputation_runtime.is_none()&&sorafs_reputation_retention_authority.is_some()"
+        ));
+        assert!(compact_source.contains(
+            "ifletSome(config_update_receivers)=config_update_receivers{letnet_for_relay=network.clone();"
+        ));
+        assert!(compact_source.contains(
+            "if!emergency_fast{letfastpq_device_labels=FastpqDeviceLabels::from_config(&config.zk.fastpq);install_fastpq_execution_mode_probe(&fastpq_device_labels);"
+        ));
+        assert!(compact_source.contains(
+            "let_=ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES,ivm::MIN_STACK_BYTES);ivm::set_scheduler_thread_limits(Some(1),Some(1));println!(\"{}\",scheduler_banner_line(1));}else{apply_concurrency_config(&config.concurrency);}"
+        ));
+        assert!(compact_source.contains(
+            "apply_norito_config(&config);ifconfig.kura.init_mode==InitMode::Fast{norito::core::hw::set_gpu_compression_allowed(false);}"
+        ));
+        assert!(compact_source.contains(
+            "letmutacceleration=config.accel.clone();acceleration.enable_simd=false;acceleration.enable_metal=false;acceleration.enable_cuda=false;acceleration.max_gpus=Some(0);apply_ivm_acceleration_config(&acceleration);rs16::set_simd_enabled(false);"
+        ));
         assert!(compact_source.contains(
             "if!emergency_fast{iroha_core::time::start(network.clone(),iroha_core::time::Params::from(&config.nts));}"
+        ));
+        assert!(compact_source.contains(
+            "if!emergency_fast{std::thread::spawn(||{loop{std::thread::sleep(Duration::from_secs(10));letdeadlocks=deadlock::check_deadlock();"
+        ));
+        assert!(compact_source.contains(
+            "lettokio_stack_bytes=ifemergency_fast{iroha_config::parameters::actual::Concurrency::from_defaults().tokio_stack_bytes}else{config.concurrency.tokio_stack_bytes};"
+        ));
+        assert!(compact_source.contains(
+            "if!emergency_fast{letsigning_key=config.snapshot.signing_private_key.as_ref().map_or_else("
+        ));
+        assert!(compact_source.contains(
+            "letgpu_allowed=cfg.kura.init_mode!=InitMode::Fast&&n.allow_gpu_compression;"
         ));
     }
     #[test]
@@ -15555,7 +15655,7 @@ mod tests {
             .filter(|character| !character.is_whitespace())
             .collect();
         assert!(compact_source.contains(
-            "ifshared.emergency_fast{run_emergency_fast_network_relay(shared,base_cap,worker_limit).await;return;}"
+            "ifshared.emergency_fast{run_emergency_fast_network_relay(shared).await;return;}"
         ));
         assert!(compact_source.contains("spawn_network_relay_worker(&shared,&sumeragi_ingress,"));
         assert!(compact_source.contains(
@@ -15572,8 +15672,11 @@ mod tests {
         assert_eq!(
             fast_relay.matches("mpsc::channel(").count(),
             1,
-            "Fast must allocate only its peer/health subscriber queue"
+            "Fast must allocate only its peer/trust subscriber queue"
         );
+        assert!(fast_relay.contains("mpsc::channel(EMERGENCY_FAST_RELAY_SUBSCRIBER_CAP)"));
+        assert!(!fast_relay.contains("tokio::spawn"));
+        assert!(!fast_relay.contains("Semaphore"));
         assert!(!fast_relay.contains("Topic::Consensus"));
         assert!(!fast_relay.contains("Topic::BlockSync"));
         assert!(!fast_relay.contains("Topic::Control"));

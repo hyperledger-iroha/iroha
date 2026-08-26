@@ -2212,7 +2212,10 @@ impl Kura {
         kura_inner._temp_store_dir = Some(temp_store_dir);
         Ok(kura)
     }
-    fn acquire_store_root_lock(store_root: &Path) -> Result<std::fs::File> {
+    fn acquire_store_root_lock(
+        store_root: &Path,
+        create_if_missing: bool,
+    ) -> Result<std::fs::File> {
         let canonical_root = std::fs::canonicalize(store_root)
             .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
         let root_before = std::fs::symlink_metadata(&canonical_root)
@@ -2244,7 +2247,10 @@ impl Kura {
             ));
         }
         let mut options = std::fs::OpenOptions::new();
-        options.read(true).write(true).create(true);
+        options
+            .read(true)
+            .write(true)
+            .create(create_if_missing);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
@@ -2358,7 +2364,8 @@ impl Kura {
         let store_dir = std::fs::canonicalize(&configured_store_dir)
             .map_err(|error| Error::IO(error, configured_store_dir))?;
         let store_root = store_dir.clone();
-        let store_root_lock_file = Self::acquire_store_root_lock(&store_dir)?;
+        let store_root_lock_file =
+            Self::acquire_store_root_lock(&store_dir, config.init_mode == InitMode::Strict)?;
         #[cfg(all(unix, not(target_os = "espidf")))]
         let store_root_directory =
             Self::open_safety_wal_store_root_directory(&store_root, &store_root_lock_file)?;
