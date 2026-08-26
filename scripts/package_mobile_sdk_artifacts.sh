@@ -112,6 +112,8 @@ MOBILE_SDK_PACKAGE_OUT_DIR is required and selects a dedicated external package 
 whose final path component contains "mobile-sdk".
 MOBILE_SDK_PYTHON_BINARY may select an absolute, already-canonical regular
 Python 3.12 executable when the fixed Homebrew/system locators are unavailable.
+MOBILE_SDK_RUSTUP_BINARY may select the absolute canonical, non-symbolic rustup
+executable used by Apple source authentication.
 Source-authenticated packaging invokes scripts/check_mobile_sdk_artifacts.sh
 and therefore also requires exact Rust 1.93.1 RUSTC/RUSTDOC plus one canonical
 writable external CARGO_TARGET_DIR. Only the repository-root Cargo.lock is
@@ -630,7 +632,7 @@ write_manifest() {
 prepare_apple_archive_provenance_environment() {
   local user_home developer_dir authenticated
   local cargo_home rustup_home temporary_dir cargo_target
-  local cargo_binary rustc_binary rustdoc_binary rustup_binary
+  local cargo_binary rustc_binary rustdoc_binary rustup_binary canonical_rustup_binary
 
   user_home="${NORITO_BRIDGE_SEAL_HOME:-$(run_isolated_python -c '
 import os
@@ -651,7 +653,21 @@ print(Path(pwd.getpwuid(os.getuid()).pw_dir).resolve(strict=True))
   else
     cargo_binary=""
   fi
-  rustup_binary="${NORITO_BRIDGE_SEAL_RUSTUP:-$user_home/.cargo/bin/rustup}"
+  if [[ -n "${NORITO_BRIDGE_SEAL_RUSTUP:-}" ]]; then
+    rustup_binary="$NORITO_BRIDGE_SEAL_RUSTUP"
+  elif [[ -n "${MOBILE_SDK_RUSTUP_BINARY+x}" ]]; then
+    rustup_binary="$MOBILE_SDK_RUSTUP_BINARY"
+    if [[ -z "$rustup_binary" || "$rustup_binary" != /* ]] \
+      || ! canonical_rustup_binary="$(run_isolated_python -c \
+        'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+        "$rustup_binary")" \
+      || [[ "$canonical_rustup_binary" != "$rustup_binary" ]]; then
+      echo "[mobile-sdk-package] ERROR: MOBILE_SDK_RUSTUP_BINARY must be an absolute canonical non-symbolic executable" >&2
+      exit 66
+    fi
+  else
+    rustup_binary="$user_home/.cargo/bin/rustup"
+  fi
   developer_dir="${NORITO_BRIDGE_SEAL_DEVELOPER_DIR:-${NORITO_BRIDGE_DEVELOPER_DIR:-}}"
   if [[ -z "$developer_dir" ]]; then
     if [[ ! -x /usr/bin/xcode-select ]]; then
@@ -793,6 +809,7 @@ package_apple() {
   prepare_apple_archive_provenance_environment
 
   MOBILE_SDK_APPLE_ARTIFACT_DIR="$artifact_root" \
+    MOBILE_SDK_RUSTUP_BINARY="$ARCHIVE_SEAL_RUSTUP" \
     bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
   require_dir "$xcframework" "NoritoBridge XCFramework"
   require_file "$bridge_manifest" "NoritoBridge artifact manifest"

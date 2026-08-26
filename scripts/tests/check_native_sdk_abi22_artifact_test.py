@@ -1222,6 +1222,9 @@ def test_kotlin_localnet_release_lane_is_mandatory_and_payload_free() -> None:
     mobile = (REPO_ROOT / ".github/workflows/mobile_sdk_artifacts.yml").read_text(
         encoding="utf-8"
     )
+    kagemusha = (
+        REPO_ROOT / ".github/workflows/pr_kagemusha_payload_bench.yml"
+    ).read_text(encoding="utf-8")
 
     assert '"gradle-jvm-localnet": GRADLE_JVM_ENVIRONMENT' in runner
     assert '"IROHA_LOCALNET_DIR"' in runner
@@ -1258,6 +1261,15 @@ def test_kotlin_localnet_release_lane_is_mandatory_and_payload_free() -> None:
     assert "if-no-files-found: error" in mobile
     assert '"scripts/deploy_localnet.sh"' in mobile
 
+    for required in (
+        'rustup_source="$(command -v rustup)"',
+        'rustup_path="$rustup_tools/rustup"',
+        '/bin/cp "$rustup_source" "$rustup_path"',
+        '"${rustup_path##*/}" == rustup',
+        "MOBILE_SDK_RUSTUP_BINARY=$rustup_path",
+    ):
+        assert required in kagemusha
+
     kagemusha_paths = pull_request_paths("pr_kagemusha_payload_bench.yml")
     assert {
         "Cargo.toml",
@@ -1266,6 +1278,7 @@ def test_kotlin_localnet_release_lane_is_mandatory_and_payload_free() -> None:
         "crates/iroha_core/**",
         "crates/irohad/**",
         "kotlin/core-jvm/**",
+        "scripts/build_norito_xcframework.sh",
         "scripts/deploy_localnet.sh",
         "scripts/*taira*.py",
         "scripts/operator_http_headers.py",

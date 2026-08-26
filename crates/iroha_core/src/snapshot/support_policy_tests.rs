@@ -90,6 +90,18 @@ fn current_generation_dir(store_dir: &Path) -> PathBuf {
 fn current_generation_artifact(store_dir: &Path, name: &str) -> PathBuf {
     current_generation_dir(store_dir).join(name)
 }
+fn current_snapshot_bundle_auth_digest(store_dir: &Path) -> [u8; 32] {
+    let digest_path = current_generation_artifact(store_dir, SNAPSHOT_DIGEST_FILE_NAME);
+    let digest_bytes = std::fs::read(&digest_path).expect("read snapshot digest");
+    let payload_digest =
+        parse_snapshot_digest_bytes(&digest_bytes, &digest_path).expect("canonical payload digest");
+    let manifest_bytes = std::fs::read(current_generation_artifact(
+        store_dir,
+        SNAPSHOT_FAST_MANIFEST_FILE_NAME,
+    ))
+    .expect("read emergency Fast manifest");
+    snapshot_bundle_auth_digest(&payload_digest, &manifest_bytes)
+}
 fn assert_canonical_snapshot_generation(store_dir: &Path) {
     let mut root_entries = std::fs::read_dir(store_dir)
         .expect("read snapshot root")
@@ -135,6 +147,7 @@ fn assert_canonical_snapshot_generation(store_dir: &Path) {
         SNAPSHOT_FILE_NAME.to_owned(),
         SNAPSHOT_DIGEST_FILE_NAME.to_owned(),
         SNAPSHOT_SIGNATURE_FILE_NAME.to_owned(),
+        SNAPSHOT_FAST_MANIFEST_FILE_NAME.to_owned(),
         SNAPSHOT_MERKLE_FILE_NAME.to_owned(),
     ];
     expected.sort();
@@ -1259,11 +1272,36 @@ fn publish_test_snapshot_generation(
     key_pair: &KeyPair,
 ) -> (StableSnapshotFileIdentity, PublishedSnapshotGeneration) {
     std::fs::create_dir_all(store_dir).expect("snapshot dir");
-    let digest_bytes = Sha256::digest(bytes);
+    let digest_bytes: [u8; 32] = Sha256::digest(bytes).into();
     let digest_vec = digest_bytes.to_vec();
     let digest_hex = hex::encode(&digest_vec);
     let digest_line = format!("{digest_hex}\n").into_bytes();
-    let signature = Signature::try_new(key_pair.private_key(), &digest_vec)
+    let payload_len = u64::try_from(bytes.len()).expect("snapshot length fits u64");
+    let fast_manifest = match geometry_checkpoint_from_snapshot(bytes) {
+        Ok(checkpoint) => EmergencyFastSnapshotManifestV1 {
+            version: SNAPSHOT_FAST_MANIFEST_VERSION,
+            payload_len,
+            chain_id: checkpoint.chain_id,
+            network_id: checkpoint.network_id,
+            committed_height: checkpoint.height,
+            tip_hash: checkpoint.block_hash,
+            sccp_policy_hash: checkpoint.sccp_policy_hash,
+            has_snapshot_bootstrap_lineage: checkpoint.snapshot_v2_bootstrap.is_some(),
+        },
+        Err(_) => EmergencyFastSnapshotManifestV1 {
+            version: SNAPSHOT_FAST_MANIFEST_VERSION,
+            payload_len,
+            chain_id: ChainId::from(TEST_CHAIN_ID),
+            network_id: snapshot_test_network_id(),
+            committed_height: 0,
+            tip_hash: None,
+            sccp_policy_hash: [0; 32],
+            has_snapshot_bootstrap_lineage: false,
+        },
+    };
+    let fast_manifest_bytes = fast_manifest.encode();
+    let bundle_digest = snapshot_bundle_auth_digest(&digest_bytes, &fast_manifest_bytes);
+    let signature = Signature::try_new(key_pair.private_key(), &bundle_digest)
         .expect("checked snapshot signature");
     let signature_hex = hex::encode(signature.payload()).into_bytes();
     let merkle = SnapshotMerkleMetadata::from_bytes(bytes, TEST_CHUNK_SIZE);
@@ -1283,6 +1321,7 @@ fn publish_test_snapshot_generation(
         bytes,
         &digest_line,
         &signature_hex,
+        &fast_manifest_bytes,
         &merkle_bytes,
         merkle_limit,
         key_pair.public_key(),

@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="${KAGEMUSHA_RECURSIVE_SPEND_JAVASCRIPT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SDK_DIR="${ROOT_DIR}/javascript/iroha_js"
 
+npm --prefix "${SDK_DIR}" run build:dist
 node --test "${SDK_DIR}/test/kagemushaOfflineTorii.test.js"
 
 source_file="${SDK_DIR}/src/kagemushaOffline.js"

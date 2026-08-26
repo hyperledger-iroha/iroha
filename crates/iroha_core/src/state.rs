@@ -1303,10 +1303,21 @@ impl BlockHashes {
         }
     }
     /// Obtain a block-scoped mutable view of the hashes.
+    ///
+    /// # Panics
+    ///
+    /// Panics when this container is the read-only mapped journal installed by
+    /// emergency Fast startup. Fast must be restarted in Strict mode before any
+    /// state mutation can begin.
     pub fn block(&self) -> BlockHashesBlock<'_> {
         BlockHashesBlock::new(self, false)
     }
     /// Obtain a block-scoped mutable view after reverting the latest committed block, if any.
+    ///
+    /// # Panics
+    ///
+    /// Panics when this container is the read-only mapped journal installed by
+    /// emergency Fast startup.
     pub fn block_and_revert(&self) -> BlockHashesBlock<'_> {
         BlockHashesBlock::new(self, true)
     }
@@ -1332,6 +1343,10 @@ pub struct BlockHashesBlock<'a> {
 impl<'a> BlockHashesBlock<'a> {
     fn new(inner: &'a BlockHashes, revert_latest: bool) -> Self {
         let guard = inner.inner.read();
+        assert!(
+            matches!(&*guard, BlockHashStorage::Owned(_)),
+            "emergency Fast block hashes are read-only; restart in Strict mode before mutation"
+        );
         let visible_len = if revert_latest {
             guard.as_slice().len().saturating_sub(1)
         } else {
@@ -1469,6 +1484,21 @@ mod emergency_fast_block_hash_mapping_tests {
             &*journal.inner.read(),
             BlockHashStorage::EmergencyFastMapped(_)
         ));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "emergency Fast block hashes are read-only; restart in Strict mode before mutation"
+    )]
+    fn mapped_hash_journal_rejects_block_scoped_mutation_before_copying() {
+        let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x53; 32]));
+        let mut file = tempfile::NamedTempFile::new().expect("create mapped hash fixture");
+        file.write_all(hash.as_ref()).expect("write hash fixture");
+        let mapping =
+            ReadOnlyMmap::copy_read_only(file.as_file(), Hash::LENGTH).expect("map hash fixture");
+        let journal = BlockHashes::new_emergency_fast_mapped(mapping, 1);
+
+        let _forbidden = journal.block();
     }
 }
 /// Small per-transaction cache to speed up hot permission checks
@@ -17856,31 +17886,18 @@ impl World {
         self.asset_escrows_by_status = public_by_status.into_iter().collect();
     }
     fn rebuild_vpn_lease_indexes(&mut self) -> Result<(), String> {
-        self.rebuild_vpn_lease_indexes_with_validation(true)
-    }
-
-    fn rebuild_vpn_lease_indexes_emergency_fast(&mut self) -> Result<(), String> {
-        self.rebuild_vpn_lease_indexes_with_validation(false)
-    }
-
-    fn rebuild_vpn_lease_indexes_with_validation(
-        &mut self,
-        validate_records: bool,
-    ) -> Result<(), String> {
         let mut active_by_account = BTreeMap::<AccountId, [u8; 32]>::new();
         let mut active_by_address_slot = BTreeMap::<VpnAddressSlotV1, [u8; 32]>::new();
         let mut by_account = BTreeMap::<AccountId, BTreeSet<(u64, [u8; 32])>>::new();
         for (lease_id, record) in self.vpn_leases.view().iter() {
-            if validate_records {
-                if lease_id != &record.lease_id {
-                    return Err(format!(
-                        "VPN lease map key {} does not match record id {}",
-                        hex::encode(lease_id),
-                        hex::encode(record.lease_id)
-                    ));
-                }
-                validate_vpn_lease_quote_projection(record)?;
+            if lease_id != &record.lease_id {
+                return Err(format!(
+                    "VPN lease map key {} does not match record id {}",
+                    hex::encode(lease_id),
+                    hex::encode(record.lease_id)
+                ));
             }
+            validate_vpn_lease_quote_projection(record)?;
             if record.status == VpnLeaseStatusV1::Active {
                 if let Some(existing) =
                     active_by_account.insert(record.client_account_id.clone(), record.lease_id)
@@ -24975,12 +24992,17 @@ impl State {
         &mut self,
         emergency_fast: bool,
     ) -> core::result::Result<(), String> {
-        if !emergency_fast {
-            let leases = self.world.vpn_leases.view();
-            for (_, record) in leases.iter() {
-                validate_vpn_lease_network(record, &self.network_id)?;
-            }
+        if emergency_fast {
+            iroha_logger::warn!(
+                "emergency Fast snapshot restore skipped final derived account and dataspace indexes"
+            );
+            return Ok(());
         }
+        let leases = self.world.vpn_leases.view();
+        for (_, record) in leases.iter() {
+            validate_vpn_lease_network(record, &self.network_id)?;
+        }
+        drop(leases);
         self.rebuild_snapshot_root_indexes()
     }
 
@@ -27872,6 +27894,35 @@ impl State {
     fn install_sccp_registry_cache(&self, registry: Arc<ValidatedSccpRegistryV1>) {
         let mut cache = self.sccp_registry_cache.lock();
         cache.registry = registry;
+    }
+    /// Install the compact signed SCCP policy identity used by emergency Fast startup.
+    ///
+    /// Fast never opens the governed registry whose policy this hash commits. Its HTTP,
+    /// consensus, and mutation surfaces remain disabled, so this value is used only for the
+    /// peer capability identity advertised by the read-only process.
+    pub(super) fn install_emergency_fast_sccp_policy_hash(&self, policy_hash: [u8; 32]) {
+        assert!(
+            self.kura.emergency_fast_startup_enabled(),
+            "an SCCP policy-only override is valid only during emergency Fast startup"
+        );
+        self.sccp_registry_cache.lock().emergency_fast_policy_hash = Some(policy_hash);
+    }
+    /// Return the SCCP policy identity appropriate for peer capability matching.
+    ///
+    /// Strict mode derives this value from the fully validated governed registry. Emergency Fast
+    /// mode returns only the independently signed compact-manifest commitment and does not decode
+    /// or allocate that registry.
+    #[must_use]
+    #[track_caller]
+    pub fn sccp_policy_hash_snapshot(&self) -> [u8; 32] {
+        if self.kura.emergency_fast_startup_enabled() {
+            return self
+                .sccp_registry_cache
+                .lock()
+                .emergency_fast_policy_hash
+                .expect("emergency Fast State is missing its signed SCCP policy hash");
+        }
+        self.sccp_registry_snapshot().policy_hash()
     }
     /// Snapshot the immutable governed SCCP registry.
     #[must_use]
@@ -44970,11 +45021,13 @@ pub(crate) fn validate_sccp_registry_cell_json_str(
 #[derive(Debug)]
 struct SccpRegistryCache {
     registry: Arc<ValidatedSccpRegistryV1>,
+    emergency_fast_policy_hash: Option<[u8; 32]>,
 }
 impl Default for SccpRegistryCache {
     fn default() -> Self {
         Self {
             registry: Arc::new(ValidatedSccpRegistryV1::empty()),
+            emergency_fast_policy_hash: None,
         }
     }
 }

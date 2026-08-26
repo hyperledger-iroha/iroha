@@ -3107,16 +3107,6 @@ impl Kura {
             BLOCKS_IN_MEMORY,
         )
     }
-    /// Create an empty isolated Kura with emergency Fast read semantics for
-    /// focused snapshot-deserialization tests.
-    #[cfg(test)]
-    pub(crate) fn blank_emergency_fast_kura_for_testing() -> Arc<Kura> {
-        let mut kura = Self::blank_kura_for_testing();
-        Arc::get_mut(&mut kura)
-            .expect("fresh test Kura has one owner")
-            .auxiliary_history_deferred = true;
-        kura
-    }
     /// Return the number of FASTPQ proof snapshots awaiting persistence in tests.
     #[cfg(test)]
     pub(crate) fn fastpq_proof_queue_len_for_testing(&self) -> usize {
@@ -41989,9 +41979,12 @@ impl BlockStore {
             hashes_file
                 .read_exact(&mut tip_bytes)
                 .map_err(|error| Error::IO(error, hashes_path.clone()))?;
-            let actual_tip =
-                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(tip_bytes));
-            if marker.tip_hash != Some(actual_tip) {
+            let expected_tip_bytes: &[u8] = marker
+                .tip_hash
+                .as_ref()
+                .expect("non-empty commit marker has a tip hash")
+                .as_ref();
+            if expected_tip_bytes != tip_bytes {
                 return Err(invalid(
                     hashes_path,
                     "Kura fast init commit marker tip mismatches the hash journal",
@@ -42121,9 +42114,12 @@ impl BlockStore {
             hashes_file
                 .read_exact(&mut tip_bytes)
                 .map_err(|error| Error::IO(error, hashes_path.clone()))?;
-            let journal_tip =
-                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(tip_bytes));
-            if marker.tip_hash != Some(journal_tip) {
+            let expected_tip_bytes: &[u8] = marker
+                .tip_hash
+                .as_ref()
+                .expect("non-empty commit marker has a tip hash")
+                .as_ref();
+            if expected_tip_bytes != tip_bytes {
                 return Err(mutation(marker.count));
             }
         }
@@ -42685,6 +42681,12 @@ impl BlockStore {
             for _ in 0..block_count {
                 let mut buffer = [0; Hash::LENGTH];
                 file.read_exact(&mut buffer)?;
+                if buffer[Hash::LENGTH - 1] & 1 == 0 {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "block hash journal entry lacks the canonical marker bit",
+                    ));
+                }
                 hashes.push(HashOf::from_untyped_unchecked(Hash::prehashed(buffer)));
             }
             Ok(())

@@ -742,12 +742,24 @@ def test_swift_native_bridge_contract_requires_universal_macos_slice() -> None:
     parity = read(".github/workflows/sorafs-orchestrator-sdk.yml")
     for workflow in (mobile, parity):
         assert (
-            "rustup target add aarch64-apple-ios aarch64-apple-ios-sim "
+            '"$rustup_path" target add aarch64-apple-ios aarch64-apple-ios-sim '
             "x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin"
+            in workflow
+        )
+        assert 'rustup_source="$(command -v rustup)"' in workflow
+        assert 'rustup_path="$rustup_tools/rustup"' in workflow
+        assert '/bin/cp "$rustup_source" "$rustup_path"' in workflow
+        assert '"${rustup_path##*/}" == rustup' in workflow
+        assert "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" in workflow
+        assert (
+            'rustc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which '
+            '--toolchain 1.93.1 rustc)"'
             in workflow
         )
 
     builder = read("scripts/build_norito_xcframework.sh")
+    assert "MOBILE_SDK_RUSTUP_BINARY" in builder
+    assert 'MOBILE_SDK_RUSTUP_BINARY="$RUSTUP_BINARY"' in builder
     assert 'MACOS_ARM_TRIPLE="aarch64-apple-darwin"' in builder
     assert 'MACOS_X64_TRIPLE="x86_64-apple-darwin"' in builder
     assert (
@@ -758,6 +770,7 @@ def test_swift_native_bridge_contract_requires_universal_macos_slice() -> None:
     assert '"macos-arm64_x86_64"' in builder
 
     checker = read("scripts/check_mobile_sdk_artifacts.sh")
+    assert "MOBILE_SDK_RUSTUP_BINARY" in checker
     assert (
         "local slices=(ios-arm64 ios-arm64_x86_64-simulator "
         "macos-arm64_x86_64)"

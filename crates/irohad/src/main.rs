@@ -3811,6 +3811,54 @@ fn high_priority_relay_filter() -> iroha_p2p::network::SubscriberFilter {
     use iroha_p2p::network::{SubscriberFilter, message::Topic};
     SubscriberFilter::topics([Topic::ConsensusSafety, Topic::Consensus, Topic::Control])
 }
+fn emergency_fast_relay_filter() -> iroha_p2p::network::SubscriberFilter {
+    use iroha_p2p::network::{SubscriberFilter, message::Topic};
+    SubscriberFilter::topics([Topic::PeerGossip, Topic::TrustGossip, Topic::Health])
+}
+async fn run_emergency_fast_network_relay(
+    shared: Arc<NetworkRelayShared>,
+    subscriber_cap: usize,
+    worker_limit: usize,
+) {
+    let filter = emergency_fast_relay_filter();
+    let worker_sem = Arc::new(tokio::sync::Semaphore::new(worker_limit));
+    loop {
+        // Fast deliberately owns one peer/health subscriber. It does not allocate
+        // consensus safety, payload, chunk, retained-dispatch, or worker queues.
+        let (sender, mut receiver) = mpsc::channel(subscriber_cap);
+        if let Err(_returned) = shared
+            .network
+            .subscribe_to_peers_messages_with_filter(sender, filter.clone())
+        {
+            iroha_logger::warn!("retrying emergency Fast peer/health P2P subscriber registration");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            continue;
+        }
+        iroha_logger::info!("registered emergency Fast peer/health relay subscriber");
+        while let Some(msg) = receiver.recv().await {
+            let Ok(permit) = worker_sem.clone().acquire_owned().await else {
+                let _exact_unadmitted_item = msg;
+                iroha_logger::error!(
+                    "emergency Fast relay worker semaphore closed while exact work was retained"
+                );
+                std::process::exit(1);
+            };
+            let shared = Arc::clone(&shared);
+            tokio::spawn(async move {
+                let (peer, authenticated_via, payload, payload_bytes, _retention_guard) =
+                    msg.into_parts();
+                shared
+                    .handle_message(peer, authenticated_via, payload, payload_bytes)
+                    .await;
+                drop(permit);
+            });
+        }
+        iroha_logger::warn!(
+            "emergency Fast peer/health subscriber closed; restarting subscription"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
 impl NetworkRelay {
     fn into_shared(self) -> NetworkRelayShared {
         NetworkRelayShared {
@@ -3831,6 +3879,14 @@ impl NetworkRelay {
         use iroha_p2p::network::{SubscriberFilter, message::Topic};
         let shared = Arc::new(self.into_shared());
         let base_cap = shared.network.subscriber_queue_cap().get();
+        let worker_limit = std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1)
+            .clamp(1, 8);
+        if shared.emergency_fast {
+            run_emergency_fast_network_relay(shared, base_cap, worker_limit).await;
+            return;
+        }
         let network_per_lane = shared.network.authenticated_source_credit_capacity().get();
         let authenticated_source_count = shared.network.reply_route_source_capacity();
         let sumeragi_geometry = SumeragiRelayCapacityGeometry::checked(
@@ -3991,10 +4047,6 @@ impl NetworkRelay {
         let work_payload_cap = payload_cap.saturating_mul(2);
         let work_chunk_cap = chunk_cap;
         let work_low_cap = low_cap;
-        let worker_limit = std::thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
-            .unwrap_or(1)
-            .clamp(1, 8);
         let high_filter = high_priority_relay_filter();
         let payload_filter = SubscriberFilter::topics([Topic::ConsensusPayload, Topic::BlockSync]);
         let chunk_filter = SubscriberFilter::topics([Topic::ConsensusChunk]);
@@ -4279,6 +4331,11 @@ impl NetworkRelayShared {
                 return false;
             }
             StreamingControl(frame) => {
+                if self.emergency_fast {
+                    // Streaming control can persist session snapshots and provision
+                    // filesystem spools. Fast is read-only for the whole process.
+                    return true;
+                }
                 if let Err(err) = self.streaming.process_control_frame(&peer, frame.as_ref()) {
                     iroha_logger::warn!(%peer, ?err, "Failed to process streaming control frame");
                 }
@@ -7506,10 +7563,15 @@ impl Iroha {
             .change_context(StartError::InitKura)?;
         let provisional_imported_prefix = kura.provisional_snapshot_bootstrap_pending();
         kura.configure_fastpq_proof_sidecar_limits(&config.zk.fastpq);
-        let (live_query_store, child) =
-            LiveQueryStore::from_config(config.live_query_store, supervisor.shutdown_signal())
-                .start();
-        supervisor.monitor(child);
+        let live_query_store =
+            LiveQueryStore::from_config(config.live_query_store, supervisor.shutdown_signal());
+        let live_query_store = if emergency_fast {
+            live_query_store.into_inert_handle()
+        } else {
+            let (handle, child) = live_query_store.start();
+            supervisor.monitor(child);
+            handle
+        };
         let telemetry_profile = if config.telemetry_enabled {
             config.telemetry_profile
         } else {
@@ -7698,7 +7760,7 @@ impl Iroha {
             install_zk_config_before_kura_replay(&mut state, &config)?;
         }
         apply_state_runtime_config_before_snapshot_auth(&mut state, &config);
-        if !provisional_imported_prefix {
+        if !emergency_fast && !provisional_imported_prefix {
             apply_state_geometry_config_before_kura_replay(&mut state, &config)?;
             // Kura authenticates canonical replay evidence before State exists. Geometry setup
             // above then publishes the configured lane directories, so refresh only that
@@ -7902,7 +7964,11 @@ impl Iroha {
         // Transaction validation during replay consults the lane registry. Freeze and install the
         // configured source set before the first replay transition; installing it only after
         // replay leaves even the default lane absent on snapshot-free restart.
-        let replay_nexus = nexus_for_runtime_surfaces(&state);
+        let replay_nexus = if emergency_fast {
+            config.nexus.clone()
+        } else {
+            nexus_for_runtime_surfaces(&state)
+        };
         let frozen_startup_lane_manifests = if emergency_fast {
             iroha_logger::warn!(
                 "emergency Fast startup deferred lane-manifest directory loading and validation until a Strict restart"
@@ -7952,7 +8018,11 @@ impl Iroha {
         // the effective replayed state, otherwise a restarted node briefly
         // routes with the stale startup catalog and never installs state-side
         // manifest bindings for restored lanes.
-        let runtime_nexus = nexus_for_runtime_surfaces(&state);
+        let runtime_nexus = if emergency_fast {
+            config.nexus.clone()
+        } else {
+            nexus_for_runtime_surfaces(&state)
+        };
         let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
             runtime_nexus.routing_policy.clone(),
             runtime_nexus.dataspace_catalog.clone(),
@@ -8119,11 +8189,19 @@ impl Iroha {
             .map(|engine| engine.consensus_policy_digest());
         let lane_manifest_policy_digest = (!emergency_fast)
             .then(|| state.lane_manifests.read().consensus_policy_digest());
-        let config_caps = build_consensus_config_caps(
-            &state.nexus_snapshot(),
-            compliance_policy_digest,
-            lane_manifest_policy_digest,
-        )?;
+        let config_caps = if emergency_fast {
+            build_consensus_config_caps(
+                &config.nexus,
+                compliance_policy_digest,
+                lane_manifest_policy_digest,
+            )
+        } else {
+            build_consensus_config_caps(
+                &state.nexus_snapshot(),
+                compliance_policy_digest,
+                lane_manifest_policy_digest,
+            )
+        }?;
         let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
         // Peer admission is frozen by exactly one authenticated startup root. Ordinary startup
         // uses signed genesis metadata. An audited hash-only import instead derives the handshake
@@ -8135,28 +8213,46 @@ impl Iroha {
             consensus_caps,
             signed_block_cadence_ms,
             confidential_features,
-        ) = {
-            let view = state.view();
-            let height = u64::try_from(view.block_hashes().len()).expect("height fits into u64");
-            let confidential_features = if emergency_fast {
+        ) = if emergency_fast {
+            debug_assert!(!snapshot_bootstrap_active);
+            let zk = state.zk_snapshot();
+            let confidential_features =
                 iroha_data_model::confidential::ConfidentialFeatureDigest::new(
                     None,
                     None,
                     None,
                     Some(iroha_config::parameters::defaults::confidential::RULES_VERSION),
                     Some(iroha_core::state::combine_zk_and_sccp_policy_hashes(
-                        iroha_core::state::compute_zk_consensus_policy_hash(&view.zk),
-                        view.sccp_registry.policy_hash(),
+                        iroha_core::state::compute_zk_consensus_policy_hash(&zk),
+                        state.sccp_policy_hash_snapshot(),
                     )),
+                );
+            let (mode_tag, bls_domain, caps, block_cadence_ms) = consensus_caps_from_genesis(
+                effective_genesis.expect("normal startup has signed genesis metadata"),
+                &config_caps,
+                &config.sumeragi,
+            )
+            .ok_or_else(|| {
+                Report::new(StartError::InitKura).attach(
+                    "signed genesis does not contain one canonical Sumeragi v2 handshake context",
                 )
-            } else {
-                iroha_core::state::compute_confidential_feature_digest(
-                    view.world(),
-                    &view.zk,
-                    view.sccp_registry.as_ref(),
-                    height,
-                )
-            };
+            })?;
+            (
+                mode_tag,
+                bls_domain,
+                caps,
+                block_cadence_ms,
+                confidential_features,
+            )
+        } else {
+            let view = state.view();
+            let height = u64::try_from(view.block_hashes().len()).expect("height fits into u64");
+            let confidential_features = iroha_core::state::compute_confidential_feature_digest(
+                view.world(),
+                &view.zk,
+                view.sccp_registry.as_ref(),
+                height,
+            );
             let (mode_tag, bls_domain, caps, block_cadence_ms) = if snapshot_bootstrap_active {
                 let (mode_tag, bls_domain, caps) = compute_consensus_handshake_caps(
                     view.world(),
@@ -8484,11 +8580,6 @@ impl Iroha {
             return Err(Report::new(StartError::InitKura)
                 .attach("missing genesis file for empty storage; provide `--genesis.file`"));
         }
-        let snapshot_file = config
-            .streaming
-            .session_store_dir
-            .clone()
-            .join("sessions.norito");
         let mut streaming = iroha_core::streaming::StreamingHandle::with_key_material(
             config.streaming.key_material.clone(),
         )
@@ -8503,31 +8594,40 @@ impl Iroha {
         if let Some(ref telemetry_handle) = streaming_telemetry {
             streaming = streaming.with_telemetry(telemetry_handle.clone());
         }
-        configure_soranet_transport(&mut streaming, &config.streaming.soranet)?;
-        streaming.set_snapshot_path(snapshot_file.clone());
-        let snapshot_encryption_key =
-            iroha_core::streaming::snapshot_session_key(&config.streaming.key_material);
-        streaming
-            .set_snapshot_encryption_key(&snapshot_encryption_key)
-            .map_err(Report::from)
-            .change_context(StartError::StartP2p)
-            .map_err(|report| report.attach("failed to configure streaming snapshot encryption"))?;
-        if !emergency_fast {
+        if emergency_fast {
+            iroha_logger::warn!(
+                "emergency Fast startup disabled streaming control, durable session snapshots, and filesystem spool provisioning"
+            );
+        } else {
+            configure_soranet_transport(&mut streaming, &config.streaming.soranet)?;
+            let snapshot_file = config
+                .streaming
+                .session_store_dir
+                .clone()
+                .join("sessions.norito");
+            streaming.set_snapshot_path(snapshot_file);
+            let snapshot_encryption_key =
+                iroha_core::streaming::snapshot_session_key(&config.streaming.key_material);
+            streaming
+                .set_snapshot_encryption_key(&snapshot_encryption_key)
+                .map_err(Report::from)
+                .change_context(StartError::StartP2p)
+                .map_err(|report| {
+                    report.attach("failed to configure streaming snapshot encryption")
+                })?;
             if let Err(err) = streaming.load_snapshots() {
                 iroha_logger::warn!(?err, "Failed to load streaming session snapshots");
             }
-        } else {
-            iroha_logger::warn!(
-                "emergency Fast startup skipped durable streaming-session recovery"
-            );
         }
         log_startup_trace("irohad.streaming.ready", startup_trace_started_at);
         iroha_core::streaming::set_global_handle(streaming.clone());
-        let streaming_events_handle = streaming.clone();
-        let ticket_events_rx = events_sender.subscribe();
-        supervisor.monitor(tokio::spawn(async move {
-            run_ticket_event_listener(streaming_events_handle, ticket_events_rx).await;
-        }));
+        if !emergency_fast {
+            let streaming_events_handle = streaming.clone();
+            let ticket_events_rx = events_sender.subscribe();
+            supervisor.monitor(tokio::spawn(async move {
+                run_ticket_event_listener(streaming_events_handle, ticket_events_rx).await;
+            }));
+        }
         #[cfg(feature = "telemetry")]
         start_telemetry(&logger, &config, &mut supervisor).await?;
         #[cfg(feature = "telemetry")]
@@ -8722,7 +8822,7 @@ impl Iroha {
                 network.online_peers_receiver(),
                 config.common.peer.id.clone(),
                 TimeSource::new_system(),
-                telemetry_capabilities.metrics_enabled(),
+                !emergency_fast && telemetry_capabilities.metrics_enabled(),
             );
             supervisor.monitor(child);
             metrics_reporter
@@ -10155,7 +10255,11 @@ impl Iroha {
             Some(sumeragi.clone()),
             runtime_deps,
         );
-        let torii = torii.with_p2p(network.clone());
+        let torii = if emergency_fast {
+            torii
+        } else {
+            torii.with_p2p(network.clone())
+        };
         let torii = torii.with_local_peer_id(config.common.peer.id.clone());
         let torii_run = torii.start(supervisor.shutdown_signal());
         let shutdown_on_failure = supervisor.shutdown_signal();
@@ -10190,8 +10294,11 @@ impl Iroha {
             }
             .run(network_relay_shutdown),
         ));
-        // Start Network Time Service sampler with config parameters
-        iroha_core::time::start(network.clone(), iroha_core::time::Params::from(&config.nts));
+        // Fast is a bounded recovery surface; its network-time sampler is not
+        // needed while consensus and all mutable APIs remain offline.
+        if !emergency_fast {
+            iroha_core::time::start(network.clone(), iroha_core::time::Params::from(&config.nts));
+        }
         // Observer nodes are configured with `NodeRole::Observer`; Sumeragi suppresses
         // local consensus emissions in that case, so observers follow the chain and
         // serve queries without proposing or voting. Validators retain the full duties.
@@ -14910,6 +15017,14 @@ mod tests {
         );
     }
     #[test]
+    fn emergency_fast_relay_subscribes_only_to_peer_and_health_topics() {
+        use iroha_p2p::network::{SubscriberFilter, message::Topic};
+        assert_eq!(
+            emergency_fast_relay_filter(),
+            SubscriberFilter::topics([Topic::PeerGossip, Topic::TrustGossip, Topic::Health])
+        );
+    }
+    #[test]
     fn standard_launcher_does_not_derive_six_sorafs_authority_signers_from_node_key() {
         let dependencies = IrohaRuntimeDeps::default();
         assert!(dependencies.sorafs_stream_token_signer.is_none());
@@ -15318,15 +15433,20 @@ mod tests {
         ));
 
         let confidential_setup = startup
-            .split_once("let confidential_features = if emergency_fast")
+            .split_once(") = if emergency_fast {")
             .expect("emergency Fast confidential-feature branch")
             .1
-            .split_once("let (mode_tag, bls_domain, caps, block_cadence_ms)")
-            .expect("end of confidential-feature branch")
-            .0;
-        assert!(confidential_setup.contains("compute_zk_consensus_policy_hash(&view.zk)"));
-        assert!(confidential_setup.contains("view.sccp_registry.policy_hash()"));
-        assert!(confidential_setup.contains("compute_confidential_feature_digest("));
+            .split_once("} else {")
+            .expect("Strict confidential-feature branch");
+        assert!(confidential_setup.0.contains("state.zk_snapshot()"));
+        assert!(confidential_setup.0.contains("state.sccp_registry_snapshot()"));
+        assert!(!confidential_setup.0.contains("state.view()"));
+        assert!(confidential_setup.1.contains("let view = state.view()"));
+        assert!(
+            confidential_setup
+                .1
+                .contains("compute_confidential_feature_digest(")
+        );
 
         let kagemusha_runtime = startup
             .split_once("if !emergency_fast")
@@ -15387,6 +15507,22 @@ mod tests {
         );
     }
     #[test]
+    fn emergency_fast_keeps_query_telemetry_and_time_workers_inert() {
+        let compact_source: String = include_str!("main.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+
+        assert!(compact_source.contains(
+            "letlive_query_store=ifemergency_fast{live_query_store.into_inert_handle()}else{let(handle,child)=live_query_store.start();supervisor.monitor(child);handle};"
+        ));
+        assert!(compact_source
+            .contains("!emergency_fast&&telemetry_capabilities.metrics_enabled(),"));
+        assert!(compact_source.contains(
+            "if!emergency_fast{iroha_core::time::start(network.clone(),iroha_core::time::Params::from(&config.nts));}"
+        ));
+    }
+    #[test]
     fn emergency_fast_uses_inert_consensus_and_transaction_gossip_handles() {
         let startup = include_str!("main.rs")
             .split_once("pub(crate) async fn start_with_runtime_deps")
@@ -15413,6 +15549,75 @@ mod tests {
         assert!(transaction_gossip
             .contains("TransactionGossiperHandle::emergency_fast_disabled()"));
         assert!(transaction_gossip.contains("TransactionGossiper::from_config"));
+
+        let compact_source: String = include_str!("main.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        assert!(compact_source.contains(
+            "ifshared.emergency_fast{run_emergency_fast_network_relay(shared,base_cap,worker_limit).await;return;}"
+        ));
+        assert!(compact_source.contains("spawn_network_relay_worker(&shared,&sumeragi_ingress,"));
+        assert!(compact_source.contains(
+            "lettorii=ifemergency_fast{torii}else{torii.with_p2p(network.clone())};"
+        ));
+
+        let fast_relay = include_str!("main.rs")
+            .split_once("async fn run_emergency_fast_network_relay")
+            .expect("emergency Fast relay")
+            .1
+            .split_once("impl NetworkRelay")
+            .expect("emergency Fast relay boundary")
+            .0;
+        assert_eq!(
+            fast_relay.matches("mpsc::channel(").count(),
+            1,
+            "Fast must allocate only its peer/health subscriber queue"
+        );
+        assert!(!fast_relay.contains("Topic::Consensus"));
+        assert!(!fast_relay.contains("Topic::BlockSync"));
+        assert!(!fast_relay.contains("Topic::Control"));
+        assert!(!fast_relay.contains("spawn_network_relay_worker"));
+        assert!(!fast_relay.contains("spawn_sumeragi_relay_dispatcher"));
+    }
+    #[test]
+    fn emergency_fast_disables_streaming_persistence_and_control() {
+        let compact_source: String = include_str!("main.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        let streaming_setup = compact_source
+            .split_once("letmutstreaming=iroha_core::streaming::StreamingHandle")
+            .expect("streaming setup")
+            .1
+            .split_once("log_startup_trace(\"irohad.streaming.ready\"")
+            .expect("streaming setup boundary")
+            .0;
+        assert!(streaming_setup.starts_with("::with_key_material"));
+        assert!(streaming_setup.contains("ifemergency_fast{"));
+        let strict_branch = streaming_setup
+            .split_once("}else{")
+            .expect("Strict streaming branch")
+            .1;
+        assert!(strict_branch.contains("configure_soranet_transport("));
+        assert!(strict_branch.contains("streaming.set_snapshot_path("));
+        assert!(strict_branch.contains("streaming.load_snapshots()"));
+
+        let streaming_control = compact_source
+            .split_once("StreamingControl(frame)=>{")
+            .expect("streaming control relay branch")
+            .1
+            .split_once("TransactionGossiper(data)=>{")
+            .expect("streaming control relay boundary")
+            .0;
+        assert!(streaming_control.starts_with("ifself.emergency_fast{"));
+        let fast_return = streaming_control
+            .find("returntrue;")
+            .expect("Fast streaming-control terminal return");
+        let control_processing = streaming_control
+            .find("self.streaming.process_control_frame(")
+            .expect("Strict streaming-control processing");
+        assert!(fast_return < control_processing);
     }
     #[test]
     fn enabled_reputation_runtime_has_no_validator_key_submitter_fallback() {

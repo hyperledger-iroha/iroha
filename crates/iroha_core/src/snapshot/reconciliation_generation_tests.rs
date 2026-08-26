@@ -311,8 +311,8 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     SNAPSHOT_PAYLOAD_DIGEST_PASSES.with(|passes| {
         assert_eq!(
             passes.get(),
-            1,
-            "Fast restore must hash the handle-bound payload exactly once"
+            0,
+            "Fast restore must never read or hash snapshot.data"
         );
     });
     SNAPSHOT_DEEP_VALIDATION_PASSES.with(|passes| {
@@ -382,13 +382,15 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     }
 
     let merkle_path = current_generation_artifact(&snapshot_store_dir, SNAPSHOT_MERKLE_FILE_NAME);
-    std::fs::remove_file(&merkle_path).expect("remove deferred Merkle sidecar");
+    let merkle_len = std::fs::metadata(&merkle_path)
+        .expect("read Merkle metadata")
+        .len();
     std::fs::write(
-        merkle_path.with_file_name("operator-emergency-note"),
-        b"ignored by Fast",
+        &merkle_path,
+        vec![b'!'; usize::try_from(merkle_len).expect("Merkle length fits usize")],
     )
-    .expect("add unrelated generation artifact");
-    let restored_without_merkle = try_read_snapshot(
+    .expect("replace deferred Merkle contents");
+    let restored_without_reading_merkle = try_read_snapshot(
         &snapshot_store_dir,
         &fast_kura,
         LiveQueryStore::start_test,
@@ -400,8 +402,8 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
     )
-    .expect("Fast restore must not require or inventory the deferred Merkle sidecar");
-    assert_eq!(restored_without_merkle.committed_height(), 1);
+    .expect("Fast restore must bind but never read the deferred Merkle sidecar");
+    assert_eq!(restored_without_reading_merkle.committed_height(), 1);
 
     let wrong_network_id = NetworkId::from_genesis_hash(dummy_block_hash(0xE1));
     let network_error = match try_read_snapshot(
@@ -424,15 +426,46 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         TryReadError::NetworkIdMismatch { .. }
     ));
 
-    let digest_hex = std::fs::read_to_string(current_generation_artifact(
+    let manifest_path = current_generation_artifact(
         &snapshot_store_dir,
-        SNAPSHOT_DIGEST_FILE_NAME,
-    ))
-    .expect("snapshot digest");
-    let digest = hex::decode(digest_hex.trim()).expect("snapshot digest hex");
+        SNAPSHOT_FAST_MANIFEST_FILE_NAME,
+    );
+    let manifest_bytes = std::fs::read(&manifest_path).expect("read signed Fast manifest");
+    let mut forged_manifest =
+        decode_emergency_fast_manifest(&manifest_bytes, &manifest_path).expect("decode manifest");
+    forged_manifest.sccp_policy_hash[0] ^= 0x01;
+    let forged_manifest_bytes = forged_manifest.encode();
+    assert_eq!(
+        forged_manifest_bytes.len(),
+        manifest_bytes.len(),
+        "fixed-width policy mutation must preserve the manifest bound"
+    );
+    std::fs::write(&manifest_path, forged_manifest_bytes).expect("replace Fast manifest");
+    let manifest_signature_error = match try_read_snapshot(
+        &snapshot_store_dir,
+        &fast_kura,
+        LiveQueryStore::start_test,
+        block_count,
+        TEST_CHUNK_SIZE,
+        signing_key.public_key(),
+        &expected_network_id,
+        &crate::state::default_zk_config(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::new(<_>::default(), true),
+    ) {
+        Ok(_) => panic!("Fast restore must authenticate every manifest field"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        manifest_signature_error,
+        TryReadError::SignatureInvalid(_)
+    ));
+    std::fs::write(&manifest_path, manifest_bytes).expect("restore signed Fast manifest");
+
+    let bundle_digest = current_snapshot_bundle_auth_digest(&snapshot_store_dir);
     let wrong_signing_key = checked_random_snapshot_keypair();
-    let wrong_signature =
-        Signature::try_new(wrong_signing_key.private_key(), &digest).expect("wrong-key signature");
+    let wrong_signature = Signature::try_new(wrong_signing_key.private_key(), &bundle_digest)
+        .expect("wrong-key signature");
     std::fs::write(
         current_generation_artifact(&snapshot_store_dir, SNAPSHOT_SIGNATURE_FILE_NAME),
         hex::encode(wrong_signature.payload()),
@@ -496,6 +529,18 @@ async fn emergency_fast_snapshot_reconcile_checks_only_the_terminal_boundary() {
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
     let mut snapshot_hashes = state.committed_block_hashes_snapshot();
     let canonical_tip = snapshot_hashes[2];
+    let configured_catalog_hash = kura
+        .configured_lane_catalog_baseline()
+        .expect("read configured lane catalog baseline")
+        .expect("configured test catalog baseline");
+    let lane_incarnation =
+        crate::state::derive_static_lane_incarnations(&LaneCatalog::default())[&LaneId::SINGLE];
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        lane_config.primary(),
+        lane_incarnation,
+        configured_catalog_hash,
+    )
+    .expect("authenticate the configured primary geometry before restart");
     drop(state);
     drop(kura);
 
@@ -665,6 +710,35 @@ async fn snapshot_generation_shape_is_exact_and_idempotent() {
         "idempotence must not create another immutable generation"
     );
     assert_canonical_snapshot_generation(&store_dir);
+
+    let payload_limit =
+        u64::try_from(iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES.get())
+            .expect("snapshot payload limit fits u64");
+    let manifest_path =
+        current_generation_artifact(&store_dir, SNAPSHOT_FAST_MANIFEST_FILE_NAME);
+    let manifest_bytes = std::fs::read(&manifest_path).expect("read Fast manifest");
+    std::fs::remove_file(&manifest_path).expect("remove Fast manifest");
+    assert!(
+        bind_current_snapshot_generation_emergency_fast(
+            &store_dir,
+            payload_limit,
+            TEST_CHUNK_SIZE,
+        )
+        .is_err(),
+        "Fast must reject a legacy four-artifact generation"
+    );
+    std::fs::write(&manifest_path, manifest_bytes).expect("restore Fast manifest");
+    std::fs::write(current_generation_dir(&store_dir).join("unexpected"), b"extra")
+        .expect("add unexpected artifact");
+    assert!(
+        bind_current_snapshot_generation_emergency_fast(
+            &store_dir,
+            payload_limit,
+            TEST_CHUNK_SIZE,
+        )
+        .is_err(),
+        "Fast must reject a generation with an extra artifact"
+    );
 }
 #[tokio::test]
 async fn snapshot_reader_rejects_every_noncanonical_current_pointer() {
@@ -763,6 +837,7 @@ async fn bound_generation_rejects_same_byte_directory_substitution() {
         SNAPSHOT_FILE_NAME,
         SNAPSHOT_DIGEST_FILE_NAME,
         SNAPSHOT_SIGNATURE_FILE_NAME,
+        SNAPSHOT_FAST_MANIFEST_FILE_NAME,
         SNAPSHOT_MERKLE_FILE_NAME,
     ] {
         std::fs::copy(displaced_dir.join(name), generation_dir.join(name)).unwrap();

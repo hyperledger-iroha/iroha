@@ -5783,6 +5783,131 @@ fn early_rejection_response_format(headers: &HeaderMap) -> ResponseFormat {
         .or_else(|| headers.get(axum::http::header::ACCEPT));
     utils::negotiate_response_format(accept).unwrap_or(ResponseFormat::Json)
 }
+fn emergency_fast_route_is_available(route: &MatchedRouteMetadata) -> bool {
+    let route_id = route.stable_route_id();
+    route_id == route_catalog::core::HEALTH.stable_route_id()
+        || route_id == route_catalog::core::LIVEZ.stable_route_id()
+        || route_id == route_catalog::core::READYZ.stable_route_id()
+        || route_id == route_catalog::core::PEERS.stable_route_id()
+        || route_id == route_catalog::core::CONFIGURATION_GET.stable_route_id()
+        || route_id == "http.route_not_found"
+        || route_id == "http.method_not_allowed"
+}
+async fn enforce_emergency_fast_surface(
+    State(app): State<SharedAppState>,
+    req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<AxResponse, Infallible> {
+    if !app.kura.emergency_fast_startup_enabled()
+        || req
+            .extensions()
+            .get::<MatchedRouteMetadata>()
+            .is_some_and(emergency_fast_route_is_available)
+    {
+        return Ok(next.run(req).await);
+    }
+    let format = early_rejection_response_format(req.headers());
+    Ok(utils::respond_with_status_and_format(
+        StatusCode::SERVICE_UNAVAILABLE,
+        ErrorEnvelope::new(
+            "emergency_fast_surface_unavailable",
+            "This API needs persisted block data, derived state, or a mutable runtime that emergency Fast mode deliberately leaves offline. Use health, liveness, readiness, peer, or configuration diagnostics, or restart in Strict mode.",
+        ),
+        format,
+    ))
+}
+#[cfg(test)]
+mod emergency_fast_surface_tests {
+    use super::*;
+
+    #[test]
+    fn emergency_fast_exposes_only_bounded_operational_routes() {
+        for descriptor in [
+            route_catalog::core::HEALTH,
+            route_catalog::core::LIVEZ,
+            route_catalog::core::READYZ,
+            route_catalog::core::PEERS,
+            route_catalog::core::CONFIGURATION_GET,
+        ] {
+            assert!(emergency_fast_route_is_available(
+                &MatchedRouteMetadata::from_descriptor(descriptor)
+            ));
+        }
+        assert!(!emergency_fast_route_is_available(
+            &MatchedRouteMetadata::from_descriptor(route_catalog::core::CONFIGURATION_POST)
+        ));
+        assert!(!emergency_fast_route_is_available(
+            &MatchedRouteMetadata::from_descriptor(route_catalog::pipeline::QUERY)
+        ));
+        for descriptor in [
+            route_catalog::core::API_VERSION,
+            route_catalog::diagnostic::STATUS,
+            route_catalog::diagnostic::METRICS,
+        ] {
+            assert!(!emergency_fast_route_is_available(
+                &MatchedRouteMetadata::from_descriptor(descriptor)
+            ));
+        }
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn emergency_fast_does_not_attach_the_torii_proxy_control_subscriber() {
+        let compact_source: String = include_str!("lib.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        assert!(compact_source.contains(
+            "if!app_state.kura.emergency_fast_startup_enabled()&&letSome(network)=app_state.p2p.clone(){attach_torii_proxy_network(app_state.clone(),network);}",
+        ));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn emergency_fast_does_not_resolve_public_dataspace_upstreams_from_state() {
+        let compact_source: String = include_str!("lib.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        assert!(compact_source.contains(
+            "letpublic_dataspace_upstreams=Arc::new(ifemergency_fast{BTreeMap::new()}else{load_public_dataspace_upstreams(state.as_ref())});",
+        ));
+    }
+
+    #[test]
+    fn emergency_fast_disables_optional_torii_background_services() {
+        let compact_source: String = include_str!("lib.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        for disabled in [
+            "config.peer_telemetry_urls.clear();",
+            "config.connect.enabled=false;",
+            "config.mcp.enabled=false;",
+        ] {
+            assert!(compact_source.contains(disabled));
+        }
+        assert!(compact_source.contains(
+            "if!emergency_fast{letmutrx=self.events.subscribe();letcache=self.pipeline_status_cache.clone();",
+        ));
+        assert!(compact_source.contains(
+            "ifself.kura.emergency_fast_startup_enabled(){iroha_logger::warn!(\"emergencyFastKuramodeleavesToriidetachedfromP2Prelayservices\");returnself;}self.p2p=Some(p2p);",
+        ));
+
+        let connect_source: String = include_str!("connect.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        let from_config = connect_source
+            .split_once("pubfnfrom_config(")
+            .expect("Connect Bus configuration constructor")
+            .1
+            .split_once("fnstart_cleaner(")
+            .expect("Connect cleaner boundary")
+            .0;
+        assert!(from_config.contains("ifcfg.enabled{bus.start_cleaner();}"));
+    }
+}
 async fn coalesce_accept_headers(
     mut req: axum::http::Request<Body>,
     next: Next,
@@ -15302,7 +15427,14 @@ async fn handler_health(
 ///
 /// Offline wallet UI capability is universal and never participates in this
 /// probe. Future ordinary chain-readiness checks belong here.
-async fn handler_readyz(State(_app): State<SharedAppState>) -> AxResponse {
+async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
+    if app.kura.emergency_fast_startup_enabled() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Emergency Fast mode is live but intentionally not production-ready",
+        )
+            .into_response();
+    }
     (StatusCode::OK, "Ready").into_response()
 }
 /// GET `/livez` — process-only liveness; never claims protocol readiness.
@@ -45064,7 +45196,7 @@ fn emergency_fast_uses_only_the_process_local_sorafs_facade() {
 fn emergency_fast_does_not_configure_or_start_the_background_zk_prover() {
     let source = include_str!("lib.rs");
     let app_services = source
-        .split_once("// Configure app API subsystems (attachments) from Torii config")
+        .rsplit_once("// Configure app API subsystems (attachments) from Torii config")
         .expect("app-service startup section")
         .1
         .split_once("let query_rate = config")
@@ -47994,6 +48126,9 @@ impl Torii {
             config.kagemusha_commands = None;
             config.ram_lfe = None;
             config.tx_history = None;
+            config.peer_telemetry_urls.clear();
+            config.connect.enabled = false;
+            config.mcp.enabled = false;
         }
         let runtime_deps = runtime_deps.into();
         let runtime_deps = if emergency_fast {
@@ -49278,12 +49413,19 @@ impl Torii {
             Some(service)
         });
         #[cfg(feature = "app_api")]
-        let tx_history_access_policy = Arc::new(load_tx_history_access_policy(
-            config.tx_history.as_ref(),
-            &state.nexus_snapshot().dataspace_catalog,
-        ));
+        let tx_history_access_policy =
+            Arc::new(if let Some(tx_history) = config.tx_history.as_ref() {
+                let nexus = state.nexus_snapshot();
+                load_tx_history_access_policy(Some(tx_history), &nexus.dataspace_catalog)
+            } else {
+                TxHistoryAccessPolicy::default()
+            });
         #[cfg(feature = "app_api")]
-        let public_dataspace_upstreams = Arc::new(load_public_dataspace_upstreams(state.as_ref()));
+        let public_dataspace_upstreams = Arc::new(if emergency_fast {
+            BTreeMap::new()
+        } else {
+            load_public_dataspace_upstreams(state.as_ref())
+        });
         #[cfg(feature = "app_api")]
         let recipient_lookup = Arc::new(config.recipient_lookup.clone());
         #[cfg(feature = "app_api")]
@@ -49531,6 +49673,12 @@ impl Torii {
     /// Wire a P2P handle for WebSocket fallback (feature `p2p_ws`).
     #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     pub fn with_p2p(mut self, p2p: iroha_core::IrohaNetwork) -> Self {
+        if self.kura.emergency_fast_startup_enabled() {
+            iroha_logger::warn!(
+                "emergency Fast Kura mode leaves Torii detached from P2P relay services"
+            );
+            return self;
+        }
         self.p2p = Some(p2p);
         #[cfg(feature = "connect")]
         {
@@ -50158,7 +50306,9 @@ impl Torii {
             });
         }
         #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-        if let Some(network) = app_state.p2p.clone() {
+        if !app_state.kura.emergency_fast_startup_enabled()
+            && let Some(network) = app_state.p2p.clone()
+        {
             attach_torii_proxy_network(app_state.clone(), network);
         }
         let router = self.compose_api_router(app_state.clone());
@@ -50331,6 +50481,13 @@ impl Torii {
                 )
             },
         ));
+        // Fast restores no derived World indexes and has no mutable runtime.
+        // Keep its HTTP surface diagnostic-only before authentication, body
+        // extraction, query execution, or optional service code can run.
+        let router = router.layer(axum::middleware::from_fn_with_state(
+            app_state.clone(),
+            enforce_emergency_fast_surface,
+        ));
         // Matched-route metadata must wrap metrics and tracing so neither ever
         // needs to use a raw URL as a fallback label.
         let router = router.layer(axum::middleware::from_fn_with_state(
@@ -50478,7 +50635,7 @@ impl Torii {
                 }
             });
         }
-        {
+        if !emergency_fast {
             let mut rx = self.events.subscribe();
             let cache = self.pipeline_status_cache.clone();
             let kura = self.kura.clone();

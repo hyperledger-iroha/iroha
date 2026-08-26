@@ -186,7 +186,10 @@ use sorafs_car::{
     CarBuildPlan, CarChunk, CarWriter, FilePlan, compute_chunk_plan_digest_sha3, compute_por_root,
 };
 use sorafs_node::store::{StorageBackend, StoredManifest};
+#[cfg(any(test, target_os = "linux"))]
 use std::fmt::Write as _;
+#[cfg(any(test, target_os = "linux"))]
+use std::io::BufRead as _;
 #[cfg(any(test, target_os = "linux"))]
 use std::net::{Shutdown, TcpListener};
 #[cfg(target_os = "linux")]
@@ -203,7 +206,7 @@ use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{self, BufRead as _, Read as _, Seek as _, Write as _},
+    io::{self, Read as _, Seek as _, Write as _},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs as _},
     num::{NonZeroU64, NonZeroUsize},
     ops::{Deref, DerefMut},
@@ -377,26 +380,43 @@ const SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT: Duration = Duration::from_secs(1);
 // mke2fs.conf defaults. One allocation unit is one complete ext4 block group;
 // accepting partial groups would let mke2fs silently leave trailing raw-device
 // bytes outside the filesystem on some e2fsprogs revisions.
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_BLOCK_BYTES_V1: u64 = 4 * 1024;
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_BLOCKS_PER_GROUP_V1: u64 = 32 * 1024;
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_GROUP_BYTES_V1: u64 =
     SORACLOUD_INROU_EXT4_BLOCK_BYTES_V1 * SORACLOUD_INROU_EXT4_BLOCKS_PER_GROUP_V1;
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_INODE_BYTES_V1: u64 = 16 * 1024;
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_INODE_SIZE_V1: u16 = 256;
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_INODES_PER_GROUP_V1: u32 = 8 * 1024;
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_GROUP_DESCRIPTOR_BYTES_V1: u16 = 64;
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_FLEX_GROUPS_V1: u8 = 16;
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_JOURNAL_MIB_V1: u64 = 16;
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_LABEL_V1: &str = "inrou-v1";
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_FEATURES_V1: &str = "none,has_journal,ext_attr,dir_index,filetype,64bit,extent,flex_bg,sparse_super,large_file,huge_file,dir_nlink,extra_isize,metadata_csum";
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_EXTENDED_OPTIONS_V1: &str = "lazy_itable_init=0,lazy_journal_init=0,nodiscard,root_owner=0:0,assume_storage_prezeroed=0,packed_meta_blocks=0,stride=0,stripe_width=0";
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_COMPAT_FEATURES_V1: u32 = 0x0000_002c;
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_INCOMPAT_FEATURES_V1: u32 = 0x0000_02c2;
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_INCOMPAT_RECOVER: u32 = 0x0000_0004;
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_RO_COMPAT_FEATURES_V1: u32 = 0x0000_046b;
 // EXT4_DEFM_XATTR_USER | EXT4_DEFM_ACL. `mke2fs` has no command-line switch
 // for this field, so post-format validation pins the accepted V1 value before
 // publication instead of inheriting an unchecked host default.
+#[cfg(any(test, target_os = "linux"))]
 const SORACLOUD_INROU_EXT4_DEFAULT_MOUNT_OPTIONS_V1: u32 = 0x0000_000c;
 const SORACLOUD_INROU_ID_BASE: u32 =
     iroha_config::parameters::defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_BASE;
@@ -22255,6 +22275,7 @@ struct PortableVmLeaseDisk {
     mount_options: String,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, target_os = "linux"))]
 struct InrouExt4VolumeProfileV1 {
     total_bytes: u64,
     total_blocks: u32,
@@ -23937,6 +23958,7 @@ fn validate_reusable_inrou_disk(path: &Path, exact_bytes: Option<u64>) -> eyre::
     }
     Ok(())
 }
+#[cfg(any(test, target_os = "linux"))]
 fn inrou_ext4_volume_profile_v1(
     plan: &SoracloudRuntimeServicePlan,
     volume: &SoracloudRuntimeLeaseVolumePlan,
@@ -23993,6 +24015,7 @@ fn inrou_ext4_volume_profile_v1(
     })
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn format_inrou_ext4_uuid_v1(uuid: &[u8; 16]) -> String {
     format!(
         "{}-{}-{}-{}-{}",
@@ -24004,10 +24027,12 @@ fn format_inrou_ext4_uuid_v1(uuid: &[u8; 16]) -> String {
     )
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn inrou_ext4_superblock_u16(superblock: &[u8; 1_024], offset: usize) -> u16 {
     u16::from_le_bytes([superblock[offset], superblock[offset + 1]])
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn inrou_ext4_superblock_u32(superblock: &[u8; 1_024], offset: usize) -> u32 {
     u32::from_le_bytes([
         superblock[offset],
@@ -24017,6 +24042,7 @@ fn inrou_ext4_superblock_u32(superblock: &[u8; 1_024], offset: usize) -> u32 {
     ])
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn validate_inrou_ext4_filesystem(
     path: &Path,
     profile: InrouExt4VolumeProfileV1,
@@ -26486,6 +26512,7 @@ fn run_host_command_with_timeout(
 ) -> eyre::Result<()> {
     run_host_command_with_timeout_and_environment(program, args, timeout, &[])
 }
+#[cfg(any(test, target_os = "linux"))]
 fn run_host_command_with_timeout_and_environment(
     program: &Path,
     args: &[&str],

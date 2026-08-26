@@ -25,7 +25,7 @@ VALIDATOR = ROOT / "scripts/validate_norito_bridge_xcframework.py"
 SOURCE_DATE_EPOCH = "1700000001"
 NORMALIZED_ZIP_TIME = (2023, 11, 14, 22, 13, 20)
 KNOWN_FIXTURE_ARCHIVE_SHA256 = (
-    "34a716d04bdc69f3751b135406674f55699798db94ee4d2965d85d3feb9904ca"
+    "1fd2514ffb6481bc589d0fce035594e8f96fea2172155d4d5c45ea2f84996977"
 )
 SLICE_METADATA = {
     "ios-arm64": ("ios", ["arm64"], None),

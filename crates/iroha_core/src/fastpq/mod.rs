@@ -463,6 +463,7 @@ pub(crate) fn try_submit_transfer_transcript_digests_in_map(
     })
 }
 /// Fill missing single-delta transcript digests in witness bundles.
+#[cfg(any(test, feature = "telemetry"))]
 pub(crate) fn finalize_transfer_transcript_bundle_digests_in_place(
     bundles: &mut [TransferTranscriptBundle],
 ) {
@@ -513,6 +514,7 @@ fn try_finalize_transfer_transcript_digests_in_map_batched(
     );
     true
 }
+#[cfg(any(test, feature = "telemetry"))]
 fn try_finalize_transfer_transcript_bundle_digests_batched(
     bundles: &mut [TransferTranscriptBundle],
     digest_count: usize,

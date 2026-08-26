@@ -41,6 +41,17 @@ fail() {
   exit 1
 }
 
+TEST_RUSTUP_BINARY="$(command -v rustup)" \
+  || fail "rustup is required"
+TEST_RUSTUP_BINARY="$("$TEST_PYTHON_BINARY" -I -S -B -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$TEST_RUSTUP_BINARY")" \
+  || fail "rustup must resolve to a canonical executable"
+[[ "$TEST_RUSTUP_BINARY" == /* && -f "$TEST_RUSTUP_BINARY" \
+  && ! -L "$TEST_RUSTUP_BINARY" && -x "$TEST_RUSTUP_BINARY" ]] \
+  || fail "rustup must be an absolute canonical non-symbolic executable"
+export MOBILE_SDK_RUSTUP_BINARY="$TEST_RUSTUP_BINARY"
+
 command -v zip >/dev/null 2>&1 || fail "zip command is required"
 
 # shellcheck source=tests/mobile_sdk_build_source_seal_test.sh
@@ -483,6 +494,26 @@ run_expect_fail() {
   esac
 }
 
+run_expect_rustup_override_fail() {
+  local root="$1"
+  local candidate="$2"
+  local output
+  if output="$(PATH="$INSPECTION_TOOLS:$PATH" \
+      MOBILE_SDK_RUSTUP_BINARY="$candidate" \
+      MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
+      bash "$CHECK_SCRIPT" "$root" --apple-only 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "expected checker to reject rustup override: $candidate"
+  fi
+  case "$output" in
+    *"MOBILE_SDK_RUSTUP_BINARY must be an absolute canonical non-symbolic executable"*) ;;
+    *)
+      printf '%s\n' "$output" >&2
+      fail "checker rustup override rejection was not explicit"
+      ;;
+  esac
+}
+
 make_apple_inspection_tools() {
   local tools="$1"
   mkdir -p "$tools"
@@ -797,6 +828,15 @@ fixture="$TMP_DIR/valid"
 make_fixture "$fixture"
 run_expect_pass "$fixture"
 run_expect_single_apple_nm_projection "$fixture"
+
+checker_rustup_link="$TMP_DIR/checker-rustup-link"
+ln -s "$TEST_RUSTUP_BINARY" "$checker_rustup_link"
+checker_rustup_dir="${TEST_RUSTUP_BINARY%/*}"
+checker_rustup_noncanonical="$checker_rustup_dir/../${checker_rustup_dir##*/}/${TEST_RUSTUP_BINARY##*/}"
+run_expect_rustup_override_fail "$fixture" rustup
+run_expect_rustup_override_fail "$fixture" ""
+run_expect_rustup_override_fail "$fixture" "$checker_rustup_link"
+run_expect_rustup_override_fail "$fixture" "$checker_rustup_noncanonical"
 
 retired_binary_bypass_output="$(
   MOBILE_SDK_SKIP_BINARY_INSPECTION=1 \

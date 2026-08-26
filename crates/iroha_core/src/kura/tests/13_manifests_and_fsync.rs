@@ -557,7 +557,7 @@ fn fast_init_defers_body_validation_without_rewriting_hashes() {
             .unwrap();
         // Keep the marker-bound tip intact while corrupting an interior journal identity.
         file.seek(SeekFrom::Start(SIZE_OF_BLOCK_HASH)).unwrap();
-        file.write_all(&[0xAA; Hash::LENGTH]).unwrap();
+        file.write_all(forged.as_ref()).unwrap();
         file.flush().unwrap();
     }
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -643,6 +643,60 @@ fn fast_init_defers_body_validation_without_rewriting_hashes() {
     let mut store = new_block_store(&temp_dir);
     assert_eq!(store.read_block_hashes(1, 1).unwrap(), vec![forged]);
 }
+
+#[test]
+fn fast_init_rejects_an_unmarked_tip_hash_without_mutation() {
+    let temp_dir = TempDir::new().unwrap();
+    populate_store(&temp_dir, 1);
+    let blocks_dir = primary_blocks_dir(&temp_dir);
+    let hash_path = blocks_dir.join(HASHES_FILE_NAME);
+    let mut hash_bytes = std::fs::read(&hash_path).expect("read committed hash journal");
+    hash_bytes[Hash::LENGTH - 1] &= !1;
+    std::fs::write(&hash_path, &hash_bytes).expect("clear the canonical hash marker bit");
+    let paths = [
+        blocks_dir.join(DATA_FILE_NAME),
+        blocks_dir.join(INDEX_FILE_NAME),
+        hash_path,
+        blocks_dir.join(COUNT_FILE_NAME),
+    ];
+    let before = paths
+        .iter()
+        .map(std::fs::read)
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap();
+
+    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    config.init_mode = InitMode::Fast;
+    assert!(
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .is_err(),
+        "Fast must compare the exact marker-bound tip bytes without normalizing corruption"
+    );
+
+    let after = paths
+        .iter()
+        .map(std::fs::read)
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(after, before, "Fast rejection must not repair the journal");
+}
+
+#[test]
+fn hash_journal_reader_rejects_an_unmarked_entry() {
+    let temp_dir = TempDir::new().unwrap();
+    populate_store(&temp_dir, 2);
+    let hash_path = primary_blocks_dir(&temp_dir).join(HASHES_FILE_NAME);
+    let mut hash_bytes = std::fs::read(&hash_path).expect("read committed hash journal");
+    hash_bytes[Hash::LENGTH - 1] &= !1;
+    std::fs::write(&hash_path, hash_bytes).expect("clear an interior canonical marker bit");
+
+    let mut store = new_block_store(&temp_dir);
+    assert!(matches!(
+        store.read_block_hashes(0, 1),
+        Err(Error::IO(error, _)) if error.kind() == ErrorKind::InvalidData
+    ));
+}
+
 #[test]
 fn fast_init_keeps_history_sparse_and_rejects_canonical_mutation() {
     let temp_dir = TempDir::new().unwrap();

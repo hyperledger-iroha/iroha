@@ -8,11 +8,9 @@ std::thread_local! {
         std::cell::Cell::new(0)
     };
 }
+
 enum SnapshotJsonField<'a> {
-    Borrowed {
-        raw: &'a str,
-        emergency_fast: bool,
-    },
+    Borrowed { raw: &'a str },
     #[cfg(test)]
     Owned(json::Value),
 }
@@ -24,14 +22,8 @@ impl<'a> SnapshotJsonField<'a> {
         let decoded: Result<T, json::Error> = match self {
             #[cfg(test)]
             Self::Owned(value) => json::value::from_value(value),
-            Self::Borrowed {
-                raw,
-                emergency_fast,
-            } => (|| {
+            Self::Borrowed { raw } => (|| {
                 let value = json::from_str::<T>(raw)?;
-                if emergency_fast {
-                    return Ok(value);
-                }
                 // TODO: Teach Norito JSON serialization to target a comparison sink so
                 // canonical verification does not need one field-sized temporary String.
                 let canonical = json::to_json(&value)?;
@@ -50,10 +42,7 @@ impl<'a> SnapshotJsonField<'a> {
     }
     fn into_object(self, field: &str) -> Result<SnapshotJsonMap<'a>, json::Error> {
         match self {
-            Self::Borrowed {
-                raw,
-                emergency_fast,
-            } => SnapshotJsonMap::parse_with_mode(raw, field, emergency_fast),
+            Self::Borrowed { raw } => SnapshotJsonMap::parse(raw, field),
             #[cfg(test)]
             Self::Owned(json::Value::Object(map)) => Ok(SnapshotJsonMap::from_owned(map)),
             #[cfg(test)]
@@ -63,98 +52,9 @@ impl<'a> SnapshotJsonField<'a> {
             }),
         }
     }
-    /// Count a snapshot hash array and decode only its terminal element.
-    ///
-    /// Emergency Fast mode needs an exact height/tip binding, but it does not
-    /// need to allocate or type-decode the historical prefix that Kura exposes
-    /// through its read-only hash mapping.
-    fn block_hash_boundary(
-        self,
-        field: &str,
-    ) -> Result<(usize, Option<HashOf<BlockHeader>>), json::Error> {
-        let invalid = |error: json::Error| json::Error::InvalidField {
-            field: field.to_owned(),
-            message: error.to_string(),
-        };
-        match self {
-            Self::Borrowed { raw, .. } => {
-                let mut parser = json::Parser::new(raw);
-                parser.expect(b'[').map_err(&invalid)?;
-                parser.skip_ws();
-                if parser.peek() == Some(b']') {
-                    parser.bump();
-                    parser.skip_ws();
-                    if parser.eof() {
-                        return Ok((0, None));
-                    }
-                    return Err(invalid(json::Error::Message(
-                        "trailing bytes after block hash array".to_owned(),
-                    )));
-                }
-                let mut count = 0_usize;
-                let mut terminal = None;
-                loop {
-                    let start = parser.position();
-                    parser.skip_value().map_err(&invalid)?;
-                    let end = parser.position();
-                    count = count.checked_add(1).ok_or_else(|| {
-                        invalid(json::Error::Message(
-                            "block hash count exceeds platform limits".to_owned(),
-                        ))
-                    })?;
-                    terminal = Some(&raw[start..end]);
-                    parser.skip_ws();
-                    match parser.bump() {
-                        Some(b',') => {
-                            parser.skip_ws();
-                        }
-                        Some(b']') => break,
-                        _ => {
-                            return Err(invalid(json::Error::Message(
-                                "expected comma or block hash array end".to_owned(),
-                            )));
-                        }
-                    }
-                }
-                parser.skip_ws();
-                if !parser.eof() {
-                    return Err(invalid(json::Error::Message(
-                        "trailing bytes after block hash array".to_owned(),
-                    )));
-                }
-                let terminal = terminal
-                    .map(json::from_str::<HashOf<BlockHeader>>)
-                    .transpose()
-                    .map_err(&invalid)?;
-                Ok((count, terminal))
-            }
-            #[cfg(test)]
-            Self::Owned(json::Value::Array(mut hashes)) => {
-                let count = hashes.len();
-                let terminal = hashes
-                    .pop()
-                    .map(json::value::from_value::<HashOf<BlockHeader>>)
-                    .transpose()
-                    .map_err(&invalid)?;
-                Ok((count, terminal))
-            }
-            #[cfg(test)]
-            Self::Owned(_) => Err(json::Error::InvalidField {
-                field: field.to_owned(),
-                message: "expected block hash array".to_owned(),
-            }),
-        }
-    }
     fn validate_sccp_registry(&self) -> Result<(), json::Error> {
         match self {
-            Self::Borrowed {
-                raw: _,
-                emergency_fast: true,
-            } => return Ok(()),
-            Self::Borrowed {
-                raw,
-                emergency_fast: false,
-            } => validate_sccp_registry_cell_json_str(raw),
+            Self::Borrowed { raw } => validate_sccp_registry_cell_json_str(raw),
             #[cfg(test)]
             Self::Owned(value) => validate_sccp_registry_cell_json(value),
         }
@@ -180,16 +80,6 @@ impl<'a> SnapshotJsonMap<'a> {
         }
     }
     fn parse(input: &'a str, field: &str) -> Result<Self, json::Error> {
-        Self::parse_with_mode(input, field, false)
-    }
-    fn parse_emergency_fast(input: &'a str, field: &str) -> Result<Self, json::Error> {
-        Self::parse_with_mode(input, field, true)
-    }
-    fn parse_with_mode(
-        input: &'a str,
-        field: &str,
-        emergency_fast: bool,
-    ) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(input);
         parser
             .expect(b'{')
@@ -230,7 +120,6 @@ impl<'a> SnapshotJsonMap<'a> {
                         key.clone(),
                         SnapshotJsonField::Borrowed {
                             raw: &input[start..end],
-                            emergency_fast,
                         },
                     )
                     .is_some()
@@ -355,21 +244,76 @@ impl KuraSeed {
     /// so restoration never constructs a recursive full-state JSON tree.
     pub(crate) fn into_state_from_json_str(self, input: &str) -> Result<State, json::Error> {
         let map = SnapshotJsonMap::parse(input, "state")?;
-        self.into_state_from_snapshot_map(map, true, false)
+        self.into_state_from_snapshot_map(map, true)
     }
-    /// Decode a signed snapshot for the read-only emergency startup boundary.
+    /// Construct the deliberately minimal State authenticated by a compact emergency manifest.
     ///
-    /// Current-world values remain typed, but redundant canonical
-    /// reserialization and semantic audits are deferred to the required Strict
-    /// restart. Historical transaction membership is discarded, while the
-    /// signed hash array contributes only its exact count and terminal hash;
-    /// State reads the matching Kura prefix through a read-only mapping.
-    pub(crate) fn into_state_from_json_str_emergency_fast(
+    /// The caller has already authenticated the manifest signature. This constructor binds its
+    /// exact height and terminal hash to Kura, maps the matching hash prefix read-only, and leaves
+    /// World, transaction history, consensus topology, and runtime Nexus state unopened. The
+    /// signed SCCP policy hash is retained separately because Fast mode never constructs the
+    /// potentially large governed registry.
+    pub(crate) fn into_state_from_emergency_fast_manifest(
         self,
-        input: &str,
+        chain_id: ChainId,
+        network_id: NetworkId,
+        snapshot_height: usize,
+        snapshot_tip: Option<HashOf<BlockHeader>>,
+        sccp_policy_hash: [u8; 32],
     ) -> Result<State, json::Error> {
-        let map = SnapshotJsonMap::parse_emergency_fast(input, "state")?;
-        self.into_state_from_snapshot_map(map, true, true)
+        let block_hashes =
+            emergency_fast_block_hashes(self.kura.as_ref(), snapshot_height, snapshot_tip)?;
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+        let lane_incarnations = derive_static_lane_incarnations(&nexus.lane_catalog);
+        let lane_incarnation_activation_heights = lane_incarnations
+            .keys()
+            .copied()
+            .map(|lane_id| (lane_id, 0))
+            .collect::<BTreeMap<_, _>>();
+        let lane_incarnation_lineage = lane_incarnations
+            .iter()
+            .map(|(&lane_id, &incarnation)| {
+                (
+                    lane_id,
+                    LaneIncarnationLineage {
+                        generation: 0,
+                        incarnation,
+                        activation_height: 0,
+                    },
+                )
+            })
+            .collect();
+        let state = build_state(
+            BuildStateInputs {
+                world: World::default(),
+                block_hashes,
+                transactions: TransactionsStorage::new(),
+                commit_topology: Cell::new(Vec::new()),
+                prev_commit_topology: Cell::new(Vec::new()),
+                ivm: IVM::new(0),
+                nexus,
+                lane_incarnations,
+                lane_incarnation_activation_heights,
+                lane_incarnation_lineage,
+                autoscale_sample_history: VecDeque::new(),
+                chain_id,
+                network_id,
+                snapshot_v2_bootstrap_candidate: None,
+                nexus_runtime_restored_from_snapshot: false,
+                kura: self.kura,
+                query_handle: self.query_handle,
+                #[cfg(feature = "telemetry")]
+                telemetry: self.telemetry,
+            },
+            false,
+            true,
+        )
+        .map_err(|error| json::Error::InvalidField {
+            field: "state.durable_merge_ledger".to_owned(),
+            message: error.to_string(),
+        })?;
+        state.install_emergency_fast_sccp_policy_hash(sccp_policy_hash);
+        Ok(state)
     }
     /// Decode a State without loading, promoting, truncating, or otherwise
     /// recovering any durable Kura-adjacent journal.
@@ -383,7 +327,7 @@ impl KuraSeed {
         input: &str,
     ) -> Result<State, json::Error> {
         let map = SnapshotJsonMap::parse(input, "state")?;
-        self.into_state_from_snapshot_map(map, false, false)
+        self.into_state_from_snapshot_map(map, false)
     }
     #[cfg(test)]
     fn into_state_from_json_with_recovery_mode(
@@ -397,17 +341,12 @@ impl KuraSeed {
                 message: "expected object".into(),
             });
         };
-        self.into_state_from_snapshot_map(
-            SnapshotJsonMap::from_owned(map),
-            allow_durable_recovery,
-            false,
-        )
+        self.into_state_from_snapshot_map(SnapshotJsonMap::from_owned(map), allow_durable_recovery)
     }
     fn into_state_from_snapshot_map(
         self,
         mut map: SnapshotJsonMap<'_>,
         allow_durable_recovery: bool,
-        emergency_fast: bool,
     ) -> Result<State, json::Error> {
         const WITHOUT_BOOTSTRAP: &[&str] = &[
             "chain_id",
@@ -460,7 +399,7 @@ impl KuraSeed {
             ivm: &ivm_runtime,
             _marker: PhantomData,
         };
-        let mut world = parse_world(world_map, &ivm_seed, emergency_fast)?;
+        let mut world = parse_world(world_map, &ivm_seed, false)?;
         let public_lane_validators: Vec<SnapshotNoritoBlob> =
             take_required(&mut map, "public_lane_validators")?;
         let public_lane_stake_shares: Vec<SnapshotNoritoBlob> =
@@ -475,113 +414,56 @@ impl KuraSeed {
             take_required(&mut map, "nexus_runtime")?;
         let chain_id: ChainId = take_required(&mut map, "chain_id")?;
         let network_id: NetworkId = take_required(&mut map, "network_id")?;
-        if !emergency_fast {
-            let world_view = world.view();
-            for (_receipt_id, receipt) in world_view
-                .soracloud_private_uploaded_model_execution_receipts()
-                .iter()
-            {
-                if receipt.network_id != network_id {
-                    return Err(json::Error::InvalidField {
-                        field: "state.world.soracloud_private_uploaded_model_execution_receipts"
-                            .to_owned(),
-                        message: "private receipt network_id must match the snapshot network_id"
-                            .to_owned(),
-                    });
-                }
-            }
-        }
-        let (block_hashes, strict_block_hashes, committed_height) = if emergency_fast {
-            let (snapshot_height, snapshot_tip) = take_block_hash_boundary(&mut map)?;
-            let committed_height = u64::try_from(snapshot_height).map_err(|_| {
-                json::Error::InvalidField {
-                    field: "state.block_hashes".to_owned(),
-                    message: "committed height does not fit u64".to_owned(),
-                }
-            })?;
-            let (durable_height, durable_tip) = self
-                .kura
-                .emergency_fast_snapshot_boundary(snapshot_height)
-                .map_err(|error| json::Error::InvalidField {
-                    field: "state.block_hashes".to_owned(),
-                    message: format!("failed to bind the Kura Fast boundary: {error}"),
-                })?;
-            if durable_height != snapshot_height || durable_tip != snapshot_tip {
+        let world_view = world.view();
+        for (_receipt_id, receipt) in world_view
+            .soracloud_private_uploaded_model_execution_receipts()
+            .iter()
+        {
+            if receipt.network_id != network_id {
                 return Err(json::Error::InvalidField {
-                    field: "state.block_hashes".to_owned(),
-                    message: format!(
-                        "snapshot boundary ({snapshot_height}, {snapshot_tip:?}) differs from durable Kura ({durable_height}, {durable_tip:?})"
-                    ),
+                    field: "state.world.soracloud_private_uploaded_model_execution_receipts"
+                        .to_owned(),
+                    message: "private receipt network_id must match the snapshot network_id"
+                        .to_owned(),
                 });
             }
-            let block_hashes = match self
-                .kura
-                .emergency_fast_snapshot_hash_mapping(snapshot_height)
-                .map_err(|error| json::Error::InvalidField {
-                    field: "state.block_hashes".to_owned(),
-                    message: format!("failed to map the Kura Fast hash prefix: {error}"),
-                })? {
-                Some(mapping) => BlockHashes::new_emergency_fast_mapped(mapping, snapshot_height),
-                None => BlockHashes::default(),
-            };
-            (Some(block_hashes), None, committed_height)
-        } else {
-            let hashes: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
-            let committed_height =
-                u64::try_from(hashes.len()).map_err(|_| json::Error::InvalidField {
-                    field: "state.block_hashes".to_owned(),
-                    message: "committed height does not fit u64".to_owned(),
-                })?;
-            (None, Some(hashes), committed_height)
-        };
-        if !emergency_fast {
-            let block_hashes = strict_block_hashes
-                .as_deref()
-                .expect("Strict snapshot restore retains its hash vector");
-            validate_replication_order_completion_anchors(&world, block_hashes)?;
-            validate_private_uploaded_model_execution_height_anchors(&world, committed_height)?;
-            validate_musubi_resolver_checkpoint_anchors(&world, block_hashes)?;
-            world
-                .privacy_consensus_policy
-                .view()
-                .get()
-                .validate_at_committed_height(committed_height)
-                .map_err(|error| json::Error::InvalidField {
-                    field: "state.world.privacy_consensus_policy".to_owned(),
-                    message: error.to_string(),
-                })?;
-            crate::privacy_state::validate_privacy_activations_at_committed_height_v1(
-                &world.privacy_activations.view(),
-                committed_height,
-            )
-            .map_err(|message| json::Error::InvalidField {
-                field: "state.world.privacy_activations".to_owned(),
-                message,
-            })?;
         }
+        drop(world_view);
+        let block_hashes: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
+        let committed_height =
+            u64::try_from(block_hashes.len()).map_err(|_| json::Error::InvalidField {
+                field: "state.block_hashes".to_owned(),
+                message: "committed height does not fit u64".to_owned(),
+            })?;
+        validate_replication_order_completion_anchors(&world, &block_hashes)?;
+        validate_private_uploaded_model_execution_height_anchors(&world, committed_height)?;
+        validate_musubi_resolver_checkpoint_anchors(&world, &block_hashes)?;
+        world
+            .privacy_consensus_policy
+            .view()
+            .get()
+            .validate_at_committed_height(committed_height)
+            .map_err(|error| json::Error::InvalidField {
+                field: "state.world.privacy_consensus_policy".to_owned(),
+                message: error.to_string(),
+            })?;
+        crate::privacy_state::validate_privacy_activations_at_committed_height_v1(
+            &world.privacy_activations.view(),
+            committed_height,
+        )
+        .map_err(|message| json::Error::InvalidField {
+            field: "state.world.privacy_activations".to_owned(),
+            message,
+        })?;
         let (
             restored_nexus,
             lane_incarnations,
             lane_incarnation_activation_heights,
             lane_incarnation_lineage,
             autoscale_sample_history,
-        ) = if emergency_fast {
-            nexus_from_snapshot_runtime_emergency_fast(snapshot_nexus_runtime)?
-        } else {
-            nexus_from_snapshot_runtime(
-                snapshot_nexus_runtime,
-                strict_block_hashes
-                    .as_deref()
-                    .expect("Strict snapshot restore retains its hash vector"),
-            )?
-        };
+        ) = nexus_from_snapshot_runtime(snapshot_nexus_runtime, &block_hashes)?;
         let nexus_runtime_restored_from_snapshot = true;
-        let transactions = if emergency_fast {
-            discard_required(&mut map, "transactions")?;
-            TransactionsStorage::new()
-        } else {
-            take_required(&mut map, "transactions")?
-        };
+        let transactions = take_required(&mut map, "transactions")?;
         let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
         let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
         let snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> =
@@ -593,63 +475,52 @@ impl KuraSeed {
                 message,
             },
         )?;
-        if !emergency_fast {
-            crate::smartcontracts::code::validate_contract_subject_bindings(&world).map_err(
-                |message| json::Error::InvalidField {
-                    field: "contract_subject_bindings".into(),
-                    message,
-                },
-            )?;
-        }
-        let public_lane_validator_records: Vec<PublicLaneValidatorRecord> =
-            decode_snapshot_records(
-                public_lane_validators,
-                "public_lane_validators",
-                !emergency_fast,
-            )?;
-        let public_lane_stake_share_records: Vec<PublicLaneStakeShare> = decode_snapshot_records(
-            public_lane_stake_shares,
-            "public_lane_stake_shares",
-            !emergency_fast,
+        crate::smartcontracts::code::validate_contract_subject_bindings(&world).map_err(
+            |message| json::Error::InvalidField {
+                field: "contract_subject_bindings".into(),
+                message,
+            },
         )?;
+        let public_lane_validator_records: Vec<PublicLaneValidatorRecord> =
+            decode_snapshot_records(public_lane_validators, "public_lane_validators", true)?;
+        let public_lane_stake_share_records: Vec<PublicLaneStakeShare> =
+            decode_snapshot_records(public_lane_stake_shares, "public_lane_stake_shares", true)?;
         let public_lane_reward_records = decode_snapshot_records::<PublicLaneRewardRecord>(
             public_lane_rewards,
             "public_lane_rewards",
-            !emergency_fast,
+            true,
         )?;
-        if !emergency_fast {
-            validate_canonical_snapshot_record_order(
-                &public_lane_validator_records,
-                "public_lane_validators",
-                |record| (record.lane_id, record.validator.clone()),
-            )?;
-            validate_canonical_snapshot_record_order(
-                &public_lane_stake_share_records,
-                "public_lane_stake_shares",
-                |record| {
-                    (
-                        record.lane_id,
-                        record.validator.clone(),
-                        record.staker.clone(),
-                    )
-                },
-            )?;
-            validate_canonical_snapshot_record_order(
-                &public_lane_reward_records,
-                "public_lane_rewards",
-                |record| (record.lane_id, record.epoch),
-            )?;
-            validate_canonical_snapshot_record_order(
-                &public_lane_reward_claims,
-                "public_lane_reward_claims",
-                |record| (record.lane_id, record.account.clone(), record.asset.clone()),
-            )?;
-            validate_canonical_snapshot_record_order(
-                &space_directory_manifests,
-                "space_directory_manifests",
-                |record| record.uaid,
-            )?;
-        }
+        validate_canonical_snapshot_record_order(
+            &public_lane_validator_records,
+            "public_lane_validators",
+            |record| (record.lane_id, record.validator.clone()),
+        )?;
+        validate_canonical_snapshot_record_order(
+            &public_lane_stake_share_records,
+            "public_lane_stake_shares",
+            |record| {
+                (
+                    record.lane_id,
+                    record.validator.clone(),
+                    record.staker.clone(),
+                )
+            },
+        )?;
+        validate_canonical_snapshot_record_order(
+            &public_lane_reward_records,
+            "public_lane_rewards",
+            |record| (record.lane_id, record.epoch),
+        )?;
+        validate_canonical_snapshot_record_order(
+            &public_lane_reward_claims,
+            "public_lane_reward_claims",
+            |record| (record.lane_id, record.account.clone(), record.asset.clone()),
+        )?;
+        validate_canonical_snapshot_record_order(
+            &space_directory_manifests,
+            "space_directory_manifests",
+            |record| record.uaid,
+        )?;
         world.public_lane_validators = public_lane_validator_records
             .into_iter()
             .map(|record| ((record.lane_id, record.validator.clone()), record))
@@ -681,24 +552,17 @@ impl KuraSeed {
             })
             .collect();
         world.space_directory_manifests =
-            decode_space_directory_manifest_sets(space_directory_manifests, !emergency_fast)?;
-        if !emergency_fast {
-            world
-                .validate_quantity_ledger_invariants()
-                .map_err(|message| json::Error::InvalidField {
-                    field: "state.world.numeric_ledgers".to_owned(),
-                    message,
-                })?;
-        }
+            decode_space_directory_manifest_sets(space_directory_manifests, true)?;
+        world
+            .validate_quantity_ledger_invariants()
+            .map_err(|message| json::Error::InvalidField {
+                field: "state.world.numeric_ledgers".to_owned(),
+                message,
+            })?;
         let state = build_state(
             BuildStateInputs {
                 world,
-                block_hashes: block_hashes.unwrap_or_else(|| {
-                    BlockHashes::new(
-                        strict_block_hashes
-                            .expect("Strict snapshot restore retains its hash vector"),
-                    )
-                }),
+                block_hashes: BlockHashes::new(block_hashes),
                 transactions,
                 commit_topology,
                 prev_commit_topology,
@@ -718,108 +582,52 @@ impl KuraSeed {
                 telemetry: self.telemetry,
             },
             allow_durable_recovery,
-            emergency_fast,
+            false,
         )
         .map_err(|error| json::Error::InvalidField {
             field: "state.durable_merge_ledger".to_owned(),
             message: error.to_string(),
         })?;
-        if !emergency_fast {
-            super::validate_sccp_state_local_profile(&state).map_err(|message| {
-                json::Error::InvalidField {
-                    field: "state.world.sccp".to_owned(),
-                    message,
-                }
-            })?;
-        }
+        super::validate_sccp_state_local_profile(&state).map_err(|message| {
+            json::Error::InvalidField {
+                field: "state.world.sccp".to_owned(),
+                message,
+            }
+        })?;
         Ok(state)
     }
+
 }
-fn nexus_from_snapshot_runtime_emergency_fast(
-    runtime: SnapshotNexusRuntime,
-) -> Result<
-    (
-        iroha_config::parameters::actual::Nexus,
-        BTreeMap<LaneId, Hash>,
-        BTreeMap<LaneId, u64>,
-        BTreeMap<LaneId, LaneIncarnationLineage>,
-        VecDeque<AutoscaleSampleRecord>,
-    ),
-    json::Error,
-> {
-    if runtime.version != SnapshotNexusRuntime::VERSION {
+fn emergency_fast_block_hashes(
+    kura: &Kura,
+    snapshot_height: usize,
+    snapshot_tip: Option<HashOf<BlockHeader>>,
+) -> Result<BlockHashes, json::Error> {
+    let (durable_height, durable_tip) = kura
+        .emergency_fast_snapshot_boundary(snapshot_height)
+        .map_err(|error| json::Error::InvalidField {
+            field: "state.block_hashes".to_owned(),
+            message: format!("failed to bind the Kura Fast boundary: {error}"),
+        })?;
+    if durable_height != snapshot_height || durable_tip != snapshot_tip {
         return Err(json::Error::InvalidField {
-            field: "nexus_runtime.version".to_owned(),
+            field: "state.block_hashes".to_owned(),
             message: format!(
-                "unsupported Nexus runtime snapshot version {}; expected {}",
-                runtime.version,
-                SnapshotNexusRuntime::VERSION
+                "snapshot boundary ({snapshot_height}, {snapshot_tip:?}) differs from durable Kura ({durable_height}, {durable_tip:?})"
             ),
         });
     }
-    let scale_out_window =
-        std::num::NonZeroU16::new(runtime.autoscale_scale_out_window_blocks).ok_or_else(|| {
-            json::Error::InvalidField {
-                field: "nexus_runtime.autoscale_scale_out_window_blocks".to_owned(),
-                message: "autoscale scale-out window must be non-zero".to_owned(),
-            }
-        })?;
-    let scale_in_window =
-        std::num::NonZeroU16::new(runtime.autoscale_scale_in_window_blocks).ok_or_else(|| {
-            json::Error::InvalidField {
-                field: "nexus_runtime.autoscale_scale_in_window_blocks".to_owned(),
-                message: "autoscale scale-in window must be non-zero".to_owned(),
-            }
-        })?;
-    let lane_count =
-        std::num::NonZeroU32::new(runtime.lane_count).ok_or_else(|| json::Error::InvalidField {
-            field: "nexus_runtime.lane_count".to_owned(),
-            message: "lane_count must be non-zero".to_owned(),
-        })?;
-    let catalog =
-        LaneCatalog::new(lane_count, runtime.lanes).map_err(|error| json::Error::InvalidField {
-            field: "nexus_runtime.lanes".to_owned(),
-            message: error.to_string(),
-        })?;
-    let lane_incarnation_lineage: BTreeMap<_, _> = runtime
-        .lane_incarnation_lineage
-        .into_iter()
-        .map(|entry| {
-            (
-                entry.lane_id,
-                LaneIncarnationLineage {
-                    generation: entry.generation,
-                    incarnation: entry.incarnation,
-                    activation_height: entry.activation_height,
-                },
-            )
-        })
-        .collect();
-    let mut lane_incarnations = BTreeMap::new();
-    let mut lane_incarnation_activation_heights = BTreeMap::new();
-    for lane in catalog.lanes() {
-        let entry = lane_incarnation_lineage.get(&lane.id).ok_or_else(|| {
-            json::Error::InvalidField {
-                field: "nexus_runtime.lane_incarnation_lineage".to_owned(),
-                message: format!("active lane {} is missing lineage", lane.id),
-            }
-        })?;
-        lane_incarnations.insert(lane.id, entry.incarnation);
-        lane_incarnation_activation_heights.insert(lane.id, entry.activation_height);
-    }
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
-    nexus.lane_catalog = catalog;
-    nexus.autoscale.scale_out_window_blocks = scale_out_window;
-    nexus.autoscale.scale_in_window_blocks = scale_in_window;
-    nexus.autoscale.last_transition_height = runtime.autoscale_last_transition_height;
-    Ok((
-        nexus,
-        lane_incarnations,
-        lane_incarnation_activation_heights,
-        lane_incarnation_lineage,
-        VecDeque::new(),
-    ))
+    Ok(
+        match kura
+            .emergency_fast_snapshot_hash_mapping(snapshot_height)
+            .map_err(|error| json::Error::InvalidField {
+                field: "state.block_hashes".to_owned(),
+                message: format!("failed to map the Kura Fast hash prefix: {error}"),
+            })? {
+            Some(mapping) => BlockHashes::new_emergency_fast_mapped(mapping, snapshot_height),
+            None => BlockHashes::default(),
+        },
+    )
 }
 fn nexus_from_snapshot_runtime(
     runtime: SnapshotNexusRuntime,
@@ -1284,18 +1092,6 @@ where
         .remove(key)
         .ok_or_else(|| json::Error::missing_field(key))?;
     value.decode_canonical(key)
-}
-fn take_block_hash_boundary(
-    map: &mut SnapshotJsonMap<'_>,
-) -> Result<(usize, Option<HashOf<BlockHeader>>), json::Error> {
-    map.remove("block_hashes")
-        .ok_or_else(|| json::Error::missing_field("block_hashes"))?
-        .block_hash_boundary("block_hashes")
-}
-fn discard_required(map: &mut SnapshotJsonMap<'_>, key: &str) -> Result<(), json::Error> {
-    map.remove(key)
-        .map(|_| ())
-        .ok_or_else(|| json::Error::missing_field(key))
 }
 fn take_optional<T>(map: &mut SnapshotJsonMap<'_>, key: &str) -> Result<Option<T>, json::Error>
 where
@@ -1911,15 +1707,11 @@ fn take_topology_cell(
         .remove(key)
         .ok_or_else(|| json::Error::missing_field(key))?;
     match value {
-        SnapshotJsonField::Borrowed {
-            raw,
-            emergency_fast,
-        } if raw.as_bytes().first() == Some(&b'[') => SnapshotJsonField::Borrowed {
-            raw,
-            emergency_fast,
+        SnapshotJsonField::Borrowed { raw } if raw.as_bytes().first() == Some(&b'[') => {
+            SnapshotJsonField::Borrowed { raw }
+                .decode_canonical(key)
+                .map(Cell::new)
         }
-        .decode_canonical(key)
-        .map(Cell::new),
         #[cfg(test)]
         SnapshotJsonField::Owned(json::Value::Array(values)) => {
             SnapshotJsonField::Owned(json::Value::Array(values))

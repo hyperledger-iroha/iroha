@@ -595,7 +595,9 @@ impl Bus {
             per_ip_counts: Arc::new(Mutex::new(HashMap::new())),
             handshake_buckets: Arc::new(Mutex::new(HashMap::new())),
         };
-        bus.start_cleaner();
+        if cfg.enabled {
+            bus.start_cleaner();
+        }
         bus
     }
     fn start_cleaner(&self) {
